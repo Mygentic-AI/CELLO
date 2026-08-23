@@ -3009,3 +3009,40 @@ cleanup.**
 shipped feature depends on it. It is on the backlog because the gap was invisible, not because it is
 newly broken.
 - **Enforcer:** receipt.
+
+---
+
+### `DOD-M15-SEALROOT-EMPTY-1` — ❌ BLOCKS LAUNCH. A close reports success and hands back no receipt
+**Found by the other lane's first-ever spine-lane run (2026-08-23), five journeys deep. Diagnosis is
+open; what is established is below, and the exoneration evidence is the durable part.**
+
+`cello_close_session` returns **`ok: true` with `sealed_root` undefined**. The operator is told their
+conversation closed successfully and receives nothing to keep — and a notarized receipt is the entire
+product. Five journeys fail on it: both `J-UNILATERAL` cases, `J-UPGRADE`, `J-SPINE` DOD-SPINE-7
+(bilateral, byte-identical root) and `J-LOOPBACK`. A sixth, `J-MULTIPLAYER`'s *"agentA has no sealed
+root"*, is the same shape.
+
+**Classified BLOCKS LAUNCH** on the DoD's own test: a prospective customer cannot get the core value.
+Not because the session breaks — it closes — but because the artifact the close exists to produce
+does not arrive, while the response says it did. A silent success is worse here than a failure: an
+operator with `ok: true` has no reason to look.
+
+**WHAT WAS ESTABLISHED, by running rather than reasoning:**
+
+- **Not version skew.** The daemon `dist` the spine spawned was built at 18:57 and *contains* the B2b
+  symbols — verified by grepping the built artifact for them, not by comparing timestamps.
+- **Reproduces at HEAD.** `j-loopback` fails identically now, at ~4.6 s.
+- **`SEALWIRE-1` B2b is EXONERATED, by two probes each rebuilt and re-run:**
+  - `SALT_AGREEMENT_WAIT_MS` 5 000 → 50. Still fails, ~4.4 s. So the bounded first-send hold is not
+    delaying the seal past a deadline.
+  - The salted branch bypassed entirely, every hash plain `sha256` — pre-B2b behaviour. **Still
+    fails, ~4.5 s.**
+- **Therefore: pre-existing.** Consistent with the lane having never been run — there is no baseline
+  saying these ever passed.
+
+**WHAT IS NOT ESTABLISHED, and is not guessed at:** which branch returns `ok: true` without a root.
+The only `ok: true` lacking `sealed_root` in `close-session-handler.ts` is the `force: true` abandon
+path, which the spine does not take. The ~4.5 s is consistent across all three runs, which reads more
+like a fixed timeout being hit than a race — but that is an observation, not a diagnosis.
+
+- **Enforcer:** journey — the five spine journeys above are the receipt, and they must go green.
