@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
+import type { TrustSignalEnvelope } from "@cello-protocol/protocol-types";
 import {
   startSpineCluster,
   startDaemon,
@@ -50,11 +51,19 @@ async function loadSealer(): Promise<{
 }
 
 // The M10 envelope codec, from the SAME local build the daemon decodes with (INV-CANONICAL / M10-D7).
-interface Envelope {
-  subject_kind: "account" | "agent"; subject: string; issuer_kind: "portal" | "agent"; issuer_pubkey: string;
-  type: string; schema_version: number; payload: Uint8Array; issued_at: number;
-  expires_at: number | null; supersedes_hash: Uint8Array | null;
-}
+/**
+ * DOD-M15-SPINERED-1: IMPORTED, not re-declared.
+ *
+ * This was a hand-copied structural duplicate of the wire format, and it drifted: `same_operator`
+ * was APPENDED to the preimage (M10-D17, a CLOSED set of twelve) and this copy still had eleven
+ * fields, so the encoder refused the fixture and the journey died before reaching anything it
+ * tests. `@cello-protocol/protocol-types` was already a dependency — the copy was never needed.
+ *
+ * A local copy of a wire format cannot fail to drift; it can only fail to notice. The type now
+ * comes from the same package the daemon encodes with, so the next appended field is a compile
+ * error here rather than a runtime refusal sixty seconds into a live journey.
+ */
+type Envelope = TrustSignalEnvelope;
 async function loadCodec(): Promise<{
   encodeTrustSignalEnvelope: (e: Envelope) => Uint8Array;
   hashTrustSignalEnvelope: (e: Envelope) => Uint8Array;
@@ -129,6 +138,18 @@ describe("J-TRUST — M10 sealed-envelope pickup end-to-end (M10-D18 / M10-D22)"
         credential_stub: hex(hash(new TextEncoder().encode(credId))),
       }),
       issued_at: 1_700_000_000, expires_at: null, supersedes_hash: null,
+      /**
+       * DOD-M15-SPINERED-1: this fixture predated `same_operator` and built an ELEVEN-field
+       * envelope. The preimage is a CLOSED set of twelve (M10-D17) and the encoder refuses a
+       * missing mandatory field, so the journey died before it reached anything it was testing.
+       *
+       * `false` is not an arbitrary pick: the preimage builder writes `envelope.same_operator ===
+       * true`, so an absent field would have hashed as `false` anyway. This value therefore
+       * preserves the exact hash the fixture always meant to produce, and keeps this journey about
+       * sealed-envelope pickup rather than about same-operator standing — which is a different
+       * signal's concern and has its own line.
+       */
+      same_operator: false,
     };
     const envBytes = encodeTrustSignalEnvelope(envelope);
     const signalHash = hex(hashTrustSignalEnvelope(envelope));
