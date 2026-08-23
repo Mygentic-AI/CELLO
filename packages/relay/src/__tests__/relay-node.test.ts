@@ -339,12 +339,48 @@ describe("DOD-M15-SEALWIRE-1: a carried SEAL payload reaches the seal data", () 
       "the SEAL payload must reach the directory byte-identical — accepted and dropped is worse than refused, because it reads as an old relay",
     ).toBe(true);
 
-    for (const l of leaves.filter((l) => l.kind !== "ctrl")) {
+    /**
+     * ⚠️ THE NEGATIVE ASSERTION NEEDS ITS OWN PRECONDITION — review F7, and the same shape bit this
+     * milestone two commits back. A loop over a filtered list asserts nothing when the list is
+     * empty, so if a refactor ever made `submitForSeal` return only ctrl leaves this would iterate
+     * zero times and stay green while the property went unchecked.
+     */
+    const nonCtrl = leaves.filter((l) => l.kind !== "ctrl");
+    expect(nonCtrl.length, "the msg leaf must be in the seal data, or the loop below asserts nothing").toBe(1);
+    for (const l of nonCtrl) {
       expect(
         l.content_bytes,
         "and no other kind may carry content — the relay must never hand the directory message plaintext",
       ).toBeUndefined();
     }
+
+    /**
+     * ⚠️ AND THE WIRE HOP — review F3, and its failure mode changed with this commit.
+     *
+     * Everything above proves the payload reaches `submitForSeal`'s RETURN VALUE. The directory does
+     * not see that; it sees a CBOR frame. Until this commit no relay sent the field, so a shape
+     * mismatch on that hop was unreachable in production. It is live now — and it does not degrade
+     * gracefully: `validateSealSubmissionLeaves` refuses the whole submission, the directory answers
+     * an error, and the relay classifies any directory answer as terminal. **A mismatch there does
+     * not produce `not_carried`; it destroys the seal.**
+     *
+     * So the bytes are run through the real encoder and the real validator, rather than trusted to
+     * survive because every other byte field on this frame does.
+     */
+    const encoded = CBOR_ENC.encode({ leaves });
+    const roundTripped = (decode(encoded) as { leaves: Array<{ kind: string; content_bytes?: Uint8Array }> }).leaves;
+    /**
+     * The relay half of the hop only. The DIRECTORY's validator cannot be imported here — the relay
+     * does not depend on the directory and must not start to — so the other half is asserted in
+     * `packages/directory/src/__tests__/dod-m15-sealwire-1-content-bytes-parsers.test.ts`, against a
+     * leaf of exactly this shape. Two halves, each in the package that owns its side.
+     */
+    const rtCtrl = roundTripped.filter((l) => l.kind === "ctrl");
+    expect(
+      rtCtrl[0]!.content_bytes !== undefined
+        && Buffer.from(rtCtrl[0]!.content_bytes).equals(Buffer.from(payload)),
+      "and the payload must survive CBOR byte-identical — a mismatch here refuses the whole seal, it does not degrade",
+    ).toBe(true);
   });
 });
 

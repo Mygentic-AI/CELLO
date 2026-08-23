@@ -32,6 +32,7 @@ import { describe, it, expect } from "vitest";
 import { Encoder } from "cbor-x";
 import { decodeInboundSignalingFrame } from "../directory-frames.js";
 import { validateSealSubmissionLeaves } from "../seal-unilateral-verify.js";
+import { encodeSealPayload } from "@cello-protocol/protocol-types";
 
 const CBOR = new Encoder({ tagUint8Array: false });
 
@@ -94,6 +95,43 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4 (pass 2, F-3): content_bytes is shape-c
      */
     expect(decodeInboundSignalingFrame(unilateralFrame({ hex: "a1b2" }))).toBeNull();
     expect(decodeInboundSignalingFrame(unilateralFrame(42))).toBeNull();
+  });
+
+  it("★★ THE RELAY'S OWN LEAF SHAPE IS ACCEPTED — the hop that now REFUSES rather than degrades", () => {
+    /**
+     * ⚠️ THE OTHER HALF OF A HOP NOTHING COVERED, and its failure mode changed when the relay
+     * started sending the field.
+     *
+     * The relay proves the payload reaches `submitForSeal` and survives its own CBOR encoder
+     * (`packages/relay/src/__tests__/relay-node.test.ts`). It cannot assert this side — the relay
+     * does not depend on the directory and must not start to. So the shape it produces is asserted
+     * here, against the validator that actually receives it.
+     *
+     * Why it matters more than it used to: until the relay carried the field, a shape mismatch here
+     * was unreachable in production. It is live now, and it does not degrade — this validator refuses
+     * the whole submission, the directory answers an error, and the relay treats any directory answer
+     * as terminal. **A mismatch destroys the seal rather than producing `not_carried`.**
+     *
+     * `Buffer` on purpose: cbor-x decodes byte strings to `Buffer`, not `Uint8Array`, so a validator
+     * that checked `instanceof Uint8Array` alone would refuse every honest relay frame. (`Buffer`
+     * extends `Uint8Array`, so it passes — asserted rather than assumed, because that is the exact
+     * shape a decoder hands over and the exact assumption that would have been wrong.)
+     */
+    const payload = encodeSealPayload({
+      session_id: new Uint8Array(16).fill(0x11),
+      final_root: new Uint8Array(32).fill(0x33),
+      close_timestamp: 1_700_000_000_000,
+      attestation: "PENDING",
+    });
+    const relayShaped = [
+      { kind: "msg", s2: {}, structure1_cbor: Buffer.from([1, 2, 3]) },
+      { kind: "ctrl", s2: {}, structure1_cbor: Buffer.from([4, 5, 6]), content_bytes: Buffer.from(payload) },
+    ];
+    const verdict = validateSealSubmissionLeaves(relayShaped);
+    expect(
+      verdict.ok,
+      `a leaf set of exactly the shape the relay sends must be accepted: ${JSON.stringify(verdict)}`,
+    ).toBe(true);
   });
 
   it("★★ the BILATERAL path refuses the same input, by name — the two must not disagree", () => {
