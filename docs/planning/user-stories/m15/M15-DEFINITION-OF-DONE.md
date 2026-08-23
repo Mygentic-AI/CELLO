@@ -2500,6 +2500,28 @@ The feature half of the IP disclosure. A direct session reveals the operator's I
 as a footnote. Promote it to a real setting, so the disclosure in `DOD-M15-DISCLOSE-1` is actionable
 rather than a warning.
 
+> ### ⚠️ SCOPED 2026-08-24 — GATE THE DIAL, NOT THE LABEL, or you ship a placebo
+> **`transport_mode` DOES NOT CONTROL WHETHER A DIRECT CONNECTION HAPPENS.** A setting that sets it
+> would be a privacy control that does not protect privacy — the same shape as a tier that grants
+> nothing and a content profile no verb consults, both found earlier in this milestone.
+>
+> - **The directory already defaults to relay.** `directory-node.ts`: `const transportMode =
+>   requestedTransportMode ?? "relay"`. So the label is *already* relay in the ordinary case.
+> - **And the client dials directly anyway.** `initiate-session-handler.ts` says it outright:
+>   *"attempt the dial whenever the assignment carries counterparty session addrs, **regardless of
+>   the transport_mode LABEL** (the local selector stub labels everything 'relay' even when the addrs
+>   are directly dialable)"*. The dial is gated on **`counterparty_session_addrs.length > 0`**, not
+>   on the mode.
+> - **So the IP is exposed on a path whose label already says "relay".** An operator who set a
+>   relay-only flag today would be told they were protected, and would not be.
+>
+> **The unit is therefore:** the setting must suppress the direct dial — either by refusing to dial
+> `counterparty_session_addrs` when relay-only is on, or by not publishing this agent's session addrs
+> into the assignment at all (stronger: nothing to dial, and it protects the operator even against a
+> peer who ignores the flag). **The second is the one worth building** — a privacy control that
+> depends on the counterparty honouring it is not a control.
+> **Sized, not built.** Recorded so the next lane does not implement the label.
+
 ---
 
 # Explicitly Beyond — deferred WITH a trigger, never dropped
