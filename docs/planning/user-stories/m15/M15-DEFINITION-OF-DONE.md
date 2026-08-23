@@ -1529,20 +1529,44 @@ argument: a wire and schema change is cheapest against an empty database and nev
 consumes.
 
 ### `DOD-M15-KEYAGREE-1` — 🟡 CELLO owns its own confidentiality guarantee
-> **PRIMITIVE BUILT 2026-08-23, review in flight.** Ephemeral-ephemeral X25519 (RFC 7748) + HKDF-SHA256
-> (RFC 5869), extending the parked-content seal pattern. Session id as HKDF salt; both ephemeral
-> publics bound into `info` in canonical SORTED order (role-independent, because the two daemons
-> reach the derivation from different code paths and a disagreement about who initiated would produce
-> two keys and a conversation that fails to decrypt with nothing explaining why). One agreement, two
-> outputs under distinct labels: content key + content-hash salt.
-> **The PQ hook works on day one** — `extraSharedSecret` is tested to change the key, accepts any
-> length, and a MISMATCH makes the two sides diverge rather than silently agreeing on a
-> classical-only key.
-> **Revert test already corrected one claim:** the all-zero degenerate-agreement check never executes
-> — `@noble/curves` refuses a small-order point first — and the comment said otherwise. Kept as a
-> backstop, now labelled unreachable; the TEST pins the property rather than which layer enforces it.
-> **⚠️ EXPECT THIS TO STAY 🟡:** it ships a PRIMITIVE. Nothing consumes either output yet — that is
-> `SEALWIRE-1`'s work, which is the whole reason KEYAGREE must precede it.
+> **PRIMITIVE BUILT + REVIEWED 2026-08-23** (→ Entry 39); **STAYS 🟡 — nothing consumes either
+> output.** That is `SEALWIRE-1`'s work and the reason KEYAGREE precedes it. Reviewer: *"it ships a
+> primitive while the DoD clause it most needs to satisfy — destruction at close — has neither code
+> nor caller."* Verdict quoted: *"**HOLLOW TESTS FOUND** — six of eight mutations stay green,
+> including deleting the pubkey binding, inverting the sort, swapping the two labels, and replacing
+> the content-hash salt with a constant [blocking]… **ERROR SUBSTITUTION FOUND**… I am not
+> rubber-stamping this one. The construction is sound… almost none of that is pinned by a test."*
+> All thirteen findings fixed. Gate: 4254 client tests, lint, typecheck, build.
+>
+> **The construction was verified sound** — salt/info assignment conventional per RFC 5869, IKM
+> concatenation unambiguous because the X25519 secret is fixed-length, and matching TLS/NIST hybrid
+> practice. What was missing was any test that constrained the BYTES: every property I had tested is
+> satisfied by X25519 alone.
+> **`pqTranscript` added while there are no callers** — a hybrid must bind the KEM's ciphertext and
+> public key, not just its secret (X-Wing; eprint 2026/140 says necessary, not optional). After a wire
+> format exists it is a wire change, i.e. the rewrite the hook exists to avoid.
+> **Refuses:** a non-canonical peer key (bit 255 — a one-bit undiagnosable session kill), a reflected
+> key, a wrong-length key on either side, an empty session id.
+> **Carried:** `DOD-M15-EPHEMERAL-REVIVAL-1`, `DOD-M15-EPHEMERAL-AUTH-1`.
+
+### `DOD-M15-EPHEMERAL-AUTH-1` — ❌ The session ephemeral is bound to the agent's identity
+Split from `DOD-M15-KEYAGREE-1` (review F6). The key agreement defeats a PASSIVE recorder — the
+harvest-now threat the line names — and NOT an active on-path relay.
+- Nothing in the key-agreement API takes an identity key, so there is nowhere to bind the ephemeral
+  to a peer. An active relay substitutes both ephemerals and reads everything.
+- `SEALWIRE-1` must sign the ephemeral public with the agent's Ed25519 identity and verify the peer's
+  BEFORE deriving. It also removes `KEYAGREE`'s bit-255 refusal as the sole tamper detector — a
+  signature catches the flip instead.
+- The module docstring states the limit in the meantime, so a reader cannot conclude MITM is covered.
+
+### `DOD-M15-EPHEMERAL-REVIVAL-1` — ❌ A revived session re-handshakes
+Split from `DOD-M15-KEYAGREE-1` (review F5, ruled in Decisions Carried #5).
+- CELLO sessions survive daemon restarts; the ephemeral secret is deliberately NOT persisted, so a
+  revived session has no key material and its content is unreadable until it re-handshakes.
+- Needs a fresh ephemeral exchange on revival, on the same path that rebuilds the session node.
+- **Do not "fix" this by persisting the ephemeral.** That is the option Decisions Carried #5 rules
+  out, and the reason is that key material in a backup is unrecoverable once written.
+
 Relay-audit Decision 5(b), with the PQ hook built in from the start.
 - Live content today is plaintext inside libp2p's Noise session. Confidentiality is real, but it is
   **libp2p's** key agreement over **libp2p's** ephemeral transport keys, so **CELLO cannot upgrade
@@ -1848,6 +1872,23 @@ Rulings that bind every line above. **Re-asking one is decision theatre** (M15-P
    agreement produces and the seal items cannot be split.
 3. **The unpublished investor and GTM material is not in M15.** Never made public, never sent;
    corrected after the milestone against what actually shipped.
+5. **Session ephemerals are NOT persisted; a revived session re-handshakes** (mine, 2026-08-23, §3a
+   — surfaced by `KEYAGREE-1` review F5. **Flagged for Andre**: it changes session revival, not just a
+   crypto choice.)
+
+   CELLO sessions survive daemon restarts, so the key agreement forces a fork the DoD line never
+   named: persist the ephemeral secret so a restarted daemon can still read its own session, or do
+   not, and make a restart leave that session's content unreadable.
+
+   **Persisting is the irreversible harm.** It voids forward secrecy — the entire point of the unit —
+   and puts key material in `sessions.db`, and therefore in every backup, for the life of the
+   session. That does not remove harvest-now-decrypt-later; it moves it from the wire to the disk,
+   where collecting it is easier. Once written to a backup it cannot be unwritten.
+
+   **Re-handshaking is additive** and can be built when revival needs it
+   (`DOD-M15-EPHEMERAL-REVIVAL-1`). REDO > BLOCK: if this ruling is wrong the cost is building the
+   persistence path later; if persistence were wrong the cost is every key ever written.
+
 4. **`DOD-M15-CLOSEWAIT-1`'s close contract: ANSWER ON COMMITMENT, NOT ON NOTARIZATION** (mine,
    2026-08-23, §3a — the line says *"decide the contract, then build"*, so here it is decided).
 

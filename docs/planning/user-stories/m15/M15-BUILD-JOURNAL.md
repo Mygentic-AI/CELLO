@@ -15,11 +15,21 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟡 30 ✅, 3 🟡, 2 🅿️, 36 ❌. Both repos clean, pushed, on main.
-> **`KEYAGREE-1` IS THE UNREVIEWED ONE** — primitive built (`037774a`+), reviewer dispatched.
-> `DIRAUTH-1` and `DEAD-WIRE-FIELD-1` are 🟡 for CARRIED halves only and do not block.
-> Gate: 4243 client tests, lint, typecheck — by EXIT CODE.
+> ### 🟢 30 ✅, 3 🟡, 2 🅿️, 38 ❌. Both repos clean, pushed, on main.
+> **No unreviewed work.** `KEYAGREE-1` reviewed and all thirteen findings fixed (Entry 39) — it
+> **stays 🟡 on purpose**: it ships a PRIMITIVE and nothing consumes either output, which is
+> `SEALWIRE-1`'s work. `DIRAUTH-1` and `DEAD-WIRE-FIELD-1` are 🟡 for carried halves too.
+> Gate: 4254 client tests, lint, typecheck, build — by EXIT CODE.
 
+- **🔴 NEXT: `DOD-M15-SEALWIRE-1`** — the other half of Tier 4, and Andre asked for both. It is ONE
+  protocol change with eight bullets that **cannot be split** (the DoD says so outright: every one
+  changes the same wire format or depends on the domain change). It also inherits two carried lines
+  from KEYAGREE: it must SIGN the ephemeral public (`EPHEMERAL-AUTH-1`) and it consumes both
+  KEYAGREE outputs. **Both repos, version-bump ACs on both sides.**
+- **⚠️ DECISIONS CARRIED #5 IS NEW AND FLAGGED FOR ANDRE:** session ephemerals are NOT persisted; a
+  revived session re-handshakes. Persisting would void forward secrecy and put key material in every
+  backup — irreversible once written. Do not let SEALWIRE quietly persist an ephemeral to make
+  revival work.
 - **🔴 TIER 4 IS UNDERWAY — ANDRE'S DIRECTION (2026-08-23, while briefly awake).**
   *"The encryption handshake and the seal-to-transcript binding still haven't started. After these
   open [ones] are reviewed, fixed and closed they should be started."* They are now closed, so:
@@ -3639,3 +3649,93 @@ Gate: 4229 client tests, server suite green, lint, typecheck, build — by exit 
 - **`DOD-M15-SEAL-RETRY-1`** — nothing retries a failed background ceremony before the next daemon
   restart. `seal_failed` now makes it discoverable and re-close is a working manual remedy, but an
   unattended daemon still sits on a durable commitment doing nothing until it is restarted.
+
+---
+
+## Entry 39 — six of eight mutants survived: not one test constrained the derivation
+
+`DOD-M15-KEYAGREE-1` stays **🟡** — the primitive is built and reviewed; nothing consumes either
+output, which is `SEALWIRE-1`'s work. Thirteen findings.
+
+### The verdict, quoted
+
+> **SPEC: DEVIATIONS FOUND** — "destroys the ephemerals at close" is absent from the code entirely
+> (F4) [blocking]; the hybrid hook cannot carry the KEM transcript, which is what "an addition, not a
+> rewrite" requires (F8)…
+> **NO SILENT FALLBACKS** — every failure path throws… Nothing returns a usable-looking key from bad
+> input.
+> **ERROR SUBSTITUTION FOUND** — the live degenerate-agreement path surfaces `@noble`'s "invalid
+> private or public key received"; the message that names the cause sits on the branch you have
+> documented as unreachable (F7) [blocking].
+> **HOLLOW TESTS FOUND** — six of eight mutations stay green, including deleting the pubkey binding,
+> inverting the sort, swapping the two labels, and replacing the content-hash salt with a constant
+> [blocking].
+>
+> *"I am not rubber-stamping this one. The construction is sound… The unit's problem is that almost
+> none of that is pinned by a test, and that it ships a primitive while the DoD clause it most needs
+> to satisfy — destruction at close — has neither code nor caller."*
+
+### The lesson, and it generalises past crypto
+
+The reviewer built a mutation harness and ran my own fourteen assertions against eight mutants. **Six
+survived**: delete the pubkey binding, invert the sort, swap the two output labels, make the content
+salt a constant, drop the session id from the salt, truncate both outputs to 16 bytes.
+
+The cause is structural, not carelessness: **every property I tested is satisfied by X25519 alone.**
+Both sides agree — that is ECDH. A third party cannot — ECDH. A different session differs — fresh
+ephemerals. I had written a suite that constrains the CURVE and believed it constrained my
+derivation. Nothing touched the bytes.
+
+The fix recomputes the construction independently from the header pseudocode and asserts the module
+agrees — deliberately not a captured hex snapshot, because **a snapshot of a label swap is a label
+swap with a test.** And the length assertion used the module's own constant, so truncating to 16 and
+moving the constant with it passed: a self-referential assertion cannot fail.
+
+### The finding that had to land now or never
+
+F8. Concatenating shared secrets is the right shape — it matches TLS's X25519MLKEM768 and NIST SP
+800-56C Rev 2 — and the reviewer verified my canonicalisation reasoning holds because the X25519
+secret is fixed at 32 bytes. What was missing is the KEM's **public** material: X-Wing binds the
+ciphertext and public key, and the current analysis (eprint 2026/140) is that this is *necessary*.
+
+A caller passing only an ML-KEM shared secret would have got a hybrid with its ciphertext unbound.
+`pqTranscript` is where `ct_pq ‖ pk_pq` goes, and it went in **while there are no callers and no wire
+format** — added later it is a wire change, which is the exact rewrite the hook exists to avoid.
+
+### A one-bit attack with no diagnosis
+
+F10. X25519 masks bit 255 (RFC 7748 §5), so `pk` and `pk | 0x80` agree on the same shared secret but
+are **different bytes** — and the bytes are bound into the derivation. A relay flipping that bit costs
+itself nothing and makes the two sides derive different keys: the session never decrypts and nothing
+explains why, which is precisely the failure the sorted binding exists to prevent. Refused rather
+than masked, because masking makes the tamper invisible.
+
+### And the clause with no code
+
+F4: *"destroys the ephemerals at close"* existed only as a sentence telling the caller to do it.
+Forward secrecy is not a property of minting a fresh key; it is a property of the old one being gone.
+
+Gate: 4254 client tests, lint, typecheck, build — by exit code.
+
+### Decision taken under §3a — F5, and it needs Andre's eye before SEALWIRE writes a schema
+
+The reviewer surfaced a genuine fork this line never named: **CELLO sessions survive daemon restarts.**
+So either the ephemeral secret is persisted (forward secrecy void — the key sits in `sessions.db` and
+in every backup for the life of the session, moving the harvest-now threat from the wire to the disk),
+or it is not (a restart makes an active session permanently undecryptable).
+
+**Ruled, least-likely-to-reverse: DO NOT PERSIST. Re-handshake on revival.** Persisting key material
+is the irreversible harm — once it is in backups it is in backups — while re-handshaking is additive
+and can be built when revival needs it. Recorded in Decisions Carried; flagged for Andre because it
+is a behaviour change to session revival, not just a crypto choice.
+
+### Carried
+
+- **`DOD-M15-EPHEMERAL-REVIVAL-1`** — a revived session needs a fresh handshake, because its
+  ephemeral was deliberately not persisted. Until it exists, a restart makes an active session's
+  content unreadable.
+- **`DOD-M15-EPHEMERAL-AUTH-1`** (review F6) — the ephemerals are unauthenticated, so the construction
+  defeats a PASSIVE recorder (the stated harvest-now threat) but not an ACTIVE on-path relay, which
+  can substitute both ephemerals and read everything. `SEALWIRE-1` must sign the ephemeral public with
+  the agent's Ed25519 identity and verify the peer's before deriving. Until then the module docstring
+  says passive-only in one sentence rather than letting a reader conclude MITM is covered.
