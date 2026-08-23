@@ -323,26 +323,57 @@ describeIntegration("PERSIST-004 integration: hash chain in Postgres", () => {
       );
     }
 
-    // Use superuser to tamper with row 5's content (modify requester_pseudonym but keep chain_hash)
-    await superPool.query(
-      `UPDATE connection_requests SET requester_pseudonym = 'TAMPERED_BY_SUPERUSER'
-       WHERE request_id = $1`,
-      [insertedIds[4]],
-    );
+    /**
+     * DOD-M15-CHAINDEBT-1 — THE TAMPER IS UNDONE IN A `finally`, and it was not before.
+     *
+     * This test deliberately corrupts a row to prove `verifyChain` detects it, and then left the
+     * row corrupted. **That is why `connection_requests` verifies red on a freshly reset database
+     * after a fully green suite** — measured: first break at position 5, serialized as
+     * `"requester_pseudonym":"TAMPERED_BY_SUPERUSER"`. Every later run and every other suite
+     * inherited an unverifiable table from a test that had already made its point.
+     *
+     * Restoring the column returns the row to the serialization its `chain_hash` was computed over.
+     * An UPDATE back, never a DELETE — removing it would break its successors.
+     *
+     * `finally`, not a trailing statement: the assertions below are exactly where a failure is
+     * plausible, and a cleanup that only runs when nothing went wrong leaves the table broken on
+     * the one path where someone is already debugging.
+     */
+    const originalPseudonym = `req_${testRunId}_ac004`;
+    try {
+      // Use superuser to tamper with row 5's content (modify requester_pseudonym but keep chain_hash)
+      await superPool.query(
+        `UPDATE connection_requests SET requester_pseudonym = 'TAMPERED_BY_SUPERUSER'
+         WHERE request_id = $1`,
+        [insertedIds[4]],
+      );
 
-    // Run verifyChain — should detect break at the tampered row
-    const result = await store.verifyChain("connection_requests");
-    expect(result.valid).toBe(false);
-    // breakAtSequence is asserted as toBeDefined() rather than a specific value because
-    // the integration tests run without transaction rollback between runs. Prior test
-    // runs may have left rows in the table, so the break position within the full table
-    // scan is not predictable — it depends on how many rows preceded this test run's
-    // insertions. The break will always be at or after position 5 within this batch,
-    // but its absolute sequence number in the table varies.
-    expect(result.breakAtSequence).toBeDefined();
-    expect(result.storedHash).toBeDefined();
-    expect(result.recomputedHash).toBeDefined();
-    expect(result.recomputedHash).not.toBe(result.storedHash);
+      // Run verifyChain — should detect break at the tampered row
+      const result = await store.verifyChain("connection_requests");
+      expect(result.valid).toBe(false);
+      // breakAtSequence stays `toBeDefined()` rather than an exact position: this test does NOT
+      // isolate the table, so where the break lands depends on how many rows precede this batch.
+      // `persist-004`'s AC-005 below asserts an exact position because it runs in a transaction.
+      expect(result.breakAtSequence).toBeDefined();
+      expect(result.storedHash).toBeDefined();
+      expect(result.recomputedHash).toBeDefined();
+      expect(result.recomputedHash).not.toBe(result.storedHash);
+    } finally {
+      await superPool.query(
+        `UPDATE connection_requests SET requester_pseudonym = $1 WHERE request_id = $2`,
+        [originalPseudonym, insertedIds[4]],
+      );
+    }
+
+    // The table must be verifiable again — this is the assertion that would have caught the
+    // original defect, and it is self-checking: if the restore is ever wrong, this goes red here
+    // rather than in whichever unrelated suite runs next.
+    const afterRestore = await store.verifyChain("connection_requests");
+    expect(
+      afterRestore.valid,
+      "the deliberate tamper was not undone — connection_requests is left unverifiable for every " +
+        "later run and every other suite",
+    ).toBe(true);
 
     await pool.end();
   });
