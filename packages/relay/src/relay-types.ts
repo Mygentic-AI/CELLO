@@ -267,34 +267,6 @@ export interface SealData {
   merkle_root: Uint8Array;
 }
 
-// ─── PERSIST-014: Gap-fill frame types ─────────────────────────────────────────
-
-export interface GapFillRequest {
-  type: "gap_fill_request";
-  session_id: Uint8Array;    // 16 bytes
-  from_seq: number;          // exclusive lower bound — leaves with seq > from_seq
-  to_seq: number;            // inclusive upper bound — leaves with seq <= to_seq
-}
-
-export interface GapFillLeaf {
-  sequence_number: number;
-  sender_pubkey: Uint8Array;    // 32 bytes
-  content_hash: Uint8Array;     // 32 bytes
-  sender_signature: Uint8Array; // 64 bytes
-  prev_root: Uint8Array;        // 32 bytes
-  structure1_cbor: Uint8Array;  // exact bytes sender signed — required for signature verification
-}
-
-export interface GapFillResponse {
-  type: "gap_fill_response";
-  leaves: GapFillLeaf[];
-}
-
-export interface GapFillError {
-  type: "gap_fill_error";
-  reason: "session_not_found" | "wal_unavailable" | "not_a_participant";
-}
-
 // ─── CELLO-M7-SESSION-003: session-path liveness frames ────────────────────────
 
 export interface SessionLivenessQuery {

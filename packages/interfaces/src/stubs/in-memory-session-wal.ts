@@ -76,19 +76,4 @@ export class InMemorySessionWal implements SessionWal {
     this.#logger.info("relay.wal.deleted", { sessionId });
   }
 
-  async getLeaves(sessionId: string, fromSeq: number, toSeq: number): Promise<Leaf[] | typeof RELAY_SESSION_UNRECOVERABLE> {
-    const leaves = this.#sessions.get(sessionId);
-    if (!leaves) return [];
-    // SI-001: Only return leaves with sequence_number > fromSeq AND <= toSeq
-    return leaves
-      .filter((l) => l.sequence_number > fromSeq && l.sequence_number <= toSeq)
-      .map((l) => ({
-        sequence_number: l.sequence_number,
-        sender_pubkey: new Uint8Array(l.sender_pubkey),
-        content_hash: new Uint8Array(l.content_hash),
-        sender_signature: new Uint8Array(l.sender_signature),
-        prev_root: new Uint8Array(l.prev_root),
-        structure1_cbor: new Uint8Array(l.structure1_cbor),
-      }));
-  }
 }

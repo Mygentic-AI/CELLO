@@ -15,9 +15,6 @@ import type {
   HashSubmitAck,
   HashSubmitError,
   LeafDeliver,
-  GapFillRequest,
-  GapFillResponse,
-  GapFillError,
   SessionLivenessQuery,
   SessionLivenessResponse,
   ClientRecordAssignment,
@@ -74,26 +71,6 @@ export function encodeLeafDeliver(frame: LeafDeliver): Uint8Array {
   });
 }
 
-// ─── PERSIST-014: Gap-fill encode ────────────────────────────────────────────
-
-export function encodeGapFillResponse(frame: GapFillResponse): Uint8Array {
-  return ENC.encode({
-    type: frame.type,
-    leaves: frame.leaves.map((l) => ({
-      sequence_number: l.sequence_number,
-      sender_pubkey: l.sender_pubkey,
-      content_hash: l.content_hash,
-      sender_signature: l.sender_signature,
-      prev_root: l.prev_root,
-      structure1_cbor: l.structure1_cbor,
-    })),
-  });
-}
-
-export function encodeGapFillError(frame: GapFillError): Uint8Array {
-  return ENC.encode({ type: frame.type, reason: frame.reason });
-}
-
 // ─── M7-SESSION-001: session_interrupted control frame ────────────────────────
 
 /**
@@ -103,7 +80,7 @@ export function encodeGapFillError(frame: GapFillError): Uint8Array {
  *
  * WIRE CONVENTION (L-1): the on-wire field is INTENTIONALLY snake_case
  * `session_id`, matching every other relay frame (leaf_deliver, hash_submit,
- * gap_fill_*). The camelCase `sessionId` is the in-process TS field only; it is
+ * the surviving session frames). The camelCase `sessionId` is the in-process TS field only; it is
  * mapped to `session_id` here. Do NOT "fix" this to camelCase — doing so breaks
  * the relay wire format and any decoder expecting `session_id`.
  */
@@ -134,7 +111,7 @@ export function encodeSessionLivenessResponse(frame: SessionLivenessResponse): U
 
 // ─── Decode ───────────────────────────────────────────────────────────────────
 
-export type InboundRelayFrame = RelayAuthResponse | HashSubmit | GapFillRequest | SessionLivenessQuery | ClientRecordAssignment;
+export type InboundRelayFrame = RelayAuthResponse | HashSubmit | SessionLivenessQuery | ClientRecordAssignment;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -176,15 +153,6 @@ export function decodeInboundFrame(bytes: Uint8Array): InboundRelayFrame | null 
     const predecessor_relay_sequence = typeof o["predecessor_relay_sequence"] === "number" ? o["predecessor_relay_sequence"] : undefined;
     const predecessor_relay_timestamp = typeof o["predecessor_relay_timestamp"] === "number" ? o["predecessor_relay_timestamp"] : undefined;
     return { type: "hash_submit", session_id, leaf_kind, structure1_cbor, sender_signature, predecessor_relay_id, predecessor_relay_signature, predecessor_relay_sequence, predecessor_relay_timestamp };
-  }
-
-  if (o["type"] === "gap_fill_request") {
-    const session_id = toUint8Array(o["session_id"]);
-    const from_seq = typeof o["from_seq"] === "number" ? o["from_seq"] : null;
-    const to_seq = typeof o["to_seq"] === "number" ? o["to_seq"] : null;
-    if (!session_id || session_id.length !== 16) return null;
-    if (from_seq === null || to_seq === null) return null;
-    return { type: "gap_fill_request", session_id, from_seq, to_seq };
   }
 
   // CELLO-M7-SESSION-003: session_liveness_query

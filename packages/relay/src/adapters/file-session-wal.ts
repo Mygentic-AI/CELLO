@@ -409,16 +409,4 @@ export class FileSessionWal implements SessionWal {
     return leaves;
   }
 
-  /**
-   * PERSIST-014: Retrieve leaves for gap-fill reconciliation.
-   * Reads the WAL file directly without closing any active file handles.
-   * SI-001: Only serves leaves with sequence_number > fromSeq and <= toSeq.
-   */
-  async getLeaves(sessionId: string, fromSeq: number, toSeq: number): Promise<Leaf[] | typeof RELAY_SESSION_UNRECOVERABLE> {
-    const allLeaves = await this.#readAllFromFile(sessionId);
-    if (allLeaves === RELAY_SESSION_UNRECOVERABLE) {
-      return RELAY_SESSION_UNRECOVERABLE;
-    }
-    return allLeaves.filter((l) => l.sequence_number > fromSeq && l.sequence_number <= toSeq);
-  }
 }

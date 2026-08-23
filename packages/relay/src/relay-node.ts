@@ -84,7 +84,6 @@ import * as transport from "@cello-protocol/transport";
 import type { CelloNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import type { Logger, SessionWal, ContentStore } from "@cello-protocol/interfaces";
-import { RELAY_SESSION_UNRECOVERABLE } from "@cello-protocol/interfaces";
 import { ContentParkHandler } from "./content-park.js";
 import { RELAY_LEAF_KINDS, RELAY_LEAF_HASHERS } from "./relay-types.js";
 import type {
@@ -92,7 +91,6 @@ import type {
   RelaySessionState,
   SealData,
   HashSubmitErrorReason,
-  GapFillRequest,
   SessionLivenessQuery,
   ClientRecordAssignment,
 } from "./relay-types.js";
@@ -105,8 +103,6 @@ import {
   encodeHashSubmitAck,
   encodeHashSubmitError,
   encodeLeafDeliver,
-  encodeGapFillResponse,
-  encodeGapFillError,
   encodeSessionInterrupted,
   encodeSessionLivenessResponse,
   decodeInboundFrame,
@@ -954,13 +950,13 @@ export class CelloRelayNode {
           continue;
         }
 
-        // Authenticated: process hash_submit and gap_fill_request frames
+        // Authenticated: process hash_submit and the surviving session frames.
+        // (`gap_fill_request` was dispatched here until `DOD-M15-SEALWIRE-1` bullet 7 deleted the
+        // PERSIST-014 exchange it belonged to — see the directory-side guard for the deadness proof.)
         const parsed = decodeInboundFrame(frameBytes);
         if (!parsed) continue;
         if (parsed.type === "hash_submit") {
           await this.#processHashSubmit(stream, authedPubkeyHex!, parsed);
-        } else if (parsed.type === "gap_fill_request") {
-          await this.#processGapFillRequest(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "session_liveness_query") {
           await this.#processSessionLivenessQuery(stream, parsed);
         } else if (parsed.type === "client_record_assignment") {
@@ -995,77 +991,6 @@ export class CelloRelayNode {
     }
   }
 
-  /**
-   * PERSIST-014: Process gap_fill_request from an authenticated client.
-   * SI-001: Only serves leaves with seq > from_seq (last agreed).
-   * Returns RELAY_SESSION_UNRECOVERABLE if WAL is unavailable.
-   */
-  async #processGapFillRequest(
-    stream: Stream,
-    senderPubkeyHex: string,
-    frame: GapFillRequest,
-  ): Promise<void> {
-    const sessionKey = Buffer.from(frame.session_id).toString("hex");
-
-    // Verify the requester is a participant in this session
-    const state = this.#store.getSession(sessionKey);
-    if (!state) {
-      try {
-        await this.#sendFrame(stream, encodeGapFillError({ type: "gap_fill_error", reason: "session_not_found" }));
-      } catch { /* stream closed */ }
-      return;
-    }
-
-    const aHex = Buffer.from(state.assignment.participant_a).toString("hex");
-    const bHex = Buffer.from(state.assignment.participant_b).toString("hex");
-    if (senderPubkeyHex !== aHex && senderPubkeyHex !== bHex) {
-      try {
-        await this.#sendFrame(stream, encodeGapFillError({ type: "gap_fill_error", reason: "not_a_participant" }));
-      } catch { /* stream closed */ }
-      return;
-    }
-
-    // Validate bounds before WAL access
-    if (frame.from_seq < 0 || frame.to_seq < 0 || frame.from_seq > frame.to_seq || (frame.to_seq - frame.from_seq) > 1000) {
-      try {
-        await this.#sendFrame(stream, encodeGapFillError({ type: "gap_fill_error", reason: "wal_unavailable" }));
-      } catch { /* stream closed */ }
-      return;
-    }
-
-    // If no SessionWal is configured, WAL is unavailable
-    if (!this.#sessionWal) {
-      this.#logger.error("relay.gap.fill.failed", { sessionId: sessionKey, reason: "session_wal_not_configured" });
-      try {
-        await this.#sendFrame(stream, encodeGapFillError({ type: "gap_fill_error", reason: "wal_unavailable" }));
-      } catch { /* stream closed */ }
-      return;
-    }
-
-    const result = await this.#sessionWal.getLeaves(sessionKey, frame.from_seq, frame.to_seq);
-    if (result === RELAY_SESSION_UNRECOVERABLE) {
-      this.#logger.error("relay.gap.fill.failed", { sessionId: sessionKey, reason: "wal_unrecoverable" });
-      try {
-        await this.#sendFrame(stream, encodeGapFillError({ type: "gap_fill_error", reason: "wal_unavailable" }));
-      } catch { /* stream closed */ }
-      return;
-    }
-
-    // Send gap-fill response with the filtered leaves
-    try {
-      await this.#sendFrame(stream, encodeGapFillResponse({
-        type: "gap_fill_response",
-        leaves: result.map((l) => ({
-          sequence_number: l.sequence_number,
-          sender_pubkey: l.sender_pubkey,
-          content_hash: l.content_hash,
-          sender_signature: l.sender_signature,
-          prev_root: l.prev_root,
-          structure1_cbor: l.structure1_cbor,
-        })),
-      }));
-    } catch { /* stream closed */ }
-  }
 
   /**
    * M7-SESSION-003 AC-002: answer a session_liveness_query over the relay stream.
