@@ -4865,3 +4865,82 @@ causes collapse; the reason falls back to `annex_write_failed`; the encoder fold
 - `getSessionContentSalt` cannot write, and the salt reaches no log, wire field or IPC response.
 - A refusal **cannot** delete the relay copy — the terminal-block delete is unreachable from both new
   branches. That was the right thing to worry about.
+
+---
+
+## Entry 46 — I fixed "the wiring has no test" and shipped the fix with no test
+
+Pass 2 of part B2a, closing it on the two-pass cap. One blocking finding, two non-blocking, and a
+mutant that survived my own re-run and exposed something worse than the finding did.
+
+### The verdict, quoted
+
+> **HOLLOW TESTS FOUND [blocking]** — the F1 fix has zero coverage and is provably undetectable by
+> the suite (Finding 2); three of the four new annex tests assert a return field with no production
+> consumer (Finding 3).
+> **SPEC: DEVIATIONS FOUND** — F1's gate (`result.ok`) does not implement "only on a real
+> reconciliation".
+> **NO SILENT FALLBACKS** — nothing new. **ERRORS NAME THEIR CAUSE** — the two split refusals name
+> the right subsystem and promise nothing. **REMOVALS PROVEN** — no signed or hashed bytes are
+> affected by the encoder change.
+
+The reviewer *proved* Finding 2 rather than grepping it: `content.recover.alg_refusal_reconciled`
+appears twice in the whole repository — its emit site and its `dist/` output — and the memo behind it
+is private, reaching no IPC surface and no return value. So the log line is its only observable
+effect, and reverting half the fix **could not be distinguished by any test in the suite.**
+
+That is pass 1's own finding class repeating inside pass 1's own commit. I fixed *"neither production
+wiring has a test"* and shipped that fix with no test.
+
+### `ok` is not "delivered"
+
+`ingestReceivedContent` returns `ok` in three shapes and only one is a delivery: a **held** frame is
+buffered behind an ordering gap, and a **screened-out** frame is leafed and permanently never shown.
+Announcing *"the message was delivered by the other route"* for either is a false all-clear on the
+operator's one line about that message — and the memo is deleted in the same breath, so nothing
+re-raises it.
+
+### The mutant that survived, and what it found
+
+I wrote the missing test. Re-running the predicate mutant **individually** — the rule I had sent the
+other lane ninety minutes earlier — it **SURVIVED**.
+
+The test read `if (res.ok) expect(announced).toBe(1); else expect(announced).toBe(0);`. It adapts to
+whatever happens, so it only ever took the success branch, where the mutant and the fix behave
+identically. **That is the conditional assertion the B1 review caught me on, and which I had just
+described to another agent, in writing, as "a wish".** Both cases are deterministic now: the failure
+case re-parks the entry *still* naming the unreadable algorithm, so ingest refuses it by construction.
+
+The fixture was wrong on the first attempt too, and the test caught it rather than me — my
+"unrelated message" reused the same body, so it produced the same content hash and was not unrelated
+at all. A test whose unrelated case is secretly the related one proves nothing about keying.
+
+### The labels reached nothing
+
+`recoverParkedFromRelay` has always returned a `refusals` array and **both callers dropped it** — the
+IPC handler returned only `{recovered, pulled}`, the unattended drain reads only `res.recovered`. So
+every reason computed in that loop reached a vitest assertion and nothing else, including the four
+this milestone added to tell a version skew from a missing salt from a tamper from a storage fault.
+The pass-1 fix was a label with no reader; three of its tests asserted a channel nobody can observe.
+Both callers carry it now, the drain as counts by reason so one fault does not become a wall of log.
+
+### Said out loud rather than left looking covered
+
+Dropping the `screenedOut` half of the predicate **survives** the suite, because a terminal inbound
+block needs a detector the shipping gateway does not wire. The clause stays — the day one is wired it
+is the difference between an all-clear and a permanent silent discard — but the comment now says it
+is unreachable, so nobody reads it as covered.
+
+### What the reviewer confirmed independently
+
+- The F6 restatement: `git tag --contains` on the salt-agreement commit returns empty against 261
+  tags, so no published build has it at all. The comment is true as restated.
+- The producer throw loses no message at either site — traced through `#parkContent`'s catch and
+  `drainAwaitingToPark`'s `PERMANENT_PARK_FAILURES`. **But** the thrown English paragraph lands in
+  `cause`, a field documented as the machine-readable half. B2b must throw a coded error.
+- The discriminant `alg.alg !== SHA256 && !sessionSalt` is exact, and the catch behind it genuinely
+  unreachable.
+- `annexRefusal` is complete: `annex_write_failed` is now reachable only through `recordSealedAnnex`
+  returning false, which is what its comment claims.
+
+Gate: 4403 client tests, lint, typecheck, build — by exit code.
