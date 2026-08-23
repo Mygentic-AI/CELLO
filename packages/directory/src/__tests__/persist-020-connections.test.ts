@@ -826,24 +826,11 @@ describeIntegration(
         [connectionId],
       );
 
-      // Chain verification must detect the break
-      const verifyLogger = makeLogger();
-      const verifyStore = new PgDirectoryStore(servicePool, verifyLogger);
-      const result = await verifyStore.verifyChain("connections");
-      expect(result.valid).toBe(false);
-      expect(result.breakAtSequence).toBeDefined();
-
-      // db.chain.break.detected must have been logged
-      expect(verifyLogger.error).toHaveBeenCalledWith(
-        "db.chain.break.detected",
-        expect.objectContaining({ tableName: "connections" }),
-      );
-
       /**
-       * DOD-M15-CHAINDEBT-1 — UNDO THE TAMPER. This is the one test in the file that genuinely
-       * left the table broken, and it is why the two whole-table wipes existed.
+       * DOD-M15-CHAINDEBT-1 — UNDO THE TAMPER, IN A `finally`. This is the one test in the file
+       * that genuinely left the table broken, and it is why the two whole-table wipes existed.
        *
-       * The tamper is deliberate and the assertion above is the point — but the corrupted row
+       * The tamper is deliberate and the assertions below are the point — but the corrupted row
        * persisted, so `verifyChain` stayed red for every later run and every other suite, and the
        * only remedy anyone had was to empty a hash-chained table. Restoring the column returns the
        * row to the serialization its `chain_hash` was computed over, so the chain verifies again
@@ -851,11 +838,32 @@ describeIntegration(
        *
        * An UPDATE back, never a DELETE: removing the row would break its SUCCESSORS, which is the
        * damage this whole unit exists to remove.
+       *
+       * **`finally`, on review (F3).** The first version put the restore after four `expect`s with
+       * no guard. A failing assertion — the break NOT being detected, say — would skip the restore
+       * and leave `connections` permanently tampered: exactly the state the wipes were papering
+       * over, reached by the one path where someone is already debugging. A cleanup that only runs
+       * when nothing went wrong is not a cleanup.
        */
-      await superPool.query(
-        `UPDATE connections SET participant_a = $1 WHERE connection_id = $2`,
-        [participantA, connectionId],
-      );
+      try {
+        // Chain verification must detect the break
+        const verifyLogger = makeLogger();
+        const verifyStore = new PgDirectoryStore(servicePool, verifyLogger);
+        const result = await verifyStore.verifyChain("connections");
+        expect(result.valid).toBe(false);
+        expect(result.breakAtSequence).toBeDefined();
+
+        // db.chain.break.detected must have been logged
+        expect(verifyLogger.error).toHaveBeenCalledWith(
+          "db.chain.break.detected",
+          expect.objectContaining({ tableName: "connections" }),
+        );
+      } finally {
+        await superPool.query(
+          `UPDATE connections SET participant_a = $1 WHERE connection_id = $2`,
+          [participantA, connectionId],
+        );
+      }
       const restored = await new PgDirectoryStore(servicePool, makeLogger()).verifyChain("connections");
       expect(
         restored.valid,
