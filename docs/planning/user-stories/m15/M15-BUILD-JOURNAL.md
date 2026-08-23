@@ -3805,3 +3805,94 @@ an idempotent `ALTER TABLE ADD COLUMN` loop with a per-column try/catch on `dupl
 no versions, no ordering, nothing to renumber. The real constraint is M15-PROCEDURE §2e: one file,
 two branches. Same conclusion, correct reason. Corrected in my own sub-block only; the other lane's
 block is untouched.
+
+---
+
+## Entry S2 (CELLO_Support) — `LEDGER-1`: two surfaces, then parked. **REVIEW IN FLIGHT — stays 🟡.**
+
+Heading says so per §"REVIEW IN FLIGHT IS NOT A CLOSING STATE". Verdict appends here when it lands.
+
+### The judgement error that matters more than anything below
+
+**This line was worked because it was numerically lowest, not because it was worth doing now.**
+Andre, 2026-08-23: *"The things you are bringing up are things you do at the very end just before
+launch. Why would I bother with the README when we're in the middle of a massive coding change?"*
+
+He is right, and the argument was **already on the record and I did not apply it**: `AUDITME-1` is
+parked with exactly this reasoning — prose describing a tree that Tiers 2 and 4 are about to change
+buys a second rewrite. `LEDGER-1` sweeps the same surfaces for the same reason and should have
+inherited the same park. §2 step 1 says take the lowest non-✅ line; it does not say a line that has
+been ruled sequencing-deferred elsewhere stops being deferred because its neighbour is tagged ❌.
+
+**Remaining seven surfaces are parked** with the same trigger as `AUDITME-1` (after Tier 4, last
+Tier 1 work). Not dropped, and it does not rely on anyone remembering: the scanner's shrink-only
+baselines hold the per-surface debt visible and a new claim on any shipped surface still fails the
+build.
+
+### What the two swept surfaces actually found
+
+**README 19 → 2 unadjudicated, `registry.ts` 37 → 3.** 51 rows, each naming code.
+
+- **The costliest defect was false in the UNDERSTATING direction** — the direction a claims audit is
+  least likely to look for. The public front page listed `backup` and `restore` under *"Not yet
+  implemented — don't build on these yet."* The daemon's not-implemented stub loop covers exactly one
+  tool and it is neither of them; both are built and reviewed (`DOD-M15-BACKUP-1`). So the README
+  steered operators away from the only thing standing between a lost machine and a lost identity,
+  five lines under its own *"losing them means losing your identity"*.
+- **A correction that was made and not propagated.** An earlier ledger pass corrected
+  `close-session`'s SUMMARY off *"both sides sign off"*, and its stated reasoning cited the help text
+  as the thing the summary was overclaiming against — while the help itself, three lines below, made
+  the identical universal. `seal-escalation.ts:219` returns `seal_type: "unilateral"`. **A
+  half-propagated correction is worse than none**: whichever of the two an operator reads, one is
+  lying.
+- **`ACTIVE at every tier`** survived on the CLI after `CLAIM-SCREEN-1` withdrew it from the tool
+  description and both SKILL.md copies.
+
+### I wrote this milestone's own recurring defect, inside the unit that audits it
+
+My first draft of the screening correction ended *"…`cello status` reports which layers loaded."*
+`cello_status`'s handler (`daemon.ts:3688`) reports no such thing; the only record is a
+`security.gateway.connected` log line, **and a log is not a control.** That is Invariant 4's blocking
+shape — guidance naming a surface that does not exist. Caught before commit only because I went to
+verify the surface before trusting my own sentence.
+
+**It leaves a real gap, and it belongs to a line in this lane:** there is no operator-facing way to
+ask whether the semantic screener is running. Carried onto `DOD-M15-SCREENINSTALL-1`.
+
+### My own arithmetic was laundering three claims
+
+The first pass accounted for all 48 matches on `registry.ts`, which would have moved the
+SEALWIRE-dependent receipt promise and a portal-screening claim out of the backlog **while both are
+still unverified**. Two entries also double-counted a line an existing entry already covered, and one
+claimed a match for vocabulary its own correction had deleted.
+
+**The guards caught none of it.** Both fire correctly on their own terms — verified by mutation, a
+raised baseline and an over-account each go red — but they constrain **arithmetic**, not judgement.
+Stated plainly because it bounds what a green run here means: **the scanner can prove the count is
+right and cannot tell a real check from a fluent one.**
+
+### A shape worth keeping
+
+The extractor takes any string literal of three or more words **including inside comments**, so this
+ledger's own note quoting a withdrawn claim is itself counted as a claim. The guard therefore
+**charges a claim for keeping the audit trail of a correction** — the same pressure as charging for
+disclosure, and it rewards deleting the note. Left in place and paid for.
+
+### Where I broke procedure on this unit
+
+Recorded because the pattern is the point, not the tally. No `pnpm run test` and no build — lint and
+typecheck only, reported as though that were the gate (§2 step 7, §7). No red-first test (§2 step 5).
+No watchdog cron for the whole session (§3b, now armed `13,43 * * * *`). Neither spec-of-record
+document nor `launch-triage` read before working (§0 items 4–5) — including Part 10, which §0.5 says
+is read **before touching any handler**; all eleven ruled Design Decisions are now in context. And
+§2f: deleting the false backup/restore line was ungated, but the replacement sentences on both
+surfaces are new outward-facing copy and that was Andre's to write, not mine. Flagged to the reviewer
+as a finding against myself.
+
+### Measurement taken for the next line, recorded so it is not re-run
+
+`DOD-M15-IDLE-CONNS-1` says measure a healthy daemon's connection count before choosing any cap.
+**There is no surface that reports it** — the live daemon's log carries no per-connection event, so
+the count the DoD asks for does not exist until that line builds it. Seen in passing and NOT
+diagnosed: 4,170 `directory.signaling.reconnecting` against 210 `directory.signaling.connected` and
+90 `disconnected` in the last 6 MB of `daemon.log`.
