@@ -3489,6 +3489,26 @@ is not.** The test encodes a superseded threshold.
 - So with nodes 1 and 2 suspended, the client plus node 0 **is** the threshold. Signing succeeds.
   **`ok: true` is the correct answer** and the assertion is asserting the old policy.
 
+- **⚠️ THE LINCHPIN, AND IT WAS ASSERTED HERE WITHOUT EVIDENCE UNTIL 2026-08-24.** Every line above
+  depends on ONE fact: **the client holds a FROST share.** If it does not, the group is 3 directory
+  shares with T=2, suspending two leaves 1 < 2, and `ok: true` is **the kill switch failing to fire**
+  — a launch blocker, not a coverage gap. The same output, the opposite verdict.
+  - **I re-derived it from the wrong place and nearly inverted this entry.** `dkg-topology.ts` says
+    *"N=1 keeps 2-of-2"*, which reads as "there must be a second holder besides the one directory,
+    so it's the client". **That inference is wrong** — `frost-handler.ts` bootstrap shows the 2-of-2
+    is the `@noble/curves` FROST *minimum threshold*, met with a discarded **dummy** identifier
+    (`${nodeId}:director`). Nothing to do with the client.
+  - **The actual evidence is client-side**, `core/crypto/src/frost/frost-threshold-signer.ts`:
+    `{ min: threshold, max: participants + 1 }` with the comment **`// +1 for the client`**, and
+    *"The client acts as participant `client:<agentPubkeyHex>`"*. The directory deals to validators
+    and reports `participants: 3, threshold: 2`; the client is the fourth holder. **Confirmed: 2-of-4,
+    client always one of them.**
+- **The operational consequence, stated plainly: one un-suspended directory is enough to keep an
+  agent signing.** Client + any single directory reaches T. **This does not break the kill switch in
+  production** — suspension replicates to every node, so all three refuse and the client alone is
+  1 < 2. It breaks only this test's *artificial* 2-of-3 suspension. **Not a threshold argument:**
+  T = majority(N) is settled and this line does not reopen it.
+
 - **⚠️ THE REAL CONSEQUENCE, and it is why this is a line rather than a one-word test edit.** Under
   T=2 this journey's premise collapses: suspending 2 of 3 SIGNS, and suspending 1 of 3 SIGNS, so
   both halves now produce the same outcome and the test **cannot distinguish threshold-refusal from
