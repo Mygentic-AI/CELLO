@@ -963,7 +963,46 @@ export class CelloRelayNode {
         // (`gap_fill_request` was dispatched here until `DOD-M15-SEALWIRE-1` bullet 7 deleted the
         // PERSIST-014 exchange it belonged to — see the directory-side guard for the deadness proof.)
         const parsed = decodeInboundFrame(frameBytes);
-        if (!parsed) continue;
+        if (!parsed) {
+          /**
+           * ⚠️ A REFUSED FRAME MUST NOT VANISH — my own invariant check on `DOD-M15-SEALWIRE-1`'s
+           * relay leg, and it is the SAME defect I had just fixed on the directory side.
+           *
+           * This was a bare `continue`. The new ctrl-only guard refuses a submit that carries content
+           * for a `msg` or `doc` leaf — which is a client trying to hand a relay the operator's
+           * plaintext, the single thing INV-3 exists to prevent — and that refusal produced no log
+           * line, no counter, and no answer to the client. The most security-relevant thing this
+           * decoder can say was the thing it said least loudly: nothing.
+           *
+           * Two audiences, and they need different things. The relay operator needs to know a peer is
+           * sending frames this build refuses, and *which*. The client needs to know its submit did
+           * not land — it already does, because no `hash_submit_ack` comes back and the submit path
+           * treats a missing ack as a failure; what it could not know is why, and that is what
+           * `reason` is for when this is escalated to an error frame.
+           *
+           * WARN, not debug, and the level is the point: unlike the directory's signaling stream —
+           * where an unknown frame is an ordinary version skew during a roll — every field on this
+           * frame is one this build has always known. A refusal here means a malformed submit or a
+           * client attempting something the relay declines to hold, and neither is routine.
+           *
+           * Best-effort `type`/`leaf_kind` peek: these bytes already failed a strict decode, so it
+           * must not throw and must not assert the values mean anything.
+           */
+          let rawType = "(undecodable)";
+          let rawLeafKind: number | null = null;
+          try {
+            const peek = decode(frameBytes) as Record<string, unknown> | null;
+            if (peek && typeof peek["type"] === "string") rawType = peek["type"];
+            if (peek && typeof peek["leaf_kind"] === "number") rawLeafKind = peek["leaf_kind"];
+          } catch { /* not CBOR, or not an object — "(undecodable)" is the honest answer */ }
+          this.#logger.warn("relay.session.frame.refused", {
+            rawType,
+            leafKind: rawLeafKind,
+            clientPubkey: authedPubkeyHex?.slice(0, 16) ?? "unknown",
+            impact: "this frame was refused and NOT processed — no leaf was sequenced and no ack was sent, so the client's submit fails. A ctrl-only violation (content_bytes on a non-ctrl leaf) lands here: that is a client offering the relay message or document content, which this relay does not accept.",
+          });
+          continue;
+        }
         if (parsed.type === "hash_submit") {
           await this.#processHashSubmit(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "session_liveness_query") {

@@ -35,6 +35,7 @@
 import { describe, it, expect } from "vitest";
 import { Encoder } from "cbor-x";
 import { decodeInboundFrame } from "../relay-frames.js";
+import { readFileSync } from "node:fs";
 
 const CBOR = new Encoder({ tagUint8Array: false });
 
@@ -118,6 +119,42 @@ describe("DOD-M15-SEALWIRE-1 relay half: the SEAL payload rides, and only on a c
     expect(decodeInboundFrame(submit(CTRL, "a1b2c3")), "hex-as-string is the encoding bug that happens").toBeNull();
     expect(decodeInboundFrame(submit(CTRL, { hex: "a1b2" }))).toBeNull();
     expect(decodeInboundFrame(submit(CTRL, 42))).toBeNull();
+  });
+
+  it("★★ THE REFUSAL IS AUDIBLE — a security refusal that vanishes is not a refusal", () => {
+    /**
+     * ⚠️ MY OWN INVARIANT CHECK CAUGHT THIS, AND IT IS THE SAME DEFECT I HAD FIXED ON THE DIRECTORY
+     * SIDE HOURS EARLIER.
+     *
+     * The decoder refuses by returning null, and the relay's dispatch loop did `if (!parsed)
+     * continue;` — bare. So the single most security-relevant thing this decoder can say (a client is
+     * offering us the operator's plaintext) produced no log line, no counter and no answer. The relay
+     * operator would never know a peer was doing it.
+     *
+     * Asserted at the SOURCE level rather than by standing up a relay, because that is what this file
+     * can honestly reach: it is a decoder test, and the log lives one layer up. The anchor is pinned
+     * first, so a moved or renamed dispatch fails this loudly instead of silently matching nothing —
+     * which is how two guards in this milestone passed while checking nothing at all.
+     */
+    const src = readFileSync(new URL("../relay-node.ts", import.meta.url), "utf8");
+    expect(
+      src.includes("const parsed = decodeInboundFrame(frameBytes);"),
+      "ANCHOR — if the dispatch moved or was renamed, this test is reading the wrong thing and must fail",
+    ).toBe(true);
+    expect(
+      src.includes("relay.session.frame.refused"),
+      "a refused frame must leave a trace — without one, a client offering the relay plaintext is indistinguishable from a client sending nothing",
+    ).toBe(true);
+    const at = src.indexOf("relay.session.frame.refused");
+    const around = src.slice(Math.max(0, at - 600), at + 600);
+    expect(
+      around.includes("this.#logger.warn"),
+      "and at WARN — unlike the directory's signaling stream, every field on this frame is one this build has always known, so a refusal here is never routine version skew",
+    ).toBe(true);
+    expect(
+      around,
+      "the line must name WHICH frame, or the operator cannot tell a malformed submit from a ctrl-only violation",
+    ).toMatch(/rawType/);
   });
 
   it("★ an oversized payload on a ctrl leaf is refused — the field is not a smuggling channel", () => {
