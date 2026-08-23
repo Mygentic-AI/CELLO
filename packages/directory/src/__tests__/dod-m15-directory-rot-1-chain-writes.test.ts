@@ -157,9 +157,7 @@ const KNOWN_DEBT_INSERTS = [
 
 /** Still deleting from a chained table. Shrink; do not add. */
 const KNOWN_DEBT_DELETES = [
-  "federation-001.test.ts",
   "federation-003.test.ts",
-  "m6b-010-startup-state-restore.test.ts",
   "persist-020-connections.test.ts",
   "persist-021-adapter-boundary-audit.test.ts", // partially converted — see the note above
   "persist-reconnect-session-survival.test.ts",
@@ -239,7 +237,7 @@ describe("DOD-M15-DIRECTORY-ROT-1: fixtures never put a hole in a hash-chained t
     // Lower these as files are converted; never raise them. DOD-M15-CHAINDEBT-1 owns driving both
     // to zero, at which point the lists and this assertion go with them.
     expect(KNOWN_DEBT_INSERTS.length, "the insert backlog must shrink, never grow").toBeLessThanOrEqual(5);
-    expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(6);
+    expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(4);
   });
 
   it("the ROLLED_BACK and ALLOWED_DELETES entries still name files that exist", () => {

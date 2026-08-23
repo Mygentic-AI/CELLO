@@ -188,8 +188,10 @@ describeIntegration("M6B-010: PgDirectoryStore startup state load", () => {
     // If it did, map lookups in directory-node.ts would silently miss the restored state.
     expect(found!.sessionId).not.toContain("-");
 
-    // Cleanup
-    await pool.query("DELETE FROM sessions WHERE session_id = $1", [sessionId]);
+    // DOD-M15-CHAINDEBT-1: no cleanup, deliberately. `sessions` is hash-chained, so deleting a row
+    // leaves every row after it unable to verify — permanently, and in suites that never touch
+    // this file. `sessionId` is `randomBytes(16)` per test, so the row collides with nothing and
+    // costs nothing by staying.
   });
 
   it("AC-002: loadActiveSessionParticipants returns genesis timestamp as genesisTimestampMs", async () => {
@@ -234,8 +236,10 @@ describeIntegration("M6B-010: PgDirectoryStore startup state load", () => {
     // IMP-001: Verify the key format round-trip — loaded sessionId must not contain dashes.
     expect(found!.sessionId).not.toContain("-");
 
-    // Cleanup
-    await pool.query("DELETE FROM sessions WHERE session_id = $1", [sessionId]);
+    // DOD-M15-CHAINDEBT-1: no cleanup, deliberately. `sessions` is hash-chained, so deleting a row
+    // leaves every row after it unable to verify — permanently, and in suites that never touch
+    // this file. `sessionId` is `randomBytes(16)` per test, so the row collides with nothing and
+    // costs nothing by staying.
   });
 
   it("AC-003b: loadActiveSessionParticipants excludes sessions with seal_notarizations", async () => {
@@ -273,8 +277,10 @@ describeIntegration("M6B-010: PgDirectoryStore startup state load", () => {
     const foundAfter = after.find((s) => s.sessionId === sessionId);
     expect(foundAfter).toBeUndefined();
 
-    // Cleanup
-    await pool.query("DELETE FROM sessions WHERE session_id = $1", [sessionId]);
+    // DOD-M15-CHAINDEBT-1: no cleanup, deliberately. `sessions` is hash-chained, so deleting a row
+    // leaves every row after it unable to verify — permanently, and in suites that never touch
+    // this file. `sessionId` is `randomBytes(16)` per test, so the row collides with nothing and
+    // costs nothing by staying.
   });
 
   it("AC-001: deleteActiveConnectionRequest removes it from loadActiveConnectionRequests", async () => {
