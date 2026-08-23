@@ -929,7 +929,14 @@ trip-wire (§0z.2) says record and stop; a wrong root cause here is expensive be
 radius looks shared.
 
 **The measurement, and nothing more:** `pnpm run test:spine` → **21 of 36 files failed, 49 of 98
-tests**, 3,387 seconds, exit 0 on the wrapper. Every file listed in Entry S12.
+tests**, 3,387 seconds, **vitest exit 1**. Every file listed in Entry S12, and the full log is
+committed at `receipts/2026-08-23_spine-lane-full-run.log` — the original was in a temp directory a
+reboot clears, and re-running to recover the failure texts costs another hour.
+
+> **An earlier version of this line said "exit 0 on the wrapper", and that was wrong** — the 0 was
+> the last statement of a compound shell command, not vitest. `SPINE_EXIT=1`, captured. It matters
+> because the exit code is the ONLY thing a scheduler reads: the lane reports its failure honestly,
+> so wiring it up later gives an honest red rather than a false green.
 
 - **Why this blocks:** `.claude/CLAUDE.md` — *"No milestone closes until a live multi-process smoke
   test passes."* This IS that test. **A close today would be a close with no evidence**, and the
@@ -959,8 +966,41 @@ tests**, 3,387 seconds, exit 0 on the wrapper. Every file listed in Entry S12.
 - **Enforcer:** `test:spine` green, or every remaining failure carrying a written verdict of
   environment / stale-expectation / real-defect, with the real ones lined up.
 
-### `DOD-M15-SPINE-LANE-1` — ❌ The spine suites are run, or their absence is a decision on the record
-Split from `DOD-M15-CI-SKIPS-SILENT-1`. 38 files — the M8D spine lane plus the cross-machine
+### `DOD-M15-SPINE-LANE-1` — ✅ The spine suites are run, or their absence is a decision on the record
+> **CLOSED 2026-08-23 (CELLO_Support) → Entry S12.** Reviewed; three blocking findings, all fixed.
+> Verdict quoted: *"SPEC: DEVIATIONS FOUND — clause 3 only. The decision is right; its recorded
+> reason is false… and neither the decision nor the receipt is attached to SPINE-LANE-1's own DoD
+> entry."* Gate: 8/8, tsc 0, eslint 0, enforcer revert-tested.
+>
+> **THE DECISION: manual, not scheduled.** (1) `cross-machine` needs a second physical machine.
+> (2) The spine config needs the `cello-portal` sibling repo checked out beside this one — a
+> cross-repo checkout credential, not a config line. (3) The lane is 56 minutes and **half red**, so
+> scheduling it today creates a permanently red required check, which `.github/workflows/ci.yml`'s
+> own header already rules against. **REVISIT once `SPINERED-1` is green** — the CI host exists.
+>
+> **OWNER — spine:** whichever lane closes M15 runs it BEFORE the close gate and pastes the result
+> into the journal. `.claude/CLAUDE.md` says no milestone closes without a live multi-process smoke
+> test; **this is that test**, so a close without it is a close without evidence.
+> **OWNER — cross-machine:** Andre, by hand, on the two-machine setup. Not required for the close
+> gate; required before claiming cross-machine support.
+>
+> **RECEIPT:** Entry S12 + `receipts/2026-08-23_spine-lane-full-run.log`. 21/36 red → `SPINERED-1`.
+>
+> **⚠️ TWO FALSE STATEMENTS I COMMITTED AND THE REVIEW CAUGHT**, recorded because both were the
+> milestone's own defect class: *"the lane is not rotted"* (written after ONE green file, falsified
+> by the full run), and *"the only CI is the stale AWS pipeline set"* (`ci.yml` is live and the same
+> file says so 190 lines below). The decision survived; its stated reason did not.
+>
+> **The enforcer, and its honest limit.** The declaration is no longer prose: each hidden lane names
+> a command, and the command is asserted to EXIST **and to collect the excluded pattern** — narrowing
+> the spine config's `include` would otherwise un-collect 35 files with the script name untouched,
+> which is `CI-SKIPS-SILENT-1` reproduced inside the escape hatch built to close it. It still proves
+> only that the lane is *reachable*, never that it *works*; "works" is `SPINERED-1`.
+>
+> **CARRIED:** both guards read only `exclude:` in `packages/*/vitest.config.ts` — a narrowed
+> `include:` hides files just as completely and neither sees it. That is failure mode #2 from this
+> guard file's own header, half-covered.
+Split from `DOD-M15-CI-SKIPS-SILENT-1`. **37** files (the line said 38; measured) — the M8D spine lane plus the cross-machine
 transport tests — are excluded by `packages/e2e-tests/vitest.config.ts` and therefore **never
 collect under any environment**. Worse than the env-gated suites, which at least print a skipped
 line; these produce no output at all.

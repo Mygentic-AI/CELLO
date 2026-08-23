@@ -11,6 +11,8 @@
     "typecheck": "tsc --build",
     "test": "vitest run",
     "test:all": "pnpm -r --workspace-concurrency=1 run test",
+    "test:spine": "pnpm --filter @cello-protocol/e2e-tests run test:spine",
+    "test:cross-machine": "pnpm --filter @cello-protocol/e2e-tests run test:cross-machine",
     "lint": "eslint packages/*/src",
     "dev": "pnpm --filter @cello-protocol/directory run start & pnpm --filter @cello-protocol/relay run start"
   },
