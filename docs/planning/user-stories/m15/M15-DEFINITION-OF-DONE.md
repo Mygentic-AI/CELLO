@@ -3593,3 +3593,43 @@ tested, and already receiving the bytes.
   separately from the bilateral one.
 - **Enforcer:** unit — a unilateral seal whose carried payload names a root over a larger leaf set
   than the one presented must be refused.
+
+---
+
+### `DOD-M15-SEALREJECT-MUTE-1` — 🅿️ POST-LAUNCH BACKLOG. The one moment the system catches the attack it was built for is the moment it tells nobody
+**Raised by review pass 1 on `DOD-M15-SEALWIRE-1` bullets 3+4 (findings F2 and F7), filed as ONE
+line because they are one operator-visible problem. Verified in code, not taken from the review.**
+
+**What an operator lives through.** Alice closes. Bob closes. The directory catches a relay
+presenting a leaf set the participants never signed, refuses to certify it, and writes an accurate
+error to its own log. Alice and Bob see: **a close that never completes.** No receipt, no error, no
+reason. The two people it happened to are the only parties told nothing.
+
+**The two halves, and why neither is worth fixing alone:**
+
+- **F7 — the frame has no consumer.** `#notifySealRejected` broadcasts `session_seal_rejected` to
+  every authenticated stream. A grep of the whole `cello-client` repo returns **one hit: the type
+  definition**. No decoder, no handler, no listener. The frame has never been read by anything.
+- **F2 — and its reason is wrong anyway.** `SealRejectionReason` is a closed seven-value union with
+  nothing for a final-root failure, so all six `SEAL_FINAL_ROOT_REASONS` are broadcast as
+  `merkle_root_mismatch` — the label of the *circular arithmetic check* that bullet 4 exists to
+  distinguish itself from. The direction is backwards too: the accused (the relay) receives the
+  accurate reason on its own error path, while the victims receive the misleading one.
+
+Fixing F2 alone re-labels a frame nobody decodes. Fixing F7 alone gives operators a consumer that
+reports the wrong subsystem. **The work is: extend the union, bump `protocol-types`, and give the
+client a handler that surfaces it through the close path.**
+
+**⚠️ I CLASSIFIED THIS BELOW THE REVIEWER, WHO MARKED F2 BLOCKING — recorded so the disagreement is
+visible rather than resolved by silence.** My reasoning: the gate is frozen and the launch test is
+whether a prospective customer is *ruined* or can *forgive*. This fires only when a relay presents a
+tampered or corrupt leaf set. In the ordinary case the seal succeeds; when it does not, the operator
+already has `cello_sealed_receipt` and the close path's `pullSealCertificate` recovery, so they learn
+there is no receipt — just not why. That is a bad experience, not a lost core promise, and it has
+been the behaviour for the life of the frame. **If Andre disagrees, this belongs in the gate and the
+reviewer was right.**
+
+- **Enforcer:** unit on both sides — the directory sends a reason that names the final-root check,
+  and the client's close path surfaces a refusal instead of a silent non-completion.
+- **Cross-repo:** needs a `@cello-protocol/protocol-types` version bump and publish (human-gated),
+  then the `trustless-cello` package.json update.
