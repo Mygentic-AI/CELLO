@@ -5476,3 +5476,106 @@ files.
 while every value is `sha256`, and reachable the day B2b-2 lands. The source assertions should be
 merged into the existing adapter guard rather than cloned, and `matchAll` used so a second adapter
 appearing earlier in the file cannot mask the one being checked.
+
+---
+
+## Entry S10 (CELLO_Support) — the chain was not broken. A test broke it and walked away
+
+`CHAINROUNDTRIP-1`'s review found in one query what three of my diagnoses had missed, and the
+answer reframes the whole line: **`seal_notarizations` never had a serialization defect.** Its chain
+was doing exactly its job.
+
+### The finding
+
+`persist-018` SI-003 proves the verifier catches a superuser tamper. It zeroes a row's
+`frost_signature`, asserts the chain goes red — and stops there. Its `describe` is the last in the
+file and the only cleanup is a `beforeEach` TRUNCATE, so a run ends with one row of sixty-four zero
+bytes sitting in a shared database. `verifyChain` stops at the FIRST break. One unrestored row makes
+the table permanently unverifiable for every test, operator and auditor downstream.
+
+The full suite then turned up a **second file doing the identical thing** —
+`m7-upgrade-001-superseding-notarization` — which is why the table looked healthy on its own and red
+in a full run. Neither test was wrong about what it was proving. Both assumed they were the only
+writer to a table nobody owns.
+
+### The reason it cost three wrong diagnoses
+
+**A red chain looks the same whether the DATA is wrong or the CHECK is wrong.** That is not a
+weakness of the design; it is what a tamper-evident chain is *for*. But it means "the chain is red"
+is the beginning of an investigation, not a finding — and I kept treating it as a finding, then
+hunting for the defect in the writer, because the writer is where a defect *would* be. Nothing in
+the evidence pointed there. I ruled out the `bytea` round-trip, the anti-entropy path, and all
+eleven columns one at a time, and every one of those ruled-outs was correct and useless: they were
+all searches of the same wrong place.
+
+The question that resolved it in a single query was **"which value differs, and who wrote it?"** —
+the producer/consumer frame the debugging discipline already prescribes. I had the frame and did not
+apply it, because a hash mismatch reads like a hashing problem.
+
+### What changed, beyond the two restores
+
+Restores go in a `finally`, so a *failing* assertion does not leave the table red either — cleanup
+that only runs on success is cleanup exactly where it is not needed — and each is followed by an
+assertion that the restore actually restored. A wrong value put back is the same permanent red as no
+value put back.
+
+**But the in-suite enforcer was itself hollow, and only its own failure revealed it.** An assertion
+living inside the suite can only see damage from files that sorted before it. The second offending
+file was caught by luck of ordering, not by the check. So there is now a `globalSetup`/`teardown`
+that verifies all ten chains once, after every file, in every ordering. It throws rather than logs:
+a warning leaves the suite green, and a green suite over a broken chain is the exact condition that
+let this survive.
+
+**Its wiring silently did nothing, twice, before it worked.** Vitest has no `globalTeardown` key and
+ignores an unrecognised one without a word — the suite ran green over a chain I had poisoned on
+purpose. Then a setup module's *default export* is treated as `setup`, so the check ran *before* the
+suite and aborted the run it existed to guard. Both are the milestone's recurring shape: something
+with the FORM of a check, doing nothing. It is verified the only way that means anything — poison a
+row, confirm the tests still pass, confirm the run exits 1.
+
+### The `sessions` fix, and what it cannot repair
+
+`sessions` was a genuine instance of the class and is fixed at the writer. Two things are worth
+recording:
+
+- **`serializeRecord` must never learn about UUIDs.** It sees values, never column types, so a rule
+  there could only key on "32 hex characters" — and `connection_requests.request_id` is a TEXT column
+  holding exactly that shape in twenty-four live rows, stored verbatim. The generalisation breaks a
+  chain that works today. The note is now at the top of `serializeRecord`, because the asymmetry
+  looks like an oversight to anyone tidying it.
+- **Rows already written by a live directory cannot be repaired.** They hashed the undashed form;
+  `verifyChain` stops at the first break, so a live directory's `sessions` chain is red at row 1
+  permanently — now for a reason the code no longer produces, which makes it *harder* to recognise,
+  not easier. It is bounded: `sessions` is node-local and not anti-entropy replicated, and nothing in
+  production calls `verifyChain` on these tables. It is an audit-facility gap, not a runtime failure.
+  Written down here so the first person to run a chain audit on GCP is not the one who discovers it.
+
+### The guard found five silent failures I was not looking for
+
+The review's other blocking finding was that `canonicalUuid`'s safety argument — *"hand it back and
+let Postgres reject it loudly"* — was void, because the only production caller ended in
+`.catch(() => {})`. It discarded both that rejection and the SI-001 ownership violation, a security
+guard whose alarm was wired to nothing.
+
+Writing the guard against the *shape* rather than the one call site turned up five more:
+
+- Two connection-request persists. Someone sends you a connection request, the directory restarts
+  before you answer, and the request is gone with nothing connecting the two events.
+- Two connection-request deletes. You accept or decline; the delete is lost; a restart hands you the
+  same request again as though you never answered.
+- A trust-signal ACK. The signal stays unacknowledged and is re-delivered on every pickup, forever.
+
+All six now log the reason *and the consequence* — what the operator will actually see later, which
+is the part that makes a log line usable. Fire-and-forget stays: session delivery must not block on
+the database. **Non-blocking is not the same as silent.**
+
+### Rules earned
+
+1. **A red hash chain is a question, not an answer.** It cannot distinguish wrong data from a wrong
+   check. Ask "which value differs, and who wrote it?" before looking at any writer.
+2. **A test that tampers a chained row MUST restore it in a `finally`, and then assert the restore
+   worked.** Deleting the row is not an alternative — later rows chain to its stored hash.
+3. **An assertion inside a suite cannot police the suite.** It only sees what sorted before it.
+   Whole-suite properties belong in a teardown.
+4. **Verify a new guard by making it fail on purpose.** Two of my three wirings looked configured and
+   checked nothing. Only a deliberate poison told them apart.
