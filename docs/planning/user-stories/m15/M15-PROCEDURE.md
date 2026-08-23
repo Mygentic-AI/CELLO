@@ -351,6 +351,45 @@ ledger in the DoD: one row per claim, its current text, where it appears, and it
 > key was documented as sender-scoped with no test, and the attack was reachable by ordinary
 > participation — the counterparty sees your submission ids on the wire.
 
+> ### 🧪 THE MUTATION LOOP HAS A PRECONDITION AND A BASELINE — agreed by BOTH lanes, 2026-08-23
+>
+> Mutation testing is how this milestone catches hollow tests, and **the loop itself has now failed
+> EIGHT times** — six in the `CELLO_Coder_1` lane, two in `CELLO_Support`'s. Drafted by
+> `CELLO_Support`, rule 4 contributed by `CELLO_Coder_1`, agreed over CELLO before either lane wrote
+> it. It lives here rather than in a RESUME STATE block because a RESUME STATE block is per-lane by
+> construction — invisible to the other lane, which is why neither of us knew the other was hitting
+> it.
+>
+> **The failure has THREE shapes, and they are not equally loud:**
+>
+> - **Lost work** — the loop's `git checkout` restores paths that include work committed to nothing.
+>   Loud, once you notice.
+> - **False GREEN** — the loop reports a mutant survived when it ran nothing, or ran against a tree
+>   where neither the mutation nor the fix existed. Suspicious, if you look.
+> - **False CAUGHT** — the loop reports a mutant was killed when it was not. **The worst of the
+>   three, and the least obvious: a false green raises a suspicion, a false caught RETIRES one.** It
+>   tells you a guard is covered and you stop looking. Found on a CLEAN tree with a correct restore,
+>   so none of the rules below except 4 would have caught it.
+>
+> **Four rules:**
+>
+> 1. **Commit is the first thing that happens after a fix goes green — before the loop exists.** Not
+>    "commit the file you are about to mutate": a restore takes every path it names, and the work it
+>    eats is usually something added *after* the last commit, in a file you were not mutating.
+>    **By explicit path** — `git add -A` in a shared worktree is its own way to lose the other lane's
+>    work.
+> 2. **Refuse to run against a dirty tree.** `git diff --quiet || { echo DIRTY; exit 1; }` at the top
+>    of the loop. One line; it closes the whole lost-work class.
+> 3. **Print a BASELINE result before the first mutant, and compare against it.** A loop that
+>    executes zero tests prints nothing, and nothing reads exactly like a pass — five mutants were
+>    once reported green having run no tests at all (zsh does not word-split an unquoted `$T`
+>    holding several paths, so vitest matched no files).
+> 4. **A mutant is not caught until it has been re-run ALONE and seen red.** The loop's verdict is a
+>    hint. **And a mutant that fails LINT or TYPECHECK is NOT caught** — narrowing a mutation to one
+>    argument often leaves an unused variable, the gate goes red for that, and you record coverage
+>    you do not have. If the mutation does not survive compilation, widen it until it does, or it
+>    proves nothing.
+
 1. **Find the red** — lowest non-✅ DoD line in the active tier. Don't skip ahead.
 2. **State the target** — one sentence of observable behavior, PLUS expand the full DoD line (every
    clause) into a clause checklist in the journal. That checklist is what the reviewer receives.
