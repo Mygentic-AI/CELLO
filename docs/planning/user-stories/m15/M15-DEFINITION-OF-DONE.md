@@ -266,6 +266,23 @@ different repos, different disciplines, neither blocks the other.
   > substantively right, not merely defensible:** the peer-side check this gate pre-empts compares
   > **leaf count**, not content, so an unwitnessed *received* leaf — which both peers hold — changes
   > neither count, and gating on it would be a pure false positive.
+- **THE SALT'S ACs, inherited from the key/salt decoupling (Decisions #8/#9/#10) and its review:**
+  - **The contributions ride the peer-to-peer `/cello/content/1.0.0` stream** — circuit-relay-v2 with
+    its own Noise session, so a forwarding relay sees ciphertext. They **MUST NEVER** appear in
+    `session_offer` / `session_offer_accept` or anything a DIRECTORY brokers. The trap: today the only
+    round trip at session open runs on the directory's signaling stream, so that is the obvious place
+    to put one and it is the forbidden one. **Unrepairable once shipped** — the relay would already
+    hold the salt and the hashes.
+  - **The named reasons land here**, not in `core/crypto`: add `SALT_FINGERPRINT_MISMATCH` and
+    `SALT_CONTRIBUTION_DEGENERATE` to `REFUSAL_REASONS` with total guidance. Decision #10 says
+    "refuse with a named reason", and in this codebase that means a member of that closed union —
+    `session-salt.ts`'s throws currently have no listener and no reason code (review F9). They are not
+    added ahead of a consumer, because the guidance map must be total.
+  - **A VERSION DISCRIMINATOR is required.** Salted and unsalted content hashes are both 32 bytes in
+    the same wire field with nothing telling them apart. A salted sender talking to an older unsalted
+    peer fails EVERY frame at the receive-path authenticity check — the least-debuggable shape again —
+    and the fingerprint check does not catch it, because an old client sends no fingerprint.
+    `content_salt IS NULL → unsalted` is a legacy branch and must announce itself.
 - **Enforcer:** receipt. *(Not run — the unit is carried by suite + review; the enforcer itself is
   built by `DOD-M15-INTERRUPTED-1` and this line is re-asserted there.)*
 
