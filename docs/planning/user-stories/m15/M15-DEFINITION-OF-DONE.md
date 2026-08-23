@@ -3198,6 +3198,38 @@ uses it to decide whether an arriving message is a REDELIVERY or genuinely NEW.
 - **Related and NOT the same:** `DOD-M15-CORROBORATE-1` (the relay's independent copy) and
   `SEALWIRE-1` bullet 3 (the directory verifying the SEAL leaf's `final_root`).
 
+### `DOD-M15-REVOKED-READS-OFFLINE-1` — a retired agent is reported as merely "not currently online"
+**POST-LAUNCH under the frozen gate (§0z.4)** — nothing is admitted that should be refused, so it is
+not a security hole. **It is error substitution with actively wrong guidance**, which is this
+milestone's own named defect class, and Andre's to reclassify.
+
+**What the operator is told when they try to reach an agent that has been permanently retired:**
+
+> *"The counterparty exists but is not currently online. Have its operator bring it online
+> (`cello_status`), then retry."*
+
+**They then wait, retry, and ask the other person to bring an agent online that no longer exists.**
+The guidance does not merely under-inform — it instructs an action that cannot succeed.
+
+**The chain, traced rather than guessed (`j-remove` DOD-REMOVE-3, measured):**
+1. `outbound-sessions.ts` runs DISCOVERY before it sends a `session_request`.
+2. `classifyOnlineResult` collapses the lookup into three states, and a REVOKED agent comes back as
+   **`offline`** — evidenced by the observed result, not inferred.
+3. The client returns `counterparty_offline` and **never sends the session_request.**
+4. So the directory's revoked check — `directory-node.ts`, `isAgentRevoked(target) ||
+   isAgentRevoked(initiator)` → `agent_revoked`, correct and well-placed — **is on a path that is
+   never reached.**
+
+- **The check is not missing. It is SHADOWED.** A correct refusal exists, is right, and sits behind
+  a coarser earlier answer. That is worth stating precisely because "add a revoked check" is the
+  obvious fix and it is already there; the fix is at the discovery classifier, which flattens
+  *retired forever* into *not right now*.
+- **Both directions of the guidance are wrong**, which is what makes it worse than silence: the
+  initiator waits for something that will never happen, and the counterparty's operator is asked to
+  fix an agent they deliberately retired.
+- **Enforcer:** `j-remove` DOD-REMOVE-3 green — the test already exists and already asserts the
+  right thing; it has been failing since the lane stopped being run.
+
 ### `DOD-M15-TOOLDESC-SCAN-1` — The claim scanner can see MCP tool descriptions
 **POST-LAUNCH** (§0z.1): the launch risk is whether the shipped descriptions are HONEST, and
 `DOD-M15-TIERTEXT-1` audits them by hand in this milestone. This line is the durable control that
