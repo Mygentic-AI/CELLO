@@ -30,6 +30,56 @@ import pg from "pg";
 import { randomUUID } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
+// DOD-M15-CHAINDEBT-1: this file seeds conversation_seals rows with a REAL chain hash.
+import { computeChainHash, serializeRecord, CHAIN_GENESIS } from "../hash-chain.js";
+
+/**
+ * Insert a `conversation_seals` row whose `chain_hash` is chained to the current head.
+ *
+ * ─── Why this exists (DOD-M15-CHAINDEBT-1) ─────────────────────────────────────────────────────
+ *
+ * Four tests in this file seeded a row with `chain_hash = "0".repeat(64)` and COMMITTED it. A chain
+ * hash must be computed against the current chain head; a constant cannot be, so each was a hole —
+ * and `verifyChain` fails at the hole and at every row after it, for the whole run, in suites that
+ * have nothing to do with RLS.
+ *
+ * They cannot be rolled back: three of the four insert as the SUPERUSER and then assert what
+ * `cello_service` can or cannot do to the row from a DIFFERENT connection, which would not see an
+ * uncommitted row. And they cannot go through `recordConversationSeal`, which also writes
+ * participation and attestation rows these tests do not want.
+ *
+ * So this does exactly what `insertWithChain` does — read the head, hash the record against it —
+ * leaving an ordinary valid row. The statement still runs on whichever client the caller passes,
+ * which is what each test is actually asserting about.
+ */
+async function insertChainedSeal(
+  client: pg.PoolClient,
+  headPool: pg.Pool,
+  conversationId: string,
+  merkleRoot: string,
+): Promise<void> {
+  const head = await headPool.query<{ chain_hash: string }>(
+    `SELECT chain_hash FROM conversation_seals ORDER BY id DESC LIMIT 1`,
+  );
+  // `seal_date` and `close_reason_code` are excluded from the chain (hash-chain.ts), so the record
+  // below carries what actually chains: the id, the root, the close type and the participant count.
+  const record: Record<string, unknown> = {
+    conversation_id: conversationId,
+    merkle_root: merkleRoot,
+    close_type: "MUTUAL_SEAL",
+    participant_count: 2,
+  };
+  const chainHash = computeChainHash(
+    serializeRecord(record, "conversation_seals"),
+    head.rows[0]?.chain_hash ?? CHAIN_GENESIS,
+  );
+  await client.query(
+    `INSERT INTO conversation_seals
+       (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
+     VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date, $3)`,
+    [conversationId, merkleRoot, chainHash],
+  );
+}
 
 const isLocal = process.env["CELLO_ENV"] === "local";
 const DATABASE_URL =
@@ -395,12 +445,7 @@ describeIntegration("PERSIST-003 AC-002: cello_service can INSERT into conversat
 
     const serviceClient = await servicePool.connect();
     try {
-      await serviceClient.query(
-        `INSERT INTO conversation_seals
-           (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
-         VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date, $3)`,
-        [conversationId, "a".repeat(64), "0".repeat(64)],
-      );
+      await insertChainedSeal(serviceClient, superPool, conversationId, "a".repeat(64));
     } finally {
       serviceClient.release();
     }
@@ -427,12 +472,7 @@ describeIntegration(
       const conversationId = randomUUID();
       const superClient = await superPool.connect();
       try {
-        await superClient.query(
-          `INSERT INTO conversation_seals
-             (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
-           VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date, $3)`,
-          [conversationId, "b".repeat(64), "0".repeat(64)],
-        );
+        await insertChainedSeal(superClient, superPool, conversationId, "b".repeat(64));
       } finally {
         superClient.release();
       }
@@ -480,12 +520,7 @@ describeIntegration(
       const conversationId = randomUUID();
       const superClient = await superPool.connect();
       try {
-        await superClient.query(
-          `INSERT INTO conversation_seals
-             (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
-           VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date, $3)`,
-          [conversationId, "d".repeat(64), "0".repeat(64)],
-        );
+        await insertChainedSeal(superClient, superPool, conversationId, "d".repeat(64));
       } finally {
         superClient.release();
       }
@@ -597,12 +632,7 @@ describeIntegration("PERSIST-003 AC-006: cello_service SELECT succeeds and retur
     const conversationId = randomUUID();
     const superClient = await superPool.connect();
     try {
-      await superClient.query(
-        `INSERT INTO conversation_seals
-           (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
-         VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date, $3)`,
-        [conversationId, "e".repeat(64), "0".repeat(64)],
-      );
+      await insertChainedSeal(superClient, superPool, conversationId, "e".repeat(64));
     } finally {
       superClient.release();
     }

@@ -829,9 +829,13 @@ describeIntegration("PERSIST-021 integration: AC-003 connection_request round-tr
       "", // chain_hash placeholder — index 4
     ];
 
-    // Ensure no prior row with this request_id
-    await superPool.query("DELETE FROM connection_requests WHERE request_id::text = $1", [requestId]);
-
+    /**
+     * DOD-M15-CHAINDEBT-1 — no pre-clear. `requestId` is `randomUUID()`, so "ensure no prior row
+     * with this request_id" was guarding against a UUID collision. Deleting from a hash-chained
+     * table to protect against that leaves every later row unverifiable, in exchange for nothing:
+     * if a collision ever did happen the INSERT would fail on the unique constraint, which is the
+     * outcome you want to SEE rather than silently clear.
+     */
     await store.insertWithChain("connection_requests", record, columns, values, 4);
 
     // Verify the chain: read the row back
@@ -866,8 +870,9 @@ describeIntegration("PERSIST-021 integration: AC-003 connection_request round-tr
     expect(reqPersisted![1]["rowCount"]).toBe(1);
     expect(typeof reqPersisted![1]["durationMs"]).toBe("number");
 
-    // Cleanup
-    await superPool.query("DELETE FROM connection_requests WHERE request_id::text = $1", [requestId]);
+    // DOD-M15-CHAINDEBT-1: no cleanup. The row was written through `insertWithChain`, so it is a
+    // correctly chained row — leaving it costs nothing, and removing it would break the rows after
+    // it, including the chain this very test just verified.
   });
 });
 
