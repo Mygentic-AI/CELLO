@@ -4304,3 +4304,93 @@ Gate: 4326 client tests, lint, typecheck, build — by exit code.
   park/relay backstop never agrees a salt. Free today; a session that cannot send once the content
   hash depends on it.
 - The version discriminator remains part B's, and is what makes part B non-optional.
+
+---
+
+## Entry 42 — the fix for a session-killing defect could not stop itself
+
+Pass 2 on the salt agreement, reviewing pass 1's fix. **Two blocking defects, both in the new code.**
+The hard cap is two passes, so this closes the unit; what was left became acceptance criteria on
+part B.
+
+### The verdict, quoted
+
+> **SPEC: DEVIATIONS FOUND** — F15 (the commit's own *"never mints for a session that already has a
+> salt"* is false in the daemon) and F18 (one-salt-per-session not enforced at the write), both
+> [blocking]. **SILENT FALLBACKS FOUND** — F15 (mint-when-required-thing-missing, HIGH, [blocking]).
+> **ERROR SUBSTITUTION FOUND** — `salt_fingerprint_mismatch` stands in for `salt_state_divergent` on
+> the one path a restarted daemon actually takes, and sends the operator to their counterparty's
+> build version. [blocking]. **HOLLOW TESTS FOUND** — F16, three surviving mutants, all on the new
+> behaviour… **Not rubber-stamping: F14 and F15 are both in the new code this pass exists to judge,
+> and F14 in particular is the failure mode the fix traded for the old one.**
+
+### The repair could not terminate
+
+I asked the reviewer to prove or refute termination. Refuted, from the transition function:
+
+> `(ownSalt = S, ownContribution = h)` + input `contribution` → emit `contribution`, **state
+> unchanged**.
+
+Two daemons in that state trade contributions at round-trip speed forever — a fresh libp2p stream
+and an INFO line each, per iteration — **while holding the same salt**, so the entire exchange is
+waste. And entering it needs one reconnect mid-exchange: both sides correctly re-announce while
+neither holds a salt, each ends up with a duplicate of the other's half queued, and after both
+derive, that duplicate lands on a side that now holds a salt.
+
+**A reconnect is the exact event the repair was written to survive.** I replaced a defect triggered
+by one dropped frame with a livelock triggered by one reconnect. The `session.salt.repair` comment I
+wrote — *"at INFO because a session that repairs REPEATEDLY is a signal"* — is, at unbounded volume,
+the opposite of a signal.
+
+Bounded now by remembering which peer half we last answered: an identical re-offer gets our
+fingerprint, which is terminal for the peer, while a genuinely new half still gets our contribution.
+
+### The safety claim I wrote in the commit message was false in the code
+
+Pass 1's fix rests on one invariant: *the caller never mints a fresh half for a session that already
+has a salt.* I added `#saltState` and `#ownSaltHalf` for it — **and then did not use them in
+`#sendSaltFrame`**, which still called the minting accessor directly. Both arguments evaluate, so
+the mint happened even though the frame discards it on that branch.
+
+`#evictSessionCaches` drops the half on every teardown while the salt stays on disk, so **every
+revived session was in that state**, and the bogus half landed before any inbound frame could be
+handled. `STATE_DIVERGENT` was therefore dead code, and a revived session would have repaired its
+counterparty onto a half its salt was never built from — both sides freezing on a fingerprint
+mismatch whose guidance sends the operator to compare build versions with someone who did nothing
+wrong. The reviewer traced it end to end:
+
+> Neither named cause is what happened, and neither named log event will be present… The operator is
+> sent to compare build versions with an innocent counterparty. The intended message,
+> `salt_state_divergent`, is unreachable.
+
+One line to fix. The parameter is nullable now, so the next caller has to make minting a decision
+rather than a parameter default.
+
+### And the write could destroy the value it exists to preserve
+
+The persist `UPDATE` was unconditional. `#getSessionSalt` returns null on a transient read failure,
+which routes that side down the derive path — which **overwrote a perfectly good stored salt**. The
+read error was logged; the destruction was not, and the read log promised only that we would "offer
+a fresh contribution". Decision #8's "one salt per session" was a comment, not a constraint. It is in
+the `WHERE` clause now, still allowing the one overwrite F8 needs for a corrupt row.
+
+### Test teeth
+
+Three mutants survived pass 1 and **all three were on the outbound half** — the repair's frame, the
+mismatch notice, the `null` invariant. `FakeNode.sent` had existed the whole time and no salt test
+read it. Asserting the log proves the daemon reached a verdict; it cannot prove it sent the frame
+that verdict is made of. Four tests now read the wire.
+
+Re-run after the fixes: six mutants including all three of the reviewer's survivors — degrade the
+repair to a fingerprint; delete the peer notice; make `#saltState` always mint; drop the termination
+guard; make that guard ignore the peer's bytes; let the persist overwrite again. **All six caught.**
+
+Gate: 4330 client tests, lint, typecheck, build — by exit code.
+
+### The pattern across both passes, and it is not a coding pattern
+
+Three of the five blocking findings across two passes were **a sentence I wrote being wrong**, not a
+statement I mistyped: the header claiming the halves are unrecoverable, the docblock claiming no
+mutant could survive the storage test, and the commit message claiming an invariant the code did not
+implement. Each one made the wrong code look correct to me on re-reading, which is precisely why the
+reviewer runs mutants instead of reading prose.
