@@ -227,6 +227,40 @@ The six known checked-then-ignored instances; three carry such a comment.
   clients perform this verification locally"* and the client's *"deliberately NOT compared at this
   layer"* — each pointing at a check the other does not perform.
 
+### `DOD-M15-TIERTEXT-1` — ❌ The tier descriptions do not promise a gate that does not exist
+**BLOCKS LAUNCH** (§0z.1): shipped operator-facing text states a protection the system does not
+provide, and the false half is the *reassuring* half. Found 2026-08-23 while Andre was setting a
+contact's tier by hand; the receptionist raised it as "a setting that does nothing" and the measured
+answer was worse and different.
+
+- **The text.** `cello_contact_set_tier` ships as *"3=whitelisted (**auto-accepted when you're
+  away**)"*, and `cello_contact_add` as *"…NOT auto-accepted when you're away. Promote them to
+  whitelisted/vip … to let them reach you unattended."* Both attribute unattended acceptance to the
+  tier.
+- **What actually happens: EVERYONE is auto-accepted, at every tier.** `daemon.ts` says so at its
+  own extension point — *"Do not add an 'accept' or 'join' tool — CELLO has no such step. Inbound
+  sessions are auto-accepted by the standing receiver."* `isAutoAccept` (the only tier check that
+  would gate this) has **no production caller**; its docstring says the consumer is the offline
+  mailbox and is *"defined here as the seam"*.
+- **So the promise is not unkept — it is REDUNDANT, and that is the worse shape.** Whitelisting does
+  not fail to let someone through; it fails to be the *reason* they got through. An operator reading
+  this concludes strangers are held back while they are away. They are not. **The reader is misled
+  in the safe-feeling direction**, which is the same defect class as `DOD-M15-DISCLOSE-1` rather than
+  a broken setting.
+- **⚠️ THE FIX IS THE TEXT, NOT THE BEHAVIOUR. Do not read this line as "add the gate."** Whether
+  inbound sessions should be gated for strangers is a protocol decision with a design comment behind
+  it that says explicitly not to add an accept step. Changing that is Andre's call and is **not in
+  this line**.
+- **Not repeated to the counterparty** — checked, because the same implication said to a stranger
+  would be worse. The away reply says only *"…is currently away. Leave a message … and it will be
+  read when they return."* True, and it implies no gate. Operator-facing only.
+- **Scope:** audit **every** description in `core/adapter-claude-code/src/bin/cello-mcp.ts` in the
+  same pass — fixing one claim in a file nobody has ever scanned, and leaving the rest unread, is
+  the "letter, not spirit" failure `DOD-M15-CLAIM-SCANNER-1` was written against.
+- **Enforcer:** the corrected text, plus these descriptions inside a scan (see
+  `DOD-M15-TOOLDESC-SCAN-1` — the durable control, post-launch; this line's audit is what covers
+  launch).
+
 ### `DOD-M15-DISCLOSE-1` — ❌ Shipped documentation discloses what the architecture cannot remove
 - **A direct session permanently reveals the operator's IP address to the counterparty.** No gate,
   port change or ephemeral identity removes it; anyone who has talked to you directly can flood you
@@ -2675,4 +2709,29 @@ line — the classification changes what happens to a finding, never how hard it
 **A line arrives here only by being classified at creation.** Moving an existing tier line down here
 is Andre's call, never a lane's.
 
-_(empty — the first entries will be the triage Andre rules on, plus new findings from this point.)_
+### `DOD-M15-TOOLDESC-SCAN-1` — The claim scanner can see MCP tool descriptions
+**POST-LAUNCH** (§0z.1): the launch risk is whether the shipped descriptions are HONEST, and
+`DOD-M15-TIERTEXT-1` audits them by hand in this milestone. This line is the durable control that
+stops the next one drifting — real, and not what a customer meets at launch.
+
+**Answer to the question that produced it: NO, they are not covered.** Read out of the scanner, not
+inferred. `shippedSurfaces()` enumerates `.md` files three ways — via each core package's
+`package.json#files`, the repo root, and `plugins/**` — and then reaches exactly ONE non-markdown
+file, by name: `core/cli/src/registry.ts`. `core/adapter-claude-code/src/bin/cello-mcp.ts` is
+neither markdown nor that file, so **not one of its tool descriptions has ever been scanned.**
+
+- **The hole is the shape the scanner's own header condemns.** That header says surfaces are
+  enumerated *"never from a hand-kept array"*, because the connect tarball's `SKILL.md` was missed by
+  every previous audit *"precisely because it was not on anyone's list"*. The `.md` half honours
+  that. The prose-in-TypeScript half does not: it names one file, which is a hand-kept list of
+  length one.
+- **It is producing, not theoretical.** The first look at the unscanned surface found a false claim
+  (`DOD-M15-TIERTEXT-1`). Tool descriptions are read by every operator AND by every agent that calls
+  the tool, which makes them the surface most likely to describe behaviour and the one most likely
+  to be acted on without a human reading it.
+- **Do not fix it by adding a second filename.** That reproduces the defect one entry longer. The
+  right shape is the one the `.md` walk already uses: enumerate what SHIPS — every `bin`/`main`
+  entry point a package's `package.json` declares — and take prose-shaped literals from it, exactly
+  as `registryClaimStrings()` already does for the CLI.
+- Expect a large baseline on first run; `cello-mcp.ts` has never been adjudicated. Same
+  shrink-only backlog treatment the scanner already uses, for the same reason.
