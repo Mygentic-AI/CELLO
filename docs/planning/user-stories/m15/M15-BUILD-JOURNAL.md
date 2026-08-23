@@ -115,18 +115,28 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
   and reports as *skipped with a hook timeout*, which reads as flaky and is not. Coder_1 handed me
   the slot; ask before taking it. Start Docker + `docker compose up -d` + `docker start
   cello-portal-postgres` first or results are noise.
-- **🚨 THE BIGGEST CORRECTION OF THE NIGHT, AND IT GOVERNS HOW TO READ THE RECEIPT.** *"A test that
-  asserts X is red"* only means *"X is broken"* **if the test reached X.** **EIGHT journeys** —
-  `j-persist`, `j-refresh`, `j-relaysig`, `j-remove`, `j-sign`, `j-suspend-tofn`, `j-tofn`,
-  `j-tofn-dkg` — died inside `register-agent` on `CLIJSON-1` before reaching their assertions.
-  **I reported the sovereign-node quorum invariant as failing. It was never tested.** Every
-  pre-fix characterisation of those eight is void; re-run before reasoning from any of them.
+- **🚨 THE CORRECTION THAT GOVERNS EVERYTHING ELSE — and it has now RESOLVED.** *"A test that
+  asserts X is red"* only means *"X is broken"* **if the test reached X.** EIGHT journeys died inside
+  `register-agent` on `CLIJSON-1` before reaching their assertions, and **I reported the
+  sovereign-node quorum invariant as failing when it was never tested.**
+  **✅ ALL EIGHT RE-RUN. NOT ONE WAS A PRODUCT DEFECT.** `j-tofn-dkg` 2/2 (**kill a directory →
+  registration still succeeds**), `j-tofn` 4/4 (**sovereign isolation** + **forged manifest
+  REFUSED**), `j-sign` ✅ (FROST T-of-N across ≥2 directories), `j-relaysig` ✅, `j-refresh` ✅,
+  `j-remove` 2/3. The two still red are the other lane's salting landing (`j-persist` computes the
+  pre-salt hash) and a test encoding **T=3 when we ship T=2** (`j-suspend-tofn`).
+  **Seven properties are now POSITIVELY PROVEN rather than un-disproven** — a stronger position than
+  before any of this. The lesson stands regardless: check how far a test got before believing it.
 - **DONE tonight:** `CHAINDEBT-1`, `CHAINROUNDTRIP-1`, `MIGRATION-GUARD-1`, `SPINE-LANE-1`,
   `CLIJSON-1`, `NORMHASH-1` ✅. `SEALWIRE-1` bullet 5 (received half; sent half ruled
   not-worth-its-cost). `REFUSED-INBOUND-SILENT-1` + `UNWITNESSED-1(b)` implemented.
   `RELAYAUTH-1` liveness scoping implemented.
 - **GREEN journeys:** `j-loopback` (now carries `…` as the `NORMHASH` guard — **do not tidy it to
   ASCII**), `j-refresh`, `j-legibility`, `j-trust`, `j-end` 9/10, `j-spine`'s seal tests.
+- **⚠️ NO PASSING TEST PROVES THRESHOLD-REFUSAL under the threshold we ship.** `j-suspend-tofn`
+  assumes T=3; `dkg-topology` computes `floor(N/2)+1` = **2**. Under T=2 suspending 2-of-3 SIGNS and
+  suspending 1-of-3 SIGNS, so the journey can no longer tell threshold-refusal from
+  single-node-refusal — the property it is named for. **Do NOT fix it by flipping the expectation to
+  `ok:true`**: that is a green test asserting nothing, which is worse than the red one.
 - **FOUR CONFIRMED DEFECTS, all POST-LAUNCH by the freeze and NOT by severity:**
   1. `SAMEOP-FALSEPOS-1` — a **stranger's** endorsement is flagged self-dealing. Fails OPEN on trust
      while looking closed. Fixture exonerated by its own passing assertion; display + mint paths
