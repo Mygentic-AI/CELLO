@@ -6346,3 +6346,89 @@ before anything else has been seen. Collect first, compare after.
 4. **A fixture with one identity cannot test a two-identity property.** Every leaf used one pubkey, so
    "the two participants disagree" modelled one participant signing twice — and the fixture could not
    tell that from a retry, because neither could the code.
+
+---
+
+## Entry 57 — the doc said "the relay learns nothing"; the code said "512 arbitrary bytes"
+
+`DOD-M15-SEALWIRE-1` bullets 3+4, the relay leg. Review pass 1.
+
+### Reviewer verdict, quoted
+
+> **SPEC: DEVIATIONS FOUND** — one, journaled: the refusal is loud in the log, not in the response.
+> **NO SILENT FALLBACKS** — every guard here fails closed and loud …
+> **ERROR SUBSTITUTION FOUND** — `relay_submit_timeout` for a deliberate policy refusal [blocking].
+> **HOLLOW TESTS FOUND** — the source-level audibility test passes if the log block moves to the
+> auth-phase refusal; the ceiling is only pinned to <4096; no test uses a real `encodeSealPayload`
+> output [blocking test-quality gap].
+
+And on why the pass earned itself:
+
+> the gap between what the doc comment asserts and what the decoder enforces (H1) is the specific
+> failure mode this codebase has been correcting all week, and the error label (H2) is the named
+> worked example from the debugging rules.
+
+### The guard checked everything except the thing it was for
+
+Three checks: ctrl leaf, non-empty, ≤512 bytes. **Nothing required the bytes to be a seal payload.**
+So a client could put 512 bytes of the operator's message into a ctrl leaf and this relay would
+accept them.
+
+The type doc said *"the relay already knows all four fields, nothing is disclosed."* What the code
+enforced was *"at most 512 arbitrary bytes per close."* Those are different properties, and the first
+is the one anybody would quote back at me. **Third time this milestone that I have written a comment
+asserting a safety property the code does not have**, and this one was the whole justification for
+adding a content-carrying field to a relay at all.
+
+Fixed by decoding the payload at the wire and binding it to the frame's session — which also stops a
+valid payload from another conversation being replayed here, three hops before the directory notices.
+
+### And the justification was wrong about one field
+
+*"The relay already knows all four."* It knows three. `session_id` is on the frame, `final_root` is
+derivable from leaves it sequenced, `"PENDING"` is a constant — **`close_timestamp` is the client's
+own clock at close**, so what it discloses is a clock offset. Milliseconds, and negligible, which is
+a different word from *nothing*, and only one of them was true.
+
+### A policy refusal that arrived as a transport failure
+
+The relay refused by sending nothing. What the operator actually lived through:
+
+1. A send stalls for **ten seconds** while the client races an ack it will never get.
+2. The client reports `relay_submit_timeout` — a transport word.
+3. It then **resets the stream, which every session that agent holds on that relay shares.** One
+   refused frame drops every other conversation's transport.
+4. The relay is working perfectly and refusing on purpose, and its log line saying so is on a
+   different machine under a different operator.
+5. It never self-corrects: the next message re-sends the same frame.
+
+Now a typed terminal `hash_submit_error` naming the rule and the leaf kind.
+
+### I had made the two ends of one hop disagree
+
+The relay refuses content on a non-ctrl leaf at its own wire. The directory accepted it on **any**
+kind, at any length, on a frame its own header describes as *"accepted from any dialer"* with *"no
+relay receipt"* binding it. The stricter of the two was the side that had a receipt.
+
+### Two notes on my own mutation testing
+
+- **A "survivor" that was an invalid mutant.** I disabled a two-line condition by prefixing
+  `if (false && A` — and `&&` binds tighter than `||`, so the second clause still ran. Applied
+  properly, it is caught. *A mutant that did not apply is not a survivor,* which is the same lesson as
+  "a mutant caught by the compiler is not caught".
+- **A genuine survivor that changed my mind about my own guard.** Raising the 512-byte ceiling to 4096
+  breaks nothing: once the bytes must decode as a payload, oversized input is refused on content
+  grounds anyway, and a real payload is 69 bytes so the boundary is unreachable from the honest side
+  too. Kept for the one job the decode cannot do — bounding the work done *before* the decode — and
+  **labelled untestable rather than left looking load-bearing.**
+
+### Rules earned
+
+1. **When adding a field that carries content to a component trusted with none, the guard must
+   enforce the SHAPE, not just the envelope.** "Small, and on the right leaf" is not "is the thing I
+   said it was."
+2. **"Nothing is disclosed" is a claim with four parts if the payload has four fields.** Check each.
+3. **Refusing by silence is refusing twice** — once to the client, once to the operator — and on a
+   shared stream the cost lands on conversations that had nothing to do with it.
+4. **A guard that can no longer fail is not automatically dead.** Say what job it still does, or the
+   next reader deletes it for the job it no longer does.
