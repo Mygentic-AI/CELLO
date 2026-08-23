@@ -908,9 +908,18 @@ reboot clears, and re-running to recover the failure texts costs another hour.
   test passes."* This IS that test. **A close today would be a close with no evidence**, and the
   reason nobody knew is that the lane is excluded from every environment (that is `SPINE-LANE-1`).
 - **What is red includes the floor, not just the edges.** `J-SPINE` *"daemon up: started"* — the
-  most basic multi-process assertion there is. `J-TOFN-DKG` *"kill one directory → registration
-  still succeeds"*, which is the **sovereign-node quorum invariant** stated as non-negotiable in
-  `.claude/CLAUDE.md`. `J-CONTENT`'s entire ACK/dedup/recover set. `J-MULTIPLAYER` 7 of 7.
+  most basic multi-process assertion there is. `J-CONTENT`'s entire ACK/dedup/recover set.
+  `J-MULTIPLAYER` 7 of 7.
+- **⚠️ CORRECTION: I ALSO NAMED THE SOVEREIGN-NODE QUORUM INVARIANT HERE, AND THAT WAS WRONG.**
+  `J-TOFN-DKG`'s two failures — including *"kill one directory → registration still succeeds"* — are
+  **both** `Unexpected non-whitespace character after JSON at position 156`, which is
+  `DOD-M15-CLIJSON-1`: the journeys died at their FIRST line, in `register-agent`, and **never
+  reached the quorum assertion at all.**
+  **So the quorum invariant was not failing. It was untested.** Those are very different claims, and
+  I reported the alarming one about a property `.claude/CLAUDE.md` calls non-negotiable. The
+  distinction matters beyond this line: *"a test that asserts X is red"* only means *"X is broken"*
+  if the test reached X, and a journey that dies at setup reaches nothing. Re-run after the
+  `CLIJSON-1` fix before making any claim about quorum in either direction.
 - **What is GREEN is worth as much as what is red, and constrains the cause:** `j-conn`, `j-auth`,
   `j-onboard`, `j-int`, `j-presence`, `j-sig`, `j-antientropy` (5/5), `j-suspend`,
   `j-trust-journey`, `j-combined-journey`, `j-leg-frontier`, `j-track-record`, `j-optionb-setup`,
