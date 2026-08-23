@@ -70,12 +70,21 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
   `session_frozen_identity_failure` into a family of varying strings.
 - **NEXT after part A:** part B — `wireContentHash` → `saltedContentHash`, the version discriminator,
   and holding the first send until the salt is agreed. Then `SEALWIRE-1` bullets 3–8.
-- **🚨 BULLETS 3 + 4 HAVE AN UNRESOLVED DESIGN FORK — do not start them without reading this.** The
-  directory cannot hard-gate on a SEAL leaf's declared `final_root`, because the client's local tree
-  is NOT guaranteed to be a prefix of the relay's leaf array: content is appended locally even when
-  no witness bound it (`session.content.leaf.unwitnessed`). A strict comparison would refuse real
-  sessions, and a root check that is wrong makes every session unsealable. The candidate answer is a
-  PREFIX SEARCH plus making the declared root cover witnessed leaves only — unverified.
+- **🚨 BULLETS 3 + 4 — read `DOD-M15-UNWITNESSED-1` FIRST; it is the same problem and it is already
+  split out.** The directory cannot naively hard-gate on a SEAL leaf's declared `final_root`, because
+  the client's local tree is not guaranteed to be a prefix of the relay's leaf array: an own send
+  whose relay submit failed appends UNWITNESSED at the tail with **no flag and no ERROR**
+  (`#placeLeaf`, `assignedSeq === undefined`), and `placeOwnLeaf`'s own comment says *"the seal was
+  already lost at the unwitnessed append, not here."* A strict comparison would refuse real sessions,
+  and a root check that is wrong makes every session unsealable.
+  - **Correction to what I first wrote here:** this is NOT unaddressed. `DOD-M15-UNWITNESSED-1`
+    carries both suspected partings, names case (b) exactly, and sets the bar: *"a signal separating
+    a relay catching up from a leaf it will never carry."* (`#diverged` IS consumed — seal readiness
+    reads it directly; only the public `isSessionDiverged` wrapper has no caller.)
+  - **The connection worth having, unverified:** the SEAL leaf's `final_root` may BE that missing
+    signal. At close there is no catching-up left, so "the declared root matches some prefix of the
+    relay's array" is a decidable question in a way it is not mid-session. If that holds, bullets
+    3 + 4 and `UNWITNESSED-1` are one piece of work, not two. **Verify before building on it.**
 - **🚨 A CLIENT-SIDE COLUMN NEEDS TWO ENTRIES** — see the shared trap above the lane blocks. Caught me
   twice.
 - **🚨 SEALWIRE DEPLOYMENT ORDERING:** every directory node must run the new directory BEFORE any
