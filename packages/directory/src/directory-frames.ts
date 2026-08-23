@@ -792,7 +792,6 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     return { type: "seal_certificate_request", session_id: sessionId };
   }
 
-
   if (o["type"] === "seal_unilateral") {
     const session_id = toUint8Array(o["session_id"]);
     const reported_root = toUint8Array(o["reported_root"]);
@@ -1451,10 +1450,6 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     if (!epochId || participants === null || threshold === null) return null;
     return { type: "dkg_ready" as const, epochId, participants, threshold };
   }
-
-  // ─── PERSIST-014 outbound frames ─────────────────────────────────────────
-
-
 
   // ─── PERSIST-015 outbound frames ─────────────────────────────────────────
 

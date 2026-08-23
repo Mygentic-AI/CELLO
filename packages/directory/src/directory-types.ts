@@ -448,11 +448,6 @@ export type {
   DisclosureResponseInbound,
 } from "@cello-protocol/protocol-types";
 
-// ─── PERSIST-014: Seal attempt frames ────────────────────────────────────────
-
-
-
-
 // ─── PERSIST-015: Unilateral seal types ──────────────────────────────────────
 
 /**

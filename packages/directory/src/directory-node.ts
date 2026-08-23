@@ -681,8 +681,22 @@ export class CelloDirectoryNode {
 
   // PERSIST-015: delivery grace period (seconds) before unilateral seal is allowed
   readonly #deliveryGraceSeconds: number;
-  // PERSIST-015: session_id_hex → last activity timestamp (ms) — updated on session creation.
-  // (It was also updated by the PERSIST-014 seal_attempt handler, deleted with that dead path.)
+  /**
+   * PERSIST-015: `session_id_hex` → the timestamp the unilateral delivery-grace window runs from.
+   *
+   * ⚠️ THE NAME IS WIDER THAN THE BEHAVIOUR, AND THE GAP IS SECURITY-RELEVANT. It says *last
+   * activity*; it holds *session start*. There are exactly two writers — session creation and the
+   * restart restore, which seeds it with `genesisTimestampMs` — and **nothing refreshes it while a
+   * session is running.** So the grace period a unilateral seal must outwait is measured from when
+   * the session opened, not from when the two sides last spoke: a conversation that has been busy
+   * for an hour is as eligible for a unilateral seal as one that went quiet immediately.
+   *
+   * `DOD-M15-SEALWIRE-1` bullet 7 did not cause this. The PERSIST-014 `seal_attempt` handler
+   * contained the only mid-session refresh, and that handler had no sender, so the refresh could
+   * never fire — the deletion removed a writer that was already unreachable. Recorded here rather
+   * than left implicit, because the previous comment narrated what the code used to do and a reader
+   * would have to reconstruct what it now does.
+   */
   readonly #sessionLastActivity = new Map<string, number>();
   // PERSIST-015: session_id_hex → unilateral seal record
   readonly #unilateralSeals = new Map<string, { sealed_root: Uint8Array; sealed_at: number; submitter_hex: string }>();
@@ -2593,7 +2607,27 @@ export class CelloDirectoryNode {
             });
           }
         } else {
-          // Unknown frame type for authenticated state — ignore
+          /**
+           * IGNORED, BUT NO LONGER SILENT — `DOD-M15-SEALWIRE-1` bullet 7 review.
+           *
+           * Ignoring is the right policy and is what makes deleting a dead frame type safe: a peer
+           * speaking a protocol this build has dropped degrades to silence rather than a torn
+           * stream. But this branch had NO log at all, not even debug — so a version-skewed peer
+           * sending an unrecognised frame was indistinguishable from a peer sending nothing, and the
+           * operator had no thread to pull. That is the exit-point-label failure in its purest form:
+           * the condition exists, and nothing anywhere names it.
+           *
+           * Debug rather than warn: on a healthy federation this fires when an older or newer peer
+           * speaks a frame we do not, which is expected during a roll and must not raise an alarm.
+           * The FROST stream's equivalent branch aborts with `unknown_frost_frame_type` instead —
+           * two dispatch loops, opposite policies, and deliberately so: a FROST frame we cannot read
+           * means a ceremony we must not continue, while a signaling frame we cannot read means a
+           * peer we can keep talking to about everything else.
+           */
+          this.#logger?.debug("directory.signaling.frame.unknown", {
+            type: parsed.type,
+            agentPubkeyHex: authedPubkeyHex!.slice(0, 16),
+          });
         }
       }
     } catch (streamErr) {
@@ -4313,7 +4347,6 @@ export class CelloDirectoryNode {
   }
 
   // ─── Seal processing ─────────────────────────────────────────────────────────
-
 
   /**
    * SESSION-002: Process a unilateral seal request from a client. Validates that
