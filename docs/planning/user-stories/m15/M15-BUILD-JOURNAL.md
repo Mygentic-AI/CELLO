@@ -5292,3 +5292,86 @@ Re-applied and committed before touching anything else.
 
 The rule I contributed to `M15-PROCEDURE` §2 says *commit is the first thing that happens after a fix
 goes green — before the loop exists.* I had it, I wrote it, and I did not do it.
+
+---
+
+## Entry S9 (CELLO_Support) — `CHAINROUNDTRIP-1` opened: the obvious general fix breaks a working table
+
+Clause checklist per §2 step 2, before implementing. Falsification (§2 step 3) killed the first fix.
+
+### The target, in one sentence
+
+A chained row hashes the value the database will actually return, so `verifyChain` on a live
+directory means tampering rather than a type that round-trips differently.
+
+### Cleared with the other lane first
+
+`CELLO_Coder_1` confirmed over CELLO, by checking rather than recalling: their entire `SEALWIRE-1`
+footprint in this repo is one commit touching `directory-node.ts` and two of its tests. **Neither
+`pg-directory-store.ts` nor `hash-chain.ts` has been touched by them this milestone**, so the §2e
+collision I was worried about does not exist. They will message before entering either.
+
+### FALSIFICATION — the fix I was going to write is wrong, and it would break a green table
+
+`serializeRecord` **already** normalises three round-trip hazards, deliberately: pg BIGINT strings →
+numbers, `Date` → UTC ISO, bare `YYYY-MM-DD` → UTC ISO. So the established pattern is *normalise the
+value so insert-time and verify-time agree*, and the obvious move is to add UUID to that list —
+coerce a 32-hex string to the canonical dashed form.
+
+**That would corrupt `connection_requests`, which currently verifies.** Measured, not reasoned:
+
+```
+connection_requests.request_id  |  text
+SELECT count(*) … WHERE request_id ~ '^[0-9a-f]{32}$'   →  13
+```
+
+`request_id` is **TEXT**, and thirteen live rows hold exactly-32-hex values (`makeHexId()` is
+`randomBytes(16).toString("hex")`). A shape-based rule cannot tell those from a `uuid` column's
+value, so it would change their serialization and break a table that is green today — trading two
+broken tables for three.
+
+**The lesson, and it generalises past this unit:** `serializeRecord` sees VALUES, never column
+types. A normalisation keyed on what a string *looks like* is a guess about the schema. One keyed on
+the value's JavaScript TYPE is not.
+
+### So the two instances need DIFFERENT fixes
+
+- **`seal_notarizations` (`bytea`) — fix in `serializeRecord`.** `node-pg` returns a `Buffer`; the
+  insert-time value is a `Uint8Array`. `JSON.stringify` renders those differently
+  (`{"type":"Buffer","data":[…]}` vs an index map). Normalising **both to hex** is keyed on the JS
+  type, matches the three normalisations already there, and cannot mistake a string for anything.
+- **`sessions` (`uuid`) — fix at the PRODUCER.** `directory-node.ts` passes `sessionIdHex`; the
+  column is `uuid`, so Postgres stores and returns the dashed canonical form. The caller is passing
+  a value that does not match its own column type. Normalising there is precise; normalising in
+  `serializeRecord` is a guess.
+
+### Clause checklist — what the reviewer receives
+
+- **C1** — `verifyChain` is green on **every** table in `HASH_CHAINED_TABLES` after a full suite run
+  against a freshly reset database. That is the enforcer and it is measurable.
+- **C2** — a test writes through the **production shape** (`writeSessionWithParticipants` with the
+  hex form the daemon actually passes) and asserts the chain verifies. The existing
+  `federation-001` AC-012 cannot catch this: it truncates and writes a `randomUUID()`, the dashed
+  form, which is a shape production never produces.
+- **C3** — `connection_requests`, `connections`, `user_accounts`, `relay_registrations` and
+  `conversation_seals` stay green. A fix that breaks a working table is a worse trade than the bug.
+- **C4** — the `void … .catch(() => {})` on the session write is addressed or explicitly left, with
+  a reason. A chained write whose failure is discarded is Invariant 2's shape.
+- **C5** — no shape-based schema guessing in `serializeRecord`. Normalisations are keyed on the
+  value's JS type.
+
+### The counterbalance (§2b Invariant 1)
+
+**The directory is the enforcement point, and that is the honest answer.** This is not a guard
+against a peer — it is the integrity of the directory's own append-only record, verified by the
+directory. What makes it meaningful is that the record is replicated across sovereign nodes and the
+chain is checked independently on each: a node that quietly rewrote history would diverge from its
+peers. Nothing here rests on a client behaving.
+
+### Hollow-test risk, named before writing (§🕳️ questions 1 and 2)
+
+The fixture that will pass over this defect is **the one that already exists**: write a
+`randomUUID()`, verify, green. It is the wrong shape — the dashed form round-trips trivially. The
+breaking shape is the **undashed hex the daemon actually sends**, and any test I write has to go
+through `writeSessionWithParticipants` rather than constructing a record by hand, or it tests my
+normalisation against itself.
