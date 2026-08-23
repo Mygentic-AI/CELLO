@@ -733,7 +733,14 @@ did not earn. The suite survives its own run; this is the debt that no longer br
   opened to fix.
 - **Enforcer:** the existing guard's lists reach zero.
 
-### `DOD-M15-CHAINROUNDTRIP-1` — ❌ A chained row can be verified against what the database returns
+### `DOD-M15-CHAINROUNDTRIP-1` — 🟡 A chained row can be verified against what the database returns
+> **Implemented, review in flight (→ Entry S9).** `sessions` FIXED and verified — 10 rows green
+> after a full clean run; canonicalised at the PRODUCER because adding UUID to `serializeRecord`
+> would corrupt `connection_requests` (TEXT `request_id`, 13 live 32-hex rows). Gate 2275 tests +
+> lint + typecheck by exit code. **`seal_notarizations` is NOT closed and my bytea diagnosis for it
+> was WRONG** — retracted in the tree; both writers normalise to Buffer deliberately. It is red,
+> reproducible from `persist-018` alone, cause unidentified after three ruled-out hypotheses. Open
+> AC below.
 Found by `DOD-M15-CHAINDEBT-1`'s review and **measured, not inferred** (→ Entry S7). Three of ten
 hash-chained tables cannot verify on a freshly reset database after a fully green suite.
 - **The class:** `insertWithChain` hashes the record the CALLER supplies; `verifyChain` hashes
