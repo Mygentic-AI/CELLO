@@ -1259,6 +1259,17 @@ one could ship safely. **Neither of these is visible to `sealReadiness` today.**
   here."* **So the gate fires one send later than the code says the damage happens.**
 - **Do not gate either on suspicion alone.** The bar is a signal separating a relay catching up from
   a leaf it will never carry.
+- **⚠️ `8c58cc0` — (b)'s commit — does not typecheck on its own.** Found by `CELLO_Coder_1`'s
+  reviewer, not by me. `submitLeaf` takes four parameters at that commit and
+  `session-node-manager.ts:6349` passes five; the two halves landed in different commits because we
+  were both editing that file. **Nothing to revert and the end state is right** — but `git bisect`
+  across that range will not build, so anyone bisecting a later seal defect hits a compile error and
+  will read it as the bug. Recorded rather than rewritten: rewriting published history to fix a
+  bisect point costs more than the note.
+- **The collision is why `session-node-manager.ts` now has ONE owner.** Both lanes commit by explicit
+  path, which is correct and did nothing here — explicit paths do not separate two agents editing the
+  same file. Settled with `CELLO_Coder_1` over CELLO: that file is theirs outright,
+  `close-session-handler.ts` is mine, and neither of us announces.
 
 ### `DOD-M15-MIGRATION-GUARD-1` — ✅ The upgrade guard checks all seven rebuilt tables, not one
 > **CLOSED 2026-08-23 (CELLO_Support, taken from CELLO_Coder_1) → Entry S11.** Two review passes.
