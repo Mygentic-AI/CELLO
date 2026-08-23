@@ -3166,6 +3166,38 @@ portal database is running (it was 7 failures; **6 were the stopped container**)
 - **So the producer is upstream of the daemon** — whatever mints the envelope, or the journey's own
   seeding. That is where to look, and it is NOT the display path.
 
+### `DOD-M15-RELAYSEQ-UNSIGNED-1` — dedup trusts a position nobody signed
+**POST-LAUNCH under the frozen gate (§0z.4).** Raised by `CELLO_Coder_1` from the other side —
+*"anything that treats a relay-assigned `sequence_number` as authenticated is resting on nothing"* —
+and traced into this lane rather than assumed.
+
+**The fact:** Structure 1, the only bytes a client signs, is
+`[version, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]`. **`sequence_number`
+is not in it.** It lives only in Structure 2, which the relay produces. So the canonical position is
+unauthenticated by construction.
+
+**Where this lane consumes it:** `ingestReceivedContent` takes `canonicalSeqIn` from that record and
+uses it to decide whether an arriving message is a REDELIVERY or genuinely NEW.
+
+- **The suppression direction is SAFE, and it is worth saying why rather than just concluding it.**
+  The redelivery branch requires `tree.hashAt(canonicalSeqIn) === contentHashHex` — the content must
+  already be at that position. A relay cannot mark a new message as "already seen" unless that exact
+  content genuinely is already there, in which case nothing is lost.
+- **The duplication direction is NOT.** A position at or beyond the frontier is treated as new. An
+  inflated position therefore forces a second append of content this side already holds — the
+  "too permissive" case the code's own comment measures at tree size 3 where 2 is correct. That
+  **inflates this side's tree against the counterparty's**, which is the strand: the two trees
+  disagree and the session can no longer seal bilaterally.
+- **Bounded honestly:** a relay that wants to break a session can already drop messages, so this
+  buys an attacker a different failure rather than a new capability. What makes it worth a line is
+  that the failure it produces is SILENT and looks like the counterparty's fault — a session that
+  simply stops being sealable.
+- **Do not fix by signing the position.** That is a wire change and it belongs with
+  `SEALWIRE-1`'s bullets 3+4, where the root and chain verification already live. The narrow fix
+  here is to stop treating an unsigned position as authority for an append decision.
+- **Related and NOT the same:** `DOD-M15-CORROBORATE-1` (the relay's independent copy) and
+  `SEALWIRE-1` bullet 3 (the directory verifying the SEAL leaf's `final_root`).
+
 ### `DOD-M15-TOOLDESC-SCAN-1` — The claim scanner can see MCP tool descriptions
 **POST-LAUNCH** (§0z.1): the launch risk is whether the shipped descriptions are HONEST, and
 `DOD-M15-TIERTEXT-1` audits them by hand in this milestone. This line is the durable control that
