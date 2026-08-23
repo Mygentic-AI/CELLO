@@ -150,7 +150,15 @@ cello_receive({ cello_session_id: "SESSION_ID", timeout_ms: 30000 })
 
 ## After the conversation
 
-When your `cello_close_session` returns `sealed_root` (first-closer), or your `cello_receive` returns `type: "session_sealed"` (second-closer/waiter), report:
+`cello_close_session` answers immediately with `seal_status: "committed"` — it does **NOT** return
+`sealed_root` any more, and it no longer blocks. The notarization runs in the background.
+
+So the first-closer's sequence is: close → then call `cello_sealed_receipt` to collect the root. A
+`reason: "seal_in_progress"` answer means the ceremony is still running; wait and ask again. The
+second-closer/waiter still gets `type: "session_sealed"` from `cello_receive`.
+
+Once you hold the root — from `cello_sealed_receipt` (first-closer) or from the `session_sealed`
+event (second-closer/waiter) — report:
 
 ```
 Session complete.
@@ -201,7 +209,7 @@ You used a stale session ID — likely one seen with `liveness: "gone"` in `cell
 Keep polling `cello_sessions()` — an empty result just means the initiator hasn't connected yet, it is not an error. If it stays empty for a while, verify `cello_use_agent` was called for their agent, and check the daemon log for `session.node.created` with their agent name.
 
 **Seal doesn't complete / one side hangs on close**
-`cello_close_session` blocks until *both* parties close. If one agent forgot to close, the other waits 30s then falls back to a unilateral seal. Make sure **both** agents called `cello_close_session`. The seal also needs the directory reachable — confirm `directory_signaling: "connected"` in `cello_status`.
+`cello_close_session` no longer blocks — it answers at commitment and notarizes in the background, so a close that returns fast is CORRECT and is not the symptom. If one agent forgot to close, the other's background ceremony falls back to a unilateral seal. Make sure **both** agents called `cello_close_session`. The seal also needs the directory reachable — confirm `directory_signaling: "connected"` in `cello_status`.
 
 **`seal_counterparty_pending` / `seal_unilateral_too_early`**
 You closed but the other agent hasn't, and the directory's delivery-grace window hasn't elapsed yet. Either wait for them to close (preferred — it seals immediately) or retry your close after the grace period.
