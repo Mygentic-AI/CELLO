@@ -229,10 +229,29 @@ describe("AC-002: session_liveness_query over a real relay stream", () => {
     expect(resp1["liveness"]).toBe("alive");
     expect(Buffer.from(resp1["session_id"] as Uint8Array)).toEqual(Buffer.from(sessionId));
 
-    // unknown recipient (never tracked)
+    /**
+     * ─── DOD-M15-RELAYAUTH-1: THIS CASE USED TO ASSERT THE LEAK ────────────────────────────────
+     *
+     * It asked about a random 32-byte key nobody in this session has ever heard of, and expected a
+     * real answer (`liveness: "unknown"`). That answer IS the presence oracle: repeat it over a list
+     * of pubkeys and you have a live map of who is active and when, for people you have no
+     * relationship with.
+     *
+     * The relay now refuses, because the subject is not the OTHER PARTICIPANT of the session named
+     * in the frame. A legitimate participant asking about a stranger is exactly the enumeration
+     * path — being in one real session is not a licence to probe everyone else.
+     */
     sendFrame(sA, queryFor(new Uint8Array(32).fill(123)));
     const respU = await rA.readDecodedWithTimeout(3000);
-    expect(respU["liveness"]).toBe("unknown");
+    expect(
+      respU["type"],
+      "a participant may not ask about a key that is not their counterparty in THIS session — " +
+        "answering is the enumeration primitive",
+    ).toBe("session_liveness_refused");
+    expect(
+      respU["liveness"],
+      "and the refusal must carry no liveness at all: a refusal that leaks the answer is not a refusal",
+    ).toBeUndefined();
 
     // B disconnects → gone
     sB.abort(new Error("test_disconnect"));
