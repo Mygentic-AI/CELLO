@@ -3110,9 +3110,18 @@ The five, verbatim, all about message delivery rather than sealing:
 - **Equally, do not assume they are regressions.** This lane had never been run, and the same
   file already yielded one assertion that passed VACUOUSLY (`undefined === undefined`) and two stale
   contracts. A timeout waiting for a log event is exactly the shape a renamed event produces.
-- **Cheapest first step:** check whether `session.content.received` / `content.delivery.acked` are
-  still the emitted event names. A renamed event explains two of the five at zero cost, and the
-  taxonomy has moved before.
+- **THE CHEAP EXPLANATION IS RULED OUT — I did the check rather than leaving it.** Both
+  `session.content.received` and `content.delivery.acked` are still emitted, from
+  `core/daemon/src/session-node-manager.ts`. **The events were not renamed.** So those two timeouts
+  mean the daemon did not emit them, which means the content was not received and the delivery was
+  not acknowledged in those scenarios — not that the test looked for the wrong name.
+- **That makes the flag above stronger, not weaker.** Two of the five are now un-explained by the
+  cheapest stale-test hypothesis. **Andre: this is the one on the backlog I would most expect you to
+  pull back into the gate.** It sits here because of the freeze, and because the freeze put that
+  call in your hands rather than mine.
+- **Still not diagnosed, deliberately.** Ruling a hypothesis out is not diagnosing; the next step is
+  a producer/consumer trace of who should emit `content.delivery.acked` on that path and what
+  precondition it waits on. That is a unit, and the freeze says record and move.
 
 ### `DOD-M15-TOOLDESC-SCAN-1` — The claim scanner can see MCP tool descriptions
 **POST-LAUNCH** (§0z.1): the launch risk is whether the shipped descriptions are HONEST, and
