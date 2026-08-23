@@ -1046,10 +1046,38 @@ export async function awaitSealedRoot(
     const receipt = (await conn.call("cello_sealed_receipt", { cello_session_id: sessionId })) as {
       ok?: boolean;
       sealed_root?: string;
+      local_tree_root?: string;
     };
     last = receipt;
     // An empty answer means "still running", not "failed" — the daemon's own words.
-    if (receipt.ok === true && typeof receipt.sealed_root === "string") return receipt.sealed_root;
+    if (receipt.ok === true && typeof receipt.sealed_root === "string") {
+      /**
+       * ─── DOD-M15-SEALWIRE-1 bullet 8, asserted HERE so every journey gets it ────────────────
+       *
+       * The assertion journeys used to make — that both parties' `sealed_root` matched — is hollow:
+       * both sides read the same field out of the same certificate, so it holds even if the
+       * directory certified a root over a leaf set neither party has. It proves the two clients got
+       * identical bytes, which was never the question.
+       *
+       * `local_tree_root` is THIS side's root, recomputed from its own stored leaves. Requiring it
+       * to equal the certified root is the real claim: **the certificate covers the conversation
+       * this party actually holds.**
+       *
+       * It lives in the helper rather than in each journey deliberately — an assertion every
+       * journey must remember to make is one a new journey will omit, and the omission is silent.
+       */
+      if (typeof receipt.local_tree_root === "string" && receipt.local_tree_root !== receipt.sealed_root) {
+        throw new Error(
+          `${label}: the certificate does NOT cover this party's own tree.\n` +
+            `  certified root : ${receipt.sealed_root}\n` +
+            `  this side's root: ${receipt.local_tree_root}\n` +
+            `  Both parties can still agree on the certified root while it certifies a leaf set ` +
+            `neither of them holds — that is why matching the two parties' sealed_root is not ` +
+            `sufficient, and why this compares against a LOCALLY derived root instead.`,
+        );
+      }
+      return receipt.sealed_root;
+    }
     await new Promise((r) => setTimeout(r, 500));
   }
   throw new Error(
