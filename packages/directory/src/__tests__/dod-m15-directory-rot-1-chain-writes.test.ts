@@ -79,6 +79,14 @@ const ROLLED_BACK: Record<string, string> = {
     "its first two describe blocks wrap every test in BEGIN/ROLLBACK on the same client, so their " +
     "inserts never commit. Its third block could not (the store uses its own pool connection) and " +
     "was converted to seedAccount() + per-run ids instead.",
+  "federation-003.test.ts":
+    "DOD-M15-CHAINDEBT-1 — CONVERTED. Its AC-001 block proves cello_service may INSERT and SELECT " +
+    "but not UPDATE or DELETE, so the INSERT has to execute as that role; it now runs inside " +
+    "BEGIN/ROLLBACK on a service client, with SAVEPOINTs around the two statements that are meant " +
+    "to fail (in Postgres a failed statement aborts the transaction, so without them the DELETE " +
+    "assertion would pass on 'current transaction is aborted' rather than on a permission error). " +
+    "The rollback replaced a cleanup that deleted WHERE relay_id LIKE '________________________________' " +
+    "— thirty-two wildcards, reaching into every other test's rows, under a .catch(() => {}).",
   "persist-006-pgaudit.test.ts":
     "DOD-M15-CHAINDEBT-1 — CONVERTED. Its AC-001 INSERT must really execute as `cello_service`, " +
     "because the assertion reads that statement back out of the container's pgaudit log — so it " +
@@ -125,6 +133,13 @@ const ALLOWED_DELETES: Record<string, { count: number; why: string }> = {
       "AC-006 attempts a DELETE as the SERVICE role and asserts it is REFUSED. It deletes nothing, " +
       "because it fails — that is the test proving the table is append-only in production.",
   },
+  "federation-003.test.ts": {
+    count: 1,
+    why:
+      "DOD-M15-CHAINDEBT-1 — the surviving DELETE is the AC-001 assertion that cello_service is " +
+      "REFUSED DELETE on relay_registrations. It runs inside a SAVEPOINT and is expected to throw, " +
+      "so it removes nothing. The four cleanup deletes that used to sit alongside it are gone.",
+  },
   "persist-003-rls.test.ts": {
     count: 1,
     why:
@@ -146,7 +161,6 @@ function deleteCount(text: string): number {
 
 /** Still committing a literal chain_hash. Shrink; do not add. DOD-M15-DIRECTORY-ROT-1 owns these. */
 const KNOWN_DEBT_INSERTS = [
-  "federation-003.test.ts",
   "persist-003-rls.test.ts",
   "persist-008-analytics.test.ts",
   "persist-020-connections.test.ts",
@@ -157,7 +171,6 @@ const KNOWN_DEBT_INSERTS = [
 
 /** Still deleting from a chained table. Shrink; do not add. */
 const KNOWN_DEBT_DELETES = [
-  "federation-003.test.ts",
   "persist-020-connections.test.ts",
   "persist-021-adapter-boundary-audit.test.ts", // partially converted — see the note above
 ];
@@ -235,8 +248,8 @@ describe("DOD-M15-DIRECTORY-ROT-1: fixtures never put a hole in a hash-chained t
 
     // Lower these as files are converted; never raise them. DOD-M15-CHAINDEBT-1 owns driving both
     // to zero, at which point the lists and this assertion go with them.
-    expect(KNOWN_DEBT_INSERTS.length, "the insert backlog must shrink, never grow").toBeLessThanOrEqual(5);
-    expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(3);
+    expect(KNOWN_DEBT_INSERTS.length, "the insert backlog must shrink, never grow").toBeLessThanOrEqual(4);
+    expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(2);
   });
 
   it("the ROLLED_BACK and ALLOWED_DELETES entries still name files that exist", () => {
