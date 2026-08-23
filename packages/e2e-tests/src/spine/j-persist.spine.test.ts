@@ -44,7 +44,7 @@ async function openEncryptedDb(dbPath: string): Promise<KeyedDb> {
   )) as { openEncryptedDatabaseAtPath(p: string): KeyedDb };
   return mod.openEncryptedDatabaseAtPath(dbPath);
 }
-import { contentHashHex } from "./content-seal-fixture.js";
+import { contentHashHex, saltedContentHashHex } from "./content-seal-fixture.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -192,14 +192,53 @@ describe("J-PERSIST — durable encrypted transcript survives restart (DOD-LOG-1
       const leafIndexByHash = new Map(leafRows.map((r) => [r.leaf_hash_hex.toLowerCase(), r.leaf_index]));
       // There is a committed msg leaf for each of the three messages.
       expect(leafRows.length, `expected 3 committed msg leaves in B's tree, saw ${leafRows.length}`).toBe(3);
+
+      /**
+       * ⚠️ THE LEAVES ARE SALTED NOW, AND THAT TURNS THIS HOP INTO A STRONGER TEST THAN IT WAS —
+       * `DOD-M15-SEALWIRE-1` bullet 6.
+       *
+       * This loop used to recompute `SHA-256(0x00 ‖ content)` and look the leaf up by it. Once a
+       * session agrees a salt, the daemon writes `HMAC-SHA256(salt, 0x00 ‖ content)`, so the lookup
+       * missed every leaf and the failure read as *"transcript message must have a committed msg
+       * leaf"* — a persistence failure, which it was not. The leaves were all there.
+       *
+       * The salt is durable in the same row (`sessions.content_salt`), so the journey can read what
+       * the daemon actually used rather than guessing which algorithm applied.
+       *
+       * And asserting it is worth more than the old form: it pins **Decision #8 end to end on a live
+       * pair** — one salt per session, agreed BEFORE the first leaf is hashed. Nothing else in the
+       * journeys proves the agreed salt reached the durable leaf at all.
+       */
+      const saltRow = db
+        .prepare("SELECT content_salt FROM sessions WHERE agent_id = ? AND session_id = ?")
+        .get(agentIdRow!.agent_id, sessionId) as { content_salt: Uint8Array | null } | undefined;
+      const salt = saltRow?.content_salt ?? null;
+      expect(
+        salt,
+        "the session must hold an agreed content salt — Decision #8 agrees it BEFORE the first leaf is hashed, so a live pair that exchanged three messages cannot legitimately have none",
+      ).toBeTruthy();
+      expect(salt!.length, "the agreed salt must be the full 32 bytes").toBe(32);
+
       for (const m of msgs) {
-        const hashHex = contentHashHex(Buffer.from(m.text)).toLowerCase();
+        const hashHex = saltedContentHashHex(new Uint8Array(salt!), Buffer.from(m.text)).toLowerCase();
         const committedLeafIndex = leafIndexByHash.get(hashHex);
         expect(committedLeafIndex, `transcript message "${m.text.slice(0, 12)}…" must have a committed msg leaf`).toBeDefined();
         expect(
           m.sequence,
           `transcript sequence for "${m.text.slice(0, 12)}…" must equal its COMMITTED leaf index (chain join)`,
         ).toBe(committedLeafIndex);
+
+        /**
+         * AND THE UNSALTED FORM MUST MATCH NOTHING. Without this the test would still pass against a
+         * daemon that silently fell back to `sha256` — the salted lookup would simply miss and the
+         * `toBeDefined()` above would fail, which reads as a persistence bug rather than as the salt
+         * being absent. Asserting the negative is what makes the failure say which of the two it is,
+         * and it is the only journey-level proof that the hashes on disk are actually salted.
+         */
+        expect(
+          leafIndexByHash.get(contentHashHex(Buffer.from(m.text)).toLowerCase()),
+          `"${m.text.slice(0, 12)}…" is stored under the UNSALTED hash — the session holds a salt but the leaf was not written with it, so a relay holding these hashes can still confirm a guessed message`,
+        ).toBeUndefined();
       }
 
       // ── DOD-STORE-1 (PERSIST-002): B's IDENTITY reloaded from the encrypted store after the restart

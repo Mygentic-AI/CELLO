@@ -16,6 +16,7 @@
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
+import { hmac } from "@noble/hashes/hmac.js";
 import { createCipheriv, randomBytes } from "node:crypto";
 
 const IV_BYTES = 12;
@@ -50,4 +51,28 @@ export function sealToRecipient(recipientEd25519Pub: Uint8Array, plaintext: Uint
 /** The content_hash the daemon computes + cross-checks: SHA-256(0x00 || content). */
 export function contentHashHex(content: Uint8Array): string {
   return Buffer.from(sha256(new Uint8Array([0x00, ...content]))).toString("hex");
+}
+
+/**
+ * The content_hash the daemon computes once a session holds an agreed SALT:
+ * `HMAC-SHA256(salt, 0x00 ‖ content)` — `DOD-M15-SEALWIRE-1` bullet 6.
+ *
+ * ⚠️ WHY THIS IS MIRRORED RATHER THAN IMPORTED, since a second implementation is exactly what bit
+ * `j-trust`'s hand-copied envelope type. `saltedContentHash` lives in `@cello-protocol/crypto`, and
+ * the published build this package resolves (0.0.57) **does not export it yet** — the salt work is
+ * unpublished. So there is nothing to import until the cascade ships; mirroring is the only option,
+ * and it is the same skew, for the same reason, as `sealToRecipient` above.
+ *
+ * What keeps the mirror honest is that it is never the producer: the LIVE DAEMON writes the leaf,
+ * and this only recomputes what it must have written. A drift between the two turns the journey red
+ * on the next run rather than hiding — which is the opposite of the `j-trust` failure, where the
+ * duplicate was itself the producer and could drift silently.
+ *
+ * OWED: replace with the crypto import once `saltedContentHash` is published.
+ */
+export function saltedContentHashHex(salt: Uint8Array, content: Uint8Array): string {
+  const msg = new Uint8Array(1 + content.length);
+  msg[0] = 0x00;
+  msg.set(content, 1);
+  return Buffer.from(hmac(sha256, salt, msg)).toString("hex");
 }
