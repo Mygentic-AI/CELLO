@@ -1758,6 +1758,33 @@ Rulings that bind every line above. **Re-asking one is decision theatre** (M15-P
    agreement produces and the seal items cannot be split.
 3. **The unpublished investor and GTM material is not in M15.** Never made public, never sent;
    corrected after the milestone against what actually shipped.
+4. **`DOD-M15-CLOSEWAIT-1`'s close contract: ANSWER ON COMMITMENT, NOT ON NOTARIZATION** (mine,
+   2026-08-23, §3a — the line says *"decide the contract, then build"*, so here it is decided).
+
+   `cello_close_session` returns as soon as the SEAL leaf is durably submitted, naming what happens
+   next. The bilateral wait and the unilateral escalation continue in the background; the receipt is
+   collected with `cello_get_sealed_receipt`.
+
+   **Why this and not "keep blocking":** the blocking version cost real receipts. An operator watched
+   a frozen command for 11m 06s, concluded it was broken, and force-abandoned **seventeen sessions**
+   — forfeiting the exact notarized receipt the wait was earning. A UX failure destroying the core
+   artifact is the definition of unforgivable at launch.
+
+   **Why this is the least-reversing option — both safety nets already exist**, which is what makes
+   it cheap rather than a rebuild:
+   - `cello_get_sealed_receipt` is already a registered handler returning the same certificate.
+   - `RestartSealResolver` (`DOD-M12B-RESTART-SEAL-1`) already resolves `seal_interrupted_pending` on
+     boot — a seal commitment nobody asked the directory to notarize. So a daemon that dies during
+     the background wait finishes the job on its next start rather than orphaning it.
+
+   **What does NOT change:** the same inline escalation still produces the receipt, in the same
+   order, from the same leaf. Only the IPC response stops waiting for it. Nothing about what is
+   signed, by whom, or when is altered — that is deliberately outside a UX fix.
+
+   **The counterbalance, named before the code:** answering early must not let an operator believe
+   the session is sealed when it is only committed. The response says *committed, not yet notarized*,
+   names the verb that fetches the receipt, and the session's own status must continue to read as
+   sealing until it is not.
 4. **Certified root moves to the content-hash domain** (relay-audit Decision 1(a)) — not
    `seal_attempt`, not a parallel reported root.
 5. **The listening socket stays, gated on the assignment** (Decision 2). Removing it buys nothing on
