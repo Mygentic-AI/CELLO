@@ -151,6 +151,38 @@ const ALLOWED_DELETES: Record<string, { count: number; why: string }> = {
   },
 };
 
+/**
+ * ─── ALLOWED_INSERTS — an INSERT that is the SUBJECT of its test and is REFUSED ────────────────
+ *
+ * Added by `DOD-M15-CHAINDEBT-1`. The guard had two dispositions for a literal `chain_hash`:
+ * rolled back, or debt. A third case exists and had nowhere to go — an INSERT the database is
+ * supposed to REJECT, written to prove a role has no INSERT privilege. It writes nothing, so it is
+ * not a hole; and it cannot be "converted", because rewriting it through the chained writer would
+ * delete the assertion it exists to make.
+ *
+ * COUNTED, for the same reason `ALLOWED_DELETES` is counted: a file-level exemption is a hole the
+ * size of the file, and this file also contained a seeder that WAS real debt.
+ */
+const ALLOWED_INSERTS: Record<string, { count: number; why: string }> = {
+  "persist-008-analytics.test.ts": {
+    count: 2,
+    why:
+      "SI-001 attempts an INSERT into conversation_seals and one into conversation_participation " +
+      "as `cello_analytics`, and asserts both REJECT — that is the test proving the analytics role " +
+      "is SELECT-only on protocol tables. Neither writes a row. The file's real debt was its " +
+      "`insertSealedConversation` seeder, which committed a constant chain_hash into three chained " +
+      "tables; that now goes through `recordConversationSeal`.",
+  },
+};
+
+/** How many chained-table INSERTs supplying a literal chain_hash a source contains. */
+function insertCount(text: string): number {
+  return HASH_CHAINED_TABLES.reduce((n, table) => {
+    const m = text.match(new RegExp(`INSERT\\s+INTO\\s+${table}\\s*\\([^)]*chain_hash`, "gi"));
+    return n + (m ? m.length : 0);
+  }, 0);
+}
+
 /** How many chained-table DELETEs a source contains. */
 function deleteCount(text: string): number {
   return HASH_CHAINED_TABLES.reduce((n, table) => {
@@ -162,7 +194,6 @@ function deleteCount(text: string): number {
 /** Still committing a literal chain_hash. Shrink; do not add. DOD-M15-DIRECTORY-ROT-1 owns these. */
 const KNOWN_DEBT_INSERTS = [
   "persist-003-rls.test.ts",
-  "persist-008-analytics.test.ts",
   "persist-020-connections.test.ts",
   // PARTIALLY converted: its AC-001-extended block now runs in a rolled-back transaction (7 fake
   // chain_hash inserts, 7 deletes and a TRUNCATE removed). Other blocks in the file still violate.
@@ -179,10 +210,18 @@ describe("DOD-M15-DIRECTORY-ROT-1: fixtures never put a hole in a hash-chained t
   it("no NEW fixture supplies a literal chain_hash on an INSERT into a chained table", () => {
     // A chain hash must be computed against the current chain head. A value a fixture can type is,
     // by construction, not that — so it is a hole wherever it lands.
-    const offenders = testSources()
-      .filter(({ name }) => !ROLLED_BACK[name] && !KNOWN_DEBT_INSERTS.includes(name))
-      .filter(({ text }) => violates(text, "insert"))
-      .map(({ name }) => name);
+    const offenders: string[] = [];
+    for (const { name, text } of testSources()) {
+      if (ROLLED_BACK[name] || KNOWN_DEBT_INSERTS.includes(name)) continue;
+      const allowed = ALLOWED_INSERTS[name];
+      const found = insertCount(text);
+      if (allowed) {
+        // Exempted for a COUNT of refused inserts, not for the file — one more is a new violation.
+        if (found > allowed.count) offenders.push(`${name} (${found} literal chain_hash inserts, ${allowed.count} allowed)`);
+        continue;
+      }
+      if (found > 0) offenders.push(name);
+    }
 
     expect(
       offenders,
@@ -248,7 +287,7 @@ describe("DOD-M15-DIRECTORY-ROT-1: fixtures never put a hole in a hash-chained t
 
     // Lower these as files are converted; never raise them. DOD-M15-CHAINDEBT-1 owns driving both
     // to zero, at which point the lists and this assertion go with them.
-    expect(KNOWN_DEBT_INSERTS.length, "the insert backlog must shrink, never grow").toBeLessThanOrEqual(4);
+    expect(KNOWN_DEBT_INSERTS.length, "the insert backlog must shrink, never grow").toBeLessThanOrEqual(3);
     expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(2);
   });
 
@@ -256,7 +295,11 @@ describe("DOD-M15-DIRECTORY-ROT-1: fixtures never put a hole in a hash-chained t
     // An allowlist that outlives its files quietly grants exceptions to nothing, and hides that the
     // constraint is now stricter than it looks.
     const present = new Set(testSources().map((f) => f.name));
-    const missing = [...Object.keys(ROLLED_BACK), ...Object.keys(ALLOWED_DELETES)].filter((n) => !present.has(n));
+    const missing = [
+      ...Object.keys(ROLLED_BACK),
+      ...Object.keys(ALLOWED_DELETES),
+      ...Object.keys(ALLOWED_INSERTS),
+    ].filter((n) => !present.has(n));
     expect(missing, `these exemptions name files that no longer exist: ${missing.join(", ")}`).toEqual([]);
   });
 });
