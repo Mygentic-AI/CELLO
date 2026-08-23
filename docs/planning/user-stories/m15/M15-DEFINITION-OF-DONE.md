@@ -677,7 +677,14 @@ The four, and none of them was a missing check — every one was a check that fi
 - **Enforcer:** a test that fails when a `REFUSAL_REASONS` member has no path to an agent-facing
   surface.
 
-### `DOD-M15-CHAINDEBT-1` — 🟡 No fixture puts a hole in a hash-chained table
+### `DOD-M15-CHAINDEBT-1` — ✅ No fixture puts a hole in a hash-chained table
+> **CLOSED 2026-08-23 (→ Entries S5, S7, S8).** Ten findings, five blocking, all fixed. Enforcer
+> met: both backlogs 8 → **0**, ceilings pinned 0/0, so a new violation has nowhere to be parked.
+> Gate 2271 tests + lint + typecheck by exit code. **The review's real output was outside the
+> unit:** `inRolledBackTxn` — one of three patterns this milestone standardised on — had been
+> silently COMMITTING since it was written, `TRUNCATE`s included. Fixed. **Eight of ten chained
+> tables now verify;** the two that do not are `DOD-M15-CHAINROUNDTRIP-1`, a production defect this
+> unit made visible by removing the cleanups that hid it.
 > **In flight (→ Entry S5), branch `m15/chaindebt-1`.** Inserts **8 → 5**, deletes **8 → 3**;
 > shrink-only ceilings lowered with each. Every converted file's OWN suite re-run against real
 > Postgres, not just the guard. **Four of the twelve were misfiled rather than debt** — already

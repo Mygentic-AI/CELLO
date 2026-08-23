@@ -5104,3 +5104,108 @@ Its enforcer is *"the existing guard's lists reach zero"* — **met**: inserts 8
 ceilings pinned 0/0. What it does **not** close is the property in the line's prose, because three
 tables are red for reasons no fixture causes. That residue is this entry and the new line, not a
 silent gap under a ✅.
+
+---
+
+## Entry S8 (CELLO_Support) — `CHAINDEBT-1` closes ✅. The guard was green while the property was false
+
+Ten findings, five blocking, all fixed. Completes Entries S5 and S7.
+
+### The verdict, quoted
+
+> **The guard is green and the debt is genuinely paid at the source level — I ran it, 4/4, and every
+> touched suite passes, twice in a row. But the property the DoD line names is not true on the
+> database, and I can prove it: right after this branch's own suites run green, three of the ten
+> hash-chained tables fail `verifyChain`. Two of the three causes are things this unit vouched for
+> or uncovered.**
+>
+> **SILENT FALLBACKS FOUND** — F1 [blocking]: a rollback helper that silently commits, vouched for
+> in prose by an exemption in this diff's guard. F4: a seeder that reports success for rows it never
+> wrote.
+> **TESTS HAVE TEETH** — no hollow test introduced… **REMOVALS PROVEN**
+>
+> *"Two things I'd rate as the real output of this review, above the guard bookkeeping. F1, because
+> it means one of the three 'safe' patterns this milestone standardised on has been quietly
+> committing since it was written. And F2, because removing the fixture cleanups is what made a
+> production defect visible for the first time."*
+
+### F1 — the helper whose NAME was the assertion
+
+**`inRolledBackTxn` did not roll back.** The proxy neutered `release` and nothing else, so
+`insertWithChain` — which sets `ownsTransaction = true` given no external client — issued
+`BEGIN`…`COMMIT` **on the very client the caller's transaction ran on**. The store's first write
+ended that transaction and committed everything before it; the closing `ROLLBACK` was a no-op.
+Measured: a row written inside it survived, 11 → 12.
+
+`persist-004` had therefore been committing a whole-table `TRUNCATE`, ten inserts and a deliberate
+`DELETE` **every run** — under a guard entry I carried forward whose prose said the opposite.
+
+**Fixed with SAVEPOINTs**, and the property now has a test whose assertion is on the DATABASE — *did
+the row survive* — which is the only question reading the proxy would never have answered.
+
+**Fixing it turned a silent data loss into a visible deadlock.** `persist-021` AC-004 truncated on
+the transaction's client and then opened a SECOND connection inside that transaction to read the
+same table. It only ever worked because the accidental COMMIT released the lock early. Diagnosed by
+measurement, not inference: `pg_stat_activity` showed one connection `idle in transaction` holding
+the lock and another `wait_event_type=Lock` on `SELECT chain_hash FROM conversation_seals`.
+
+### The payoff, and it is the argument for the whole unit
+
+With the helper honest I re-measured every chained table and found the third break was **not**
+serialization at all — it was a **tamper a test made its point with and walked away from**.
+`persist-004` AC-004 corrupts a row to prove detection works and left it corrupted, so every later
+run inherited an unverifiable table. Recomputed row by row: first break at position 5, serialized as
+`"requester_pseudonym":"TAMPERED_BY_SUPERUSER"`. The same defect I had fixed in `persist-020` hours
+earlier, in a different file, **found only because the chain was measured rather than trusted.**
+
+`connection_requests` now verifies — 24 rows, valid. **Eight of ten chained tables green.** The two
+that are not are `DOD-M15-CHAINROUNDTRIP-1`, which is a production defect and not fixture debt.
+
+### Three of mine that the guards caught
+
+- **A false reason in a guard exemption (F5).** I wrote that `persist-003-rls` is exempt because
+  *"its INSERT is the one the RLS test proves is refused."* It has **no refused INSERT** — its
+  refusals are UPDATE and DELETE. Corrected with the wrong version left visible: a wrong reason is
+  how an exemption survives its next reader.
+- **My runtime gate was order-dependent.** The F10 fix asserted `verifyChain` over the whole shared
+  `conversation_seals` table. Passed alone, **failed in a full run** on a row this file never wrote.
+  That is the exact order-dependence this unit removed from `federation-003` and `persist-020`,
+  reintroduced by its own fix. It now checks only that the rows THIS file seeded chain to their
+  predecessors — the property it is responsible for.
+- **My TRUNCATE test depended on a sibling test** leaving a row, and failed on a clean database —
+  caught by an assertion I had written for exactly that reason.
+
+### The guard had three blind spots, and closing them found two more violations
+
+`INSERT INTO <table> VALUES (…)` with no column list never matched; a `DELETE FROM ${table}` built
+by interpolation never matched; and the walker read only `*.test.ts`, so `helpers/` — where the
+guard's own failure message sends authors — was never scanned. All closed, mutation-tested. The
+widening immediately caught a real interpolated delete in `persist-003` that no literal-name regex
+could ever have seen.
+
+**And the guard now reads CODE, not prose.** It flagged a docstring listing example SQL. That is the
+**third** time this project has been bitten by a guard reading prose — this, my own `persist-020`
+comment quoting the SQL it explained, and the claims ledger counting its own correction note as a
+claim. A guard that punishes documentation teaches people to delete the documentation.
+
+`ROLLED_BACK` is COUNTED now (F6) — it was the uncounted file-level exemption this guard's own header
+condemns, and this unit had added four files to it. Proved by mutation: a second insert in a file
+exempt for one fails.
+
+Gate on a clean database: **2271 passed, 37 skipped, 7 todo; lint and typecheck clean — all by exit
+code.**
+
+### Carried
+
+- **`DOD-M15-CHAINROUNDTRIP-1`** — `sessions` and `seal_notarizations` still red. Production defect,
+  own line, and `CELLO_Coder_1` has confirmed no collision: their entire `SEALWIRE-1` footprint in
+  this repo is `directory-node.ts` plus two tests, so `pg-directory-store.ts` and `hash-chain.ts`
+  are clear for me.
+- **`DOD-M15-MIGRATION-GUARD-1`** — taken from `CELLO_Coder_1`: the migration guard replays only
+  `sessions`' inline ALTERs while seven tables are rebuilt. **Do not "fix" it by adding the four
+  `contacts` tier columns to the rebuild DDL** — they are deliberately absent, and adding them makes
+  a legacy database skip the one-time grandfather and silently downgrade every pre-`agent_id`
+  contact to UNKNOWN.
+- **From their lane, worth the block we owe:** *a default that equals the current value makes every
+  threading edit invisible until the value changes.* Four of their mutants survived because a
+  dropped argument produced byte-identical output.
