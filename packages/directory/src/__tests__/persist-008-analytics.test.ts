@@ -58,7 +58,14 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from "vites
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { AnalyticsJob } from "../analytics-job.js";
+// DOD-M15-CHAINDEBT-1: the fixture seeds through the real chained writer instead of raw INSERTs.
+import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import type { Logger } from "@cello-protocol/interfaces";
+
+/** A logger for the seeder — the fixture's writes are not what this file is asserting about. */
+function makeSilentLogger(): Logger {
+  return { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+}
 
 // ─── Unit tests: logger calls (no DB) ────────────────────────────────────────
 
@@ -250,35 +257,47 @@ async function insertSealedConversation(
   const conversationId = randomUUID();
   const date = sealDate ?? new Date();
 
-  // Compute a stub chain hash (format mirrors hash-chain.ts output)
-  const chainHash = "0".repeat(64);
-
-  // Insert conversation seal
-  await pool.query(
-    `INSERT INTO conversation_seals
-       (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
-     VALUES ($1, $2, $3, $4, $5, $6)`,
-    [conversationId, "a".repeat(64), "MUTUAL_SEAL", participants.length, date, chainHash],
-  );
-
-  // Insert participation records for each participant
-  for (const pseudonym of participants) {
-    await pool.query(
-      `INSERT INTO conversation_participation (conversation_id, party_pseudonym, chain_hash)
-       VALUES ($1, $2, $3)`,
-      [conversationId, pseudonym, chainHash],
-    );
-  }
-
-  // Insert attestations
-  for (const [pseudonym, attestation] of Object.entries(attestations)) {
-    await pool.query(
-      `INSERT INTO conversation_attestations
-         (conversation_id, participant_pseudonym, attestation, seal_signature, chain_hash)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [conversationId, pseudonym, attestation, "sig-stub", chainHash],
-    );
-  }
+  /**
+   * DOD-M15-CHAINDEBT-1 — seeded through the REAL chained writer, not three raw INSERTs.
+   *
+   * This used to write `conversation_seals`, `conversation_participation` and
+   * `conversation_attestations` directly, each with `chain_hash = "0".repeat(64)`. A chain hash
+   * must be computed against the current chain head; a constant cannot be, so every one of those
+   * rows was a hole — and `verifyChain` fails at the hole AND at every row after it, for the whole
+   * run, in suites that have nothing to do with analytics. Three chained tables poisoned by one
+   * fixture helper, which is why this file was on the debt list for all three.
+   *
+   * `recordConversationSeal` writes exactly those three tables in one transaction through
+   * `insertWithChain`, so the rows are real, chained correctly, and COMMITTED — which this file
+   * needs, because it reads them back through a DIFFERENT pool (the analytics role). A rolled-back
+   * transaction would be invisible to those reads; that is why this file is fixed by seeding
+   * properly rather than by wrapping it.
+   */
+  const store = new PgDirectoryStore(pool, makeSilentLogger());
+  await store.recordConversationSeal({
+    conversationId,
+    merkleRootHex: "a".repeat(64),
+    closeType: "MUTUAL_SEAL",
+    closeTimestampMs: date.getTime(),
+    parties: participants.map((pseudonym) => {
+      /**
+       * REFUSE rather than default. The raw version wrote an attestation row only for pseudonyms
+       * present in the map, so a participant could have none; `recordConversationSeal` writes one
+       * per party and cannot express that absence. Every call site in this file supplies an
+       * attestation for every participant, so the shapes are identical today — and a silent
+       * `?? "CLEAN"` would let a future caller get a FABRICATED attestation that this file's
+       * clean_count / flagged_count assertions would then quietly measure as real.
+       */
+      const attestation = attestations[pseudonym];
+      if (attestation === undefined) {
+        throw new Error(
+          `insertSealedConversation: no attestation supplied for participant '${pseudonym}'. ` +
+            `Every participant needs one — the seeder writes a row per party and will not invent it.`,
+        );
+      }
+      return { pseudonym, attestation, sealSignatureHex: "sig-stub" };
+    }),
+  });
 
   return conversationId;
 }
