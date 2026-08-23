@@ -35,6 +35,7 @@ import {
   startDaemon,
   provisionAgent,
   connectMcp,
+  awaitSealedRoot,
   registerAgent,
   psqlSpineN,
   type SpineCluster,
@@ -147,7 +148,28 @@ describe("J-UPGRADE-001 — unilateral → bilateral upgrade on the absent party
       `\n--- directory ---\n${cluster.directory.output.split("\n").filter((l) => /unilateral|seal|notariz|absent/i.test(l)).slice(-15).join("\n")}`;
     expect(close.ok, `A unilateral close must succeed:${unilateralDiag}`).toBe(true);
     expect(close.seal_type, `seal must be unilateral (B was gone):${unilateralDiag}`).toBe("unilateral");
-    const rootHex = close.sealed_root!;
+    /**
+     * ⚠️ THIS WAS `const rootHex = close.sealed_root!;` AND THE `!` IS THE MECHANISM, NOT AN
+     * INCIDENTAL TIDY-UP.
+     *
+     * `cello_close_session` is non-blocking by design and no longer returns a root — so the
+     * assertion turned `undefined` into the literal string `"undefined"`, which then went into FIVE
+     * SQL queries as `decode('undefined','hex')`. Those match nothing, and the failure surfaces as
+     * *"the directory must hold exactly one unilateral notarization"* — which reads as **the
+     * directory failing to record a seal**, a far more alarming thing than a stale test, and it
+     * would send whoever picked it up into the persistence layer.
+     *
+     * That is what a non-null assertion buys here: it converts *"this value is missing"* into
+     * *"this value is wrong"*, and only the second implicates a subsystem.
+     *
+     * The root now comes from the receipt, which is where the daemon's own guidance says to fetch
+     * it. 13 minutes because B is dead: this seal reaches a root by the ~11-minute unilateral
+     * escalation, not by B closing.
+     */
+    const rootHex = await awaitSealedRoot(connA, sessionIdA, {
+      timeoutMs: 13 * 60_000,
+      label: "A's unilateral seal (B killed)",
+    });
     expect(rootHex, `A must surface a sealed_root:${unilateralDiag}`).toMatch(/^[0-9a-f]{64}$/);
 
     // Corroborate the unilateral row exists in the directory's table (pre-upgrade baseline).

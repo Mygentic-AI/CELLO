@@ -35,6 +35,7 @@ import {
   startDaemon,
   provisionAgent,
   connectMcp,
+  awaitSealedRoot,
   registerAgent,
   writeSignedManifestTo,
   writeConsortiumManifest,
@@ -227,7 +228,25 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
 
     // DOD-SEAL-3: A walks away with a verifiable sealed_root from the unilateral certificate.
     expect(close.ok, `A unilateral close must succeed:${diag}`).toBe(true);
-    expect(close.sealed_root, `A must surface a sealed_root from the unilateral cert:${diag}`).toMatch(/^[0-9a-f]{64}$/);
+
+    /**
+     * ⚠️ THE ROOT COMES FROM THE RECEIPT, NOT FROM THE CLOSE. `cello_close_session` is NON-BLOCKING
+     * by design: it records the SEAL commitment and returns `seal_status: "committed"` with guidance
+     * saying, verbatim, *"The receipt is NOT YET available … Fetch it with cello_sealed_receipt."*
+     *
+     * Asserting `close.sealed_root` was the pre-M12 blocking contract, and that contract was removed
+     * ON PURPOSE — the daemon's own guidance names the price: *"exactly how seventeen sessions were
+     * lost when this call used to block."* So a fix that made the close return a root synchronously
+     * would re-introduce the defect this shape exists to prevent. **Poll; never un-block the close.**
+     *
+     * The bound is 13 minutes rather than the helper's default 60s: this journey's counterparty is
+     * GONE, so the seal reaches a root by the ~11-minute unilateral escalation, not by B closing.
+     */
+    const sealedRoot = await awaitSealedRoot(connA, sessionIdA, {
+      timeoutMs: 13 * 60_000,
+      label: "A's unilateral seal",
+    });
+    expect(sealedRoot, `A must surface a sealed_root from the unilateral cert:${diag}`).toMatch(/^[0-9a-f]{64}$/);
     expect(close.seal_type, `seal_type must be 'unilateral':${diag}`).toBe("unilateral");
 
     // DOD-SEAL-1/2: the directory ran the REAL notarization (verify→FROST→persist), not the
@@ -282,7 +301,15 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
     };
     const rcptDiag = `\nreceipt: ${JSON.stringify(receipt)}${legDiag}`;
     expect(receipt.ok, `cello_get_sealed_receipt must return the receipt (was sealed_receipt_not_found):${rcptDiag}`).toBe(true);
-    expect(receipt.sealed_root, `retrieved receipt must carry the sealed_root:${rcptDiag}`).toBe(close.sealed_root);
+    /**
+     * ⚠️ THIS COMPARED `receipt.sealed_root` TO `close.sealed_root`, AND BOTH ARE NOW UNDEFINED ON A
+     * NON-BLOCKING CLOSE — so `expect(undefined).toBe(undefined)` PASSED, vacuously, asserting
+     * nothing at all. A test that goes green when both sides of its comparison are absent is worse
+     * than no test: it reads as coverage.
+     *
+     * Compared against the polled root instead, which is a value that had to actually exist.
+     */
+    expect(receipt.sealed_root, `retrieved receipt must carry the sealed_root:${rcptDiag}`).toBe(sealedRoot);
     const persistedAbsent = (receipt.legibility?.participants ?? []).find((p) => p.attestation_mode === "absent");
     expect(persistedAbsent, `retrieved receipt must record the counterparty 'absent':${rcptDiag}`).toBeDefined();
     expect(persistedAbsent!.pubkey, `retrieved receipt's absent party must be B (${pubB.slice(0, 16)}…):${rcptDiag}`).toBe(pubB);

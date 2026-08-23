@@ -32,6 +32,7 @@ import {
   startDaemon,
   provisionAgent,
   connectMcp,
+  awaitSealedRoot,
   registerAgent,
   type SpineCluster,
   type Proc,
@@ -150,7 +151,23 @@ describe("J-UPGRADE — auto-acknowledge close, live (DOD-UP-2)", () => {
 
     // DOD-UP-2 / AC-001: A's close completed and BILATERAL — NOT a unilateral fallback.
     expect(close.ok, `A close must succeed:${diag}`).toBe(true);
-    expect(close.sealed_root, `A must surface a sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
+
+    /**
+     * The root comes from the receipt — `cello_close_session` is non-blocking by design and returns
+     * a commitment, not a root. See `j-unilateral` for the full reasoning; the short version is that
+     * the blocking close was removed deliberately and its own guidance names the cost.
+     *
+     * ⚠️ 60s HERE, NOT 13 MINUTES, AND THE DIFFERENCE IS THE POINT OF THIS JOURNEY. B's AGENT never
+     * closes, but B's DAEMON auto-acknowledges — so this seal completes bilaterally in seconds and
+     * must NEVER reach the ~11-minute unilateral escalation. A generous bound would hide exactly the
+     * regression this test exists to catch: auto-ack silently failing and the seal degrading to
+     * unilateral would still go green, just slowly.
+     */
+    const sealedRoot = await awaitSealedRoot(connA, sessionIdA, {
+      timeoutMs: 60_000,
+      label: "A's seal via B's daemon auto-ack",
+    });
+    expect(sealedRoot, `A must surface a sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
     expect(close.seal_type, `seal must be BILATERAL — B's daemon auto-acked, so NO unilateral fallback:${diag}`).not.toBe("unilateral");
 
     // AC-008: B's daemon auto-acknowledged (its own node co-signed without an agent close call).
