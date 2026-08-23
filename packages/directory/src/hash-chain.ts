@@ -132,6 +132,20 @@ function isExcluded(tableName: string, column: string): boolean {
  * columns as strings; application code uses JavaScript numbers. Normalizing
  * string-integers to numbers makes serialization identical at INSERT time
  * (application supplies numbers) and at chain-verification time (pg returns strings).
+ *
+ * ─── THERE IS DELIBERATELY NO UUID CASE HERE. DO NOT ADD ONE ──────────────────────────────────
+ *
+ * `uuid` columns have the same round-trip problem — Postgres accepts undashed hex and returns the
+ * dashed canonical form, so a row hashed undashed can never verify (DOD-M15-CHAINROUNDTRIP-1).
+ * It is fixed at the WRITER (`canonicalUuid` in `pg-directory-store.ts`), not here, and that is
+ * not a stylistic preference:
+ *
+ * This function sees VALUES. It does not know column types. A rule here could only key on shape —
+ * "32 hex characters" — and `connection_requests.request_id` is a TEXT column holding exactly that
+ * shape, twenty-four live rows, stored and returned verbatim. Normalising them would break a chain
+ * that verifies today, in order to fix one that the writer already handles.
+ *
+ * A normaliser belongs wherever the column type is known. That is never here.
  */
 export function serializeRecord(record: Record<string, unknown>, tableName?: string): string {
   const keys = Object.keys(record)

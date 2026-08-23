@@ -200,10 +200,8 @@ describeIntegration("DOD-UP-1: superseding notarization (store layer)", () => {
     const store = new PgDirectoryStore(superPool, noopLogger());
     const sessionId = randomBytes(16);
     const sessionIdHex = Buffer.from(sessionId).toString("hex");
-    await store.recordNotarization(
-      makeNotarization({ session_id: sessionId, seal_type: "unilateral" }),
-      { correlationId: "teeth" },
-    );
+    const notarization = makeNotarization({ session_id: sessionId, seal_type: "unilateral" });
+    await store.recordNotarization(notarization, { correlationId: "teeth" });
 
     // Flip the two V31 columns WITHOUT recomputing chain_hash — simulates both a malicious edit and
     // the V31 default-backfill of a pre-existing row. Excluded columns ⇒ chain still verifies.
@@ -227,17 +225,44 @@ describeIntegration("DOD-UP-1: superseding notarization (store layer)", () => {
     }
 
     // Control: an integrity-target column (frost_signature) IS in the chain — flipping it breaks it.
-    await superPool.query(
-      `UPDATE seal_notarizations SET frost_signature = $1 WHERE session_id = decode($2,'hex')`,
-      [Buffer.alloc(64), sessionIdHex],
-    );
+    //
+    // DOD-M15-CHAINROUNDTRIP-1: AND IT MUST BE PUT BACK. `verifyChain` stops at the FIRST break,
+    // so one unrestored tamper in this shared table makes it permanently unverifiable for every
+    // test and every operator that comes afterwards — and it reads as a production integrity
+    // defect, not as a test that left its mess behind. That is not hypothetical: the identical
+    // omission in `persist-018` SI-003 cost three wrong diagnoses before anyone looked at the test.
+    const freshPool = new pg.Pool({ connectionString: DATABASE_URL });
+    try {
+      await superPool.query(
+        `UPDATE seal_notarizations SET frost_signature = $1 WHERE session_id = decode($2,'hex')`,
+        [Buffer.alloc(64), sessionIdHex],
+      );
+      const result = await new PgDirectoryStore(freshPool, noopLogger()).verifyChain("seal_notarizations");
+      expect(result.valid).toBe(false); // in-chain → tamper detected
+    } finally {
+      // In a `finally` so a FAILING assertion does not leave the table red either.
+      await superPool.query(
+        `UPDATE seal_notarizations SET frost_signature = $1 WHERE session_id = decode($2,'hex')`,
+        [Buffer.from(notarization.frost_signature), sessionIdHex],
+      );
+      await freshPool.end();
+    }
+
+    // The restore is only worth anything if it restored. `seal_type` was also flipped above, but
+    // that column is excluded from the chain by design, so the chain is the right thing to assert
+    // on: it covers exactly the columns whose values must survive this test intact.
     {
-      const freshPool = new pg.Pool({ connectionString: DATABASE_URL });
+      const checkPool = new pg.Pool({ connectionString: DATABASE_URL });
       try {
-        const result = await new PgDirectoryStore(freshPool, noopLogger()).verifyChain("seal_notarizations");
-        expect(result.valid).toBe(false); // in-chain → tamper detected
+        const restored = await new PgDirectoryStore(checkPool, noopLogger()).verifyChain("seal_notarizations");
+        expect(
+          restored.valid,
+          `this test tampered frost_signature and failed to put it back (break at ` +
+            `${String(restored.breakAtSequence)}). seal_notarizations is now permanently red for ` +
+            `every later test and for any operator who audits this table.`,
+        ).toBe(true);
       } finally {
-        await freshPool.end();
+        await checkPool.end();
       }
     }
   });

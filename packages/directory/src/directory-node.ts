@@ -2233,7 +2233,15 @@ export class CelloDirectoryNode {
                 packageCbor: pending.frame.package_cbor,
                 disclosureRound: 1,
                 expiresAt: new Date(this.#clock.now() + 24 * 60 * 60 * 1000),
-              }).catch(() => {});
+              }).catch((err: unknown) => {
+                this.#logger?.error("connection_request.persist.failed", {
+                  connectionRequestId: truncHex(pending.connection_request_id),
+                  reason: err instanceof Error ? err.message : String(err),
+                  impact:
+                    "re-delivered request will be lost if this directory restarts before the " +
+                    "target responds",
+                });
+              });
             } catch { break; }
           }
           continue;
@@ -2322,7 +2330,18 @@ export class CelloDirectoryNode {
                 this.#logger?.info("directory.trust_signal.acked", { pickupId: ackId, agentId: ackPubkey.slice(0, 16) }),
               );
             })
-            .catch(() => {});
+            .catch((err: unknown) => {
+              // A dropped ACK is not silent to the user: the signal stays unacknowledged and is
+              // handed to them again on every pickup until `sweepUndeliverablePickups` retires it
+              // at its 24-hour TTL.
+              this.#logger?.error("directory.trust_signal.ack.failed", {
+                pickupId: ackId,
+                agentId: ackPubkey.slice(0, 16),
+                reason: err instanceof Error ? err.message : String(err),
+                impact:
+                  "this trust signal will be re-delivered on every pickup until its 24-hour TTL",
+              });
+            });
         } else if (parsed.type === "submission_write") {
           // M10B / DOD-END-SUBMIT-1: accept a sealed submission into the queue this node cannot read.
           //
@@ -3529,7 +3548,15 @@ export class CelloDirectoryNode {
         packageCbor: frame.package_cbor,
         disclosureRound: 1,
         expiresAt: new Date(this.#clock.now() + 24 * 60 * 60 * 1000),
-      }).catch(() => { /* persistence failure does not block in-memory delivery */ });
+      }).catch((err: unknown) => {
+        // Delivery is already done in memory — this only decides whether the request survives a
+        // restart. Non-blocking, but the operator hears it.
+        this.#logger?.error("connection_request.persist.failed", {
+          connectionRequestId: truncHex(connectionRequestId),
+          reason: err instanceof Error ? err.message : String(err),
+          impact: "request will not be recoverable if this directory restarts before the target responds",
+        });
+      });
       // OBS-001 AC-005: relayed to target
       protocolLog("CONN", `Relayed to target ${truncHex(targetHex)}`);
       try {
@@ -3537,7 +3564,13 @@ export class CelloDirectoryNode {
       } catch {
         // Target stream failed — queue the request
         this.#pendingConnectionRequests.delete(connectionRequestId);
-        void this.#store.deleteActiveConnectionRequest(connectionRequestId).catch(() => {});
+        void this.#store.deleteActiveConnectionRequest(connectionRequestId).catch((err: unknown) => {
+          this.#logger?.error("connection_request.delete.failed", {
+            connectionRequestId: truncHex(connectionRequestId),
+            reason: err instanceof Error ? err.message : String(err),
+            impact: "a request that is now queued will ALSO be reloaded from disk on restart",
+          });
+        });
         const queued = this.#store.queuePendingConnectionRequest(targetHex, {
           connection_request_id: connectionRequestId,
           sender_pubkey: senderHex,
@@ -3581,7 +3614,18 @@ export class CelloDirectoryNode {
 
     this.#pendingConnectionRequests.delete(frame.connection_request_id);
     // M6B-010 AC-001: remove from active_connection_requests so it is not reloaded on restart.
-    void this.#store.deleteActiveConnectionRequest(frame.connection_request_id).catch(() => {});
+    void this.#store.deleteActiveConnectionRequest(frame.connection_request_id).catch((err: unknown) => {
+      // The request has been answered. If this delete is lost, a restart reloads it into the
+      // in-memory routing map — `restorePendingConnectionRequests` repopulates that map and does
+      // NOT re-send an inbound frame, so nobody is asked to decide twice. What survives is a stale
+      // routing entry that would accept a second response to a request already settled.
+      this.#logger?.error("connection_request.delete.failed", {
+        connectionRequestId: truncHex(frame.connection_request_id),
+        verdict: frame.verdict,
+        reason: err instanceof Error ? err.message : String(err),
+        impact: "an already-answered request will reappear as pending after a restart",
+      });
+    });
 
     const senderStream = this.#streams.get(pending.senderHex);
 
@@ -4190,14 +4234,35 @@ export class CelloDirectoryNode {
       this.#sessionLastActivity.set(sessionIdHex, this.#clock.now());
       // M6B-010 AC-002/AC-003: persist participants to sessions table so they survive restart.
       // Uses writeSessionWithParticipants rather than writeSession so both pubkeys are stored.
-      // Fire-and-forget — failure is non-blocking; worst case is participants are not
-      // available after a restart (loadActiveSessionParticipants returns nothing for this session).
+      //
+      // Fire-and-forget is deliberate and stays: session delivery must not wait on the database,
+      // and a directory that refused to set up a session because Postgres was slow would trade a
+      // recoverable persistence gap for an unrecoverable availability one.
+      //
+      // DOD-M15-CHAINROUNDTRIP-1: but NON-BLOCKING IS NOT THE SAME AS SILENT. This `catch` used to
+      // discard the error entirely, which hid two different failures that both matter:
+      //   - `invalid input syntax for type uuid` — the loud rejection `canonicalUuid` is designed
+      //     to provoke for a value it does not recognise. Its whole fail-safe argument is that
+      //     Postgres complains rather than a bad value being coerced into the chain; that argument
+      //     was void while the only production caller ate the complaint.
+      //   - the SI-001 `ownership violation` throw — one node attempting to write a session another
+      //     node owns. That is a security guard, and its alarm was wired to nothing.
+      // The session still proceeds. The operator now finds out.
       void this.#store.writeSessionWithParticipants(
         sessionIdHex,
         this.#frostHandler.nodeId,
         initiatorHex,
         targetHex,
-      ).catch(() => { /* persistence failure does not block session delivery */ });
+      ).catch((err: unknown) => {
+        this.#logger?.error("session.persist.failed", {
+          sessionId: truncHex(sessionIdHex),
+          nodeId: this.#frostHandler.nodeId,
+          reason: err instanceof Error ? err.message : String(err),
+          impact:
+            "session participants will not survive a directory restart, and the sessions hash " +
+            "chain has no row for this session",
+        });
+      });
 
       // OBS-001 AC-008: assignment issued
       protocolLog("SESS", `Assignment issued — session ${truncHex(sessionIdHex)}`);
