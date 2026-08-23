@@ -1269,18 +1269,48 @@ lands mid-sweep.
   external one. That is a wide signature change and did not belong inside a hardening unit.
 - The same seam would let `DOD-M12B-SHUTDOWN-1`'s reconcile sweeper stop dialing on demand.
 
-### `DOD-M15-MANIFEST-EXPIRY-LIVE-1` — 🟡 A running daemon notices its own manifest expiring
-> **BUILT 2026-08-23, review in flight.** The window is enforced at STARTUP and nowhere else. The
-> reason it went unnoticed is that a SECOND expiry check exists and reads like coverage: the manifest
-> poll refuses to ADOPT an expired manifest — it checks the one being FETCHED, never the one held. So
-> a lapsed daemon keeps polling, keeps correctly refusing expired replacements, and keeps using the
-> dead anchor it already has.
-> **Decision (mine, logged): REPORT, DO NOT KILL.** Startup fails closed, which is the right place to
-> refuse. Killing a live daemon on a wall-clock boundary would hit every operator at once — they
-> share the bundled manifest's date — turning a rotation slip into a fleet-wide outage
-> mid-conversation. Runtime warns 7 days early, in the log AND the response.
-> **The guidance names the instinctive wrong move:** do not restart to clear it, because a restart
-> REFUSES to start and turns a degraded daemon into a dead one.
+### `DOD-M15-MANIFEST-EXPIRY-LIVE-1` — ✅ A running daemon notices its own manifest expiring
+> **CLOSED 2026-08-23** (→ Entry 35). Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F3
+> (`not_before` NaN fails open under a comment asserting it cannot) [blocking]… F4 (contradictory
+> restart instructions) and F5 (a remedy the production default cannot perform) are both [blocking]
+> under Invariant 2's third check, does the remedy work? **HOLLOW TESTS FOUND** — F1, F2, F7, F8, all
+> [blocking]… I am not rubber-stamping this. The diff sits on the trust anchor for directory identity
+> authentication and the FROST ceremony roster, and it has a fail-open in the classifier itself, an
+> untested wiring line that carries the only unprompted signal, and an operator instruction that the
+> same daemon contradicts three files away."* All eleven findings fixed. Gate: 4176 client / 2265
+> server tests, lint, typecheck, build — by exit code.
+>
+> **SCOPE, PLAINLY: the bundled manifest runs to 2030-01-01**, so no production-default operator can
+> reach the expired state before then. Reachable today only via the `CELLO_CONSORTIUM_MANIFEST` env
+> path, a short-window manifest adopted through the poll, or a wrong clock. This line is over-scoped
+> relative to the fleet.
+> **The worst defect was mine and pre-existing both:** an unparseable `not_before` fell through to
+> `valid` under my own comment saying nothing unmeasurable could; and `signal-submission` told
+> operators to RESTART on expiry, which fails closed and takes every agent offline.
+> **Decision (ruled, kept): REPORT, DO NOT KILL** — §2b invariant 2 backs warning over blocking. But
+> the availability reasoning was wrong: the fleet-wide stop happens anyway at each operator's next
+> restart. Report-only defers it.
+> **Carried:** `DOD-M15-EXPIRY-CONSUMER-POLICY-1`, `DOD-M15-BUNDLED-2030-1`.
+
+### `DOD-M15-EXPIRY-CONSUMER-POLICY-1` — ❌ One policy for an expired anchor, across all consumers
+Split from `DOD-M15-MANIFEST-EXPIRY-LIVE-1` (review F6). The daemon already has a per-consumer
+policy for an expired manifest — it just never chose it.
+- `signal-submission.ts` REFUSES a trust-signal submission on the held manifest's expiry.
+- `register-handler.ts` deals a FROST share against a roster re-resolved from that same lapsed
+  manifest, with no gate. The challenge verifier authenticates a directory against it, with no gate.
+- **So the lowest-stakes consumer is blocked and the two highest-stakes ones are permitted.** That
+  may even be the right answer — but it is undefended, undocumented, and invisible to the operator.
+- Decide it deliberately, per consumer, and write down why.
+
+### `DOD-M15-BUNDLED-2030-1` — ❌ The compiled-in manifest has a cliff and no in-band remedy
+Split from `DOD-M15-MANIFEST-EXPIRY-LIVE-1`. `BUNDLED_CONSORTIUM_MANIFEST` expires `2030-01-01`.
+- On that date **every daemon on the production default refuses to start** (ADV-002), simultaneously.
+- The only fix is upgrading `@cello-protocol/connect`, which an operator whose daemon will not start
+  has no in-product prompt to do.
+- The bundled path wires no manifest poll, so a newer manifest cannot be adopted at runtime either.
+- Needs a rotation story before it needs a fix, but the cliff should be on the record now.
+
+<!-- superseded detail from the original line, retained for the trail -->
 Found by `DOD-M15-STALEROSTER-1`'s review, and **the inverse of where that unit put the hazard.**
 - Manifest expiry is checked **only at startup** (`verifyStartupManifest`), and the bundled-manifest
   path wires **no poll scheduler** at all.

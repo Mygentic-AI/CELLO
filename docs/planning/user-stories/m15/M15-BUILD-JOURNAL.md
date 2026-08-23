@@ -15,19 +15,25 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟡 27 ✅, 2 🟡, 2 🅿️, 37 ❌. Both repos clean, pushed, on main.
-> **`MANIFEST-EXPIRY-LIVE-1` IS THE UNREVIEWED ONE** — built in `2a06915` + `8ed7123`
-> (cello-client), reviewer dispatched, verdict not in. Under the WIP limit the ONLY permitted work is
-> closing it. (`DEAD-WIRE-FIELD-1` is the other 🟡 and does NOT count — carried wire half only.)
-> Gate at build time: 4168 client tests, lint, typecheck, build — all by EXIT CODE.
+> ### 🟢 28 ✅, 1 🟡 (carried half only), 2 🅿️, 39 ❌. Both repos clean, pushed, on main.
+> **No unreviewed work.** `MANIFEST-EXPIRY-LIVE-1` closed in Entry 35 — eleven findings fixed,
+> verdict quoted, gate green BY EXIT CODE (4176 client, 2265 server, lint, typecheck, build).
+> `DEAD-WIRE-FIELD-1` is the remaining 🟡 and does NOT count against the WIP limit (carried wire half
+> only). **A new line may start.**
 
-- **NEXT ACTION: close `MANIFEST-EXPIRY-LIVE-1`**, then pull ONE new ❌ line. `FREEZE-STATUS-1` needs
-  a client-side DB migration in its own reviewed unit with an upgrade test against a populated
-  pre-migration database. `UNWITNESSED-1` needs a fixture that can attach a relay client.
-- **THE REVIEW ASK MATTERS AS MUCH AS THE BUILD.** Two units running, the review's real yield was my
-  own work, and the biggest finding both times came from telling the reviewer to attack a specific
-  CLAIM rather than to "review the diff". For `MANIFEST-EXPIRY-LIVE-1` I listed five factual claims
-  and said not to take them on trust, because the previous unit shipped two false ones.
+- **NEXT ACTION: pull ONE new ❌ line.** `FREEZE-STATUS-1` needs a client-side DB migration in its own
+  reviewed unit with an upgrade test against a populated pre-migration database. `UNWITNESSED-1` needs
+  a fixture that can attach a relay client. `EXPIRY-CONSUMER-POLICY-1` (new, Entry 35) is a design
+  ruling more than a build.
+- **🚨 I HAVE SHIPPED A FALSE PRODUCER/CONSUMER MAP IN THREE CONSECUTIVE UNITS.** Not carelessness
+  about detail: I state the map from the first two or three call sites I read, then write it into a
+  file header as fact, and it ends up in operator-facing prose. **The countermeasure that works is in
+  the REVIEW ASK** — list the factual claims explicitly and tell the reviewer not to take them on
+  trust. That caught it in `MANIFEST-EXPIRY-LIVE-1`. Do it every time. Better: grep for ALL callers
+  before writing any "the only caller is…" sentence.
+- **🚨 A COMMENT ASSERTING A SAFETY PROPERTY IS STILL THE #1 WAY MY OWN DEFECTS SURVIVE.** Entry 35's
+  worst finding was a fail-open sitting directly under my comment saying it could not happen, eleven
+  lines after I handled the identical case correctly for a sibling field.
 - **🚨 A PIPE EATS THE EXIT CODE. `pnpm run lint 2>&1 | tail -3 && git commit` reports `tail`'s
   status, not eslint's** — a lint error shipped that way on 2026-08-23. Gate with
   `cmd > /dev/null 2>&1 && echo CLEAN || echo FAILED`, never by eyeballing piped output.
@@ -3238,3 +3244,107 @@ Gate: 4152 tests, lint, typecheck, build — all verified by exit code, not by e
   A long-running daemon whose manifest expires under it keeps probing its node set and now reports
   `stale: false`: a confidently fresh reading taken against an expired trust anchor. This is where
   the expired-manifest danger actually lives.
+
+---
+
+## Entry 35 — a fail-open in the classifier, under my own comment saying it could not happen
+
+`DOD-M15-MANIFEST-EXPIRY-LIVE-1` → ✅. Eleven findings, five blocking.
+
+### The verdict, quoted
+
+> **SILENT FALLBACKS FOUND** — F3 (`not_before` NaN fails open under a comment asserting it cannot)
+> [blocking].
+> **ERRORS NAME THEIR CAUSE** — no exit-point substitution. But F4 (contradictory restart
+> instructions) and F5 (a remedy the production default cannot perform) are both [blocking] under
+> Invariant 2's third check, *does the remedy work?*
+> **HOLLOW TESTS FOUND** — F1, F2, F7, F8, all [blocking].
+>
+> *"I am not rubber-stamping this. The diff sits on the trust anchor for directory identity
+> authentication and the FROST ceremony roster, and it has a fail-open in the classifier itself, an
+> untested wiring line that carries the only unprompted signal, and an operator instruction that the
+> same daemon contradicts three files away."*
+
+### The fail-open
+
+I handled an unparseable `expires` correctly — NaN → expired, because every NaN comparison is false
+and *valid* is the answer that costs security. **Eleven lines later I wrote the inverted guard for
+`not_before`:** `!Number.isNaN(notBeforeMs) && nowMs < notBeforeMs` skips the window check entirely
+when the field is garbage and falls through to `valid`. So `not_before: "2026-13-01"` — month
+thirteen, which is what a hand-edited or generator-bugged artefact actually looks like — classified
+as valid, contributed nothing to status, and logged nothing.
+
+Directly underneath the comment asserting that nothing unmeasurable could reach `valid`. **That is
+the failure mode I keep a standing note about**, and I produced a textbook instance of it inside a
+unit about trust anchors.
+
+### The instruction that bricks the daemon
+
+`signal-submission.ts` refused a submission on manifest expiry and told the operator: *"Restart the
+daemon to load and verify a current manifest, then retry."* Startup **fails closed** on an expired
+manifest, so that restart reloads nothing — the daemon refuses to come back and every agent goes
+offline. The same daemon's `cello_status` said the opposite, three files away. Following the
+instruction turns a refused submission into a dead daemon. Pre-existing; fixed here.
+
+### "Rotate the manifest" is not an action the production default supports
+
+The bundled path is a compiled-in constant: no file, no poll. The real remedy is a package upgrade.
+And the workaround a stuck operator reaches for — repointing `CELLO_DIRECTORY_URL` — makes
+`buildManifestDeps` return nothing, so the daemon starts with **directory identity authentication
+silently off**. Guidance that routes someone toward disabling a security control in order to escape
+a security warning is a defect in the guidance. Every remedy string is now origin-aware and says
+explicitly not to do that.
+
+### Claim 1 was false — third false claim in three units
+
+I said nothing re-checks the held manifest after startup. `signal-submission.ts` does. The real shape
+is not *unchecked* but **inconsistent**: the daemon refuses its LOWEST-stakes consumer (a
+trust-signal submission) and permits its two HIGHEST-stakes ones — dealing a FROST share against a
+roster re-resolved from the lapsed manifest, and authenticating a directory against it. Nothing
+defends that anywhere.
+
+**The pattern is now three for three, and it is not carelessness about detail — it is that I state a
+producer/consumer map from the first two or three call sites I read and then write it into a header
+as fact.** The fix that has actually worked is in the review ask: listing my factual claims and
+telling the reviewer not to take them on trust. That is what caught this one.
+
+### On report-vs-kill, the conclusion held and the reasoning did not
+
+§2b invariant 2 backs warning over blocking. But my availability argument does not survive: **the
+fleet-wide stop I claimed to be avoiding happens anyway**, at each operator's next restart, via
+ADV-002. Report-only defers the outage; it does not prevent it. The honest reason is that a
+wall-clock boundary is a bad trigger for tearing down live conversations.
+
+### Four hollow tests, one of which claimed otherwise in its own header
+
+**F1 is the one that stings.** Deleting `checkManifestValidity()` from the sweep left all sixteen
+tests green — the daemon-level tests read `cello_status`, which computes validity independently, and
+no tick fires inside a 31 ms test. That left the half that works when nobody is looking completely
+unproven: the status field needs an operator to run a command; the LOG LINE is the only thing that
+fires unprompted, and in production one deletable line delivers it.
+
+My test header said *"Asserted at the wiring, first time rather than after a revert test catches
+it."* True of the status field, false of the tick — a comment asserting a property the tests did not
+have, in the same unit where I fixed a comment asserting a property the code did not have.
+
+F7 makes it **twice in two units** that a constant carrying the unit's core arithmetic was asserted
+only by prose: 7 days → 365 days stayed green while making the warning fire for the final YEAR of the
+bundled manifest's four-year window.
+
+### Scope, stated plainly
+
+The bundled manifest runs to 2030-01-01, so **no production-default operator can reach this state
+before then.** Who can today: the `CELLO_CONSORTIUM_MANIFEST` env path (dev, e2e, the local harness),
+an env-path daemon that adopted a short-window manifest and outlived it, and any machine with a wrong
+clock in either direction. The line is over-scoped relative to the fleet and it is better to say so
+than to imply a live operator hazard.
+
+Gate: 4176 client tests, 2265 server, lint, typecheck, build — all by exit code.
+
+### Carried
+
+- **`DOD-M15-EXPIRY-CONSUMER-POLICY-1`** — the daemon refuses a trust-signal submission on an expired
+  manifest while dealing FROST shares and authenticating directories against it. Lowest stakes
+  blocked, highest stakes permitted, invisible to the operator, defended nowhere.
+- **`DOD-M15-BUNDLED-2030-1`** — on 2030-01-01 every bundled-manifest daemon refuses to start, and the
+  product ships no in-band remedy other than a package upgrade.
