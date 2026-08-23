@@ -190,12 +190,30 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Support (overwrite in place; CELLO_Coder_1 must not edit)
 
-> ### `CHAINDEBT-1` 🟡 — all 12 files done, REVIEW IN FLIGHT. **1 🟡 in this lane, WIP limit met.**
-> Next after it closes: `SPINE-LANE-1`, `FREEZE-STATUS-1`, `UNWITNESSED-1`, `RELAYAUTH-1`.
+> ### `CHAINROUNDTRIP-1` 🟡 — REVIEW IN FLIGHT. **1 🟡 in this lane, WIP limit met.**
+> `CHAINDEBT-1` ✅ merged. Then: `MIGRATION-GUARD-1` (taken from Coder_1), `SPINE-LANE-1`,
+> `FREEZE-STATUS-1`, `UNWITNESSED-1`, `RELAYAUTH-1`.
 
-- **`DOD-M15-CHAINDEBT-1`** (→ Entry S5), branch `m15/chaindebt-1`, worktree `/Users/andrep/tc-wt/`.
-  **Both backlogs at ZERO** — inserts 8→0, deletes 8→0, ceilings pinned 0/0, so a new violation has
-  nowhere to be parked. Server gate green: 2265 tests + lint + typecheck by exit code.
+- **🔋 ONE VITEST AT A TIME, SMALLEST SCOPE. A HOOK NOW ENFORCES IT.** Two lanes share the laptop and
+  I was the drain: **eight full server-suite runs tonight, most preceded by `docker compose down -v`
+  + re-migration + a 25s wait.** The reset was a real method for telling a fixture hole from an
+  inherited one, and I kept doing it long after that question was answered. `npx vitest run <one
+  file>` is the default; the full suite belongs at the commit gate. **Capping workers is the WRONG
+  lever** — it lowers peak draw, not total work.
+- **`DOD-M15-CHAINROUNDTRIP-1`** (→ Entry S9), branch `m15/chainroundtrip-1`. **`sessions` FIXED** —
+  every session row a live directory wrote was a hole; the id was hashed undashed and the `uuid`
+  column returns it dashed. 10 rows green after a clean run. Gate 2275 + lint + typecheck.
+- **⚠️ THE FIX GOES AT THE PRODUCER, NOT IN `serializeRecord` — do not "simplify" it there.** Adding
+  UUID to the shared normalisations corrupts `connection_requests`: `request_id` is TEXT holding
+  thirteen live 32-hex ids, and a rule keyed on "looks like 32 hex" cannot tell those from a `uuid`
+  column's value. `serializeRecord` sees values, never column types.
+- **🚨 I GOT `seal_notarizations` WRONG THREE TIMES.** Recorded as a bytea round-trip; **retracted**.
+  Both writers `Buffer.from` deliberately and the AE suite alone leaves it green. Still red,
+  reproducible from `persist-018` ALONE on a reset database, cause unknown. Ruled out: bytea, the AE
+  path, any single defaulted column (recomputed excluding each of eleven). **The pattern in all
+  three: I read evidence CONSISTENT with a cause and stopped, instead of checking the producer.**
+- **`DOD-M15-CHAINDEBT-1` → ✅** (→ Entries S5, S7, S8), merged. Both backlogs 8→0, ceilings pinned
+  0/0. Its review's real output was `inRolledBackTxn` silently COMMITTING since it was written.
 - **🚨 RUNNING THE SERVER GATE FROM A WORKTREE NEEDS `COMPOSE_PROJECT_NAME=trustless-cello`** (→
   Entry S6). Without it two docker/flyway tests fail on `Bind for 0.0.0.0:5433 failed: port is
   already allocated` — Compose derives its project from the DIRECTORY, so a worktree starts a rival
