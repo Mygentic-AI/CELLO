@@ -450,35 +450,8 @@ export type {
 
 // ─── PERSIST-014: Seal attempt frames ────────────────────────────────────────
 
-/**
- * seal_attempt: client → directory, to report local Merkle state before sealing.
- * Each party submits independently; directory compares and either proceeds or rejects.
- */
-export interface SealAttempt {
-  type: "seal_attempt";
-  session_id: Uint8Array;     // 16 bytes
-  reported_root: Uint8Array;  // 32-byte local Merkle root
-  reported_seq: number;       // highest global sequence number in local tree
-}
 
-/**
- * SEAL_REJECTED_TREE_MISMATCH: directory → both parties, when seal attempts have differing roots.
- */
-export interface SealRejectedTreeMismatch {
-  type: "seal_rejected_tree_mismatch";
-  session_id: Uint8Array;
-  party_a_sequence: number;
-  party_b_sequence: number;
-}
 
-/**
- * seal_attempt_ack: directory → client, confirming the seal attempt was received.
- * If both parties submitted matching roots, the normal seal flow proceeds.
- */
-export interface SealAttemptAck {
-  type: "seal_attempt_ack";
-  session_id: Uint8Array;
-}
 
 // ─── PERSIST-015: Unilateral seal types ──────────────────────────────────────
 

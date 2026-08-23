@@ -373,7 +373,7 @@ export function encodeDisclosureResponseInbound(frame: DisclosureResponseInbound
 
 import type { RegisterRequest, DkgComplete, ConnectionRequest, ConnectionResponse, DisclosureRequest, DisclosureResponse, PrimaryTransferRequest } from "@cello-protocol/protocol-types";
 
-import type { SealAttempt, SealRejectedTreeMismatch, SealAttemptAck, SealUnilateral, SealUnilateralTooEarly, SealUnilateralConfirmed, SealUnilateralNotification, ManifestPollRequest, SealUpgradeRequest, SealUpgradeConfirmed, SealUpgradeRejected } from "./directory-types.js";
+import type { SealUnilateral, SealUnilateralTooEarly, SealUnilateralConfirmed, SealUnilateralNotification, ManifestPollRequest, SealUpgradeRequest, SealUpgradeConfirmed, SealUpgradeRejected } from "./directory-types.js";
 
 /** M7-DIR-PING-001: client heartbeat frame. */
 /** M10B / DOD-END-SUBMIT-1 — a sealed submission handed to this node. Three fields; the ABSENCES
@@ -425,7 +425,7 @@ export type SubmissionResultsRequest = { type: "submission_results_request" };
  */
 export type SealCertificateRequest = { type: "seal_certificate_request"; session_id: Uint8Array };
 
-export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealAttempt | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SessionOfferReject | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck | DiscoveryLookup | PrimaryTransferRequest | SubmissionWrite | SubmissionResultsRequest | SealCertificateRequest;
+export type InboundSignalingFrame = SignalingAuthResponse | SessionRequest | SealFrostSignature | PeerInfoAnnounce | RegisterRequest | DkgComplete | ConnectionRequest | ConnectionResponse | DisclosureRequest | DisclosureResponse | SealUnilateral | SealUpgradeRequest | ManifestPollRequest | PingFrame | SessionOfferAccept | SessionOfferReject | SealInterruptedRequestFrame | SealInterruptedAckFrame | SealInterruptedRejectionFrame | RevokeAgentRequest | TrustSignalAck | DiscoveryLookup | PrimaryTransferRequest | SubmissionWrite | SubmissionResultsRequest | SealCertificateRequest;
 
 /**
  * M10B / DOD-END-SUBMIT-1: acknowledge a sealed submission (OUTBOUND).
@@ -792,15 +792,6 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     return { type: "seal_certificate_request", session_id: sessionId };
   }
 
-  if (o["type"] === "seal_attempt") {
-    const session_id = toUint8Array(o["session_id"]);
-    const reported_root = toUint8Array(o["reported_root"]);
-    const reported_seq = typeof o["reported_seq"] === "number" ? o["reported_seq"] : null;
-    if (!session_id || session_id.length !== 16) return null;
-    if (!reported_root || reported_root.length !== 32) return null;
-    if (reported_seq === null) return null;
-    return { type: "seal_attempt", session_id, reported_root, reported_seq };
-  }
 
   if (o["type"] === "seal_unilateral") {
     const session_id = toUint8Array(o["session_id"]);
@@ -939,24 +930,6 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
   }
 
   return null;
-}
-
-// ─── PERSIST-014: Seal attempt response encoders ─────────────────────────────
-
-export function encodeSealRejectedTreeMismatch(frame: SealRejectedTreeMismatch): Uint8Array {
-  return ENC.encode({
-    type: frame.type,
-    session_id: frame.session_id,
-    party_a_sequence: frame.party_a_sequence,
-    party_b_sequence: frame.party_b_sequence,
-  });
-}
-
-export function encodeSealAttemptAck(frame: SealAttemptAck): Uint8Array {
-  return ENC.encode({
-    type: frame.type,
-    session_id: frame.session_id,
-  });
 }
 
 // ─── PERSIST-015: Unilateral seal response encoders ──────────────────────────
@@ -1114,8 +1087,6 @@ export type OutboundSignalingFrame =
   | ConnectionRequestInbound
   | DisclosureRequestInbound
   | DisclosureResponseInbound
-  | SealRejectedTreeMismatch
-  | SealAttemptAck
   | SealUnilateralTooEarly
   | SealUnilateralConfirmed
   | SealUnilateralNotification
@@ -1483,20 +1454,7 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
 
   // ─── PERSIST-014 outbound frames ─────────────────────────────────────────
 
-  if (o["type"] === "seal_rejected_tree_mismatch") {
-    const session_id = toUint8Array(o["session_id"]);
-    const party_a_sequence = typeof o["party_a_sequence"] === "number" ? o["party_a_sequence"] : null;
-    const party_b_sequence = typeof o["party_b_sequence"] === "number" ? o["party_b_sequence"] : null;
-    if (!session_id || session_id.length !== 16) return null;
-    if (party_a_sequence === null || party_b_sequence === null) return null;
-    return { type: "seal_rejected_tree_mismatch", session_id, party_a_sequence, party_b_sequence };
-  }
 
-  if (o["type"] === "seal_attempt_ack") {
-    const session_id = toUint8Array(o["session_id"]);
-    if (!session_id || session_id.length !== 16) return null;
-    return { type: "seal_attempt_ack", session_id };
-  }
 
   // ─── PERSIST-015 outbound frames ─────────────────────────────────────────
 

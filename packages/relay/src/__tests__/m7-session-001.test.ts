@@ -240,11 +240,15 @@ describe("AC-001: relay emits session_interrupted on peer disconnect", () => {
     sB.abort(new Error("test_disconnect"));
 
     const frame = await rA.readDecodedWithTimeout(3000);
-    // The frame type must be session_interrupted — NOT a seal-related type
+    // The frame type must be session_interrupted — NOT a seal-related type.
+    //
+    // `seal_attempt` was the fourth assertion here and is gone with the frame itself
+    // (`DOD-M15-SEALWIRE-1` bullet 7): a `not.toBe` against a type no build can produce or decode
+    // asserts nothing, and leaving it would have been the only surviving reference to a deleted
+    // protocol — the kind that makes a later reader go looking for a frame that does not exist.
     expect(frame["type"]).toBe("session_interrupted");
     expect(frame["type"]).not.toBe("session_sealed");
     expect(frame["type"]).not.toBe("frost_sign");
-    expect(frame["type"]).not.toBe("seal_attempt");
 
     sA.close().catch(() => {});
   });

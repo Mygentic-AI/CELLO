@@ -171,8 +171,6 @@ import {
   encodeConnectionInsufficient,
   encodeDisclosureRequestInbound,
   encodeDisclosureResponseInbound,
-  encodeSealRejectedTreeMismatch,
-  encodeSealAttemptAck,
   encodeSealUnilateralTooEarly,
   encodeSealUnilateralConfirmed,
   encodeSealUnilateralNotification,
@@ -681,16 +679,10 @@ export class CelloDirectoryNode {
   // which arrives on the same signaling stream loop.
   readonly #pendingDkgComplete = new Map<string, (primaryPubkey: string) => void>();
 
-  // PERSIST-014: pending seal attempts — session_id_hex → { partyHex, reported_root, reported_seq }[]
-  readonly #pendingSealAttempts = new Map<string, Array<{
-    partyHex: string;
-    reported_root: Uint8Array;
-    reported_seq: number;
-  }>>();
-
   // PERSIST-015: delivery grace period (seconds) before unilateral seal is allowed
   readonly #deliveryGraceSeconds: number;
-  // PERSIST-015: session_id_hex → last activity timestamp (ms) — updated on session creation and seal attempts
+  // PERSIST-015: session_id_hex → last activity timestamp (ms) — updated on session creation.
+  // (It was also updated by the PERSIST-014 seal_attempt handler, deleted with that dead path.)
   readonly #sessionLastActivity = new Map<string, number>();
   // PERSIST-015: session_id_hex → unilateral seal record
   readonly #unilateralSeals = new Map<string, { sealed_root: Uint8Array; sealed_at: number; submitter_hex: string }>();
@@ -2493,9 +2485,6 @@ export class CelloDirectoryNode {
         } else if (parsed.type === "disclosure_response") {
           // CONNREQ-002 Round 2: sender responds to disclosure request
           void this.#processDisclosureResponse(stream, authedPubkeyHex!, parsed);
-        } else if (parsed.type === "seal_attempt") {
-          // PERSIST-014: process seal attempt
-          this.#processSealAttempt(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "seal_unilateral") {
           // PERSIST-015: process unilateral seal request
           void this.#processSealUnilateral(stream, authedPubkeyHex!, parsed);
@@ -2712,15 +2701,6 @@ export class CelloDirectoryNode {
                 this.#store.enqueueNotification(counterpartyHex, abandonedFrame, sessionIdHex);
               }
             }
-          }
-        }
-      }
-
-      // PERSIST-014: clean up any pending seal attempts where this client was a participant
-      if (authedPubkeyHex) {
-        for (const [sessionIdHex, attempts] of this.#pendingSealAttempts) {
-          if (attempts.some((a) => a.partyHex === authedPubkeyHex)) {
-            this.#pendingSealAttempts.delete(sessionIdHex);
           }
         }
       }
@@ -4334,79 +4314,6 @@ export class CelloDirectoryNode {
 
   // ─── Seal processing ─────────────────────────────────────────────────────────
 
-  /**
-   * PERSIST-014: Process a seal_attempt frame from a client.
-   * Collects both parties' reported roots and sequences. When both arrive:
-   * - If roots match → send seal_attempt_ack to both (seal proceeds via normal flow)
-   * - If roots differ → send SEAL_REJECTED_TREE_MISMATCH to both with sequence numbers
-   */
-  #processSealAttempt(
-    stream: import("@libp2p/interface").Stream,
-    senderHex: string,
-    frame: import("./directory-types.js").SealAttempt,
-  ): void {
-    const sessionIdHex = Buffer.from(frame.session_id).toString("hex");
-
-    // C-003: Verify sender is a legitimate participant in this session
-    const pendingSession = this.#pendingSessions.get(sessionIdHex);
-    if (!pendingSession || (pendingSession.initiatorHex !== senderHex && pendingSession.targetHex !== senderHex)) {
-      return; // Silently reject non-participants
-    }
-
-    // PERSIST-015: update last activity on seal attempt
-    this.#sessionLastActivity.set(sessionIdHex, this.#clock.now());
-
-    let attempts = this.#pendingSealAttempts.get(sessionIdHex);
-    if (!attempts) {
-      attempts = [];
-      this.#pendingSealAttempts.set(sessionIdHex, attempts);
-    }
-
-    // Prevent duplicate attempts from same party
-    if (attempts.some((a) => a.partyHex === senderHex)) {
-      return;
-    }
-
-    attempts.push({
-      partyHex: senderHex,
-      reported_root: frame.reported_root,
-      reported_seq: frame.reported_seq,
-    });
-
-    // Need both parties before comparing
-    if (attempts.length < 2) return;
-
-    const [attemptA, attemptB] = attempts;
-    this.#pendingSealAttempts.delete(sessionIdHex);
-
-    // Compare reported roots
-    const rootsMatch = Buffer.from(attemptA.reported_root).equals(Buffer.from(attemptB.reported_root));
-
-    if (rootsMatch) {
-      // AC-007: roots match → confirm seal proceeds (send ack to both)
-      const ackFrame = { type: "seal_attempt_ack" as const, session_id: frame.session_id };
-      const ackBytes = encodeSealAttemptAck(ackFrame);
-      // Send to both parties
-      const streamA = this.#streams.get(attemptA.partyHex);
-      const streamB = this.#streams.get(attemptB.partyHex);
-      if (streamA) { try { this.#sendFrame(streamA, ackBytes); } catch { /* */ } }
-      if (streamB) { try { this.#sendFrame(streamB, ackBytes); } catch { /* */ } }
-    } else {
-      // PERSIST-014 AC-001: tree mismatch — notify both parties with sequence numbers
-      const mismatchFrame = {
-        type: "seal_rejected_tree_mismatch" as const,
-        session_id: frame.session_id,
-        party_a_sequence: attemptA.reported_seq,
-        party_b_sequence: attemptB.reported_seq,
-      };
-      const mismatchBytes = encodeSealRejectedTreeMismatch(mismatchFrame);
-      // Send to both parties
-      const streamA = this.#streams.get(attemptA.partyHex);
-      const streamB = this.#streams.get(attemptB.partyHex);
-      if (streamA) { try { this.#sendFrame(streamA, mismatchBytes); } catch { /* */ } }
-      if (streamB) { try { this.#sendFrame(streamB, mismatchBytes); } catch { /* */ } }
-    }
-  }
 
   /**
    * SESSION-002: Process a unilateral seal request from a client. Validates that
