@@ -5696,3 +5696,90 @@ applied at the type level instead of in a comment.
    becomes a formality, and it fails open on precisely the trouble it exists for.
 4. **A verdict computed locally and acted on bilaterally needs a wire field.** If both sides run the
    same correct code on different state, the protocol has to carry the state.
+
+---
+
+## Entry S11 (CELLO_Support) — five false passes in one day, and they are one bug
+
+`MIGRATION-GUARD-1` is implemented, reviewed, and every review finding fixed and pushed. The tag is
+not flipped: Andre asked both lanes to stop while he rules on a triage, and that ruling is his.
+
+### What the unit does
+
+The upgrade re-keys seven tables by REBUILDING them from a DDL pinned inside the migration, copying
+only the columns present in both shapes. A column the running code adds separately and that DDL
+omits is dropped on the one boot a legacy database upgrades — then re-added EMPTY moments later by
+the same `ALTER`. Nothing throws. Every observation afterwards shows the column present. Only the
+operator's data is gone.
+
+The existing guard covered `sessions` and compared COLUMN SETS, which is precisely what still passes
+while the data is gone. The new one covers all seven, writes a distinguishable value into every
+column before migrating, and reads each one back.
+
+**The rule points in BOTH directions, and the obvious reading breaks something.** A column belongs in
+the pinned DDL *iff it can already exist on a legacy table when the re-key runs*. The four `contacts`
+tier columns must NOT be there: their migration runs after the re-key and gates a ONE-TIME
+grandfather on those columns being absent. Put them in the DDL and the grandfather never runs — every
+contact the operator had already approved reads UNKNOWN, and **their address book quietly stops
+auto-accepting people it accepted yesterday.** Coder_1 warned about this; I verified the mechanism
+end to end rather than taking it on trust, and both directions are now asserted.
+
+### A claim this repo repeats, which is not true
+
+`agent-id-migration.ts` and this line's own DoD text describe the retry queue's ordering columns as a
+fourth instance and "a live data-loss bug". **Nobody ever lost an ordering record.** Checked against
+history, not reasoned from the code: the re-key shipped 2026-07-10 and is one-shot; the column
+shipped 2026-08-05; `RetryQueue` is constructed once, after `initialize()`. The only database ever
+rebuilt predates the column by a month.
+
+The guard is still worth having, for a narrower and better reason: what makes that loss unreachable
+is the ORDER of two calls, and that order is held by a comment saying "do not reorder". The guard
+turns a convention into something that fails loudly.
+
+### The finding that outlives this unit — FIVE false passes today, one bug
+
+Ranked by how much damage each does, not by when it happened:
+
+1. **A guard that could not fail.** The reviewer reverted this unit's predecessor's headline fix and
+   my guard stayed GREEN — its fixed-size windows read past the end of what they were reading.
+2. **A bare `catch`** in the replay turned a broken parser into a green pass — inside the file whose
+   own thesis is that a checker matching nothing reports success either way.
+3. **A vitest config key that does not exist.** Ignored in silence; a deliberately poisoned database
+   passed.
+4. **A default export treated as `setup`**, so the check ran BEFORE the suite it was guarding.
+5. **A killed test run** (signal 143) reported by a wrapper as exit 0 — a red gate that read green.
+
+**They are one bug: a checker whose negative path has never been exercised is indistinguishable from
+a checker that cannot fail, and both are green.** In every one of the five the positive path worked.
+Nobody had ever asked the thing to fail.
+
+Coder_1 was asked the same question separately, shown none of this, and reached the same class and
+the same remedy from different evidence — its mutation harness read a non-zero EXIT CODE as "a test
+caught the mutant", when it also means the mutant did not compile. A syntax error it introduced
+itself was recorded as a clean catch.
+
+**That case sharpens the rule, so take the sharpened form:**
+
+> A new checker is not finished until it has been made to fail ON PURPOSE — **and confirmed to fail
+> for the reason you think.**
+
+Both halves are load-bearing. Coder_1's harness *did* go red; it went red for the wrong reason. And
+the two failure modes are not equally bad: a false GREEN leaves the suspicion alive and someone
+eventually re-checks, while a false CAUGHT **retires** it — the thing is recorded as covered and
+nobody looks again.
+
+**Not written into the procedure.** Andre has been burned by agents self-authorising process
+changes, and a rule about what a reviewer may rely on deserves his name on it. Both lanes are
+holding.
+
+### The caveat that belongs next to the count
+
+Five in a day is not a slide in quality. **Both lanes have moved from writing tests to writing
+guards, and a guard is where this failure lives.** Detection also worked every time: three of my five
+were caught by a reviewer or by a deliberate poison, two by breaking my own work on purpose. What was
+missing was never attention — it was a habit that runs *before* attention is needed.
+
+And the human-judgement version is mine too, not only the other lane's: I wrote a comment into
+`vitest.config.ts` calling a worker cap "a physical constraint, not a tuning preference" — a
+confident justification for a premise I had not checked, in a file Andre had already declined once.
+Coder_1 caught it. Same shape, no automation involved.
