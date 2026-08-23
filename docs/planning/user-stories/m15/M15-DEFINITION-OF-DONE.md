@@ -1114,22 +1114,34 @@ the only safety net standing between "the relay said sealed but lied" and "the r
 - Pre-V58 sessions can never be served by the pull; that is recorded, not repaired.
 - **Enforcer:** receipt.
 
-### `DOD-M15-CLOSEWAIT-1` — 🟡 A close answers the caller before eleven minutes elapse
-> **BUILT 2026-08-23, review in flight.** Contract per Decisions Carried #4, decided before any code:
-> **answer on commitment, not on notarization.** The close returns as soon as the SEAL leaf is
-> durably submitted; the bilateral wait and unilateral escalation continue in the background.
-> Nothing about what is signed, by whom, or in what order changes — only the IPC response stops
-> waiting. `wait_for_seal: true` opts back into the blocking form.
-> **Counterbalance, named before the code:** a COMMITTED response must not be mistaken for a SEALED
-> one — that is worse than the wait, because the operator never fetches the receipt. No `sealed_root`
-> and no `sealed` field by construction; `seal_status: "committed"`; the receipt named as NOT YET
-> available so an agent polling early does not read empty as failure; and what `force` costs.
-> **The dangerous part was ownership of the broker connection** — the enclosing `finally` would have
-> released it out from under a live ceremony. That guard shipped untested and the revert test caught
-> it, along with a second gap where nothing proved the background path ever released it at all.
-> **The vocabulary audit caught me naming a dead command** (`cello_get_sealed_receipt` is the IPC
-> method; `cello_sealed_receipt` is the tool) — the same defect class as two units ago, caught by a
-> guard this time rather than a reviewer.
+### `DOD-M15-CLOSEWAIT-1` — ✅ A close answers the caller before eleven minutes elapse
+> **CLOSED 2026-08-23** (→ Entry 37). Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — HIGH-1:
+> the background failure's only consumer is `daemon.log`; the named recovery surface cannot
+> distinguish failed from running… **ERROR SUBSTITUTION FOUND** — HIGH-3 … and the `not_sealed_yet`
+> remedy that the new contract made unreachable. **HOLLOW TESTS FOUND** — the counterbalance clause
+> with the real defect behind it is untested; the background logging is untested against a no-op
+> logger; and the third ownership test passes with the whole unit reverted."* All nine fixed. Gate:
+> 4212 client tests, server suite green, lint, typecheck, build — by exit code.
+>
+> Contract per Decisions Carried #4: **answer on commitment, not on notarization.** 11m 06s →
+> immediate. `wait_for_seal: true` opts back into blocking (now reachable from the MCP schema).
+> **The worst finding was prose:** three shipped documents still promised `sealed_root` from a close,
+> including the walkie-talkie skill used for live demos, whose protocol waited for a branch that can
+> no longer fire.
+> **Two surfaces contradicted each other** — the receipt verb told the agent to do something the
+> change had made impossible, and the re-close refusal named a log event emitted nowhere in the tree.
+> **Carried:** `DOD-M15-SEAL-FAILED-TERMINAL-1`.
+
+### `DOD-M15-SEAL-FAILED-TERMINAL-1` — ❌ A seal that FAILED is discoverable, not just a slow one
+Split from `DOD-M15-CLOSEWAIT-1` (review HIGH-1, the half that remains).
+- `seal_in_progress` now distinguishes a RUNNING ceremony from "no ceremony". What is still missing is
+  the terminal case: a background ceremony that **threw** leaves the session `active` with a durable
+  commitment, no receipt, and nothing retrying until a daemon restart.
+- The agent was handed `ok: true` at commitment, so it has no reason to suspect anything is wrong; the
+  only account of the failure is a `session.seal.background.failed` line in the daemon log.
+- Persist the last background failure on the session row and answer `seal_failed` with its reason, so
+  the state survives the read and an agent can tell "slow" from "dead".
+
 `DOD-M12B-CLOSE-SILENT-WAIT-1`. Half fixed — the wait now announces itself, which stopped operators
 reaching for `force: true` and forfeiting the receipt the wait was about to earn (17 sessions were
 lost that way).

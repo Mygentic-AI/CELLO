@@ -15,13 +15,19 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟡 28 ✅, 3 🟡, 2 🅿️, 38 ❌. Both repos clean, pushed, on main.
-> **`CLOSEWAIT-1` IS THE UNREVIEWED ONE** — built in `bc1cf7d` + `9927e9f` (cello-client), reviewer
-> dispatched, verdict not in. `DIRAUTH-1` and `DEAD-WIRE-FIELD-1` are 🟡 for CARRIED halves only and
-> do not count against the WIP limit.
-> Gate: 4210 client tests, lint, typecheck — by EXIT CODE.
+> ### 🟢 29 ✅, 2 🟡 (carried halves only), 2 🅿️, 38 ❌. Both repos clean, pushed, on main.
+> **No unreviewed work.** `CLOSEWAIT-1` closed in Entry 37 — nine findings fixed, verdict quoted,
+> gate green both repos BY EXIT CODE (4212 client). `DIRAUTH-1` and `DEAD-WIRE-FIELD-1` are 🟡 for
+> CARRIED halves only and do not block. **A new line may start.**
 
-- **NEXT ACTION: close `CLOSEWAIT-1`**, then pull ONE new ❌ line.
+- **NEXT ACTION: pull ONE new ❌ line.** `SEAL-FAILED-TERMINAL-1` (new, Entry 37) is the natural
+  follow-on and is small. `FREEZE-STATUS-1` needs a client-side DB migration in its own reviewed unit.
+  `UNWITNESSED-1` needs a relay-attaching fixture.
+- **🚨 `git checkout` IN A MUTATION LOOP HAS NOW DESTROYED WORK FIVE TIMES.** Same sequence every
+  time: commit, add more work, mutate, restore, lose it. "Commit before mutating" has been written
+  into three commit messages and broken three times since, so state it as a precondition instead:
+  **a mutation loop containing `git checkout` must never run against a tree with uncommitted work.**
+  Commit, then mutate, with nothing in between.
 - **🚨 A ZSH FUNCTION WITH `$T` HOLDING MULTIPLE PATHS RUNS NOTHING.** zsh does not word-split
   unquoted variables, so `npx vitest run $T` with three paths in `$T` passes ONE bogus argument,
   matches no files, and the grep for `Tests` prints nothing — which reads exactly like a pass. My
@@ -3435,3 +3441,104 @@ Gate: 4199 client tests, lint, typecheck, build — by exit code.
   so it is not a pure-network MITM, but it bounds how strongly the operator prose may be written.
 - **A claims-ledger row**: `signaling-manager.ts`'s `processStep5Frame` says *"Called inside
   production connect() after auth_ok"* and has no production caller in either repo.
+
+---
+
+## Entry 37 — the close stopped blocking, and three shipped documents kept promising it would
+
+`DOD-M15-CLOSEWAIT-1` → ✅. Nine findings, six blocking.
+
+### The verdict, quoted
+
+> **SPEC: DEVIATIONS FOUND** — the counterbalance's "reads as sealing" clause is met on
+> `cello_status` only, and "only the IPC response stops waiting" is untrue of `daemon.ts:4562`.
+> Neither is journaled. **[blocking]**
+> **SILENT FALLBACKS FOUND** — HIGH-1: the background failure's only consumer is `daemon.log`; the
+> named recovery surface cannot distinguish failed from running, and nothing retries before a
+> restart. **[blocking]**
+> **ERROR SUBSTITUTION FOUND** — HIGH-3 … and the `not_sealed_yet` remedy that the new contract made
+> unreachable. **[blocking]**
+> **HOLLOW TESTS FOUND** — the counterbalance clause with the real defect behind it is untested; the
+> background logging is untested against a no-op logger; and the third ownership test passes with the
+> whole unit reverted. **[blocking]**
+
+### What the change is for
+
+An operator closes a session and the command freezes for **11 minutes 6 seconds** (measured
+2026-08-17). It is working the whole time. One operator read that as broken and force-abandoned
+**seventeen sessions**, forfeiting the receipts the wait was earning. The close now answers at
+commitment and notarizes in the background.
+
+### The finding that would have hurt in front of an audience
+
+**Three shipped documents still promised the old contract**, including the walkie-talkie skill used
+for live two-agent demos: *"When your `cello_close_session` returns `sealed_root` (first-closer),
+report…"*. It never will now — the agent waits for a branch that cannot fire. Its troubleshooting
+section also offered *"close blocks until both parties close"* as the explanation for a hang, which
+the change **inverts**: a fast close is now correct. Both `SKILL.md` copies (which ship to the
+operator's disk) and the MCP tool description carried the same stale promise.
+
+The claim-truth rule says prose asserting a property the tree does not enforce is fixed in the SAME
+diff as the behaviour. I shipped behaviour first and prose two commits later; blocking was the right
+call.
+
+### Two surfaces in one daemon giving opposite accounts
+
+Ask for the receipt mid-ceremony and you got `not_sealed_yet`, whose guidance said *"close it and
+confirm it reports sealed"* — **which the change made impossible**. Meanwhile the close said an empty
+answer means "still running, not failed". The daemon knew the difference the whole time, in the maps
+`cello_status` already reads. There is now a distinct `seal_in_progress`.
+
+And the re-close refusal — now the common operator move, since they have their terminal back — told
+them to *"wait for `session.interrupted.sealed` to appear in the daemon logs"*. **That event is
+emitted nowhere in the tree.** Grep finds it only inside that string.
+
+### A regression I introduced
+
+The document-delivery worker is not an IPC caller: it is an in-process worker that awaits the close
+and checks `ok !== true`, which is the ONLY report of a failed delivery seal. My default handed it
+`ok: true` at commitment, so that check **could never fire for a ceremony failure again**. It takes
+`wait_for_seal: true` now — nobody is watching a terminal there.
+
+Which exposed the next one: `wait_for_seal` was **declared, honoured, and callable by nobody.** The
+shim builds params explicitly and did not forward it. I had cited it as the mitigation that made the
+contract change safe.
+
+### Two claims I got wrong, again
+
+**Crash safety.** I credited `RestartSealResolver`'s `seal_interrupted_pending` branch. During the
+background wait the row is still `active`, so that branch never sees it — the boot sweep flipping
+`active → interrupted/local` is what feeds the resolver. The net is real; the mechanism was
+decorative. It was in three places **including Decisions Carried #4**, which is the block a later
+session reads INSTEAD of re-deriving.
+
+**The danger of the ownership bug.** I called releasing the broker connection early a *corrupted
+seal*. It is not: the escalation runs over the home stream and completes. That connection carries the
+cross-node bilateral completion push, so early release silently **downgrades** a cross-node close
+from bilateral to unilateral, eleven minutes later.
+
+### The revert test, and the revert test's own hole
+
+The `handedOff` guard — which I had called the most dangerous part of the change — **had no test**.
+Then a second mutation showed nothing proved the background path ever released the connection at all:
+one leaked connection per close, on the default path.
+
+And **my first revert run executed nothing.** `npx vitest run $T` with three paths in `$T`: zsh does
+not word-split unquoted variables, so vitest got one bogus argument, matched no files, and the grep
+printed nothing — five silent no-ops that read as five passes. A baseline line runs first now.
+
+### `git checkout` destroyed uncommitted work for the FIFTH time
+
+Same sequence every time: commit, add more work, mutate, restore, lose the new work. I have written
+"commit before mutating" into three commit messages and broken it three times since. Stated properly:
+**a mutation loop containing `git checkout` must never run against a tree with uncommitted work**, and
+the only reliable way to guarantee that is commit-then-mutate with nothing in between.
+
+Gate: 4212 client tests, server suite green, lint, typecheck, build — by exit code.
+
+### Carried
+
+- **`DOD-M15-SEAL-FAILED-TERMINAL-1`** — a background ceremony that THREW leaves the session `active`
+  with a durable commitment, no receipt, and no retry until a restart. `seal_in_progress` covers
+  "running"; there is still no terminal `seal_failed` an agent can discover. Persist the last
+  background failure on the session row and surface it.
