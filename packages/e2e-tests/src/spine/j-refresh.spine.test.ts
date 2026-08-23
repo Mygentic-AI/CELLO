@@ -35,6 +35,7 @@ import {
   type SpineCluster,
   type Proc,
   type McpConn,
+  expectOwnTreeVerified,
 } from "./live-harness.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
@@ -121,7 +122,7 @@ async function setup(label: string): Promise<{ celloDir: string; daemon: Proc; c
 }
 
 /** A→B: open a session, exchange, both close → bilateral seal. Returns the byte-identical root. */
-async function sealSession(connA: McpConn, connB: McpConn, pubB: string, _daemon: Proc): Promise<string> {
+async function sealSession(connA: McpConn, connB: McpConn, pubB: string, daemon: Proc): Promise<string> {
   const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
   let init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string; reason?: string };
   for (let i = 0; i < 20 && !init.ok && init.reason === "standing_receiver_unavailable"; i++) {
@@ -155,7 +156,22 @@ async function sealSession(connA: McpConn, connB: McpConn, pubB: string, _daemon
     awaitSealedRoot(connB, sessionIdB, { label: "B sealed receipt" }),
   ]);
   expect(rootA, `A sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
-  expect(rootB, `both ends' sealed_root must be byte-identical:${diag}`).toBe(rootA);
+  expect(rootB, `both ends received the same certificate:${diag}`).toBe(rootA);
+
+  /**
+   * AND EACH SIDE RECOGNISES THE TREE IT WAS CERTIFIED OVER — `SEALWIRE-1` bullet 8. The equality
+   * above compares two reads of the SAME certificate, so it stays green over a root covering a leaf
+   * set neither party holds; it is kept because it does prove one certificate rather than two.
+   *
+   * ⚠️ `agentName` IS REQUIRED — this file runs BOTH agents on ONE daemon, so a match on session id
+   * alone returns whichever end logged first and reads it as the other (review pass 1, H2).
+   *
+   * It earns its place here specifically: this journey seals ACROSS AN EPOCH ROLLOVER, so a refresh
+   * that disturbed one side's leaves would produce a certificate that side no longer recognises —
+   * and nothing else in the file would notice.
+   */
+  await expectOwnTreeVerified(daemon, sessionIdA, { agentName: "agentA", label: "agentA (seal across refresh)" });
+  await expectOwnTreeVerified(daemon, sessionIdB, { agentName: "agentB", label: "agentB (seal across refresh)" });
   return rootA;
 }
 

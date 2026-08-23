@@ -35,6 +35,7 @@ import {
   type SpineCluster,
   writeSignedManifestTo,
   writeConsortiumManifest,
+  expectOwnTreeVerified,
 } from "./live-harness.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
@@ -678,7 +679,18 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     ]);
     expect(rootA, `A must surface a sealed_root:${closeDiag}`).toMatch(/^[0-9a-f]{64}$/);
     expect(rootB, `B must surface a sealed_root:${closeDiag}`).toMatch(/^[0-9a-f]{64}$/);
-    expect(rootA, "both parties' sealed_root must be BYTE-IDENTICAL").toBe(rootB);
+    expect(rootA, "both parties received the same certificate").toBe(rootB);
+
+    /**
+     * AND EACH PARTY RECOGNISES THE TREE IT WAS CERTIFIED OVER — `SEALWIRE-1` bullet 8.
+     *
+     * This is DOD-SPINE-7, the file the whole spine is named for, and its title says
+     * "byte-identical sealed_root". Byte-identical is what two reads of ONE certificate always are.
+     * The claim underneath — INV-2, that B's receipt describes B's conversation — needs each side to
+     * have checked the certified root against the leaves it holds, which is what this asserts.
+     */
+    await expectOwnTreeVerified(daemonA, sessionIdA, { label: "A (DOD-SPINE-7 bilateral seal)" });
+    await expectOwnTreeVerified(daemonB, sessionIdB, { label: "B (DOD-SPINE-7 bilateral seal)" });
 
     // Directory-corroborated: the relay witnessed two ctrl-leaf submissions (the SEAL leaves).
     expect(cluster.relay.output, "relay must witness both SEAL ctrl leaves").toMatch(/hash_submit/);

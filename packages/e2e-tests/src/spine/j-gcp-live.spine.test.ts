@@ -406,18 +406,42 @@ describe.skipIf(!ENABLED)("J-GCP-LIVE — DOD-E2E-GCP-1 against the live GCP fle
        * holds. Bullet 8's words: *"every one stays green if the directory certifies a root over a
        * completely different leaf set."*
        *
-       * ⚠️ AND THE PER-SIDE CHECK IS DELIBERATELY NOT ADDED HERE, which is the part worth stating.
-       * `expectOwnTreeVerified` reads each daemon's `session.sealed.root.checked` verdict from
-       * captured stdout, and this file spawns raw `ChildProcess` handles rather than the harness
-       * `Proc` — there is no `waitForLine` to hang it on. Plumbing log capture into the LIVE-GCP
-       * journey to gain an assertion the local journeys already make would be work spent on the one
-       * run that costs the most and happens least.
+       * ⚠️ I FIRST DECLINED TO ADD THE PER-SIDE CHECK HERE AND GAVE A REASON THAT WAS NOT THE
+       * REASON — review pass 1, M1. I wrote that it would mean *"plumbing log capture into the
+       * LIVE-GCP journey"*. That plumbing already exists: every daemon's stdout AND stderr is piped
+       * into `daemonErr` thirty lines above, and line ~240 already regex-tests it for
+       * `daemon.started`. The cost was two lines, not a project.
        *
-       * `j-documents` and `j-multiplayer` carry the per-side check on the same seal path, against
-       * local binaries. If that path breaks, they go red first and for less money.
+       * A comment that misstates the cost of a thing is how the thing stays undone, so it is done.
        */
       expect(ra.sealed_root).toMatch(/^[0-9a-f]{64}$/);
       expect(ra.sealed_root, "the two sides received different certificates").toBe(rb.sealed_root);
+
+      /**
+       * EACH SIDE RECOGNISES THE TREE IT WAS CERTIFIED OVER — the per-side half, read from each
+       * daemon's own captured output rather than through the harness helper (this file has no
+       * `Proc`, so there is no `waitForLine`; the closes above have already completed, so both
+       * verdict lines are in the buffer and there is nothing to wait for).
+       *
+       * `verdict":"match"` and not merely "a verdict line": `cannot_judge` means the certificate was
+       * accepted WITHOUT being checked against that daemon's leaves, which is exactly the nothing
+       * this assertion exists to stop being mistaken for something.
+       */
+      for (const s of sides) {
+        const out = daemonErr.get(s.agent) ?? "";
+        const verdict = new RegExp(
+          `"event":"session\\.sealed\\.root\\.checked"[^\\n]*"sessionId":"${sid.toLowerCase()}"[^\\n]*"verdict":"match"`,
+        ).test(out) || new RegExp(
+          `"event":"session\\.sealed\\.root\\.checked"[^\\n]*"verdict":"match"[^\\n]*"sessionId":"${sid.toLowerCase()}"`,
+        ).test(out);
+        expect(
+          verdict,
+          `${s.agent}: this daemon never reported verdict "match" for session ${sid} — the certified ` +
+            `root was either never checked against its own leaves, or checked and did not match. ` +
+            `Both sides read the same root off one certificate, so the equality above cannot see ` +
+            `either.\n${out.split("\n").filter((l) => /sealed\.root/.test(l)).slice(-4).join("\n") || "(no session.sealed.root.* lines at all)"}`,
+        ).toBe(true);
+      }
     },
     1_800_000,
   );

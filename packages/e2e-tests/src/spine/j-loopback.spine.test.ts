@@ -40,6 +40,7 @@ import {
   type Proc,
   type McpConn,
   type ManifestEnv,
+  expectOwnTreeVerified,
 } from "./live-harness.js";
 
 let cluster: SpineCluster;
@@ -214,7 +215,23 @@ describe("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => 
       awaitSealedRoot(connB, sessionIdB, { label: "B sealed receipt" }),
     ]);
     expect(rootA, `A sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
-    expect(rootB, `both ends' sealed_root must be BYTE-IDENTICAL (one bilateral seal):${diag}`).toBe(rootA);
+    expect(rootB, `both ends received the same certificate (one bilateral seal):${diag}`).toBe(rootA);
+
+    /**
+     * AND EACH END RECOGNISES THE TREE IT WAS CERTIFIED OVER — `SEALWIRE-1` bullet 8.
+     *
+     * ⚠️ THIS FILE IS THE REASON THE PRODUCER GAINED A FIELD. Review pass 1 (H2) found that
+     * `session.sealed.root.checked` logged `sessionId` and no `agentName`, and DOD-LOOP-1 puts BOTH
+     * ENDS OF ONE SESSION ON ONE DAEMON — so the two verdicts landed under the same key, and this
+     * journey was the one that could not be converted. The obstacle was a missing log field, not
+     * anything about the test. The field exists now, so both ends are asserted separately.
+     *
+     * "Byte-identical" is what two reads of ONE certificate always are. What loopback is actually
+     * for is that a daemon talking to itself still produces two INDEPENDENT parties — and that is a
+     * claim about each end's own leaves, which is what this checks.
+     */
+    await expectOwnTreeVerified(daemon, sessionIdA, { agentName: "agentA", label: "agentA (loopback, same daemon)" });
+    await expectOwnTreeVerified(daemon, sessionIdB, { agentName: "agentB", label: "agentB (loopback, same daemon)" });
 
     // ─── DOD-FIRSTMSG-WITNESS-1 AC7 + AC8, asserted on the LIVE daemon log ────────────────────
     //

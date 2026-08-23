@@ -1258,20 +1258,44 @@ export async function connectMcp(celloDir: string, label: string): Promise<McpCo
  * instant the counterparty's SEAL leaf triggers the seal), and refusing on it would make sessions
  * unsealable. But a journey that treats it as success is asserting exactly the nothing bullet 8 was
  * raised to stop — so this waits for a `match` and fails loudly on anything else.
+ *
+ * ⚠️ BILATERAL SEALS ONLY, AND THIS IS A LANDMINE FOR WHOEVER CONVERTS `j-unilateral` — review pass
+ * 1. The verdict is logged inside `seal-coordinator.ts`'s `signature_type === "frost"` branch. The
+ * UNILATERAL path (`seal_unilateral_confirmed`, `signature_type: "single"`) and the absent-party
+ * upgrade never call `verifyCertifiedRoot` and never emit this event, so this helper would wait the
+ * full timeout and fail a perfectly healthy journey. Every currently-converted journey closes both
+ * sides concurrently and therefore takes the bilateral path.
  */
 export async function expectOwnTreeVerified(
   proc: Proc,
   sessionIdHex: string,
-  opts: { timeoutMs?: number; label?: string } = {},
+  opts: { timeoutMs?: number; label?: string; agentName?: string } = {},
 ): Promise<void> {
   const timeoutMs = opts.timeoutMs ?? 30_000;
   const label = opts.label ?? proc.name;
   const sid = sessionIdHex.toLowerCase();
 
+  /**
+   * `agentName` — REQUIRED WHENEVER ONE DAEMON HOSTS BOTH ENDS (review pass 1, H2).
+   *
+   * `DOD-LOOP-1` loopback puts both ends of one session id on one daemon, so matching on
+   * `sessionId` alone returns whichever verdict was logged first and reads it as the party you
+   * asked about. That missing discriminator — not anything about the test — is what made
+   * `j-loopback` unconvertible; the producer now emits `agentName` on both events.
+   *
+   * Optional rather than required because every other journey is one agent per daemon, where the
+   * session id already identifies the party uniquely.
+   */
+  // A LOOKAHEAD, not an ordered clause. Requiring `"agentName"` immediately before `"sessionId"`
+  // would bind this regex to the field order of an object literal three files away, and a logger
+  // that inserted one field between them would break every converted journey with "no verdict line"
+  // — a false negative that reads exactly like the real failure.
+  const agentClause = opts.agentName ? `(?=[^\\n]*"agentName":"${opts.agentName}")` : "";
+
   // Either verdict line resolves the wait — otherwise a `mismatch` run would sit here until the
   // timeout and report "no line" for a daemon that was shouting the answer.
   const line = await proc.waitForLine(
-    new RegExp(`"event":"session\\.sealed\\.root\\.(checked|mismatch)"[^\\n]*"sessionId":"${sid}"`),
+    new RegExp(`"event":"session\\.sealed\\.root\\.(checked|mismatch)"${agentClause}[^\\n]*"sessionId":"${sid}"`),
     timeoutMs,
   ).catch((err: unknown) => {
     throw new Error(
@@ -1289,11 +1313,27 @@ export async function expectOwnTreeVerified(
     );
   }
   if (!/"verdict":"match"/.test(line)) {
+    /**
+     * ⚠️ LEAD WITH THE DAEMON'S OWN `reason` — review pass 1, M2.
+     *
+     * The general sentence explains the BENIGN cause of `cannot_judge`: the carry can legitimately
+     * be short at the instant the counterparty's SEAL leaf triggers the seal. But a leaf DROPPED
+     * FROM THE MIDDLE of a carry lands here too, as `carry_noncontiguous`, because contiguity is
+     * checked before any root is computed — and pointing that reader at seal timing sends them away
+     * from a real dropped leaf. The daemon already named it; the message has to lead with it.
+     */
+    const reason = /"reason":"([^"]+)"/.exec(line)?.[1];
+    const named = reason
+      ? `The daemon's own reason is "${reason}" — READ THAT FIRST: a non-contiguous carry means ` +
+        `leaves are missing from the middle of this side's log, which is a dropped leaf and not ` +
+        `seal timing. `
+      : "";
     throw new Error(
       `${label}: the certified root was accepted WITHOUT being checked against this daemon's own ` +
-        `leaves (verdict is not "match"). That is a legitimate runtime state — the carry can be ` +
-        `short at the instant the counterparty's SEAL leaf triggers the seal — but it is not what ` +
-        `this journey claims to have proven, and treating it as a pass asserts nothing.\n  ${line}`,
+        `leaves (verdict is not "match"). ${named}` +
+        `\`cannot_judge\` can also be a legitimate runtime state — the carry can be short at the ` +
+        `instant the counterparty's SEAL leaf triggers the seal — but it is not what this journey ` +
+        `claims to have proven, and treating it as a pass asserts nothing.\n  ${line}`,
     );
   }
 }

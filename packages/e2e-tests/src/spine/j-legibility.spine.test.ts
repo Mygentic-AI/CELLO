@@ -47,6 +47,7 @@ import {
   type SpineCluster,
   type Proc,
   type McpConn,
+  expectOwnTreeVerified,
 } from "./live-harness.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
@@ -198,7 +199,19 @@ describe("J-LEGIBILITY — malicious-tail bilateral seal, cert read cross-proces
       awaitSealedRoot(connB, sessionIdB, { label: "B sealed receipt" }),
     ]);
     expect(rootA, `A sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
-    expect(rootB, `both sealed_root byte-identical:${diag}`).toBe(rootA);
+    expect(rootB, `both sides received the same certificate:${diag}`).toBe(rootA);
+
+    /**
+     * AND EACH SIDE RECOGNISES THE TREE IT WAS CERTIFIED OVER — `SEALWIRE-1` bullet 8. Both roots
+     * above are read off the SAME certificate, so that comparison stays green over a root covering a
+     * leaf set neither party holds. Kept for what it does prove: one certificate, not two.
+     *
+     * This file asserts DISTINCT PER-PARTY FRONTIERS — that each side's certificate reflects what
+     * THAT side actually received. A frontier is only meaningful over a leaf set the party holds, so
+     * this is the assertion the frontier claims rest on.
+     */
+    await expectOwnTreeVerified(daemonA, sessionIdA, { label: "A (per-party frontier)" });
+    await expectOwnTreeVerified(daemonB, sessionIdB, { label: "B (per-party frontier)" });
 
     // The directory built the legibility certificate on the REAL processSeal path.
     expect(cluster.directory.output, `directory must emit seal.certificate.legibility.built:${diag}`).toMatch(/seal\.certificate\.legibility\.built/);

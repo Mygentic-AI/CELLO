@@ -30,6 +30,7 @@ import {
   type SpineCluster,
   type Proc,
   type McpConn,
+  expectOwnTreeVerified,
 } from "./live-harness.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
@@ -151,7 +152,23 @@ async function sealSession(connA: McpConn, connB: McpConn, pubB: string, daemon:
     awaitSealedRoot(connB, sessionIdB, { label: "B sealed receipt" }),
   ]);
   expect(rootA, `A sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
-  expect(rootB, `both ends' sealed_root must be byte-identical:${diag}`).toBe(rootA);
+  expect(rootB, `both ends received the same certificate:${diag}`).toBe(rootA);
+
+  /**
+   * AND EACH SIDE RECOGNISES THE TREE IT WAS CERTIFIED OVER — `SEALWIRE-1` bullet 8.
+   *
+   * The equality above is not tamper-evidence: both roots are read off the SAME certificate, so it
+   * stays green over a root covering a leaf set neither party holds. Kept because it does prove one
+   * certificate rather than two.
+   *
+   * ⚠️ `agentName` IS REQUIRED HERE, unlike the two-daemon journeys. This file runs BOTH agents on
+   * ONE daemon, so both ends log their verdict under the same `sessionId` key and a match on session
+   * id alone would return whichever was written first — reading A's answer as B's. That missing
+   * discriminator was review pass 1's H2, and it is why this file could not be converted before the
+   * producer started emitting `agentName`.
+   */
+  await expectOwnTreeVerified(daemon, sessionIdA, { agentName: "agentA", label: "agentA (T-of-N consortium seal)" });
+  await expectOwnTreeVerified(daemon, sessionIdB, { agentName: "agentB", label: "agentB (T-of-N consortium seal)" });
   return rootA;
 }
 

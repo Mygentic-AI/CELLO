@@ -705,13 +705,21 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
      * `cannot_judge` is not accepted, because that is the daemon saying it took the certificate
      * without checking the content.
      *
-     * ⚠️ THIS SESSION IS THE ONE WHERE IT MATTERS MOST IN THIS FILE. B's daemon was KILLED and
-     * restarted mid-session and its content came back through the park, so B's leaf set was rebuilt
-     * from durable state rather than accumulated in memory. A rebuild that dropped or reordered a
-     * leaf is exactly what the sealed-root equality cannot see and this can.
+     * ⚠️ I FIRST WROTE THAT THIS SESSION HAD BEEN KILLED AND RESTARTED AND ITS CONTENT RECOVERED
+     * FROM THE PARK. **None of that happens in this test** — review pass 1, H1. There is no
+     * `kill()`, no restart, and the straggler is parked AFTER the seal, which is the whole point of
+     * DOD-MSG-8. I described a different test, and the fabrication was in the failure LABELS too, so
+     * a red run would have sent the reader to a restart path that was never exercised.
+     *
+     * What this session actually is, and why the check earns its place here: it is the one that
+     * seals and THEN has a straggler pushed at it. The frontier assertions below prove the straggler
+     * never entered B's certificate. This proves the complementary half — that the root each side
+     * was certified under is the root over the leaves it actually holds — so "the straggler stayed
+     * out" is a statement about a tree both parties recognise, rather than about a number on a
+     * certificate nobody checked.
      */
-    await expectOwnTreeVerified(daemonA, sessionId, { label: "A (after B's restart + park recovery)" });
-    await expectOwnTreeVerified(daemonB, sessionId, { label: "B (rebuilt from durable state)" });
+    await expectOwnTreeVerified(daemonA, sessionId, { label: "A (sealed before the straggler)" });
+    await expectOwnTreeVerified(daemonB, sessionId, { label: "B (sealed before the straggler)" });
 
     // HONEST seal: B reads its certificate and the actual per-party content frontier. B received
     // exactly one in-session message (msg1), so B's signed frontier reflects that — never more.
