@@ -3274,7 +3274,40 @@ The five, verbatim, all about message delivery rather than sealing:
   a producer/consumer trace of who should emit `content.delivery.acked` on that path and what
   precondition it waits on. That is a unit, and the freeze says record and move.
 
-### `DOD-M15-SAMEOP-FALSEPOS-1` — a stranger's endorsement may be flagged as self-dealing
+### `DOD-M15-SAMEOP-FALSEPOS-1` — ✅ RESOLVED: NOT a defect. The journey updates a superseded column.
+> **CLOSED 2026-08-24 with the mechanism named, after I reported it wrong twice and "confirmed" it
+> once.** The flag is CORRECT. `j-end` HOP 9 is a stale fixture, and its own linkage assertion is
+> stale in the SAME direction, which is exactly why it read as convincing evidence.
+>
+> **The mechanism:** the directory's `/internal/agent-by-pubkey` resolves an agent's account from the
+> **replicated `agent_account_links` table**, joined on the stable `agent_id` — under a comment
+> saying so explicitly and citing `CELLO-REPL-001`, the change that moved the reader off
+> `agent_profiles.account_id`.
+>
+> **The journey writes `agent_profiles.account_id`** — the superseded column — and then asserts
+> `count(DISTINCT account_id)` **against that same superseded column**. So its check passes, the
+> resolver still sees Bob sharing Alice's account, and `same_operator: true` is the RIGHT answer.
+> A stale fixture whose self-check is stale the same way cannot detect its own staleness.
+>
+> **What this cost, recorded because the sequence is the lesson:** I read "no unflagged endorsement"
+> as "a stranger is flagged" (underdetermined — `CELLO_Coder_1` caught it), then called it
+> **confirmed** after adding `issuer_pubkey` (better evidence, still the wrong conclusion), and only
+> reached the truth by asking *which fields does the reader actually read* rather than *is the
+> predicate correct*. Three layers had been "ruled out by reading" and all three rule-outs were
+> right — the reader simply was not among them.
+> **The general form: I kept auditing the CONSUMER and never asked where its INPUT came from.**
+>
+> **What it produced anyway, both worth keeping:** `issuer_pubkey` now appears in the wallet listing
+> (a real gap — you could see who a signal was ABOUT and never who SAID it), and `j-end` now asserts
+> about **Bob by pubkey** instead of "any endorsement", so the two readings can never be confused
+> again.
+>
+> **The FIXTURE FIX is owed** and it is one line: update `agent_account_links`, not
+> `agent_profiles.account_id` — and assert linkage against the table the resolver reads. **Related
+> and still open: `DOD-M15-SAMEOP-1`** names this exact reader-moved-to-replicated-table problem, so
+> this journey is evidence FOR that line rather than a separate finding.
+
+### ~~`DOD-M15-SAMEOP-FALSEPOS-1`~~ — superseded by the resolution above
 **POST-LAUNCH under the frozen gate (§0z.4)** — not a security hole a customer reaches; it suppresses
 a trust signal rather than admitting one. **Flagged for reclassification: it fails in the direction
 that costs the product its value, and it sits next to `DOD-M15-SAMEOP-1`, which is IN the gate.**
