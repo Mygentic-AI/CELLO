@@ -992,15 +992,44 @@ export class CelloRelayNode {
           let rawLeafKind: number | null = null;
           try {
             const peek = decode(frameBytes) as Record<string, unknown> | null;
-            if (peek && typeof peek["type"] === "string") rawType = peek["type"];
+            // SLICED — review H3. `type` is attacker-controlled and cbor-x accepts up to 4 MiB by default, so
+            // an authenticated client could otherwise write a multi-megabyte line per refused frame.
+            if (peek && typeof peek["type"] === "string") rawType = peek["type"].slice(0, 32);
             if (peek && typeof peek["leaf_kind"] === "number") rawLeafKind = peek["leaf_kind"];
           } catch { /* not CBOR, or not an object — "(undecodable)" is the honest answer */ }
           this.#logger.warn("relay.session.frame.refused", {
             rawType,
             leafKind: rawLeafKind,
             clientPubkey: authedPubkeyHex?.slice(0, 16) ?? "unknown",
-            impact: "this frame was refused and NOT processed — no leaf was sequenced and no ack was sent, so the client's submit fails. A ctrl-only violation (content_bytes on a non-ctrl leaf) lands here: that is a client offering the relay message or document content, which this relay does not accept.",
+            impact: "this frame was refused and NOT processed — no leaf was sequenced. A ctrl-only violation (content_bytes on a non-ctrl leaf) lands here: that is a client offering the relay message or document content, which this relay does not accept.",
           });
+          /**
+           * ⚠️ ANSWER THE CLIENT — review H2, and silence here was actively harmful rather than
+           * merely unhelpful.
+           *
+           * Refusing by sending nothing left the client racing its ack against a 10-second timeout,
+           * resolving `relay_submit_timeout`, and then RESETTING THE STREAM — which every session
+           * that agent holds on this relay shares. One refused frame therefore stalled a send for ten
+           * seconds, dropped every other conversation's stream, and printed a transport word for a
+           * deliberate policy decision taken on a different machine under a different operator. And
+           * it does not self-correct: the client re-sends the same frame next time.
+           *
+           * A typed, terminal answer costs one frame and names the cause. Only for a frame that
+           * announced itself as a `hash_submit` — anything else is not something this stream's client
+           * is waiting on an ack for, and inventing a submit error for it would be its own
+           * mislabelling.
+           */
+          if (rawType === "hash_submit") {
+            try {
+              this.#sendFrame(stream, encodeHashSubmitError({
+                type: "hash_submit_error",
+                reason: "content_not_permitted",
+                detail: rawLeafKind === null
+                  ? "the submit was malformed or carried a field this relay does not accept"
+                  : `content_bytes is admissible on ctrl leaves only (0x02); this frame declared leaf_kind ${rawLeafKind}`,
+              }));
+            } catch { /* the stream is going away; the WARN above is the durable record */ }
+          }
           continue;
         }
         if (parsed.type === "hash_submit") {

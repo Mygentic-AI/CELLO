@@ -848,7 +848,14 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
          * while the real fault is an encoding bug in the payload.
          */
         const content_bytes = toUint8Array(r["content_bytes"]);
-        if (r["content_bytes"] !== undefined && content_bytes === null) return null;
+        if (r["content_bytes"] !== undefined) {
+          if (content_bytes === null) return null;
+          // CTRL ONLY — review H5. A msg leaf's content is the operator's plaintext and a doc leaf's
+          // is their document; the directory is hash-only by design and must not admit either, on a
+          // frame that carries no relay receipt.
+          if (leaf_kind !== 0x02) return null;
+          if (content_bytes.length === 0 || content_bytes.length > 512) return null;
+        }
         parsed.push({ sequence_number, leaf_kind, structure2_cbor, structure1_cbor, relay_id, relay_timestamp, relay_signature, ...(content_bytes ? { content_bytes } : {}) });
       }
       seal_leaves = parsed;

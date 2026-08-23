@@ -115,6 +115,12 @@ export function reconstructCarriedSealLeaves(
  *
  * One bad leaf voids the whole submission — a dropped leaf would be an undetected omission.
  */
+/**
+ * Ceiling on a carried SEAL payload, mirroring the relay's. A real `encodeSealPayload` output is 69
+ * bytes; this is generous against that and tiny against a message.
+ */
+const MAX_CTRL_PAYLOAD_BYTES = 512;
+
 export function validateSealSubmissionLeaves(
   raw: unknown,
 ): { ok: true; leaves: RelaySealData["leaves"] } | { ok: false; reason: string } {
@@ -140,8 +146,26 @@ export function validateSealSubmissionLeaves(
      * function's own header describes for `kind`, one field along.
      */
     const cb = (entry as { content_bytes?: unknown }).content_bytes;
-    if (cb !== undefined && !(cb instanceof Uint8Array) && !Buffer.isBuffer(cb)) {
-      return { ok: false, reason: "seal_submission_content_bytes_malformed" };
+    if (cb !== undefined) {
+      if (!(cb instanceof Uint8Array) && !Buffer.isBuffer(cb)) {
+        return { ok: false, reason: "seal_submission_content_bytes_malformed" };
+      }
+      /**
+       * ⚠️ CTRL ONLY, ON THIS SIDE OF THE HOP TOO — review H5.
+       *
+       * The relay refuses `content_bytes` on a msg or doc leaf at its own wire, because that is the
+       * operator's plaintext. This validator accepted it on ANY kind, at any length, on a frame its
+       * own header describes as *"accepted from any dialer"* with *"no relay receipt"* binding it —
+       * so the stricter of the two sides was the one that had a receipt, and the open one was the
+       * one that did not. Against the standing rule that the directory holds no PII and is hash-only
+       * by design, the guard belongs on both.
+       */
+      if (kind !== "ctrl") {
+        return { ok: false, reason: "seal_submission_content_bytes_not_permitted" };
+      }
+      if ((cb as Uint8Array).length === 0 || (cb as Uint8Array).length > MAX_CTRL_PAYLOAD_BYTES) {
+        return { ok: false, reason: "seal_submission_content_bytes_malformed" };
+      }
     }
   }
   return { ok: true, leaves: raw as RelaySealData["leaves"] };

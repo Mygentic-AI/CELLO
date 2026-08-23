@@ -6,6 +6,7 @@
  */
 
 import { Encoder, decode } from "cbor-x";
+import { decodeSealPayload } from "@cello-protocol/protocol-types";
 import type {
   RelayAuthChallenge,
   RelayAuthResponse,
@@ -30,12 +31,21 @@ const ENC = new Encoder({ tagUint8Array: false });
 const RELAY_CTRL_LEAF_KIND = 0x02;
 
 /**
- * Ceiling on a carried SEAL payload.
+ * Ceiling on a carried SEAL payload. A real `encodeSealPayload` output is **69 bytes**, measured.
  *
- * The real thing is `[session_id(16), final_root(32), close_timestamp, "PENDING"]` — CBOR well under
- * 128 bytes. Without a bound, "ctrl leaves only" stops being much of a limit: it is still one
- * unbounded write into relay session state per close, free to the client. Generous against the real
- * payload, tiny against a message.
+ * ⚠️ THIS IS NOW BELT TO THE PAYLOAD DECODE'S BRACES, AND IT CANNOT BE TESTED INDEPENDENTLY — said
+ * plainly rather than left as a guard that looks load-bearing.
+ *
+ * Once the bytes must decode as a seal payload (review H1), anything oversized is refused on content
+ * grounds anyway, so no input distinguishes "the ceiling caught it" from "the decode caught it": a
+ * mutant raising this to 4096 survives every test in the suite. It is kept for one reason the decode
+ * does not cover — it bounds the work done BEFORE `decodeSealPayload` runs, so a client cannot make
+ * this relay CBOR-parse a multi-megabyte buffer per submit. The order matters: the length check is
+ * above the decode, deliberately.
+ *
+ * A guard whose only surviving job is to protect the guard below it is worth keeping and worth
+ * labelling, because the alternative is a future reader deleting it as redundant — it is redundant
+ * for the property it was written for and not for the one it now serves.
  */
 const MAX_CTRL_PAYLOAD_BYTES = 512;
 
@@ -187,6 +197,24 @@ export function decodeInboundFrame(bytes: Uint8Array): InboundRelayFrame | null 
       if (leaf_kind !== RELAY_CTRL_LEAF_KIND) return null;
       const cb = toUint8Array(o["content_bytes"]);
       if (!cb || cb.length === 0 || cb.length > MAX_CTRL_PAYLOAD_BYTES) return null;
+      /**
+       * ⚠️ IT MUST ACTUALLY BE A SEAL PAYLOAD — review H1, and this is the difference between the
+       * safety property being TRUE and being merely CLAIMED.
+       *
+       * The guard used to be: ctrl leaf, non-empty, ≤512 bytes. Nothing required the bytes to be a
+       * seal payload at all, so a client could put 512 bytes of the operator's message in a ctrl
+       * leaf and this relay would take them. The type doc said "the relay already knows all four
+       * fields, nothing is disclosed"; what the code enforced was "at most 512 arbitrary bytes per
+       * close." A comment asserting a safety property the code does not have is the failure this
+       * codebase has been correcting all week, and I wrote another one.
+       *
+       * Decoding it here also binds the payload to THIS session at the wire, instead of leaving a
+       * `seal_payload_session_mismatch` for the directory to notice three hops later.
+       */
+      const payload = decodeSealPayload(cb);
+      if (!payload) return null;
+      if (payload.session_id.length !== session_id.length
+          || !Buffer.from(payload.session_id).equals(Buffer.from(session_id))) return null;
       content_bytes = cb;
     }
     return { type: "hash_submit", session_id, leaf_kind, structure1_cbor, sender_signature, predecessor_relay_id, predecessor_relay_signature, predecessor_relay_sequence, predecessor_relay_timestamp, ...(content_bytes ? { content_bytes } : {}) };

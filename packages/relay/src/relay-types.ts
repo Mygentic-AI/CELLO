@@ -82,10 +82,22 @@ export interface HashSubmit {
    *
    * 🚨 THIS IS THE ONE FIELD THAT CARRIES LEAF CONTENT TO A RELAY, AND THE RELAY IS THE PARTY THIS
    * PROTOCOL EXISTS TO KEEP CONTENT AWAY FROM (INV-3). It is admissible for a ctrl leaf and for no
-   * other kind, and the reason is narrow rather than general: a SEAL payload is
-   * `[session_id, final_root, close_timestamp, "PENDING"]`, and the relay already knows all four —
-   * it assigned the session, it built the tree the root comes from, and it stamped the leaf. Nothing
-   * is disclosed.
+   * other kind, and the reason is narrow rather than general. A SEAL payload is
+   * `[session_id, final_root, close_timestamp, "PENDING"]`:
+   *   - `session_id` is already on this very frame;
+   *   - `final_root` is the root over the NON-ctrl leaves, every one of which the relay sequenced —
+   *     it can derive this itself, which is exactly what makes the directory's comparison meaningful;
+   *   - `"PENDING"` is a constant.
+   *
+   * ⚠️ THIS USED TO SAY "the relay already knows all four", AND THE FOURTH IS NOT ONE OF THEM.
+   * `close_timestamp` is the CLIENT's local clock at close, distinct from the relay's own stamp, so
+   * what it discloses is the client's clock offset — single-digit milliseconds in practice, and I
+   * judge that negligible against what this field buys. But "negligible" and "nothing" are different
+   * claims and only one of them was true, so the sentence says three-known-plus-a-clock-offset now.
+   *
+   * ⚠️ AND THE BYTES ARE DECODED AS A SEAL PAYLOAD AT THE WIRE (review H1). Without that the
+   * reasoning above describes a payload while the code accepts any 512 bytes, which is not the same
+   * property at all.
    *
    * **That reasoning does not survive one leaf kind further.** A `msg` leaf's content is the
    * operator's plaintext; a `doc` leaf's is their document. `decodeInboundFrame` therefore REFUSES
@@ -163,7 +175,21 @@ export type HashSubmitErrorReason =
    */
   | "seal_in_progress"
   /** FEDERATION-003 AC-006/SI-002: predecessor relay ACK could not be verified */
-  | "RELAY_PREDECESSOR_UNKNOWN";
+  | "RELAY_PREDECESSOR_UNKNOWN"
+  /**
+   * `DOD-M15-SEALWIRE-1` — the frame carried leaf content this relay will not hold.
+   *
+   * ⚠️ THIS EXISTS BECAUSE THE REFUSAL WAS OTHERWISE INVISIBLE TO THE CLIENT, and what filled the
+   * gap was worse than silence. The relay refused by sending nothing; the client raced its ack
+   * against a 10-second timeout, resolved `relay_submit_timeout`, and then RESET THE STREAM — which
+   * is shared by every session that agent holds on this relay. So one refused frame stalled a send
+   * for ten seconds, dropped every other conversation's stream, and put a transport word on the
+   * screen for a deliberate policy decision made on a different machine.
+   *
+   * Terminal and immediate: re-sending the same frame cannot succeed, so a timeout is the wrong
+   * shape as well as the wrong word.
+   */
+  | "content_not_permitted";
 
 export interface HashSubmitError {
   type: "hash_submit_error";

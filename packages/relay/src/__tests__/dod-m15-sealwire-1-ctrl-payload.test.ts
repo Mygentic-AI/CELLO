@@ -35,7 +35,7 @@
 import { describe, it, expect } from "vitest";
 import { Encoder } from "cbor-x";
 import { decodeInboundFrame } from "../relay-frames.js";
-import { readFileSync } from "node:fs";
+import { encodeSealPayload } from "@cello-protocol/protocol-types";
 
 const CBOR = new Encoder({ tagUint8Array: false });
 
@@ -70,13 +70,27 @@ describe("DOD-M15-SEALWIRE-1 relay half: the SEAL payload rides, and only on a c
   });
 
   it("★ a CTRL leaf may carry its payload, and it survives decoding as bytes", () => {
-    const payload = new Uint8Array([0xa1, 0xb2, 0xc3]);
+    /**
+     * A REAL payload, not a stand-in. This test used three arbitrary bytes until review H1 made the
+     * decoder require the value to actually BE a seal payload — at which point the stand-in was
+     * correctly refused, and the test that had been "green" turned out to have been asserting that
+     * arbitrary bytes are accepted.
+     */
+    const payload = encodeSealPayload({
+      session_id: new Uint8Array(16).fill(0x11),
+      final_root: new Uint8Array(32).fill(0x33),
+      close_timestamp: 1_700_000_000_000,
+      attestation: "PENDING",
+    });
     const parsed = decodeInboundFrame(submit(CTRL, payload));
     expect(parsed).not.toBeNull();
+    // Compared as bytes, not as objects: CBOR round-trips a Uint8Array to a Buffer, and `toEqual`
+    // treats those as different types while the bytes are identical.
+    const carried = (parsed as { content_bytes?: Uint8Array }).content_bytes;
     expect(
-      (parsed as { content_bytes?: Uint8Array }).content_bytes,
+      carried && Buffer.from(carried).equals(Buffer.from(payload)),
       "the whole point of this leg — without the bytes the directory cannot check the relay against a client signature",
-    ).toEqual(payload);
+    ).toBe(true);
   });
 
   it("★★ A MSG LEAF CARRYING CONTENT IS REFUSED — this is the relay seeing plaintext", () => {
@@ -91,8 +105,16 @@ describe("DOD-M15-SEALWIRE-1 relay half: the SEAL payload rides, and only on a c
      * The refusal is at the WIRE BOUNDARY on purpose. Accepting here and filtering downstream means
      * the bytes have already been received, logged and possibly persisted before anyone objects.
      */
+    // A VALID payload on a msg leaf, so the refusal is unambiguously about the KIND. Junk bytes
+    // would now be refused on content grounds too, and the test would pass for the wrong reason.
+    const validPayload = encodeSealPayload({
+      session_id: new Uint8Array(16).fill(0x11),
+      final_root: new Uint8Array(32).fill(0x33),
+      close_timestamp: 1_700_000_000_000,
+      attestation: "PENDING",
+    });
     expect(
-      decodeInboundFrame(submit(MSG, new Uint8Array([1, 2, 3]))),
+      decodeInboundFrame(submit(MSG, validPayload)),
       "a relay must never receive message content — refuse the frame, do not quietly drop the field",
     ).toBeNull();
   });
@@ -105,8 +127,14 @@ describe("DOD-M15-SEALWIRE-1 relay half: the SEAL payload rides, and only on a c
      * reason" are different properties, and a future kind allow-list must fail this test if it is
      * written loosely.
      */
-    expect(decodeInboundFrame(submit(0x04, new Uint8Array([1, 2, 3])))).toBeNull();
-    expect(decodeInboundFrame(submit(0x05, new Uint8Array([1, 2, 3]))), "and reject leaves").toBeNull();
+    const validPayload = encodeSealPayload({
+      session_id: new Uint8Array(16).fill(0x11),
+      final_root: new Uint8Array(32).fill(0x33),
+      close_timestamp: 1_700_000_000_000,
+      attestation: "PENDING",
+    });
+    expect(decodeInboundFrame(submit(0x04, validPayload))).toBeNull();
+    expect(decodeInboundFrame(submit(0x05, validPayload)), "and reject leaves").toBeNull();
   });
 
   it("★ a malformed payload on a ctrl leaf VOIDS the frame — never dropped to absent", () => {
@@ -121,54 +149,78 @@ describe("DOD-M15-SEALWIRE-1 relay half: the SEAL payload rides, and only on a c
     expect(decodeInboundFrame(submit(CTRL, 42))).toBeNull();
   });
 
-  it("★★ THE REFUSAL IS AUDIBLE — a security refusal that vanishes is not a refusal", () => {
+  it("★★ a REAL seal payload is accepted, and it is nowhere near the ceiling", () => {
     /**
-     * ⚠️ MY OWN INVARIANT CHECK CAUGHT THIS, AND IT IS THE SAME DEFECT I HAD FIXED ON THE DIRECTORY
-     * SIDE HOURS EARLIER.
+     * ⚠️ REVIEW: nothing in this file tied the guard to the actual payload format. Every test used a
+     * three-byte stand-in, so a payload-format change that pushed the real thing past the ceiling
+     * would have broken every honest seal with no red test anywhere.
      *
-     * The decoder refuses by returning null, and the relay's dispatch loop did `if (!parsed)
-     * continue;` — bare. So the single most security-relevant thing this decoder can say (a client is
-     * offering us the operator's plaintext) produced no log line, no counter and no answer. The relay
-     * operator would never know a peer was doing it.
-     *
-     * Asserted at the SOURCE level rather than by standing up a relay, because that is what this file
-     * can honestly reach: it is a decoder test, and the log lives one layer up. The anchor is pinned
-     * first, so a moved or renamed dispatch fails this loudly instead of silently matching nothing —
-     * which is how two guards in this milestone passed while checking nothing at all.
+     * Built from the protocol's own `encodeSealPayload` — the producer's function, not a local
+     * imitation — and the headroom is asserted rather than assumed.
      */
-    const src = readFileSync(new URL("../relay-node.ts", import.meta.url), "utf8");
+    const real = encodeSealPayload({
+      session_id: new Uint8Array(16).fill(0x11),
+      final_root: new Uint8Array(32).fill(0x33),
+      close_timestamp: 1_700_000_000_000,
+      attestation: "PENDING",
+    });
+    const parsed = decodeInboundFrame(submit(CTRL, real));
+    expect(parsed, "the real payload format must be accepted, or every honest seal breaks").not.toBeNull();
     expect(
-      src.includes("const parsed = decodeInboundFrame(frameBytes);"),
-      "ANCHOR — if the dispatch moved or was renamed, this test is reading the wrong thing and must fail",
-    ).toBe(true);
-    expect(
-      src.includes("relay.session.frame.refused"),
-      "a refused frame must leave a trace — without one, a client offering the relay plaintext is indistinguishable from a client sending nothing",
-    ).toBe(true);
-    const at = src.indexOf("relay.session.frame.refused");
-    const around = src.slice(Math.max(0, at - 600), at + 600);
-    expect(
-      around.includes("this.#logger.warn"),
-      "and at WARN — unlike the directory's signaling stream, every field on this frame is one this build has always known, so a refusal here is never routine version skew",
-    ).toBe(true);
-    expect(
-      around,
-      "the line must name WHICH frame, or the operator cannot tell a malformed submit from a ctrl-only violation",
-    ).toMatch(/rawType/);
+      real.length,
+      "and it must sit well under the ceiling, so a format change has room before it breaks seals",
+    ).toBeLessThan(256);
   });
 
-  it("★ an oversized payload on a ctrl leaf is refused — the field is not a smuggling channel", () => {
+  it("★★ THE BYTES MUST BE A SEAL PAYLOAD FOR THIS SESSION — not merely small and on a ctrl leaf", () => {
     /**
-     * A SEAL payload is four small fields; its CBOR is well under 128 bytes. Without a ceiling the
-     * field is an arbitrary-length write into the relay's session state that costs a client nothing,
-     * and the ctrl-only rule above stops being much of a limit — one ctrl leaf per close is still one
-     * unbounded blob per close.
+     * ⚠️ REVIEW H1, AND IT IS THE DIFFERENCE BETWEEN THE SAFETY PROPERTY BEING TRUE AND BEING CLAIMED.
      *
-     * The bound is deliberately generous relative to the real payload and tiny relative to a message.
+     * The guard was: ctrl leaf, non-empty, ≤512 bytes. Nothing required the bytes to be a seal
+     * payload — so a client could put 512 bytes of the operator's message into a ctrl leaf and this
+     * relay would take them. The type doc said "the relay already knows all four fields, nothing is
+     * disclosed"; the code enforced "at most 512 arbitrary bytes per close". Those are not the same
+     * property, and the first one is the one anybody would quote.
      */
     expect(
-      decodeInboundFrame(submit(CTRL, new Uint8Array(4096).fill(0x41))),
-      "the payload has a known small shape; anything far beyond it is not a seal payload",
+      decodeInboundFrame(submit(CTRL, new Uint8Array(64).fill(0x41))),
+      "arbitrary bytes on a ctrl leaf are still the operator's content — being small does not make them a seal payload",
+    ).toBeNull();
+
+    /**
+     * And it must be a payload for THIS session. Binding at the wire also stops a valid payload from
+     * another conversation being replayed here, three hops before the directory would notice.
+     */
+    const otherSession = encodeSealPayload({
+      session_id: new Uint8Array(16).fill(0x99),
+      final_root: new Uint8Array(32).fill(0x33),
+      close_timestamp: 1_700_000_000_000,
+      attestation: "PENDING",
+    });
+    expect(
+      decodeInboundFrame(submit(CTRL, otherSession)),
+      "a well-formed payload naming a DIFFERENT session is a replay, not a seal for this one",
     ).toBeNull();
   });
+
+  it("★ oversized bytes are refused — and this CANNOT distinguish the ceiling from the payload check", () => {
+    /**
+     * ⚠️ MEASURED, AND THE HONEST ANSWER IS THAT THIS TEST DOES NOT PIN THE CEILING.
+     *
+     * A mutant raising `MAX_CTRL_PAYLOAD_BYTES` from 512 to 4096 SURVIVES this file. Once the bytes
+     * must decode as a seal payload (H1), anything oversized is refused on content grounds anyway,
+     * so no input separates "the ceiling caught it" from "the decode caught it" — and a real payload
+     * is 69 bytes, so the boundary is unreachable from the legitimate side too.
+     *
+     * The ceiling is kept for the one job the decode cannot do: it bounds the work done BEFORE
+     * `decodeSealPayload` runs, so a client cannot make the relay CBOR-parse a multi-megabyte buffer
+     * per submit. That is an ordering property of the two checks, not a behaviour any input reveals.
+     *
+     * Recorded as a surviving mutant rather than dressed up as coverage — the alternative is a
+     * future reader trusting this name and believing the bound is pinned when it is not.
+     */
+    expect(decodeInboundFrame(submit(CTRL, new Uint8Array(4096).fill(0x41))), "oversized is refused").toBeNull();
+    expect(decodeInboundFrame(submit(CTRL, new Uint8Array(513).fill(0x41))), "and just over the bound too").toBeNull();
+  });
+
 });
