@@ -3147,6 +3147,14 @@ portal database is running (it was 7 failures; **6 were the stopped container**)
 - **First step:** read the printed `signals` array from the next run. If Bob's row carries
   `same_operator: true`, trace the producer; if it is absent from the wallet entirely, the finding is
   a different one and this line is wrong.
+- **ONE LAYER ALREADY RULED OUT, so nobody re-checks it.** The hypothesis was that a predicate
+  returns true when its input is ABSENT rather than when it matches — the absent-collapses-into-a-
+  verdict shape this milestone keeps finding. **Not here.** `inbound-sessions.ts` sets the flag on
+  `s.sameOperator === true`, strict, and omits the key entirely when false, under a comment saying
+  the field's APPEARANCE is the signal. That is the correct shape. The flag arrives already set,
+  from `envelope.same_operator`.
+- **So the producer is upstream of the daemon** — whatever mints the envelope, or the journey's own
+  seeding. That is where to look, and it is NOT the display path.
 
 ### `DOD-M15-TOOLDESC-SCAN-1` — The claim scanner can see MCP tool descriptions
 **POST-LAUNCH** (§0z.1): the launch risk is whether the shipped descriptions are HONEST, and
