@@ -3255,10 +3255,22 @@ The five, verbatim, all about message delivery rather than sealing:
 - auto-recover — expected the recover log to match `"recovered":1`
 - *"straggler refused by the sealed-session guard"* (this one now reaches the seal first)
 
-- **⚠️ THE FLAG.** *"two agents connect and communicate"* is the launch intent in
-  `.claude/CLAUDE.md`, and three of these are delivery, dedup and acknowledgement — the mechanics of
-  that sentence. If they are genuine regressions they are not post-launch material. **They are here
-  because the gate is frozen and BLOCKS is Andre's to grant, not because I judged them harmless.**
+- **⚠️ MY FLAG WAS PROBABLY WRONG, AND THE MECHANISM SAYS SO.** I flagged these as possibly
+  breaking *"two agents connect and communicate"*. **All five failures key on a content hash the
+  journey computes ITSELF** — `contentHashHex()` from `content-seal-fixture.ts`, the pre-salt
+  `sha256(0x00 ‖ content)` — and use it both to DEPOSIT content at the relay and to WAIT for log
+  lines. The daemon now computes `hmac-sha256(salt, …)` for a salted session. **A deposit keyed on
+  the wrong hash is unrecoverable, and a wait for a log line containing the wrong hash times out** —
+  which is exactly the five symptoms: dedup timing out, the ACK ladder timing out, auto-recover
+  reporting nothing recovered.
+  **This is the SAME cause `CELLO_Coder_1` confirmed and fixed in `j-persist`**, one file over.
+- **NOT called confirmed, deliberately** — five of ten tests in this file PASS while using the same
+  fixture, so something distinguishes them (most likely whether that test's session holds a salt at
+  all). That difference is the salting lane's to name, and I have over-claimed on this exact kind of
+  "consistent with" evidence twice tonight. **Handed to the salting bullet, same as `j-persist`.**
+- **What survives regardless:** the event names are NOT stale — I checked, both are still emitted —
+  so if the salted-hash reading is wrong, the timeouts mean the daemon genuinely did not emit, and
+  that would be the delivery finding after all.
 - **Equally, do not assume they are regressions.** This lane had never been run, and the same
   file already yielded one assertion that passed VACUOUSLY (`undefined === undefined`) and two stale
   contracts. A timeout waiting for a log event is exactly the shape a renamed event produces.
