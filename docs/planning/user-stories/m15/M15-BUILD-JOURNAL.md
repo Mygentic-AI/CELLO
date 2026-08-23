@@ -38,8 +38,9 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 ## RESUME STATE — CELLO_Coder_1 (overwrite in place; CELLO_Support must not edit)
 
 > ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 4330 client tests.
-> **PART A CLOSED** (→ Entries 41, 42; two-pass cap spent). **PART B1 IS BUILT AND UNREVIEWED** —
-> commit `20cd495`, reviewer dispatched. Under the WIP limit the only permitted work is closing it.
+> **PART A AND PART B1 BOTH CLOSED** (→ Entries 41–44; each spent its two-pass cap). Eight blocking
+> findings across four passes, all fixed; twenty-two mutants caught. Gate: 4385 client tests.
+> **WIP is free: start part B2.**
 
 - **TIER 4 IS IN PROGRESS. `SEALWIRE-1` bullets 1 + 2 are BUILT, REVIEWED, and their blocking
   findings fixed** — the directory certifies the content-hash root, and the client verifies it
@@ -75,8 +76,17 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
   no algorithm name and resolves to `sha256` — provably right today because nothing salts, and a
   tamper report the moment something does, for a message that merely took the park route instead of
   the direct one. `park-envelope.ts` needs the field; that is a wire change on the envelope.
-- **NEXT after B1's review — PART B2.** `wireContentHash` → `saltedContentHash` on the send paths,
-  and holding the first send until the salt is agreed. **Its ACs are already written on the `SEALWIRE-1` line —
+- **NEXT — PART B2.** `wireContentHash` → `saltedContentHash` on the send paths, the sender-side
+  fallback announcement, and holding the first send until the salt is agreed. **Its ACs are written
+  on the `SEALWIRE-1` line — read them, do not re-derive them.** Five of them, inherited from B1's
+  two passes; the park envelope one is the trap.
+- **🚨 THE FAILURE MODE OF MY LAST THREE UNITS IS THE SAME, and it is not a coding pattern.** Part A:
+  a false sentence in a header that I then implemented faithfully. B1 pass 1: the second-order
+  security consequence of a new refusal path. B1 pass 2: a fix applied to ONE of a gate's TWO
+  consumers. Each time the code was right where I was looking and wrong one step to the side, and
+  each time my own test asserted the thing I had already thought of. **Before believing a fix is
+  complete, grep for every CONSUMER of what you changed** — and never write a conditional assertion,
+  which is how B1's decisive test ran zero times. **Its ACs are already written on the `SEALWIRE-1` line —
   read them, do not re-derive them**: the park-only session that never agrees a salt, the divergent
   state that leaves the far operator with silence, and salted-vs-unsalted being a fact about the
   PEER rather than about our own row. Then `SEALWIRE-1` bullets 3–8, which are now one unit with
