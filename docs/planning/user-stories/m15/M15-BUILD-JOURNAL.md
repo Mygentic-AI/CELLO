@@ -37,10 +37,10 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Coder_1 (overwrite in place; CELLO_Support must not edit)
 
-> ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 4330 client tests.
-> **PART A AND PART B1 BOTH CLOSED** (→ Entries 41–44; each spent its two-pass cap). Eight blocking
-> findings across four passes, all fixed; twenty-two mutants caught. Gate: 4385 client tests.
-> **WIP is free: start part B2.**
+> ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 4403 client tests.
+> **PARTS A, B1 CLOSED** (→ Entries 41–44, two-pass cap each). **PART B2a: pass-1 findings fixed,
+> PASS 2 IN FLIGHT** (→ Entry 45). Eleven blocking findings across five passes so far, all fixed.
+> Under the WIP limit the only permitted work is closing B2a.
 
 - **TIER 4 IS IN PROGRESS. `SEALWIRE-1` bullets 1 + 2 are BUILT, REVIEWED, and their blocking
   findings fixed** — the directory certifies the content-hash root, and the client verifies it
@@ -68,19 +68,31 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
   who did nothing. Each freezing site supplies its own reason code and guidance. **Spell the revive
   reason out — do not derive it from the freeze reason**: doing that silently turned the stable
   `session_frozen_identity_failure` into a family of varying strings.
-- **PART B SPLIT IN TWO, RECEIVER FIRST — the only safe order for a wire change.** B1 (built) teaches
-  the RECEIVER to read `content_hash_alg` off the frame and verify under it; **no sender salts.** B2
-  turns salting on. Reversed, the first upgraded sender breaks every conversation it has with a peer
-  that has not upgraded.
-- **🚨 B2 MUST FIX THE PARK ENVELOPE BEFORE IT SALTS ANYTHING.** Recovered-from-park content carries
-  no algorithm name and resolves to `sha256` — provably right today because nothing salts, and a
-  tamper report the moment something does, for a message that merely took the park route instead of
-  the direct one. `park-envelope.ts` needs the field; that is a wire change on the envelope.
+- **PART B IS THREE UNITS, RECEIVER FIRST THROUGHOUT — the only safe order for a wire change.**
+  **B1** (closed): the receiver reads `content_hash_alg` off the direct frame and verifies under it.
+  **B2a** (in review): the park envelope carries it too, at BOTH verifier sites — the second one is
+  in `content-park.ts`, not `session-node-manager.ts`, and missing it means refuse → keep the relay
+  copy → re-pull → refuse, forever. **B2b** (next): turn salting ON at the send paths.
+- **🚨 B2b'S OWN TRAPS, all found by B1/B2a reviews — read before starting:**
+  - **The two park PRODUCERS are marked in `daemon.ts`** and must pass `contentHashAlg`. The value is
+    the one the direct-path frame carried for THAT message, never re-derived from the session row.
+    The crash-backstop producer cannot follow that instruction as written — `retry_queue` has no
+    column for it, so B2b needs one (idempotent `ALTER TABLE`, and remember the agent-id rebuild).
+  - **Do NOT infer peer capability from "they completed the salt agreement."** The agreement landed
+    several commits before the v3 park decoder, so an interval build has one without the other, and a
+    v3 envelope there is refused as `unsigned_envelope` — the ATTACKER shape — and re-pulls forever.
+    Safe today only because nothing in that interval is published. Gate on a real signal.
+  - **`encodeParkEnvelope` now THROWS** on an algorithm this build cannot read. Traced: `#parkContent`
+    catches it and returns `{outcome:"refused"}`, so no message is lost — but B2b should validate
+    before calling rather than lean on that catch.
 - **NEXT — PART B2.** `wireContentHash` → `saltedContentHash` on the send paths, the sender-side
   fallback announcement, and holding the first send until the salt is agreed. **Its ACs are written
   on the `SEALWIRE-1` line — read them, do not re-derive them.** Five of them, inherited from B1's
   two passes; the park envelope one is the trap.
-- **🚨 THE FAILURE MODE OF MY LAST THREE UNITS IS THE SAME, and it is not a coding pattern.** Part A:
+- **🚨 MY MUTATION LOOP PRODUCED A FALSE NEGATIVE** (Entry 45): it printed `✅ caught` for a mutant
+  that survives, found only by re-running it alone. **Re-run every mutant individually before
+  believing it** — and a mutant caught by lint/typecheck rather than an assertion is NOT caught.
+- **🚨 THE FAILURE MODE OF MY LAST FOUR UNITS IS THE SAME, and it is not a coding pattern.** Part A:
   a false sentence in a header that I then implemented faithfully. B1 pass 1: the second-order
   security consequence of a new refusal path. B1 pass 2: a fix applied to ONE of a gate's TWO
   consumers. Each time the code was right where I was looking and wrong one step to the side, and
