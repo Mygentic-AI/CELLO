@@ -4078,3 +4078,88 @@ Gate: 4285 client tests, lint, typecheck — by exit code.
 - **A version discriminator is required.** Salted and unsalted hashes are both 32 bytes in the same
   field with nothing telling them apart; a salted sender against an older peer fails EVERY frame, and
   the fingerprint check cannot catch it because an old client sends no fingerprint.
+
+---
+
+## Entry S3 (CELLO_Support) — `IDLE-CONNS-1` opened: the line's stated threat is already closed
+
+Clause checklist per §2 step 2, written **before** implementing. Falsification (§2 step 3) moved the
+unit, so the re-scope is here rather than discovered mid-diff.
+
+### The target, in one sentence
+
+An inbound connection that never speaks the protocol is closed on a deadline this project chose,
+and the number of live connections is a thing an operator can actually look at.
+
+### FALSIFICATION FIRST — two of the line's three premises do not hold
+
+The DoD line says the remaining exposure is *"a peer that connects and stays completely silent… the
+count is attacker-controlled **on a node that accepts everyone**."*
+
+**1. The standing receiver does not accept everyone. `DOD-M15-ASSIGN-1` closed that and is ✅.**
+`session-connection-gater.ts` `#denyIfNotAllowed` states it outright: *"`null` ADMITS NOBODY
+INBOUND. It used to admit everyone, both ways."* An unclaimed receiver refuses every inbound dial;
+`admitInboundPeer` narrows to the ONE peer a `session_offer` names, before this side advertises its
+address. So a stranger cannot hold a connection at all — they are denied at
+`denyInboundEncryptedConnection`. **The DoD text describes the pre-ASSIGN-1 tree.**
+
+**2. Inbound flooding is already bounded — by inherited defaults, which is the actual defect.**
+Measured in `libp2p@3.3.2/dist/src/connection-manager/constants*.js` rather than assumed:
+
+| Knob | Inherited default |
+|---|---|
+| `maxConnections` | **300** |
+| `inboundConnectionThreshold` | **5** per host |
+| `maxIncomingPendingConnections` | **10** |
+| `inboundUpgradeTimeout` | **10_000 ms** |
+
+`transport/src/node.ts:702` passes **no `connectionManager` block at all.** So the protection is
+real and nobody chose it. A libp2p minor bump silently re-prices every one of those numbers, and
+nothing in this repo would go red.
+
+**3. What genuinely remains**, and it is narrower and more specific than the line as written:
+
+- **An ADMITTED peer that never speaks.** After an offer names them, that peer may connect and open
+  no stream, indefinitely. Nothing reaps it. This is the only true "authenticates to nothing" case
+  left, and note it is an *invited* peer — which is why it survived `ASSIGN-1` and `FRAME-1`.
+- **The posture is inherited rather than declared** (point 2).
+- **The count is unobservable.** The DoD instructs *"Measure a healthy daemon's connection count
+  first"* — and **there is no surface that reports it.** `cello_status` carries no connection state
+  and the daemon log has no per-connection event. The measurement the line requires as an input
+  does not exist until the line builds it.
+
+### Clause checklist — what the reviewer receives
+
+- **C1** — an inbound connection that has opened **no stream** is closed after a deadline, and the
+  deadline is a constant this repo names, not one libp2p happens to ship.
+- **C2** — the connection-manager policy is **declared explicitly** in `node.ts`, so an upgrade that
+  changes a default breaks a test rather than changing our posture in silence.
+- **C3** — a reaped connection is **loud in the log AND reaches the agent** where an agent is
+  waiting on that session (Invariant 2: the log is the forensic record, the response is the
+  control). Reaping an idle stranger is not a security event, so this fails loud and CONTINUES —
+  it does not block.
+- **C4** — the live connection count is **observable**, so the cap can be tuned against a real
+  number and an operator can see a flood instead of inferring one.
+- **C5** — the reaper **must not touch** a relay reservation connection or a directory connection.
+  Killing either costs the agent its inbound reachability, which is the property this milestone is
+  forbidden to trade away. This is the clause most likely to be got wrong and it is where the
+  fixture must bite.
+
+### The counterbalance (§2b Invariant 1), before the code
+
+**There is none, and that is the correct answer here — stated rather than dressed up.** This is
+resource bounding on the operator's OWN daemon, protecting that operator. There is no adversary to
+commit: a peer who declines to be reaped simply loses a connection they were not using. Invariant 1
+asks the question so that a *security* claim is not left resting on the constrained party's own
+code — and the claim this unit will support is deliberately narrow: **"your daemon does not
+accumulate connections that never speak."** It is not "strangers cannot exhaust you", which is
+`RELAYABUSE-1` and `DDOS-1`, and which the audit's Part 12 says is only defensible in front of the
+relay.
+
+### Hollow-test risk, named before writing (§🕳️ question 2)
+
+The fixture that will pass over the defect is **a connection that is idle but not admitted** — the
+shape `ASSIGN-1` already refuses, so it proves nothing. The breaking shape is **an ADMITTED peer
+that opens zero streams**, plus **a reservation relay connection that is also idle by nature and
+must SURVIVE**. If the test only asserts "idle connection closed" it will pass with a reaper that
+kills the relay too, and the agent silently loses inbound reachability.
