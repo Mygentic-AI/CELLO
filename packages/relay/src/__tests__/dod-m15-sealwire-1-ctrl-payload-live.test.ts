@@ -153,6 +153,89 @@ describe("DOD-M15-SEALWIRE-1 relay leg (live): a refused submit is answered, not
     ).toBe(0);
   }, 60_000);
 
+  it("★★ THE REASON NAMES WHAT WENT WRONG — nine conditions must not share one label", async () => {
+    /**
+     * ⚠️ REVIEW PASS 2, BLOCKING 2. `!parsed` catches every decode failure of a submit, and I replied
+     * `content_not_permitted` to all of them — including two where the message contradicted itself:
+     *
+     *   - a ctrl leaf whose payload named a DIFFERENT session (the case the previous pass's own fix
+     *     was added to catch) was told *"content_bytes is admissible on ctrl leaves only (0x02); this
+     *     frame declared leaf_kind 2"*. Leaf kind 2 IS ctrl. It named the one rule the author had
+     *     obeyed and said nothing about the mismatch found;
+     *   - a submit with a short signature and no content at all was reported as a content-policy
+     *     violation, on a frame with no content in it.
+     *
+     * Both cases are driven here, because "the reason is right for the case I thought about" is what
+     * the previous version already satisfied.
+     */
+    const events: Captured[] = [];
+    const dirKp = generateKeypair();
+    const { node: relayNode, stop } = await createRelayNode({
+      directoryPubkey: await dirKp.getPublicKey(),
+      logger: capturingLogger(events),
+    });
+    cleanups.push(async () => { await stop(); });
+
+    const clientKp = generateKeypair();
+    const clientNode = await createNode({ keyProvider: clientKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await clientNode.start();
+    cleanups.push(async () => { await clientNode.stop(); });
+    await clientNode.dial(relayNode.listenAddresses()[0]!);
+
+    const stream = await clientNode.newStream(relayNode.getPeerId(), RELAY_PROTOCOL_ID);
+    const reader = new Reader(stream);
+    const challenge = await reader.next();
+    const nonce = challenge["nonce"] as Uint8Array;
+    const pubkey = await clientKp.getPublicKey();
+    const authMsg = new Uint8Array(Buffer.concat([Buffer.from("CELLO-RELAY-AUTH-v1", "utf8"), nonce, pubkey]));
+    const signature = await clientKp.sign(new Uint8Array(createHash("sha256").update(authMsg).digest()));
+    send(stream, CBOR.encode({ type: "relay_auth_response", pubkey, signature }));
+    expect((await reader.next())["type"]).toBe("relay_auth_ok");
+
+    // ── (a) A ctrl leaf whose payload names ANOTHER session. Content IS present. ──
+    send(stream, CBOR.encode({
+      type: "hash_submit",
+      session_id: SESSION_ID,
+      leaf_kind: 0x02,
+      structure1_cbor: new Uint8Array([1, 2, 3]),
+      sender_signature: new Uint8Array(64).fill(0x22),
+      content_bytes: encodeSealPayload({
+        session_id: new Uint8Array(16).fill(0x99),   // a different conversation
+        final_root: new Uint8Array(32).fill(0x33),
+        close_timestamp: 1_700_000_000_000,
+        attestation: "PENDING",
+      }),
+    }));
+    const replayReply = await reader.next();
+    expect(replayReply["reason"], "content IS present, so this is a content refusal").toBe("content_not_permitted");
+    expect(
+      String(replayReply["detail"] ?? ""),
+      "but the detail must NOT claim the leaf kind is wrong — it was ctrl, which is the one thing that was right",
+    ).not.toMatch(/leaf_kind 2/);
+    expect(
+      String(replayReply["detail"] ?? ""),
+      "it must name what was actually detected: the payload is not a seal payload for THIS session",
+    ).toMatch(/THIS session|SEAL payload/i);
+
+    // ── (b) A malformed submit carrying NO content at all. ──
+    send(stream, CBOR.encode({
+      type: "hash_submit",
+      session_id: SESSION_ID,
+      leaf_kind: 0x00,
+      structure1_cbor: new Uint8Array([1, 2, 3]),
+      sender_signature: new Uint8Array(8).fill(0x22),   // not 64 bytes
+    }));
+    const malformedReply = await reader.next();
+    expect(
+      malformedReply["reason"],
+      "a frame with no content in it must never be told it violated a content policy",
+    ).toBe("submit_malformed");
+    expect(
+      String(malformedReply["detail"] ?? ""),
+      "and the detail must point at the fields that are actually checked",
+    ).toMatch(/sender_signature|structure1_cbor/);
+  }, 60_000);
+
   it("★ an ordinary submit is untouched — the guard must not have become a wall", async () => {
     /**
      * The anchor, and the receiver-first property in one. A client that has not deployed this change
