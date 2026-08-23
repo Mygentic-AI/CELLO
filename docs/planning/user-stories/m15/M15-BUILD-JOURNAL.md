@@ -43,6 +43,26 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 > **Bullet 7 (delete the dead `seal_attempt` path) is DONE, pass 1 findings fixed** (→ Entry 53);
 > **pass 2 is OUT on the fix diff.** Gate: client 2837, directory 1133, relay 235, interfaces 63.
 
+- **🟡 BULLETS 3+4 — THREE OF FOUR LEGS DONE. What remains is WIRING THE CALL.**
+  1. **Verifier** (`packages/directory/src/seal-final-root.ts`) — built, two review passes, mutants caught.
+  2. **Relay wire acceptance** — `content_bytes` admitted on ctrl leaves only, refused on any other
+     kind at the wire, payload decoded and session-bound. Two passes.
+  3. **Relay store + forward** — stored on the leaf and carried into `SealData`. Two passes.
+  4. **⬅️ NEXT: invoke `verifySealFinalRoots` from the directory's seal path**, and delete the
+     deferral block in the same diff — bullet 3 names that explicitly.
+- **🚨 THE PRECONDITION FOR STEP 4, and it is the thing to get wrong.** The verifier proves the
+  payload matches what `structure1_cbor` says. It does **NOT** prove `structure1_cbor` was signed by a
+  participant — that is `verify(s2.sender_pubkey, structure1_cbor, s2.sender_signature)` plus a
+  participant check, both of which live in the caller. **Wire it only from a path that has already
+  done both**, or a relay can mint a ctrl leaf with a key it holds and every comparison becomes the
+  relay checking itself. Passing the two participant pubkeys in also turns half of that precondition
+  into an enforced check — `verifySealFinalRoots` takes an optional roster.
+- **🟡 BULLET 8 — `j-upgrade` green; the other two are BLOCKED, not unrun.** `j-unilateral` and
+  `j-upgrade-bilateral` are converted and pushed but cannot pass until
+  `DOD-M15-UNILATERAL-NOTARIZE-1` is fixed: the attestation fires, the notarization never does. Do
+  not spend 13 minutes each re-confirming it — that has been done twice.
+- **🟡 BULLET 5 and the rest of BULLET 8 are CELLO_Support's**, agreed 2026-08-23.
+- **THE OLD ENTRY, kept because its precondition is the one above:**
 - **🟡 BULLETS 3+4: THE VERIFIER IS BUILT, TESTED AND FALSIFIED — AND NOT INVOKED.** `seal-final-root.ts`
   takes the SEAL payload bytes, binds them to the hash the client SIGNED (decoded from
   `structure1_cbor`, **not** `s2.content_hash` — that was pass 1's HIGH), and compares the client's
