@@ -1240,6 +1240,17 @@ from the receiving operator's chair, a refused message simply never arrives.
   the signal, the ninetieth is noise.
 - **Do NOT show the content.** It failed verification; surfacing it is the injection path the cross-
   check exists to close. The operator is told a message was refused and why, never what it said.
+- **A DECLINED PROTECTION belongs here too** (found invariant-checking `SEALWIRE-1` B2b-2's adoption
+  rule, 2026-08-23). When a salt is refused because the session already has leaves, the session stays
+  healthy and every message keeps working — so there is nothing to interrupt the agent WITH, and the
+  refusal is correctly log-only today. What is missing is *state*, not an alert: nothing lets an
+  operator tell **"unsalted because this build predates the feature"** from **"unsalted because
+  adoption was refused"**, and only the second says something about their setup.
+  - **The bar is a field, not an event:** the session's own status (`cello_sessions` / the session
+    record surface) says whether its content hashes are salted. That is checkable, costs nothing per
+    message, and cannot become a flood.
+  - **Deliberately NOT urgent.** An unsalted session is exactly as verifiable as every session
+    shipped before the feature existed. This is the difference between *knowing* and *working*.
 - **Enforcer:** receipt.
 
 ### `DOD-M15-TRANSPORT-TERMINAL-1` — ✅ A transport blip stops killing a healthy conversation
