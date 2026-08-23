@@ -4408,3 +4408,87 @@ statement I mistyped: the header claiming the halves are unrecoverable, the docb
 mutant could survive the storage test, and the commit message claiming an invariant the code did not
 implement. Each one made the wrong code look correct to me on re-reading, which is precisely why the
 reviewer runs mutants instead of reading prose.
+
+---
+
+## Entry S4 (CELLO_Support) — `IDLE-CONNS-1` closes ✅, and I corrected the review that found it
+
+Nine findings, five blocking, all fixed. Completes Entry S3.
+
+### The verdict, quoted
+
+> **Your re-scope is correct on both premises — and the reaper it justified reaps the wrong peer.**
+> …
+> **SPEC: DEVIATIONS FOUND** — C1, C3, C4 [blocking]; none journaled as a decision.
+> **SILENT FALLBACKS FOUND** — F3 (a hang-up that tells nobody), F5 (a sweep failure with no
+> handler) [blocking].
+> **ERROR SUBSTITUTION FOUND** — [blocking]. The reaper's own action surfaces as `no_connection` /
+> `session.transport.redial.unavailable`; the operator is sent to the network for a local timer.
+> **HOLLOW TESTS FOUND** — T1 and T2 [blocking].
+>
+> *"I am not rubber-stamping this one… the failure it introduces is invisible to the suite because
+> the grace is 90 seconds and no test runs that long."*
+
+### F2 was the real one, and it is a lesson about reading the callers
+
+**`acceptSession` does not build a new node.** It moves the same `CelloNode` from
+`#standingReceivers` into `#activeNodes`. So the sweep I armed "on the standing receiver only" kept
+running after promotion, against the session's own counterparty — and my daemon comment asserted the
+opposite in the same file. I had checked what the factory does and never checked what happens to the
+node afterwards.
+
+Fixed by sparing `getAllowedPeerId()` as well as the relay allowlist, which covers the admitted
+dialer before promotion and the counterparty after it. **That leaves a real and narrow population,
+stated so a guard with no targets cannot pass as one:** a peer admitted by an offer that was then
+refused or expired. `closeInbound()` nulls the gate and libp2p never re-runs a gater against a live
+connection, so that peer stays attached, named by nobody, speaking nothing.
+
+### F1: I could not reproduce it, and I had already repeated it as fact
+
+The review's headline was that the grace measures connection AGE, so a busy session — whose content
+streams are per-message and ephemeral — sits at zero streams and gets reaped. It reported running
+that: reaped at t≈1200ms, next send `No open connection to peer`.
+
+**I wrote that into a commit message and three code comments before measuring it.** Then I measured.
+
+- A stream closed by the dialer **stays** in the listener's `connection.streams`. `streamCount` was
+  still 1 after **10 seconds** (25 samples, 400ms apart).
+- Re-running the reviewer's own scenario against the old predicate — a stream every 400ms, 1000ms
+  grace — `streamCount` **climbed 1→8 across 3.2s and nothing was reaped.**
+
+So the stated mechanism does not hold on libp2p@3.3.2. **The fix stays, on a better reason:** the
+old predicate was correct only *because* libp2p happens to retain closed streams — an undocumented
+detail of a dependency, free to change in a patch release. That is the same inherited-behaviour
+problem the other half of this unit exists to remove. `hasEverCarriedStream` is right whatever
+libp2p does with closed streams.
+
+**Worth keeping as a rule:** a finding delivered with a measurement attached is still a finding to
+verify, not a fact to repeat. I escalated it twice before checking it, on a milestone whose own hard
+rules say *do not escalate what you can verify, measure before quoting a number.*
+
+### The mutation that survived, and what it revealed
+
+Deleting the line that RECORDS stream activity left every test green. Not laziness in the tests —
+**no live test can reach the state where the bit matters**, because `streamCount` never falls back
+to zero inside any window a test can wait for. That is the same measurement above, seen from the
+other side. `recordStreamActivity` is extracted and tested directly; the mutation now dies.
+
+### And the milestone's own recurring defect, one layer down
+
+`createNode` built the reaper config from the two numbers and **silently dropped both callbacks**,
+so the daemon's logging and its connection census were declared, honoured by the node, and reachable
+by nobody. Same shape as `wait_for_seal` being declared, honoured, and never forwarded by the shim.
+Caught by the two new tests, not by review.
+
+### Carried
+
+- **`DOD-M15-RELAYABUSE-1` / `DDOS-1`** — the claim this unit supports is deliberately narrow:
+  *your daemon does not accumulate connections that never speak.* It is NOT "strangers cannot
+  exhaust you"; that is application-layer admission, and the audit's Part 12 says volumetric defence
+  is only buildable in front of the relay.
+- **The connection census is a log line, not a status field.** `transport.connections.observed`
+  gives the number the DoD demanded before any cap is tuned. If tuning ever needs it at a glance it
+  belongs on `cello_status`.
+
+Gate: 4346 client tests, lint, typecheck, build — all four by exit code. 15 mutations killed across
+both halves.
