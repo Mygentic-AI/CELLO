@@ -163,6 +163,11 @@ describe("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => 
       `\n--- daemon seal/session ---\n${daemon.output.split("\n").filter((l) => /seal|session|rekey|node\.created/i.test(l)).slice(-20).join("\n")}`;
     expect(closeA.ok, `A close failed:${diag}`).toBe(true);
     expect(closeB.ok, `B close failed:${diag}`).toBe(true);
+    // `.toMatch()` on undefined throws a TypeError BEFORE vitest attaches the custom message, so
+    // the `diag` string this test carefully assembles — the actual close results and the daemon's
+    // seal log — was discarded at the exact moment it was needed. Assert presence first: that
+    // failure carries the message. (DOD-M15-CLOSEROOT-1 was unattributable for this reason.)
+    expect(closeA.sealed_root, `A sealed_root is MISSING:${diag}`).toBeDefined();
     expect(closeA.sealed_root, `A sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
     expect(closeB.sealed_root, `both ends' sealed_root must be BYTE-IDENTICAL (one bilateral seal):${diag}`).toBe(closeA.sealed_root);
     expect(closeA.seal_type, `seal must be bilateral (not a unilateral fallback):${diag}`).not.toBe("unilateral");

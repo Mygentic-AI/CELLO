@@ -984,14 +984,53 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 - **Enforcer:** `test:spine` green, or every remaining failure carrying a written verdict of
   environment / stale-expectation / real-defect, with the real ones lined up.
 
-### `DOD-M15-CLOSEROOT-1` — ❌ Closing a conversation says "done" and hands back no receipt
-**BLOCKS LAUNCH** (§0z.1), and it is the plainest one on this list: **the receipt is the product.**
-Closing a session returns `ok: true` with `sealed_root: undefined`. The operator is told the
-conversation closed successfully and gets nothing to show for it — and "success with nothing" is
-worse than a failure, because a failure would send them to look.
+### `DOD-M15-CLOSEROOT-1` — ❌ Five seal journeys still expect a receipt that close no longer returns
+**BLOCKS LAUNCH** (§0z.1) — but as **TEST DEBT, not a product defect.** The product is correct and
+the tests are stale. **This line previously said the opposite in the strongest possible terms, and
+that was WRONG. See the retraction below; it is the more useful half of this entry.**
 
-- **Reproduced twice, independently, at HEAD** — `CELLO_Coder_1` and then `CELLO_Support`.
-  `j-loopback`, ~4.5s, `closeA.ok === true`, `closeA.sealed_root === undefined`.
+> ### 🚨 RETRACTED — I opened this as a blocking PRODUCT defect and told Andre it was the most
+> ### valuable fix available. It is neither. Close works exactly as designed.
+>
+> **What close actually returns** (printed at last, by fixing the assertion — see below):
+> `{"ok":true, "seal_status":"committed", "guidance":"Your SEAL commitment … is recorded and the
+> notarization is now running in the background. The receipt is NOT YET available: the seal completes
+> as soon as the counterparty also closes… Fetch it with cello_sealed_receipt … an empty answer
+> before then means 'still running', not 'failed'. Do NOT re-close with force:true to hurry it:
+> forcing ABANDONS the session and forfeits the receipt this is earning, **which is exactly how
+> seventeen sessions were lost when this call used to block**."}`
+>
+> Close was deliberately made **non-blocking** because the blocking version lost seventeen sessions.
+> It returns a commitment, explains that the receipt is coming, names the tool to fetch it, and warns
+> against the one action that would destroy it. **That is the system doing the right thing and
+> saying so.** The five failing journeys assert a synchronous `sealed_root` — the OLD contract — and
+> nobody noticed because the lane has never been run since the change.
+>
+> **This is precisely what this milestone's own triage predicted** — *"the lane has been unrun for
+> long enough that some failures will be stale expectations rather than regressions"* — written by
+> me, four hours ago, and then not applied to the first candidate that fit it.
+>
+> **Why I got it wrong is the transferable part: I could not see the response, and I treated
+> "undefined" as the finding instead of as a missing observation.** `.toMatch()` on `undefined`
+> throws a `TypeError` **before** vitest attaches the custom message — so the `diag` string the test
+> carefully assembles, containing the whole close response and the daemon's seal log, was discarded
+> at the exact moment it was needed. Asserting `.toBeDefined()` first prints it. **The answer had
+> been in the test the whole time and the assertion form threw it away.**
+
+- **The work:** five journeys — loopback, bilateral seal, unilateral seal, the ABSENT gate,
+  auto-acknowledge close — move from *"close returns the root"* to *"close returns a commitment, then
+  poll `cello_sealed_receipt` until the root arrives"*. That is the contract the daemon documents in
+  its own guidance string.
+- **Blocks only because the close gate needs the lane green.** A customer is unaffected — this is
+  our evidence, not their experience. Nothing here is urgent in the way the retracted version was.
+- **Do the assertion fix everywhere in the same pass.** `expect(x, msg).toMatch(...)` silently
+  discards `msg` whenever `x` is undefined, which is the single most likely thing to be wrong. Any
+  spine assertion matching on a possibly-absent field needs a `.toBeDefined()` in front of it, or the
+  next unattributable failure costs another evening.
+
+- **Reproduced twice, independently, at HEAD** — `CELLO_Coder_1` and then `CELLO_Support`. Both
+  reproductions were correct and both conclusions drawn from them were wrong: the observation
+  `ok === true, sealed_root === undefined` is exactly what a non-blocking close looks like.
 - **PRE-EXISTING, and the other lane proved it rather than argued it.** Skew was ruled out: the
   binary carried the current build (checked by symbol, not timestamp). B2b was exonerated by two
   rebuilt probes — cutting the salt wait from 5000ms to 50ms, and bypassing the salted branch
