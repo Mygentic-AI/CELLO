@@ -15,25 +15,17 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 28 ✅, 1 🟡 (carried half only), 2 🅿️, 39 ❌. Both repos clean, pushed, on main.
-> **No unreviewed work.** `MANIFEST-EXPIRY-LIVE-1` closed in Entry 35 — eleven findings fixed,
-> verdict quoted, gate green BY EXIT CODE (4176 client, 2265 server, lint, typecheck, build).
-> `DEAD-WIRE-FIELD-1` is the remaining 🟡 and does NOT count against the WIP limit (carried wire half
-> only). **A new line may start.**
+> ### 🟡 28 ✅, 2 🟡, 2 🅿️, 38 ❌. Both repos clean, pushed, on main.
+> **`DIRAUTH-1` IS THE UNREVIEWED ONE** — built in `38aca9b` (cello-client), reviewer dispatched,
+> verdict not in. Under the WIP limit the ONLY permitted work is closing it. (`DEAD-WIRE-FIELD-1` is
+> the other 🟡 and does NOT count — carried wire half only.)
+> Gate at build time: 4189 client tests, lint, typecheck, build — by EXIT CODE.
 
-- **NEXT ACTION: pull ONE new ❌ line.** `FREEZE-STATUS-1` needs a client-side DB migration in its own
-  reviewed unit with an upgrade test against a populated pre-migration database. `UNWITNESSED-1` needs
-  a fixture that can attach a relay client. `EXPIRY-CONSUMER-POLICY-1` (new, Entry 35) is a design
-  ruling more than a build.
-- **🚨 I HAVE SHIPPED A FALSE PRODUCER/CONSUMER MAP IN THREE CONSECUTIVE UNITS.** Not carelessness
-  about detail: I state the map from the first two or three call sites I read, then write it into a
-  file header as fact, and it ends up in operator-facing prose. **The countermeasure that works is in
-  the REVIEW ASK** — list the factual claims explicitly and tell the reviewer not to take them on
-  trust. That caught it in `MANIFEST-EXPIRY-LIVE-1`. Do it every time. Better: grep for ALL callers
-  before writing any "the only caller is…" sentence.
-- **🚨 A COMMENT ASSERTING A SAFETY PROPERTY IS STILL THE #1 WAY MY OWN DEFECTS SURVIVE.** Entry 35's
-  worst finding was a fail-open sitting directly under my comment saying it could not happen, eleven
-  lines after I handled the identical case correctly for a sibling field.
+- **NEXT ACTION: close `DIRAUTH-1`**, then pull ONE new ❌ line. `CLOSEWAIT-1` is the most
+  user-visible remaining (an operator waits 11m 06s for a close) but its own line says **decide the
+  contract first** — answering early orphans the unilateral escalation that runs inline after the
+  wait, which changes what produces the receipt. `FREEZE-STATUS-1` needs a client-side DB migration
+  in its own reviewed unit. `UNWITNESSED-1` needs a relay-attaching fixture.
 - **🚨 A PIPE EATS THE EXIT CODE. `pnpm run lint 2>&1 | tail -3 && git commit` reports `tail`'s
   status, not eslint's** — a lint error shipped that way on 2026-08-23. Gate with
   `cmd > /dev/null 2>&1 && echo CLEAN || echo FAILED`, never by eyeballing piped output.

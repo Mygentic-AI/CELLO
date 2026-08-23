@@ -1654,7 +1654,24 @@ compromised and could weaponize "signature mismatch" as a false accusation.
 - One relay is one witness; this becomes a decentralized detection layer only with
   `DOD-M15-RELAYFANOUT-1`.
 
-### `DOD-M15-DIRAUTH-1` — ❌ Directory authentication cannot be silently skipped
+### `DOD-M15-DIRAUTH-1` — 🟡 Directory authentication cannot be silently skipped
+> **BUILT 2026-08-23, review in flight.** The skip is NOT removed — local dev and the e2e harness run
+> against a directory the bundled manifest cannot describe, and enforcing there would reject every
+> connection. It is made impossible to MISS and refusable.
+> **`cello_status` states the posture in BOTH directions**, which inverts this milestone's own rule
+> that a healthy path contributes nothing. The inversion is the point: elsewhere a field on the good
+> path is furniture, but here the defect IS that "enforced" looks exactly like silence, so *"I checked
+> and it is on"* has to be obtainable rather than inferred from an absence.
+> **Local vs public are separated** — a loopback directory is disabled-but-EXPECTED and says so
+> calmly; a public one with auth off is not marked expected, because that client is weaker than its
+> operator believes.
+> **`CELLO_REQUIRE_DIRECTORY_AUTH=1` refuses to START**, not to connect: a daemon that comes up and
+> then silently declines every session looks like a broken protocol, one that does not come up names
+> its own cause. The flag parses lopsided on purpose — anything not an explicit negative is ON,
+> because a security opt-in that silently fails to apply is worse than not offering one.
+> **Found while grepping the map rather than assuming it:** `signaling-manager.ts`'s
+> `processStep5Frame` carries a comment saying it is called from production `connect()`, and has no
+> production caller. Taking that at face value would have put the whole unit in the wrong file.
 **Scoped by `DOD-M15-SPIKE-1(a)` → Entry 1: the challenge IS running in production** —
 `daemon.manifest.bundled` 115 times, `.skipped` zero. This stays hardening and does not escalate.
 The byte-match workaround is holding; the fail-open underneath it is not fixed.
