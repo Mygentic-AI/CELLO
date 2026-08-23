@@ -49,7 +49,7 @@ description: >
     SEAL ctrl leaf as `final_root` — which is bullet 3's input on the directory side.
 
 - **⚠️ DECISIONS CARRIED #5 IS NEW AND FLAGGED FOR ANDRE:** session ephemerals are NOT persisted; a
-  revived session re-handshakes. Persisting would void forward secrecy and put key material in every
+  revived session RE-KEYS. Persisting would void forward secrecy and put key material in every
   backup — irreversible once written. Do not let SEALWIRE quietly persist an ephemeral to make
   revival work.
 - **🔴 TIER 4 IS UNDERWAY — ANDRE'S DIRECTION (2026-08-23, while briefly awake).**
@@ -3747,7 +3747,7 @@ in every backup for the life of the session, moving the harvest-now threat from 
 or it is not (a restart makes an active session permanently undecryptable).
 
 **Ruled, least-likely-to-reverse: DO NOT PERSIST. Re-handshake on revival.** Persisting key material
-is the irreversible harm — once it is in backups it is in backups — while re-handshaking is additive
+is the irreversible harm — once it is in backups it is in backups — while re-keying is additive
 and can be built when revival needs it. Recorded in Decisions Carried; flagged for Andre because it
 is a behaviour change to session revival, not just a crypto choice.
 

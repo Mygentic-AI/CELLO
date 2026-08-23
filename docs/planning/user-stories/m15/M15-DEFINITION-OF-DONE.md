@@ -1559,11 +1559,13 @@ harvest-now threat the line names — and NOT an active on-path relay.
   signature catches the flip instead.
 - The module docstring states the limit in the meantime, so a reader cannot conclude MITM is covered.
 
-### `DOD-M15-EPHEMERAL-REVIVAL-1` — ❌ A revived session re-handshakes
+### `DOD-M15-EPHEMERAL-REVIVAL-1` — ❌ A revived session RE-KEYS
 Split from `DOD-M15-KEYAGREE-1` (review F5, ruled in Decisions Carried #5).
 - CELLO sessions survive daemon restarts; the ephemeral secret is deliberately NOT persisted, so a
-  revived session has no key material and its content is unreadable until it re-handshakes.
+  revived session has no key material and its content is unreadable until it RE-KEYS.
 - Needs a fresh ephemeral exchange on revival, on the same path that rebuilds the session node.
+- **Terminology (Andre, 2026-08-23): say "re-key the session", never "re-handshake".** The latter
+  reads as reconnecting to the directory or revalidating a session, and it is neither.
 - **Do not "fix" this by persisting the ephemeral.** That is the option Decisions Carried #5 rules
   out, and the reason is that key material in a backup is unrecoverable once written.
 
@@ -1872,7 +1874,50 @@ Rulings that bind every line above. **Re-asking one is decision theatre** (M15-P
    agreement produces and the seal items cannot be split.
 3. **The unpublished investor and GTM material is not in M15.** Never made public, never sent;
    corrected after the milestone against what actually shipped.
-5. **Session ephemerals are NOT persisted; a revived session re-handshakes** (mine, 2026-08-23, §3a
+6. **THE TWO KEY-AGREEMENT OUTPUTS HAVE DIFFERENT LIFETIMES** (Andre, 2026-08-23 — stated before
+   `SEALWIRE-1` encodes anything, because after that it is a wire change).
+
+   **Intent, restated so it cannot drift again: this layer is WIRE ENCRYPTION ONLY.** Anything
+   travelling between two agents is unreadable to the relay or an interceptor, and CELLO can upgrade
+   that to quantum-resistant on its own timeline rather than libp2p's. That is the entire goal.
+   Once a message lands on the device it is decrypted for the model to read, and from then on it is
+   **SQLCipher's** job.
+
+   - **The message key NEVER touches disk**, and is destroyed at session close. That is the forward
+     secrecy.
+   - **The content salt IS a durable record field** — stored like any other column. It is not a key:
+     it decrypts nothing, and HKDF is one-way, so possession of it does not lead back to the shared
+     secret or to the message key. Storing it does not weaken forward secrecy.
+   - **NO CELLO-level encryption of anything at rest in the local database.** SQLCipher is the
+     at-rest layer, full stop. A second application layer buys nothing: anyone with full device
+     access has the database key too, because it must be on the device for anything to work. The
+     real answer is keys in the secure enclave, which needs a native app that does not exist yet.
+
+   **Verified against the code before recording, per Andre's instruction.** The salt is genuinely
+   needed downstream, and by MORE consumers than the two named:
+   1. **Transcript verification.** `recordTranscriptMessage` stores plaintext; the leaf stores the
+      content hash. Verifying "my transcript is what was sealed" means recomputing the hash from the
+      plaintext. Today `wireContentHash` is `SHA-256(0x00 ‖ content)` — derivable from plaintext
+      alone. Salted, it is underivable without the salt, and the transcript stops being
+      self-verifiable.
+   2. **Inclusion proofs — with a refinement.** The salt is NOT needed to build or check the proof
+      itself: the leaf hash IS the stored content hash, and the proof is hashes and indices. It is
+      needed for the proof to be *about a message* rather than about an opaque hash — binding
+      plaintext to the leaf requires recomputing the hash.
+   3. **The RECEIVE-PATH AUTHENTICITY CHECK** — the consumer nobody listed. The receiver recomputes
+      the content hash on every inbound frame and rejects a mismatch (`content_hash_mismatch`).
+      Salted, the receiver needs the salt for ordinary message delivery, not just for later
+      verification.
+
+   **⚠️ CONSEQUENCE THAT NEEDS ANDRE'S CALL, and it follows from Decision #5 rather than from this
+   one:** if a revived session RE-KEYS, the salt changes mid-session. Leaves before the re-key are
+   hashed under salt A and after under salt B, so **one salt column per session is not enough** —
+   the transcript would verify for half its length. The salt has to be stored per KEY EPOCH with each
+   leaf attributable to an epoch. Consumer 3 makes it sharper: both sides must switch salts in
+   lockstep or every message fails the authenticity check, which `wire-content-hash.ts`'s own header
+   calls "the least debuggable shape there is". **Not decided here.**
+
+5. **Session ephemerals are NOT persisted; a revived session RE-KEYS** (mine, 2026-08-23, §3a
    — surfaced by `KEYAGREE-1` review F5. **Flagged for Andre**: it changes session revival, not just a
    crypto choice.)
 
@@ -1885,7 +1930,7 @@ Rulings that bind every line above. **Re-asking one is decision theatre** (M15-P
    session. That does not remove harvest-now-decrypt-later; it moves it from the wire to the disk,
    where collecting it is easier. Once written to a backup it cannot be unwritten.
 
-   **Re-handshaking is additive** and can be built when revival needs it
+   **Re-keying is additive** and can be built when revival needs it
    (`DOD-M15-EPHEMERAL-REVIVAL-1`). REDO > BLOCK: if this ruling is wrong the cost is building the
    persistence path later; if persistence were wrong the cost is every key ever written.
 
