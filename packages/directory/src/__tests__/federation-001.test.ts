@@ -257,7 +257,6 @@ describeIntegration("FEDERATION-001 integration: AC-008-idempotency V18 migratio
 describeIntegration("FEDERATION-001 integration: AC-009-sessions-round-trip", () => {
   let servicePool: pg.Pool;
   let superPool: pg.Pool;
-  const writtenSessionIds: string[] = [];
 
   function makeLogger(): Logger {
     return { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
@@ -270,13 +269,15 @@ describeIntegration("FEDERATION-001 integration: AC-009-sessions-round-trip", ()
   });
 
   afterAll(async () => {
-    // Clean up rows written by this test to maintain isolation across test runs
-    if (writtenSessionIds.length > 0) {
-      await superPool.query(
-        `DELETE FROM sessions WHERE session_id = ANY($1::uuid[])`,
-        [writtenSessionIds],
-      );
-    }
+    /**
+     * DOD-M15-CHAINDEBT-1 — the cleanup DELETE is gone, and isolation does not depend on it.
+     *
+     * It removed the `sessions` rows this file wrote, "to maintain isolation across test runs".
+     * `sessions` is hash-chained: each row chains to the previous row's stored hash, so deleting
+     * one leaves every row after it unverifiable — for the whole database, permanently, including
+     * in suites that never touch federation. Isolation was already provided by `randomUUID()` per
+     * session, which is what makes the rows harmless to leave.
+     */
     await superPool?.end();
     await servicePool?.end();
   });
@@ -286,7 +287,6 @@ describeIntegration("FEDERATION-001 integration: AC-009-sessions-round-trip", ()
     const writeStore = new PgDirectoryStore(servicePool, logger, "node-1", "us-east-1");
 
     const sessionId = randomUUID();
-    writtenSessionIds.push(sessionId);
     const owningNodeId = "node-1";
 
     // Write via writeSession
