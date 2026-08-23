@@ -204,7 +204,22 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Support (overwrite in place; CELLO_Coder_1 must not edit)
 
-> ### `MIGRATION-GUARD-1` 🟡 — implemented in **cello-client**, REVIEW IN FLIGHT. **WIP limit met.**
+> ### `MIGRATION-GUARD-1` 🟡 — built + reviewed, FINAL (2nd of 2) PASS IN FLIGHT. **WIP limit met.**
+> **⏸️ TAG FLIP AND THE NEXT LINE BOTH WAIT ON ANDRE'S TRIAGE RULING.** Not a stall — he asked for
+> it explicitly. Do not start a new line until it lands.
+>
+> **THREE PROCEDURE CHANGES LANDED TODAY, ALL ANDRE'S, ALL IN M15-PROCEDURE:**
+> - **§0z.1** — a NEW finding is classified when written: BLOCKS LAUNCH → the tiers, POST-LAUNCH →
+>   the new backlog section, one line of reasoning, **unclear ⇒ blocks**. Every existing line is
+>   untouched. NOT permission to investigate less.
+> - **§0z.2** — spawn trip-wire: **more than TWO new items from one unit and you STOP** before
+>   starting any of them and report. A count, not a judgement call. **It fired once already today**
+>   (the tier-text thread) and Andre ruled: verify, write the items, back to the plan, no fixes.
+> - **§0z.3** — *"Make it fail on purpose, AND confirm it failed for the reason you think."*
+>   Reached independently by both lanes from different evidence. See Entry S11.
+>
+> **Two lines opened by that trip-wire thread:** `TIERTEXT-1` (BLOCKS) and `TOOLDESC-SCAN-1`
+> (POST-LAUNCH — the first entry in the backlog section).
 > `CHAINROUNDTRIP-1` ✅ merged. Then: `SPINE-LANE-1`, `FREEZE-STATUS-1`, `UNWITNESSED-1`,
 > `RELAYAUTH-1`. Two lines its predecessor's review opened: `SILENTACK-1`, `MMRCHAIN-1`.
 
