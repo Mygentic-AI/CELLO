@@ -37,183 +37,35 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Coder_1 (overwrite in place; CELLO_Support must not edit)
 
-> ### 🟢 30 ✅, 3 🟡, 2 🅿️, 38 ❌. Both repos clean, pushed, on main.
-> **No unreviewed work.** `KEYAGREE-1` reviewed and all thirteen findings fixed (Entry 39) — it
-> **stays 🟡 on purpose**: it ships a PRIMITIVE and nothing consumes either output, which is
-> `SEALWIRE-1`'s work. `DIRAUTH-1` and `DEAD-WIRE-FIELD-1` are 🟡 for carried halves too.
-> Gate: 4254 client tests, lint, typecheck, build — by EXIT CODE.
+> ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 4280 client tests.
+> **THE SALT UNIT IS UNREVIEWED** — reviewer dispatched. Under the WIP limit the only permitted work
+> is closing it.
 
-- **🔴 NEXT: `DOD-M15-SEALWIRE-1`** — the other half of Tier 4, and Andre asked for both. It is ONE
-  protocol change with eight bullets that **cannot be split** (the DoD says so outright: every one
-  changes the same wire format or depends on the domain change). It also inherits two carried lines
-  from KEYAGREE: it must SIGN the ephemeral public (`EPHEMERAL-AUTH-1`) and it consumes both
-  KEYAGREE outputs. **Both repos, version-bump ACs on both sides.**
-- **`SEALWIRE-1` IS MAPPED — do not re-derive this, it took real reading.** The two roots and why
-  they cannot be compared today:
-  - **UNILATERAL** (`directory-node.ts` ~4630) ALREADY rebuilds the **content-hash root** —
-    `leaves.map(l => ({ kind: "hash", data: l.s2.content_hash }))` — and its own comment says why:
-    *"the root the directory signs + the present party verifies is the content-hash root… the client's
-    local SessionTree hashes each leaf as its content_hash, NOT as encodeStructure2(s2)."*
-  - **BILATERAL** (`directory-node.ts` ~5106) rebuilds from `encodeStructure2(l.s2)` — the
-    relay/directory INTERNAL integrity root, which **the client cannot reproduce** because it lacks
-    the relay-assigned Structure 2 fields. That is the whole reason the client cannot check what it
-    is signing.
-  - So **bullet 1 is: make the bilateral path certify the content-hash root too**, exactly as the
-    unilateral path already does. Keep the `encodeStructure2` chain — it proves the content_hashes
-    are authentic and correctly ordered — but it stops being the CERTIFIED root.
-  - **Bullet 4 confirmed circular:** the bilateral check compares `merkleRoot(buildMerkleTree(...))`
-    built from the relay's own leaf array against `relayRoot` supplied by the same relay, with the
-    same code. It validates arithmetic, not the relay, and cannot detect a dropped or reordered leaf.
-  - **Bullet 2's comparison lives at `seal-coordinator.ts` ~104**, where `sessionNodeManager` is
-    already in scope — `getSessionTreeRootHex(agentName, sidHex)` vs the certified `sealed_root`.
-    `verifyBilateralSealCertificate` is the wrong home: it has no access to the local tree.
-  - **The client's own root** is `getSessionTreeRootHex`, and `submitSealLeaf` already puts it in the
-    SEAL ctrl leaf as `final_root` — which is bullet 3's input on the directory side.
-
-- **⚠️ DECISIONS CARRIED #5 IS NEW AND FLAGGED FOR ANDRE:** session ephemerals are NOT persisted; a
-  revived session RE-KEYS. Persisting would void forward secrecy and put key material in every
-  backup — irreversible once written. Do not let SEALWIRE quietly persist an ephemeral to make
-  revival work.
-- **🔴 TIER 4 IS UNDERWAY — ANDRE'S DIRECTION (2026-08-23, while briefly awake).**
-  *"The encryption handshake and the seal-to-transcript binding still haven't started. After these
-  open [ones] are reviewed, fixed and closed they should be started."* They are now closed, so:
-  **`DOD-M15-KEYAGREE-1` FIRST, then `DOD-M15-SEALWIRE-1`** — the DoD states KEYAGREE **must precede**
-  SEALWIRE because it produces both outputs the seal change consumes. Do NOT pull anything else in
-  between; `OFFER-EXPIRY-1` is diagnosed below and waits its turn.
-- **🚨 THE WIRING GAP HAS NOW ESCAPED IN FOUR UNITS.** Roster sweep, its probe budget, the manifest
-  validity tick, and this unit's WRITE side. Every time the module tests were green and nothing
-  proved the daemon called the thing. In this unit I wrote a docstring naming the previous three and
-  then made the same mistake one layer up — the test injected the READER's dep directly, so deleting
-  the WRITER was green. **Ask of every unit: which side of this seam has a test, and which side only
-  has a comment?**
-- **🚨 `git checkout` IN A MUTATION LOOP HAS NOW DESTROYED WORK FIVE TIMES.** Same sequence every
-  time: commit, add more work, mutate, restore, lose it. "Commit before mutating" has been written
-  into three commit messages and broken three times since, so state it as a precondition instead:
-  **a mutation loop containing `git checkout` must never run against a tree with uncommitted work.**
-  Commit, then mutate, with nothing in between.
-- **🚨 A ZSH FUNCTION WITH `$T` HOLDING MULTIPLE PATHS RUNS NOTHING.** zsh does not word-split
-  unquoted variables, so `npx vitest run $T` with three paths in `$T` passes ONE bogus argument,
-  matches no files, and the grep for `Tests` prints nothing — which reads exactly like a pass. My
-  first CLOSEWAIT revert test reported five mutations as green having executed **zero tests**.
-  **Always print a BASELINE line first**; an empty result must be visibly empty, not silently green.
-- **🚨 A PIPE EATS THE EXIT CODE. `pnpm run lint 2>&1 | tail -3 && git commit` reports `tail`'s
-  status, not eslint's** — a lint error shipped that way on 2026-08-23. Gate with
-  `cmd > /dev/null 2>&1 && echo CLEAN || echo FAILED`, never by eyeballing piped output.
-- **🚨 `git checkout` DURING MUTATION TESTING HAS NOW DESTROYED WORK THREE TIMES IN THREE UNITS.**
-  Identical sequence every time: commit, add more uncommitted work, mutate again, `git checkout` to
-  restore, and the new work goes with it. The rule is NOT "commit before mutating a unit" — it is
-  **the commit is the first thing that happens after a fix passes, before any mutation runs.** I
-  wrote the weaker version into a commit message and broke it within the hour, twice.
-- **THE WIRE-CHANGE CONVOY.** Three changes are pending and undeployed and must move together:
-  `SUBMIT-ID-1`'s 7-element Structure 1, `TERMINAL-REASON-1`'s new reasons, and
-  `DEAD-WIRE-FIELD-1`'s field removal. Loosen `directory-frames.ts:1182`'s `parseParticipant` in the
-  SAME commit as the removal (~110 test call sites).
-- **⚠️ `DOD-M15-SUBMIT-ID-1` HAS A DEPLOYMENT ORDER.** The relay half is in; the CLIENT half must not
-  ship until this relay is DEPLOYED. `decodeStructure1` required exactly 6 elements, so a client
-  emitting a submission id has every frame refused by the relay running right now. Deploying is
-  Andre's call — park the client half rather than shipping it.
-- **`DOD-M15-SELECTION-1`'s diagnosis answered the thing that looked like a contradiction.** A
-  release must stay eligible for the sole-online fallback (`RELEASE-1`) *and* a reconnect must attend
-  nothing (`SELECTION-1`). Both hold, because **resolving a subject is not attending**: the fallback
-  answers "which agent is this call about" and never registers with the notification dispatcher. So
-  clause 1 needed no code — `attended_by: 0` after release+reconnect measures it. The harm is the
-  HALF-ATTENDED state that leaves: tools resolve and work, doorbells never arrive, and an operator
-  reads that as the protocol dropping messages rather than as a selection nobody made.
-- **The sole-online fallback is DELIBERATE (CC-3, the post-/mcp-reconnect papercut).** Do not switch
-  it off for MCP. Four tests say no. The DoD wants it EXPLICIT IN THE RESPONSE, not removed.
-- **`pnpm run test` IS SERIAL under `CELLO_ENV=local`** (`vitest.config.ts`). Do not "optimise" it
-  back: parallel gave 16 failures one run and 19 the next on a fresh database.
-- **Docker is NOT a blocker** — start it (`open -a Docker`, poll `docker info`, `docker compose up
-  -d`), then `CELLO_ENV=local pnpm run test`.
-- **`AUDIT-ME.md` IS DELETED** (Andre, tonight): an inaccurate sample with no readers that kept
-  pulling agents into fake-urgent work. Do not recreate or audit it.
-- **THE REVERT TEST CAUGHT A DEFECT IN EVERY UNIT TONIGHT, INCLUDING MINE.** Delete the guard, run
-  the gate. If nothing goes red it is not a guard. Three of my own fixes were green-on-deletion.
-- **`DOD-M15-AUDITME-1` is 🅿️ parked — Andre's call, 2026-08-22.** LAST Tier 1 line, not the next
-  one, and not before Tier 4 lands. Public but unadvertised, and the tree it describes is about to
-  change — writing it now buys a second rewrite. **The claims themselves are not parked**: they stay
-  as ledger rows with disposition *pending rewrite*, so `SCANNER-1` does not go red on a file we
-  deliberately deferred.
-- **Timing correction for any rate estimate (2026-08-22):** the overnight run lost **4h 50m** to a
-  network outage — last activity 00:42:32, resumed 05:32:14, confirmed by the push reflog. The 56m
-  gap at 05:33–06:29 was a review agent, not the outage.
-- **`DOD-M15-SURFACE-1` is ✅** (→ Entries 9, 11) — merged. **SPEC: FAITHFUL, nothing blocking.**
-  The reviewer confirmed all five falsification claims plus two I had not checked, and built a
-  throwaway test proving a zero-listener node still dials out. Both real findings were prose. **New
-  follow-ons:** `DOD-M15-DEAD-WIRE-FIELD-1`, and `DOD-M15-IDLE-CONNS-1` from the split.
-- **`DOD-M15-SIGNUP-1` is ✅** (→ Entries 8, 10) — merged. **Two review passes, the hard cap.** The
-  first: my rekey removed the only cap on a requester, and my own test pinned the abuse case as
-  required. The second: un-shadowing the delivery-layer refusal surfaced it to the person as
-  *"Incorrect code"* after a silence — **reachable because of this unit**, so owned by it.
-  **Carried:** `DOD-M15-SIGNUP-DURABLE-1`, `DOD-M15-CI-SKIPS-SILENT-1`.
-- **`DOD-M15-FRAME-1` is ✅** (→ Entries 4, 6, 7) — merged. Six review findings, three blocking,
-  all fixed; verdict quoted in Entry 7. **The worst was my own fix reintroducing the milestone's
-  own pattern:** the defensive freeze wrote `interrupted`, which is the REVIVABLE status, so the
-  operator's next read silently rebuilt the session and re-admitted the same peer while the log
-  said no further content would be accepted. **Carried:** `DOD-M15-FREEZE-STATUS-1` (durable
-  status) — F1 fixed the reversibility, which could not wait.
-- **`DOD-M15-DIVERGE-1` is ✅** — cello-client `4478a03` + `9f05300`, merged. Ten review findings,
-  three blocking, all fixed; verdict quoted in Entry 5. **Two follow-on lines came out of it:**
-  `DOD-M15-UNWITNESSED-1` (the two *suspected* partings, one of which the review found and I had
-  missed) and `DOD-M15-DIVERGE-DURABLE-1` (the flag is still memory-only across a restart).
-- **`DOD-M15-LEDGER-1`: the SWEEP is complete** — all four live surfaces walked, dispositions
-  assigned (→ Entry 3 + the ledger section of the DoD). CLI help and status output came back clean.
-  **Acting on the rows is other lines' work.** The line itself is 🟡 pending one review pass.
-- **Process note worth keeping:** the review's own diagnosis of why its blocking finding shipped —
-  *every close-gate test stubs `sealReadiness` and every manager test calls it directly, so nothing
-  drove a real manager through a real teardown.* A unit whose tests all sit on one side of a seam
-  has not been tested across it.
-- **Spike answers that re-scoped lines → Entry 1:** step-6 directory auth IS active in production
-  (`DOD-M15-DIRAUTH-1` does not escalate); both relays accept all three directories (the feared
-  single-directory dependency does not exist); relay selection is effectively deterministic at 99:1
-  (`DOD-M15-MULTIRELAY-1` is availability only, linkability claim withdrawn).
-- **Live agents available for enforcer runs** (Andre, 2026-08-21): `CELLO_Coder_1` and
-  `CELLO_Support` (`f8d518ca0b5596fd0f383f17f03560975ea210a763249b342fd767bd067c2f3c`) locally;
-  `Miss_Chelly_H` on the Hermes EC2 instance for a genuinely different device. No pre-auth tokens
-  needed. **Check for open sessions before any sealing proof.**
-- **HEAD commits:** trustless-cello `main` — see `git log`; cello-client `main` — see `git log`.
-- **Published versions:** unchanged; no M15 publish has occurred.
-- **Parked:** `DOD-M15-SWEEP-1` (sequencing: after `DOD-M15-FRAME-1` and Tier 4).
-- **Claims ledger:** 13 swept rows + 8 unverified seed rows, in the DoD. Worst row: `AUDIT-ME.md`'s
-  Claim 3 says the client makes no outbound HTTP calls beyond directory and relay, and the
-  document's OWN command finds `api.telegram.org`. Sweep is partial — see the DIVERGE/LEDGER
-  bullets above for what remains.
-- **Three patterns worth carrying into every remaining unit**, each earned by a review finding:
-  1. **A fixture that has drifted from the real thing asserts a system that does not exist** — an
-     away test asserting a diverged tree seals; three fakes delivering frames from nobody; six
-     addresses on one domain pretending to be six people.
-  2. **Fixing one guard can wake a second one that has never fired.** Un-shadowing a refusal means
-     owning how it fails — "it was already there" is not a defence when your change made it
-     reachable.
-  3. **A revert test that PASSES is only evidence if the mutation landed where you think.** One
-     nearly went in the journal as a weak test when it had patched the wrong limiter.
-
----
-
-## How to write an entry (delete this block once Entry 1 exists)
-
-**Append at END OF FILE. Never prepend, never insert.** Then verify the write landed
-(`grep -c "^## Entry N"` or read the tail). The RESUME STATE block above is the only thing
-overwritten in place. Chronological order is not worth a lost entry — an out-of-order number at EOF
-is fine.
-
-An entry heading is `## Entry N — <DoD line or subject> (YYYY-MM-DD)`. What belongs inside:
-
-- **Target** — one sentence of observable behaviour, plus the DoD line expanded into a clause
-  checklist (every clause, verbatim). That checklist is what the reviewer receives.
-- **The counterbalance** — one sentence, written BEFORE the code, naming what makes the fix hold
-  when the peer has rewritten their own daemon (M15-PROCEDURE §2b, Invariant 1). A unit with no
-  answer here is not ready to build.
-- **What was found / what was built** — with file paths and measured numbers, not adjectives.
-- **Gate output** — the exit codes, run so they could have failed (§7).
-- **Reviewer verdict, QUOTED** — finding count and disposition, in the reviewer's own words. Without
-  this the unit stays 🟡 and the DoD tag does not flip.
-- **Enforcer run output** where the DoD line names one — the actual run, as separate OS processes,
-  not a claim that it passed.
-- **Claims-ledger flips** — any row that moved to made-true, withdrawn, or disclosed-as-bounded.
-- **Anything parked**, with its trigger.
-
----
+- **TIER 4 IS IN PROGRESS. `SEALWIRE-1` bullets 1 + 2 are BUILT, REVIEWED, and their blocking
+  findings fixed** — the directory certifies the content-hash root, and the client verifies it
+  against its own carry before accepting AND before co-signing. Bullets 3–8 remain.
+- **THE KEY/SALT DECOUPLING IS DONE** (Andre's correction, Decisions #8/#9/#10): the envelope key and
+  the session salt are two independent values from one exchange. `deriveSessionSecrets` returns ONE
+  output; the salt lives in `core/crypto/src/session-salt.ts`; `content_salt BLOB` is persisted.
+- **NEXT, once the review closes:** the salt CONTRIBUTION EXCHANGE at session open, the fingerprint
+  mismatch check (#10), and moving `wireContentHash` onto `saltedContentHash`. Then `SEALWIRE-1`
+  bullets 3–8.
+- **🚨 A CLIENT-SIDE COLUMN NEEDS TWO ENTRIES** — see the shared trap above the lane blocks. Caught me
+  twice.
+- **🚨 SEALWIRE DEPLOYMENT ORDERING:** every directory node must run the new directory BEFORE any
+  client carrying the certified-root check reaches `latest` — before the roll FINISHES, not before it
+  starts. A new client against an old directory refuses EVERY bilateral seal, deterministically.
+  Relay rolls are INDEPENDENT (verified: the relay never computes, sees or stores the certified root).
+- **`OFFER-EXPIRY-1` IS DIAGNOSED AND HANDED TO THE OTHER LANE** for after Tier 4. Cause is one field:
+  `SessionConnectionGater.#allowedPeerId` is a single `string | null` and `admitInboundPeer`
+  overwrites it, so two concurrent offers are mutually exclusive and nothing ever expires the
+  invitation. Do not re-derive it.
+- **`DEAD-WIRE-FIELD-1` stays this lane's** — its carried half rides the wire-change convoy with
+  `SUBMIT-ID-1` and `TERMINAL-REASON-1`.
+- **`pnpm run test | tail` HIDES FAILURES** — a pipe returns tail's exit code. Gate with
+  `cmd > /dev/null 2>&1 && echo CLEAN || echo FAILED`.
+- **`git checkout` IN A MUTATION LOOP HAS DESTROYED WORK FIVE TIMES.** Commit, then mutate, nothing in
+  between.
 
 ---
 
