@@ -984,6 +984,30 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 - **Enforcer:** `test:spine` green, or every remaining failure carrying a written verdict of
   environment / stale-expectation / real-defect, with the real ones lined up.
 
+### `DOD-M15-CLOSEROOT-1` — ❌ Closing a conversation says "done" and hands back no receipt
+**BLOCKS LAUNCH** (§0z.1), and it is the plainest one on this list: **the receipt is the product.**
+Closing a session returns `ok: true` with `sealed_root: undefined`. The operator is told the
+conversation closed successfully and gets nothing to show for it — and "success with nothing" is
+worse than a failure, because a failure would send them to look.
+
+- **Reproduced twice, independently, at HEAD** — `CELLO_Coder_1` and then `CELLO_Support`.
+  `j-loopback`, ~4.5s, `closeA.ok === true`, `closeA.sealed_root === undefined`.
+- **PRE-EXISTING, and the other lane proved it rather than argued it.** Skew was ruled out: the
+  binary carried the current build (checked by symbol, not timestamp). B2b was exonerated by two
+  rebuilt probes — cutting the salt wait from 5000ms to 50ms, and bypassing the salted branch
+  entirely so every hash is plain `sha256`. **Failed identically in both.** So it is not this
+  milestone's work, and there is no baseline saying it ever passed: the lane had never been run.
+- **NOT diagnosed, and the honest gap is recorded.** The only `ok: true` without a root in
+  `close-session-handler.ts` is the `force: true` abandon path, which the spine does not take. So
+  the branch responsible is somewhere neither lane reached. **The ~4.5s is identical across all
+  three runs, which reads like a fixed timeout being hit rather than a race** — that is a lead, and
+  the never-diagnose-a-race rule applies: find and quote the condition.
+- **Five of the lane's 49 failures share this shape** — unilateral seal, the ABSENT gate,
+  auto-acknowledge close, bilateral seal, loopback. If one cause explains them, that is a fifth of
+  the red lane and the most valuable single fix available.
+- **Enforcer:** `j-loopback` green, and a unit test at the handler that fails if any path returns
+  `ok: true` without a `sealed_root` — the shape, not the instance.
+
 ### `DOD-M15-CLIJSON-1` — ❌ A command that prints JSON prints only JSON
 **BLOCKS LAUNCH** (§0z.1): the CLI states its own contract — *"Prints JSON; use `--pretty` for
 humans"* — and `register-agent` breaks it on the SUCCESS path, so anything reading that output
