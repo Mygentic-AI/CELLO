@@ -734,13 +734,20 @@ did not earn. The suite survives its own run; this is the debt that no longer br
 - **Enforcer:** the existing guard's lists reach zero.
 
 ### `DOD-M15-CHAINROUNDTRIP-1` — 🟡 A chained row can be verified against what the database returns
-> **Implemented, review in flight (→ Entry S9).** `sessions` FIXED and verified — 10 rows green
-> after a full clean run; canonicalised at the PRODUCER because adding UUID to `serializeRecord`
-> would corrupt `connection_requests` (TEXT `request_id`, 13 live 32-hex rows). Gate 2275 tests +
-> lint + typecheck by exit code. **`seal_notarizations` is NOT closed and my bytea diagnosis for it
-> was WRONG** — retracted in the tree; both writers normalise to Buffer deliberately. It is red,
-> reproducible from `persist-018` alone, cause unidentified after three ruled-out hypotheses. Open
-> AC below.
+> **All findings from review pass 1 fixed; pass 2 in flight (→ Entries S9, S10).** All TEN chained
+> tables verify — the exclusion is deleted and the enforcer derives its list from
+> `HASH_CHAINED_TABLES`. Gate: 2277 tests + lint + typecheck by exit code (this repo has no `build`
+> script). Reviewer's pass-1 verdict was a conditional ✅ — *"Fix F1, delete the exclusion, restore
+> the tenth table, and the line earns ✅"* — but the whole-suite teardown and six production log
+> sites are new since, hence pass 2.
+> - **`sessions` FIXED**, canonicalised at the PRODUCER. Adding UUID to `serializeRecord` would
+>   corrupt `connection_requests` (TEXT `request_id`, 24 live 32-hex rows) — that reasoning is now
+>   a comment at the top of `serializeRecord`, because the asymmetry reads as an oversight.
+> - **`seal_notarizations` was NEVER an instance of this class.** See the corrected bullet below.
+> - **NEW, beyond the line:** every chain is verified in a `globalSetup`/`teardown` AFTER the whole
+>   suite, because an in-suite enforcer only sees damage from files that sorted before it.
+> - **NEW, beyond the line:** six fire-and-forget store writes in `directory-node.ts` reported
+>   nothing on failure; all six now log reason and consequence.
 Found by `DOD-M15-CHAINDEBT-1`'s review and **measured, not inferred** (→ Entry S7). Three of ten
 hash-chained tables cannot verify on a freshly reset database after a fully green suite.
 - **The class:** `insertWithChain` hashes the record the CALLER supplies; `verifyChain` hashes
@@ -750,17 +757,45 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
   it dashed. `writeSessionWithParticipants` is the ONLY production path (`writeSession` has no
   caller), so **every session row a live directory has written is a hole** — and the write is
   `void … .catch(() => {})`, so it has never reported anything.
-- **`seal_notarizations` (`bytea`).** `node-pg` returns a Buffer, which serializes as
-  `{"type":"Buffer","data":[…]}`; the insert-time `Uint8Array` does not.
+- **~~`seal_notarizations` (`bytea`)~~ — THIS BULLET WAS WRONG. Struck, not deleted, because the
+  wrong answer is the instructive part.** I wrote that `node-pg` returns a Buffer which serializes
+  as `{"type":"Buffer",…}` while the insert-time `Uint8Array` does not. Both writers already convert
+  to Buffer, deliberately, under comments saying why. **The real cause: `persist-018` SI-003 zeroes
+  a `frost_signature` to prove the verifier catches a tamper, and never restores it** — and
+  `m7-upgrade-001` does the identical thing in a second file. `verifyChain` stops at the first
+  break, so one unrestored row makes the table permanently unverifiable for everything downstream.
+  The chain was reporting a tamper that really happened, exactly as designed.
+  **The reason it survived three diagnoses generalises: a red chain looks the same whether the DATA
+  is wrong or the CHECK is wrong.** That is what a tamper-evident chain is *for*. "The chain is red"
+  therefore opens an investigation and never closes one — ask *which value differs, and who wrote
+  it* before looking at any writer.
 - **NOT `DOD-ACCOUNTS-CHAIN-1`** — that is a deletion making a chain permanently red. This chain was
   never green.
 - **The one test that could catch it cannot:** `federation-001` AC-012 truncates `sessions` and
   writes a `randomUUID()` — the dashed form, a shape production never produces.
-- **Fix belongs where `SEALWIRE-1` is working** (`pg-directory-store.ts` chained-write path /
-  `hash-chain.ts` `serializeRecord`); a normalisation change and a hash-domain change in one
-  function is the §2e collision. Owner to be settled between the two lanes.
+- **~~Fix belongs where `SEALWIRE-1` is working~~ — no collision occurred.** The fix landed at the
+  PRODUCER (`pg-directory-store.ts`), and `serializeRecord` was not touched at all, so the feared
+  §2e overlap with `SEALWIRE-1`'s hash-domain work never materialised. `hash-chain.ts` gained one
+  comment block and no behaviour.
+- **What this fix CANNOT repair, and nobody should rediscover it cold:** session rows a live
+  directory already wrote hashed the undashed id. They are unrepairable, and `verifyChain` stops at
+  the first break, so a live directory's `sessions` chain is red at row 1 **permanently** — now for
+  a reason the code no longer produces, which makes it harder to recognise, not easier. Bounded:
+  `sessions` is node-local and NOT anti-entropy replicated, and nothing in production calls
+  `verifyChain` on these ten tables (only `mmr-store.ts` does, for two others). An audit-facility
+  gap, not a runtime failure. No rechain unit proposed.
 - **Enforcer:** `verifyChain` green on every table in `HASH_CHAINED_TABLES` after a full suite run
   on a reset database, plus a test that writes through the PRODUCTION shape.
+- **Enforcer, second half — added because the first half is order-dependent by construction.** An
+  assertion inside the suite only sees damage from files that sorted before it; that is exactly how
+  the second offending file escaped it. A `globalSetup`/`teardown` now verifies all ten chains once,
+  after every file, in every ordering, and **throws** rather than logs — a warning would leave the
+  suite green, and a green suite over a broken chain is the condition that let this survive.
+  Verified by poisoning a row on purpose: tests pass, run exits 1.
+- **Every fire-and-forget store write reports its failure.** `canonicalUuid` is safe on unrecognised
+  input *because* Postgres rejects it loudly — an argument that was void while the only production
+  caller ended in `.catch(() => {})`. Written as a guard on the SHAPE, which then found five more
+  silent writes nobody was looking for.
 
 ### `DOD-M15-SPINE-LANE-1` — ❌ The spine suites are run, or their absence is a decision on the record
 Split from `DOD-M15-CI-SKIPS-SILENT-1`. 38 files — the M8D spine lane plus the cross-machine
