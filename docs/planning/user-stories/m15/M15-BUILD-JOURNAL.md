@@ -174,10 +174,27 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Support (overwrite in place; CELLO_Coder_1 must not edit)
 
-> ### `IDLE-CONNS-1` ✅ and merged. **0 🟡 in this lane** — the three in the DoD are Coder_1's.
-> **NEXT: `DOD-M15-CHAINDEBT-1`** (Tier 2), then `SPINE-LANE-1`, `FREEZE-STATUS-1`, `UNWITNESSED-1`,
-> `RELAYAUTH-1`.
+> ### `CHAINDEBT-1` 🟡 — all 12 files done, REVIEW IN FLIGHT. **1 🟡 in this lane, WIP limit met.**
+> Next after it closes: `SPINE-LANE-1`, `FREEZE-STATUS-1`, `UNWITNESSED-1`, `RELAYAUTH-1`.
 
+- **`DOD-M15-CHAINDEBT-1`** (→ Entry S5), branch `m15/chaindebt-1`, worktree `/Users/andrep/tc-wt/`.
+  **Both backlogs at ZERO** — inserts 8→0, deletes 8→0, ceilings pinned 0/0, so a new violation has
+  nowhere to be parked. Server gate green: 2265 tests + lint + typecheck by exit code.
+- **🚨 RUNNING THE SERVER GATE FROM A WORKTREE NEEDS `COMPOSE_PROJECT_NAME=trustless-cello`** (→
+  Entry S6). Without it two docker/flyway tests fail on `Bind for 0.0.0.0:5433 failed: port is
+  already allocated` — Compose derives its project from the DIRECTORY, so a worktree starts a rival
+  stack. Reads like a Docker problem and is not. **And cap vitest: `--maxWorkers=2`.**
+- **FOUR OF THE TWELVE WERE MISFILED, not debt.** Already inside `BEGIN`/`ROLLBACK`, or a DELETE the
+  database must REFUSE. The guard reads source and source cannot show a rollback, so a genuinely
+  inert file still matches its regex. They moved to `ROLLED_BACK`/`ALLOWED_*` **with the reasoning
+  attached** — a name that vanishes from the list looks like work that was done.
+- **THE RECURRING SHAPE, found THREE times: an assertion leaning on the cleanup that was corrupting
+  the chain.** `federation-003` AC-010 verified a one-row slice from genesis; `persist-020` SI-002
+  computed its expected hash from `CHAIN_GENESIS`; `persist-020` AC-005 needed the table empty. Each
+  only held because the file deleted its rows. **Every conversion is now run TWICE**, the second run
+  against the first run's rows — that is the condition they used to fail under.
+- **`persist-020`'s two whole-table wipes existed because SI-003 tampers a row and never undid it.**
+  Neither comment said so. It restores by UPDATE now and asserts the chain verifies again.
 - **`DOD-M15-IDLE-CONNS-1` → ✅** (→ Entries S3, S4), merged at cello-client `73b3db5`. Nine
   findings, five blocking, all fixed; 15 mutations killed; gate 4346 tests + lint + typecheck +
   build by exit code.
