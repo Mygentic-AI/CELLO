@@ -1152,17 +1152,27 @@ CPU against a healthy idle of 0.3–0.4% for days.
   AND ABOVE ONLY** — the first version logged at info, produced perfect lines that never left the
   instance, and cost a second roll of all three nodes.
 
-### `DOD-M15-STALEROSTER-1` — 🟡 A stale reading refuses to present itself as current
-> **BUILT 2026-08-23, review in flight.** The freeze has one cause: `resolveConsortiumRoster` is the
-> only writer of the reading, and its only caller is the FAILOVER path — so the daemon measures only
-> while it is unhealthy, and RECOVERING is what stops it noticing it recovered. Fixed with a slow
-> background sweep that runs regardless of health.
-> **The half I did not expect:** a daemon with an EXPIRED manifest reported no directory trouble at
-> all. The block was emitted only when the failure list was non-empty, so "nothing has ever looked"
-> rendered byte-identical to "all three nodes answered". `never_measured` is now its own kind.
-> **The revert test caught the half that mattered** — deleting the daemon's sweep wiring left all
-> thirteen tests green, because they tested the sweeper and not the sweep. The scheduler is now
-> injectable and a fourteenth test drives a tick and asserts the reading MOVES.
+### `DOD-M15-STALEROSTER-1` — ✅ A stale reading refuses to present itself as current
+> **CLOSED 2026-08-23** (→ Entry 34). Reviewer verdict quoted: *"**ERROR SUBSTITUTION FOUND
+> [blocking]** — F1. A new operator-facing string names a cause that cannot produce the state it
+> describes, and points at an empty log family. This is the defect class this milestone exists to
+> kill, shipped inside the fix for it… **HOLLOW TESTS FOUND [blocking]** — F3 (the unit's core
+> arithmetic is comment-only)… I am not rubber-stamping this. The mechanism is sound and the shutdown
+> discipline is genuinely careful. But the unit's product is diagnostic accuracy, and it ships a
+> guidance paragraph that would send an operator to the wrong subsystem, fires that paragraph on a
+> designed benign state, and leaves its own load-bearing arithmetic held up by nothing but a
+> comment."* All fourteen findings fixed. Gate: 4152 tests, lint, typecheck, build.
+>
+> **Both of my diagnoses were wrong.** The sweep does not have one caller, it has ten — all
+> ACTIVITY-driven, so the true shape is that an IDLE daemon never re-measures, not that recovering
+> stops it. And an EXPIRED manifest cannot reach the unmeasured state, because that daemon refuses to
+> start; the one reachable route is no manifest configured, which is DESIGNED (local dev, the e2e
+> harness, or a `CELLO_DIRECTORY_URL` not byte-equal to a bundled endpoint).
+> **The wrong map had a direct cost:** believing there was one writer is why I never asked what
+> happens when two sweeps overlap. They do — patient vs `FAST_PROBE` — and the write stamped
+> COMPLETION, so whichever landed last was labelled "measured now, 0 seconds old".
+> **Carried:** `DOD-M15-SWEEP-ABORT-1`, `DOD-M15-MANIFEST-EXPIRY-LIVE-1`.
+
 `DOD-STATUS-STALE-ROSTER-1`. Measured twice on two machines: both daemons displayed node failures
 from minutes long past while `curl` reached all three nodes in 37–184 ms.
 - `directory_endpoints_unresolved` freezes once the daemon returns to its healthy path, because the
@@ -1247,6 +1257,26 @@ was silently dropped.
   response**, not announced as an accomplished fact.
 - Diagnosis first: reproduce with a daemon restart after a release, with the trigger field from
   `DOD-M15-IPCVISIBLE-1` distinguishing replay from fallback in one run.
+
+### `DOD-M15-SWEEP-ABORT-1` — ❌ A shutdown stops the network work it started
+Split from `DOD-M15-STALEROSTER-1` (review F10). The background roster sweep spends up to ~16 s on
+`/bootstrap` probes when a node is down, on a 90–180 s cycle — so roughly one `cello logout` in eight
+lands mid-sweep.
+- The daemon now IGNORES a sweep that completes after `stop()` (no callbacks, no log, no re-arm), so
+  nothing acts on a dead daemon's behalf. **The probes themselves still run.**
+- Cancelling them means an `AbortSignal` threaded through `manifestNodesToEndpoints` and
+  `fetchBootstrapResult`, which owns a per-request controller for its own deadline and accepts no
+  external one. That is a wide signature change and did not belong inside a hardening unit.
+- The same seam would let `DOD-M12B-SHUTDOWN-1`'s reconcile sweeper stop dialing on demand.
+
+### `DOD-M15-MANIFEST-EXPIRY-LIVE-1` — ❌ A running daemon notices its own manifest expiring
+Found by `DOD-M15-STALEROSTER-1`'s review, and **the inverse of where that unit put the hazard.**
+- Manifest expiry is checked **only at startup** (`verifyStartupManifest`), and the bundled-manifest
+  path wires **no poll scheduler** at all.
+- So a long-running daemon whose manifest expires under it keeps probing its node set and — after
+  `STALEROSTER-1` — reports `stale: false`. A confidently fresh reading taken against an expired
+  trust anchor, which is worse than the stale reading that line was written to fix.
+- Minimum: surface `expires <= now` in the status block. Better: re-check on the manifest poll.
 
 ### `DOD-M15-VOCAB-ORDERING-1` — ❌ A response cannot be assembled after it has been translated
 Split from `DOD-M15-SELECTION-1`, where it cost an operator-facing defect. `renderForSurface` is a

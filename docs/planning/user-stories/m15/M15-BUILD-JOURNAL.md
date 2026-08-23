@@ -15,23 +15,25 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟡 26 ✅, 2 🟡, 2 🅿️, 36 ❌. Both repos clean, pushed, on main.
-> **`STALEROSTER-1` IS THE UNREVIEWED ONE** — built in `981baed` + `1305439` (cello-client), reviewer
-> dispatched, verdict not yet in. Under the WIP limit the ONLY permitted work is closing it: fix its
-> findings, quote the verdict, flip the tag. Do not pull a new line first.
-> (`DEAD-WIRE-FIELD-1` is the other 🟡 and does NOT count against the limit — its client half is
-> reviewed and closed in Entry 32; it stays yellow only because the bilateral wire half is carried.)
-> Gate at build time: 4144 client tests, lint, typecheck, clean build.
+> ### 🟢 27 ✅, 1 🟡 (carried half only), 2 🅿️, 38 ❌. Both repos clean, pushed, on main.
+> **No unreviewed work.** `STALEROSTER-1` closed in Entry 34 — all fourteen findings fixed, verdict
+> quoted, gate green by EXIT CODE (4152 client tests, lint, typecheck, build).
+> `DEAD-WIRE-FIELD-1` is the remaining 🟡 and does NOT count against the WIP limit: its client half is
+> reviewed and closed (Entry 32), and it stays yellow only because the bilateral wire half is carried.
+> **A new line may start.**
 
-- **NEXT ACTION: close `STALEROSTER-1`** — apply the reviewer's findings, quote the verdict in a new
-  entry, flip the tag to ✅. THEN pull ONE new ❌ line. `FREEZE-STATUS-1` needs a client-side DB
-  migration, which the DoD says must be its own reviewed unit with an upgrade test against a populated
-  pre-migration database. `UNWITNESSED-1` needs a fixture that can attach a relay client.
-- **`git checkout` DURING MUTATION TESTING HAS NOW DESTROYED WORK TWICE IN TWO UNITS.** The rule is
-  not "commit before mutating a unit" — it is commit before EVERY mutation round. Both times the
-  sequence was identical: commit, add more uncommitted work, mutate again, `git checkout` to restore,
-  and the new work went with it. The tree is at its most exposed exactly when it is being broken
-  deliberately.
+- **NEXT ACTION: pull ONE new ❌ line.** `FREEZE-STATUS-1` needs a client-side DB migration, which the
+  DoD says must be its own reviewed unit with an upgrade test against a populated pre-migration
+  database. `UNWITNESSED-1` needs a fixture that can attach a relay client. `MANIFEST-EXPIRY-LIVE-1`
+  (new, from Entry 34) is small and self-contained and may be the better next pick.
+- **🚨 A PIPE EATS THE EXIT CODE. `pnpm run lint 2>&1 | tail -3 && git commit` reports `tail`'s
+  status, not eslint's** — a lint error shipped that way on 2026-08-23. Gate with
+  `cmd > /dev/null 2>&1 && echo CLEAN || echo FAILED`, never by eyeballing piped output.
+- **🚨 `git checkout` DURING MUTATION TESTING HAS NOW DESTROYED WORK THREE TIMES IN THREE UNITS.**
+  Identical sequence every time: commit, add more uncommitted work, mutate again, `git checkout` to
+  restore, and the new work goes with it. The rule is NOT "commit before mutating a unit" — it is
+  **the commit is the first thing that happens after a fix passes, before any mutation runs.** I
+  wrote the weaker version into a commit message and broke it within the hour, twice.
 - **THE WIRE-CHANGE CONVOY.** Three changes are pending and undeployed and must move together:
   `SUBMIT-ID-1`'s 7-element Structure 1, `TERMINAL-REASON-1`'s new reasons, and
   `DEAD-WIRE-FIELD-1`'s field removal. Loosen `directory-frames.ts:1182`'s `parseParticipant` in the
@@ -3138,3 +3140,99 @@ Gate: 4130 tests, lint, typecheck, clean build. Server side re-gated at 2265.
   pipeline, and anything spread into a response after it ships untranslated. This unit hit it; the
   audit cannot see it because the untranslated token is a legitimate tool name. Needs a guard on the
   ordering, not on the vocabulary.
+
+---
+
+## Entry 34 — the unit whose product is diagnostic accuracy shipped a wrong diagnosis, twice
+
+`DOD-M15-STALEROSTER-1` → ✅. Fourteen findings. **Both of my stated diagnoses were false**, and one
+of them had been written into three source headers and an operator-facing guidance string.
+
+### The verdict, quoted
+
+> **SPEC: FAITHFUL** — clause 1 (sweep on a slow timer even when healthy): implemented. Clause 2 (do
+> not hide the field when stale): implemented, and correctly resisted the suppression option. […]
+> **SILENT FALLBACKS FOUND** — F6 (concurrent sweeps, last-writer-wins, timestamp stamps completion)
+> and F13/F14. […]
+> **ERROR SUBSTITUTION FOUND [blocking]** — F1. A new operator-facing string names a cause that
+> cannot produce the state it describes, and points at an empty log family. This is the defect class
+> this milestone exists to kill, shipped inside the fix for it.
+> **HOLLOW TESTS FOUND [blocking]** — F3 (the unit's core arithmetic is comment-only), F7, F8.
+>
+> *"I am not rubber-stamping this. The mechanism is sound and the shutdown discipline is genuinely
+> careful. But the unit's product is diagnostic accuracy, and it ships a guidance paragraph that
+> would send an operator to the wrong subsystem, fires that paragraph on a designed benign state, and
+> leaves its own load-bearing arithmetic held up by nothing but a comment."*
+
+### Diagnosis 1: "one caller" — ten
+
+I wrote that `resolveConsortiumRoster` had a single caller, the failover path, so the daemon measured
+only while unhealthy and **recovering** was what stopped it noticing. A thirty-second grep falsifies
+it: ten callers — four ceremony handlers, the auto-ack broker reconnect, `cello_refresh`,
+`cello_get_submission_results`, three cross-node session-setup paths, the seal broker.
+
+The true shape is **an idle daemon never re-measures**: every caller is activity-driven, and sitting
+idle is what a daemon does between conversations.
+
+The fix is unchanged — a time-driven sweep is exactly what an activity-driven producer lacks — but
+**the wrong map had a direct cost.** Believing there was one writer is why I never asked what happens
+when two sweeps overlap. They now do, routinely: the background sweep uses the patient probe (~16 s),
+the failover resolver uses `FAST_PROBE` (2 s), both write the same slot with no mutual exclusion, and
+the write stamped **completion**. Whichever landed last was labelled "measured now, 0 seconds old" —
+a confidently fresh reading assembled from a race, in the unit about knowing how old the reading is.
+
+### Diagnosis 2: the expired manifest that cannot happen
+
+I wrote that an EXPIRED manifest reaches the never-measured state. **It cannot** — that daemon
+refuses to start (ADV-002). Not-yet-valid and rollback likewise.
+
+That sentence shipped in operator guidance telling the reader to check `directory.auth.manifest.*` —
+**a log family with no lines at all** on the one path that reaches this state, which returns before
+logging anything. An exit-point story standing in for the real cause, pointing at the wrong
+subsystem, in brand-new prose, inside the fix for error substitution.
+
+The real route is no manifest provider, and it is **designed**: local dev, the e2e harness, or a
+`CELLO_DIRECTORY_URL` that is not byte-equal to a bundled endpoint — a DNS hostname does not match,
+and silently turns directory identity authentication off with it. My version fired an alarm there, on
+**every local run and every harness spin-up**: a signal on the designed normal case, two paragraphs
+below the comment where I forbade exactly that.
+
+### The 5-minute bound was also the blindness window
+
+Invariant 2, F4. A sweep failure was loud in the log and invisible to the agent — and the blindness
+is structural, not incidental: the freshness bound is five minutes and the sweep runs every 90–180 s,
+so the **first two or three consecutive failures all land while the reading still reports
+`stale: false`** and hands over a frozen reading as current. The bound that prevents flapping is the
+same window that hides the failure. `last_sweep_error` now rides in the response with a consecutive
+count.
+
+### And the arithmetic was held up by a comment
+
+F3. The interval-versus-bound reasoning is argued at length in the file header and was asserted by
+nothing. `90_000` → `900_000`, one extra zero, left **every test in the repo green** while making
+every healthy production daemon permanently stale — the exact flap the header calls impossible.
+
+### Two things I did to myself
+
+**`git checkout` destroyed uncommitted work for the THIRD time in three units**, same sequence every
+time: commit, add more work, mutate, restore, and the new work goes with it. The rule is now: the
+commit is the first thing that happens after a fix passes, before any mutation runs.
+
+**A lint error shipped because a pipe ate the exit code.** `pnpm run lint 2>&1 | tail -3 && git
+commit` reports `tail`'s status, not eslint's, so the gate "passed" on a command that had failed.
+Every gate chain in this session had that hole. Now `cmd > /dev/null 2>&1 && echo CLEAN`.
+
+Gate: 4152 tests, lint, typecheck, build — all verified by exit code, not by eye.
+
+### Carried
+
+- **`DOD-M15-SWEEP-ABORT-1`** — the background sweep's outbound probes are not cancelled on shutdown.
+  `fetchBootstrapResult` owns a per-request `AbortController` for its own deadline and takes no
+  external signal, so cancelling means threading one through `manifestNodesToEndpoints` and every
+  caller. The daemon now ignores a sweep that completes after `stop()`; the probes themselves still
+  run for up to ~16 s.
+- **`DOD-M15-MANIFEST-EXPIRY-LIVE-1`** — found by this review and **the inverse of where I put the
+  hazard**. Manifest expiry is checked only at STARTUP, and the bundled path wires no poll scheduler.
+  A long-running daemon whose manifest expires under it keeps probing its node set and now reports
+  `stale: false`: a confidently fresh reading taken against an expired trust anchor. This is where
+  the expired-manifest danger actually lives.
