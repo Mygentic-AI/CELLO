@@ -963,6 +963,24 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 - **Do NOT open 21 lines from this.** First unit is a triage: cluster the 49 by cause, establish
   how many are environment vs product, and only then decide what needs fixing. The lane has been
   unrun for long enough that some failures will be stale expectations rather than regressions.
+
+> ### TRIAGE, FIRST PASS (2026-08-23) — 49 failures are NOT 49 causes
+> **This is a CLUSTERING, not a diagnosis.** Each group is "these fail the same way", established by
+> reading the receipt. Where a cause is named it is marked as established or as a lead.
+>
+> | # | Cluster | Files | Status |
+> |---|---|---|---|
+> | 1 | **`register-agent` prints prose after its JSON** — dies at the journey's FIRST line | 5 | **CAUSE ESTABLISHED**, reproduced. → `DOD-M15-CLIJSON-1` |
+> | 2 | **Cascade inside `j-multiplayer`** — 5 × `MCP -32001 Request timed out` at ~70s each, all AFTER an earlier real failure in the same file (*"agentA has no sealed root"*) | 1 file, 5 tests | **Likely ONE cause, not five.** Re-run the file alone after cluster 3 before treating any as real |
+> | 3 | **The seal path hands back `undefined` where a value is expected** — five `.toMatch() received undefined`, in unilateral seal, the ABSENT gate, auto-acknowledge close, bilateral seal, and loopback | 5 | **LEAD ONLY.** All five are seal/notarization. `SEALWIRE-1` is mid-flight in the other lane and the spine runs the BUILT binaries, so version skew is as plausible as a regression. **Raised with `CELLO_Coder_1` rather than diagnosed from this side** |
+> | 4 | **The portal database has been down 11 days** — `j-end`'s 7 failures are all portal HOPs | ~2 | **ENVIRONMENTAL, confirmed.** Not a product defect. Start the container and re-run before counting these |
+> | 5 | Singletons — `same_operator` envelope field, the 2-of-3 quorum registration, the built-artifact layer boundary, and others | ~8 | Unexamined |
+>
+> **So the honest headline is not "half the lane is broken."** It is: **five journeys die on one CLI
+> defect, seven on a stopped container, five look like one cascade, and five share a seal-shaped
+> shape that may be version skew.** What remains genuinely unexplained is a much smaller number than
+> 49, and the next unit should re-run AFTER starting the portal database and fixing `CLIJSON-1` —
+> re-running before those two is spending an hour to re-measure known causes.
 - **Enforcer:** `test:spine` green, or every remaining failure carrying a written verdict of
   environment / stale-expectation / real-defect, with the real ones lined up.
 
