@@ -15,12 +15,12 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 30 ✅, 2 🟡 (carried halves only), 2 🅿️, 37 ❌. Both repos clean, pushed, on main.
-> **No unreviewed work.** `SEAL-FAILED-TERMINAL-1` closed in Entry 38 — nine findings fixed, verdict
-> quoted, gate green both repos BY EXIT CODE (4229 client). `DIRAUTH-1` and `DEAD-WIRE-FIELD-1` are 🟡
-> for CARRIED halves only and do not block.
+> ### 🟡 30 ✅, 3 🟡, 2 🅿️, 36 ❌. Both repos clean, pushed, on main.
+> **`KEYAGREE-1` IS THE UNREVIEWED ONE** — primitive built (`037774a`+), reviewer dispatched.
+> `DIRAUTH-1` and `DEAD-WIRE-FIELD-1` are 🟡 for CARRIED halves only and do not block.
+> Gate: 4243 client tests, lint, typecheck — by EXIT CODE.
 
-- **🔴 NEXT ACTION — ANDRE'S DIRECTION (2026-08-23, while briefly awake): START TIER 4.**
+- **🔴 TIER 4 IS UNDERWAY — ANDRE'S DIRECTION (2026-08-23, while briefly awake).**
   *"The encryption handshake and the seal-to-transcript binding still haven't started. After these
   open [ones] are reviewed, fixed and closed they should be started."* They are now closed, so:
   **`DOD-M15-KEYAGREE-1` FIRST, then `DOD-M15-SEALWIRE-1`** — the DoD states KEYAGREE **must precede**

@@ -1528,7 +1528,21 @@ argument: a wire and schema change is cheapest against an empty database and nev
 `DOD-M15-KEYAGREE-1` **must precede** `DOD-M15-SEALWIRE-1`; it produces both outputs the seal change
 consumes.
 
-### `DOD-M15-KEYAGREE-1` — ❌ CELLO owns its own confidentiality guarantee
+### `DOD-M15-KEYAGREE-1` — 🟡 CELLO owns its own confidentiality guarantee
+> **PRIMITIVE BUILT 2026-08-23, review in flight.** Ephemeral-ephemeral X25519 (RFC 7748) + HKDF-SHA256
+> (RFC 5869), extending the parked-content seal pattern. Session id as HKDF salt; both ephemeral
+> publics bound into `info` in canonical SORTED order (role-independent, because the two daemons
+> reach the derivation from different code paths and a disagreement about who initiated would produce
+> two keys and a conversation that fails to decrypt with nothing explaining why). One agreement, two
+> outputs under distinct labels: content key + content-hash salt.
+> **The PQ hook works on day one** — `extraSharedSecret` is tested to change the key, accepts any
+> length, and a MISMATCH makes the two sides diverge rather than silently agreeing on a
+> classical-only key.
+> **Revert test already corrected one claim:** the all-zero degenerate-agreement check never executes
+> — `@noble/curves` refuses a small-order point first — and the comment said otherwise. Kept as a
+> backstop, now labelled unreachable; the TEST pins the property rather than which layer enforces it.
+> **⚠️ EXPECT THIS TO STAY 🟡:** it ships a PRIMITIVE. Nothing consumes either output yet — that is
+> `SEALWIRE-1`'s work, which is the whole reason KEYAGREE must precede it.
 Relay-audit Decision 5(b), with the PQ hook built in from the start.
 - Live content today is plaintext inside libp2p's Noise session. Confidentiality is real, but it is
   **libp2p's** key agreement over **libp2p's** ephemeral transport keys, so **CELLO cannot upgrade
