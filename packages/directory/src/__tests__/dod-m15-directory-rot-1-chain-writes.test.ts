@@ -152,22 +152,42 @@ const ALLOWED_DELETES: Record<string, { count: number; why: string }> = {
 };
 
 /**
- * ─── ALLOWED_INSERTS — an INSERT that is the SUBJECT of its test and is REFUSED ────────────────
+ * ─── ALLOWED_INSERTS — the regex flags it, and it is NOT a hole ────────────────────────────────
  *
  * Added by `DOD-M15-CHAINDEBT-1`. The guard had two dispositions for a literal `chain_hash`:
- * rolled back, or debt. A third case exists and had nowhere to go — an INSERT the database is
- * supposed to REJECT, written to prove a role has no INSERT privilege. It writes nothing, so it is
- * not a hole; and it cannot be "converted", because rewriting it through the chained writer would
- * delete the assertion it exists to make.
+ * rolled back, or debt. Working the backlog turned up two more, and the guard cannot tell either
+ * of them apart from real debt because **it reads source**: it sees the string `chain_hash` inside
+ * an INSERT and cannot see what the value is or whether the statement succeeds.
  *
- * COUNTED, for the same reason `ALLOWED_DELETES` is counted: a file-level exemption is a hole the
- * size of the file, and this file also contained a seeder that WAS real debt.
+ *   · **REFUSED** — an INSERT the database is supposed to REJECT, written to prove a role has no
+ *     INSERT privilege. It writes nothing. Rewriting it through the chained writer would delete the
+ *     assertion it exists to make.
+ *   · **CORRECTLY CHAINED BY HAND** — an INSERT that reads the current chain head and computes the
+ *     hash with the same helpers the writer uses. It is an ordinary valid row; there is simply no
+ *     store method for that shape.
+ *
+ * COUNTED, for the reason `ALLOWED_DELETES` is counted: a file-level exemption is a hole the size
+ * of the file, and both files below ALSO contained real debt that had to be converted separately.
+ * Each entry says WHICH of the two it is, so "allowed" never means "unexamined".
  */
 const ALLOWED_INSERTS: Record<string, { count: number; why: string }> = {
+  "persist-020-connections.test.ts": {
+    count: 1,
+    why:
+      "CORRECTLY CHAINED BY HAND. SI-001's rejected-request test needs a connection_requests row " +
+      "with outcome REJECTED, and the store's only chained writer for that table hard-codes " +
+      "ACCEPTED — so it cannot be seeded through the store, and it cannot be rolled back either " +
+      "because `createConnection` runs on a different connection and would not see it. It now " +
+      "reads the current chain head and computes the hash with `computeChainHash`/`serializeRecord`, " +
+      "exactly as `insertWithChain` does, so the row is valid rather than exempt. It previously " +
+      "used CHAIN_GENESIS, which is the seed for the FIRST row — correct in an empty table and a " +
+      "hole in every other. The file's real debt (its seeder, two whole-table wipes and nine " +
+      "cleanup deletes) was converted separately.",
+  },
   "persist-008-analytics.test.ts": {
     count: 2,
     why:
-      "SI-001 attempts an INSERT into conversation_seals and one into conversation_participation " +
+      "REFUSED. SI-001 attempts an INSERT into conversation_seals and one into conversation_participation " +
       "as `cello_analytics`, and asserts both REJECT — that is the test proving the analytics role " +
       "is SELECT-only on protocol tables. Neither writes a row. The file's real debt was its " +
       "`insertSealedConversation` seeder, which committed a constant chain_hash into three chained " +
@@ -194,7 +214,6 @@ function deleteCount(text: string): number {
 /** Still committing a literal chain_hash. Shrink; do not add. DOD-M15-DIRECTORY-ROT-1 owns these. */
 const KNOWN_DEBT_INSERTS = [
   "persist-003-rls.test.ts",
-  "persist-020-connections.test.ts",
   // PARTIALLY converted: its AC-001-extended block now runs in a rolled-back transaction (7 fake
   // chain_hash inserts, 7 deletes and a TRUNCATE removed). Other blocks in the file still violate.
   "persist-021-adapter-boundary-audit.test.ts",
@@ -202,7 +221,6 @@ const KNOWN_DEBT_INSERTS = [
 
 /** Still deleting from a chained table. Shrink; do not add. */
 const KNOWN_DEBT_DELETES = [
-  "persist-020-connections.test.ts",
   "persist-021-adapter-boundary-audit.test.ts", // partially converted — see the note above
 ];
 
@@ -287,8 +305,8 @@ describe("DOD-M15-DIRECTORY-ROT-1: fixtures never put a hole in a hash-chained t
 
     // Lower these as files are converted; never raise them. DOD-M15-CHAINDEBT-1 owns driving both
     // to zero, at which point the lists and this assertion go with them.
-    expect(KNOWN_DEBT_INSERTS.length, "the insert backlog must shrink, never grow").toBeLessThanOrEqual(3);
-    expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(2);
+    expect(KNOWN_DEBT_INSERTS.length, "the insert backlog must shrink, never grow").toBeLessThanOrEqual(2);
+    expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(1);
   });
 
   it("the ROLLED_BACK and ALLOWED_DELETES entries still name files that exist", () => {
