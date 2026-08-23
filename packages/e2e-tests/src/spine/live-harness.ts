@@ -1073,6 +1073,11 @@ export async function awaitSealedRoot(
        *
        * `local_tree_root` is left on the receipt deliberately: it is the raw material that
        * verification needs, and it costs nothing to carry.
+       *
+       * ✅ **AND BULLET 2 HAS SINCE LANDED, SO THE CLAIM IS CHECKABLE — see `expectOwnTreeVerified`
+       * below.** The daemon now runs the comparison itself (`verifyCertifiedRoot`) and says which of
+       * three things happened. The journey asserts THAT, rather than re-deriving a root it would get
+       * wrong in exactly the way this note describes.
        */
       return receipt.sealed_root;
     }
@@ -1218,4 +1223,77 @@ export async function connectMcp(celloDir: string, label: string): Promise<McpCo
       }
     },
   };
+}
+
+/**
+ * EACH SIDE'S OWN TREE MATCHED THE CERTIFIED ROOT — `DOD-M15-SEALWIRE-1` bullet 8, the assertion the
+ * journeys were missing.
+ *
+ * ─── What bullet 8 says, and why the old assertion did not say it ──────────────────────────────
+ *
+ * Ten journeys asserted `A.sealed_root === B.sealed_root`. Both sides received the same bytes from
+ * the same certificate, so that comparison is true **whatever leaf set the directory certified** —
+ * it proves the two daemons read the same wire field, not that either of them recognises the
+ * conversation it describes. Bullet 8: *"every one stays green if the directory certifies a root
+ * over a completely different leaf set."*
+ *
+ * ─── Why this could not be written until now, and what changed ─────────────────────────────────
+ *
+ * `awaitSealedRoot` above carries a note saying bullet 8's real claim *"is NOT yet checkable here"*,
+ * and the reason was right: comparing `local_tree_root` to `sealed_root` is comparing two values
+ * that are **not supposed to be equal**. The certified root covers this side's leaves PLUS the
+ * transient SEAL ctrl leaf, and `submitSealLeaf` deliberately computes without mutating the durable
+ * tree. An assertion built on that equality failed a green journey saying *"the certificate does NOT
+ * cover this party's own tree"* — alarming, and false.
+ *
+ * **Bullet 2 has since landed**, and it does the comparison properly inside the daemon that holds
+ * the tree (`verifyCertifiedRoot`). So the journey no longer needs to re-derive anything: it asserts
+ * the daemon's own verdict, on each side separately.
+ *
+ * ─── ⚠️ `cannot_judge` IS NOT A PASS, AND THAT DISTINCTION IS THE WHOLE POINT ───────────────────
+ *
+ * The verdict is three-valued on purpose. `cannot_judge` means the daemon accepted the certificate
+ * **without checking it against its own leaves** — its own log says *"the signature was verified;
+ * the CONTENT was not."* It is a legitimate runtime state (this side's carry can be short at the
+ * instant the counterparty's SEAL leaf triggers the seal), and refusing on it would make sessions
+ * unsealable. But a journey that treats it as success is asserting exactly the nothing bullet 8 was
+ * raised to stop — so this waits for a `match` and fails loudly on anything else.
+ */
+export async function expectOwnTreeVerified(
+  proc: Proc,
+  sessionIdHex: string,
+  opts: { timeoutMs?: number; label?: string } = {},
+): Promise<void> {
+  const timeoutMs = opts.timeoutMs ?? 30_000;
+  const label = opts.label ?? proc.name;
+  const sid = sessionIdHex.toLowerCase();
+
+  // Either verdict line resolves the wait — otherwise a `mismatch` run would sit here until the
+  // timeout and report "no line" for a daemon that was shouting the answer.
+  const line = await proc.waitForLine(
+    new RegExp(`"event":"session\\.sealed\\.root\\.(checked|mismatch)"[^\\n]*"sessionId":"${sid}"`),
+    timeoutMs,
+  ).catch((err: unknown) => {
+    throw new Error(
+      `${label}: this daemon never reported checking the certified root against its own tree for ` +
+        `session ${sid}. Bullet 8 asks each side to recognise the conversation the certificate ` +
+        `describes; no verdict means nothing checked it here.\n  cause: ${String(err)}`,
+    );
+  });
+
+  if (/"event":"session\.sealed\.root\.mismatch"/.test(line)) {
+    throw new Error(
+      `${label}: THE CERTIFICATE COVERS A LEAF SET THIS DAEMON DOES NOT HOLD — the exact failure ` +
+        `bullet 8 exists to catch, and the sealed-root equality assertion would have stayed green ` +
+        `through it.\n  ${line}`,
+    );
+  }
+  if (!/"verdict":"match"/.test(line)) {
+    throw new Error(
+      `${label}: the certified root was accepted WITHOUT being checked against this daemon's own ` +
+        `leaves (verdict is not "match"). That is a legitimate runtime state — the carry can be ` +
+        `short at the instant the counterparty's SEAL leaf triggers the seal — but it is not what ` +
+        `this journey claims to have proven, and treating it as a pass asserts nothing.\n  ${line}`,
+    );
+  }
 }
