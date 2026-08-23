@@ -988,7 +988,40 @@ one could ship safely. **Neither of these is visible to `sealReadiness` today.**
 - **Do not gate either on suspicion alone.** The bar is a signal separating a relay catching up from
   a leaf it will never carry.
 
-### `DOD-M15-MIGRATION-GUARD-1` — ❌ The upgrade guard checks all seven rebuilt tables, not one
+### `DOD-M15-MIGRATION-GUARD-1` — ✅ The upgrade guard checks all seven rebuilt tables, not one
+> **CLOSED 2026-08-23 (CELLO_Support, taken from CELLO_Coder_1) → Entry S11.** Two review passes.
+> Pass-2 verdict quoted: *"HOLLOW TESTS FOUND — [blocking] on Findings 1 and 2. Three parser fixes
+> with zero revert coverage, and an inverse assertion that is structurally incapable of reaching the
+> defect class… The condition, and it is one small additive edit — test-file only, no production
+> surface, no third review pass needed."* **Both conditions met**, and writing the first found a
+> THIRD defect neither pass had proven. Gate: 7/7 + sibling guard 8/8 + tsc 0 + eslint 0.
+>
+> **The reviewer reverted all three of pass-1's parser fixes and the file stayed GREEN** — each
+> produces identical output against today's sources, because no current column uses the shapes they
+> were fixed for. The pass-1 bypasses were proven by hand-mutating source and that evidence was
+> never committed, so the next edit reintroducing any of them would have passed. This file's own
+> thesis, turned on itself. The three cases are now committed as unit tests on the parsers.
+>
+> **Writing them found the third defect: a `//` or `/*` INSIDE a string literal is not a comment**,
+> but stripping comments before finding literals cannot tell — so it ate the rest of the line and
+> the `ALTER TABLE` on the next line vanished silently. Comment state and string state are now one
+> scan; two passes each guess about the other.
+>
+> **And the inverse assertion could not reach the defect class.** It derived its expectation from the
+> pinned DDL, so a column missing from the pinned DDL *and* missed by the parser was in neither set:
+> nothing reddened, operator loses the data. Closed from the other side — count the raw `ALTER TABLE`
+> occurrences in the source and require the parser to have produced exactly that many. **Raw, not
+> comment-stripped**, deliberately: a stripped count moves *together* with the parser if
+> `stripComments` corrupts the text, and two wrong numbers that agree is the same false-agreement
+> shape being closed.
+>
+> **CARRIED, not reopened** (reviewer: *"the right size to carry as ACs on a later unit"*): the
+> coverage-police exemption is keyed on a FILENAME, so adding a rebuilt table to
+> `trust-signal-store.ts`'s literal list keeps it green — parse the list and assert the intersection
+> with the seven is empty. `readdirSync` is non-recursive (`core/daemon/src/bin/` unscanned; clean
+> today). `arrayEnd` truncates at the first `]` under a `> 0` floor. And the replay passes
+> `silentLogger()`, discarding the one event that names which fragment failed — the raw SQLite text
+> is `incomplete input`, which names neither table nor column.
 **Found 2026-08-23 while adding a column for `DOD-M15-SEALWIRE-1` B2b, and it is why that column's
 neighbours were found missing.** Raised with `CELLO_Support` over CELLO because it exposes both
 lanes; test-only, and in neither lane's current unit.
@@ -999,10 +1032,24 @@ is **dropped on the one boot where a legacy database upgrades** — and then re-
 ALTER moments later, which is what makes it silent: every observation after the fact shows the column
 present.
 
-`dod-agent-id-joinkey-migration` is the guard for exactly this, and it has caught the class **four
-times** — `read_at`, `diverged_at`, `content_salt`, and `retry_queue`'s ordering record. **It replays
-only the `sessions` inline ALTERs.** The other six rebuilt tables have nothing between a forgotten
-column and silent data loss.
+`dod-agent-id-joinkey-migration` is the guard for exactly this, and it has caught the class **three
+times** — `read_at`, `diverged_at`, `content_salt`. **It replays only the `sessions` inline ALTERs.**
+The other six rebuilt tables have nothing between a forgotten column and silent data loss.
+
+> **CORRECTED 2026-08-23. This line previously said FOUR, counting `retry_queue`'s ordering columns,
+> and that was wrong** — the last surviving copy of a claim that was also in `agent-id-migration.ts`
+> and in this unit's test header. Verified against git, not reasoned from the code: the re-key
+> shipped `173d34f` 2026-07-10 and is ONE-SHOT; `structure1_cbor` shipped `6cea544` 2026-08-05;
+> `RetryQueue` is constructed once, at `daemon.ts:1905`, after `initialize()`. **Every database that
+> ever ran the re-key did so a month before those columns existed. Nothing was lost.**
+>
+> The narrower truth is worse than the claim it replaces, which is why it is worth having. The
+> intersection-copy mechanism is real; it is unreachable for that table only because the constructor
+> runs after the migration — and `daemon.ts` puts roughly **1,400 lines** between them, held apart by
+> a comment saying not to reorder. CELLO_Coder_1's phrasing: *a convention with 1,400 lines between
+> its two halves is not a convention, it is a coincidence with good documentation.* The columns stay
+> in the pinned DDL: free while the order holds, and the difference between silent loss and no loss
+> the day someone moves the construction up.
 
 - **The bar:** the guard replays EVERY rebuilt table's inline ALTERs in the real boot order, not just
   `sessions`'. `retry_queue`'s live in `retry-queue.ts`'s constructor and `contacts`' in
