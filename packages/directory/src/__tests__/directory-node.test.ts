@@ -35,7 +35,7 @@ import {
   verifyInclusion,
   MockThresholdSigner,
 } from "@cello-protocol/crypto";
-import { buildStructure2, encodeStructure2, computeGenesisPrevRoot } from "@cello-protocol/protocol-types";
+import { buildStructure2, encodeStructure2, computeGenesisPrevRoot, encodeSealPayload } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import {
@@ -1282,6 +1282,142 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     }
 
     void hexA; void hexB;
+  });
+
+  // ─── DOD-M15-SEALWIRE-1 bullets 3+4, review pass 1 findings F3 + F6 ───────────
+  //
+  // These two live HERE rather than in `dod-m15-sealwire-1-wired.test.ts` because they need what
+  // only this harness provides: a session established through the real `session_request` →
+  // `session_assignment` exchange, so `#sessionParticipants` is populated by production code rather
+  // than seeded by a test, and two authenticated client streams, so the rejection frame the victims
+  // receive is observable instead of broadcast into an empty map.
+  //
+  // Both were REVERT-TEST SURVIVORS reported by review pass 1: the roster argument could be deleted
+  // and the `#notifySealRejected` call removed with the whole 1157-test suite still green.
+
+  /**
+   * A carried seal for `sessionId` whose SECOND ctrl leaf is signed by `ctrlSigner`.
+   *
+   * Pass B and it is an honest close. Pass a third key and it is the attack F3 names: a relay mints
+   * a ctrl leaf with a key it holds, carrying the participants' OWN payload, and the leaf-derived
+   * roster would then contain that key — making the participant check unable to fire against the
+   * only party it exists to catch.
+   */
+  async function buildCarriedSeal(
+    sessionId: Uint8Array,
+    keyA: ReturnType<typeof generateKeypair>,
+    ctrlSigner: ReturnType<typeof generateKeypair>,
+  ): Promise<RelaySealData> {
+    const pubA = new Uint8Array(await keyA.getPublicKey());
+    const pubC = new Uint8Array(await ctrlSigner.getPublicKey());
+    const m1 = new Uint8Array(randomBytes(32));
+
+    // `final_root` is over the NON-CTRL leaves — the client reads its tree root before appending
+    // its own SEAL leaf, and never appends the counterparty's.
+    const finalRoot = merkleRoot(buildMerkleTree([{ kind: "hash" as const, data: m1 }]));
+    const payload = encodeSealPayload({
+      session_id: sessionId, final_root: finalRoot, close_timestamp: 1_700_000, attestation: "PENDING",
+    });
+    // SHA-256(0x02 ‖ payload) — the client's own derivation, written out rather than imported from
+    // the module under test so the binding is not compared against itself.
+    const ctrlHash = new Uint8Array(
+      createHash("sha256").update(new Uint8Array([0x02])).update(payload).digest(),
+    );
+
+    const spec = [
+      { key: keyA, pub: pubA, kind: "msg" as const, seq: 1, ls: 0, ch: m1, carry: false },
+      { key: keyA, pub: pubA, kind: "ctrl" as const, seq: 2, ls: 0, ch: ctrlHash, carry: true },
+      { key: ctrlSigner, pub: pubC, kind: "ctrl" as const, seq: 3, ls: 2, ch: ctrlHash, carry: true },
+    ];
+
+    const leaves: RelaySealData["leaves"] = [];
+    let runningRoot: Uint8Array = new Uint8Array(32);
+    for (const s of spec) {
+      const s1 = CBOR_ENC.encode([1, s.ch, s.pub, sessionId, s.ls, 1_600_000 + s.seq]) as Uint8Array;
+      const sig = new Uint8Array(await s.key.sign(s1));
+      const built = buildStructure2(s.seq, s.pub, s.ch, sig, runningRoot);
+      if (!built.ok) throw new Error(`buildStructure2 failed at seq ${s.seq}`);
+      leaves.push({
+        kind: s.kind,
+        s2: built.structure2,
+        structure1_cbor: s1,
+        ...(s.carry ? { content_bytes: payload } : {}),
+      });
+      runningRoot = merkleRoot(buildMerkleTree(
+        leaves.map((l) => ({ kind: l.kind, data: encodeStructure2(l.s2) })),
+      ));
+    }
+    return { leaves, seq_count: leaves.length, merkle_root: runningRoot };
+  }
+
+  it("F3: a ctrl leaf minted by a NON-PARTICIPANT is refused — the roster comes from the session, not the leaves", async () => {
+    /**
+     * ⚠️ THE FINDING, AND MY COMMENT HAD CLAIMED THE OPPOSITE WAS ALREADY TRUE.
+     *
+     * The roster was `[...new Set(leaves.map(l => l.s2.sender_pubkey))]` — the first two distinct
+     * senders of the relay's own leaf array, i.e. the array under suspicion. Minting a leaf is what
+     * puts a key in that roster, so `SENDER_NOT_PARTICIPANT` could never fire against the one party
+     * it exists to catch. The comment above the call said the module *"enforces the participant half
+     * itself"*; nothing did.
+     *
+     * From the operator's chair: Alice and Bob close a conversation, and the certificate they are
+     * handed names Alice and a key neither of them has ever seen as the two participants.
+     */
+    const keyA = generateKeypair();
+    const keyB = generateKeypair();
+    const keyStranger = generateKeypair();
+
+    const { stream: streamA, reader: readerA } = await connectAndAuth(keyA);
+    const { reader: readerB, pubkeyHex: hexB } = await connectAndAuth(keyB);
+    sendFrame(streamA, CBOR_ENC.encode({
+      type: "session_request",
+      target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
+    }));
+    const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());
+    await readerB.readDecoded();
+    if (frameA?.type !== "session_assignment") throw new Error("no assignment");
+    const sessionId = frameA.assignment.session_id;
+
+    // ── THE ANCHOR: the same shape signed by the REAL counterparty must still certify. ──
+    // Pinned first because a roster check that refuses everything satisfies the assertion below
+    // while breaking every honest close in the federation.
+    const honest = await dirNode.directory.processSeal(sessionId, await buildCarriedSeal(sessionId, keyA, keyB));
+    expect(honest.ok, `an honest carried seal must certify: ${JSON.stringify(honest)}`).toBe(true);
+    await readerA.readDecoded();  // drain A's session_sealed
+    await readerB.readDecoded();  // drain B's session_sealed
+
+    // ── THE ATTACK: identical in every respect except who signed the second ctrl leaf. ──
+    const minted = await buildCarriedSeal(sessionId, keyA, keyStranger);
+    const result = await dirNode.directory.processSeal(sessionId, minted);
+    expect(result.ok, "a seal naming a key that never joined this session must be refused").toBe(false);
+    expect(
+      result.ok === false ? result.reason : "",
+      "and refused for the participant reason — not an earlier check happening to fire",
+    ).toBe("seal_sender_not_participant");
+
+    /**
+     * F6(b): AND THE VICTIMS MUST BE TOLD. The `#notifySealRejected` call on this path was deletable
+     * with the suite green — the wiring tests asserted the return value and the directory's own log,
+     * never that anyone outside the process heard about it.
+     */
+    /**
+     * BOUNDED, because the un-bounded version was a bad test even though it killed the mutant.
+     * `readDecoded()` blocks forever when no frame arrives, so removing the notification failed this
+     * test as a 30-second vitest timeout with a generic runner message — the reader had to go work
+     * out that the missing frame was the point. The bound turns it into a sentence.
+     */
+    const rejectedBytes = await Promise.race([
+      readerA.readDecoded(),
+      new Promise<null>((r) => setTimeout(() => r(null), 3_000)),
+    ]);
+    expect(
+      rejectedBytes,
+      "no frame reached the participant within 3s — the directory caught the tampering and told nobody outside its own log",
+    ).not.toBeNull();
+    const rejected = decodeOutboundSignalingFrame(rejectedBytes!);
+    expect(rejected?.type, "the refusal must reach the participant, not just the directory's log").toBe("session_seal_rejected");
   });
 
   // ─── AC-012: relay domain string not reusable at directory ───────────────────

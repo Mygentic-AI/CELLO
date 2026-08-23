@@ -5307,6 +5307,47 @@ export class CelloDirectoryNode {
       : [new Uint8Array(32), new Uint8Array(32)];
 
     /**
+     * THE ROSTER FOR THE FINAL-ROOT CHECK, AND IT MUST NOT BE THE ONE ABOVE — review pass 1, F3.
+     *
+     * `participants` is derived from the sender keys of the relay's own leaf array: the array under
+     * suspicion. Handing that to `verifySealFinalRoots` as the roster makes its participant check
+     * unable to ever fire against a relay-minted leaf, because minting the leaf is what put the key
+     * in the roster. My comment below claimed the module "enforces the participant half itself" —
+     * a property the code did not have, which is the exact failure `seal-final-root.ts`'s own header
+     * spends a paragraph warning about, one file over.
+     *
+     * Concretely: a relay presents `[A's real msg, A's real ctrl, K's minted ctrl carrying A's own
+     * final_root]`. The derived roster is `[A, K]`, so `SENDER_NOT_PARTICIPANT` passes, the ceremony
+     * pair is two distinct senders, and the seal certifies with `participant_b_pubkey = K`.
+     *
+     * `#sessionParticipants` is the authoritative roster — set when the session was established and
+     * restored from the store at boot — and the unilateral path already reads it. Same source, same
+     * fallback chain.
+     *
+     * ⚠️ WHEN NEITHER RECORD IS AVAILABLE the leaf-derived roster is used and the guarantee is
+     * WEAKER, so it is logged rather than silently substituted: a directory that has forgotten a
+     * session can still check the payload binding and the two participants' agreement with each
+     * other, but it cannot tell you those two are the people who opened the session. The underlying
+     * gap is tracked as `DOD-M15-LEAFPARTIES-1`; this call site no longer claims it is closed.
+     */
+    const known = this.#sessionParticipants.get(sessionIdHex)
+      ?? (() => {
+        const p = this.#pendingSessions.get(sessionIdHex);
+        return p ? { initiatorHex: p.initiatorHex, targetHex: p.targetHex } : null;
+      })();
+    const roster: [Uint8Array, Uint8Array] = known
+      ? [Buffer.from(known.initiatorHex, "hex"), Buffer.from(known.targetHex, "hex")]
+      : [pA, pB];
+    if (!known) {
+      this.#logger?.warn("seal.final_root.roster_unknown", {
+        sessionId: sessionIdHex,
+        impact: "the final-root check ran against the roster derived from the relay's OWN leaves, so it cannot detect a leaf minted by a key the relay holds. Payload binding and participant-vs-participant agreement are still checked.",
+        guidance: "The directory has no session record for this seal — it was established by another node, or lost across a restart before replication caught up. Expected on a node that did not serve the session; investigate if it appears for sessions this node established.",
+        correlationId: sessionIdHex,
+      });
+    }
+
+    /**
      * 🚨 `DOD-M15-SEALWIRE-1` BULLETS 3 AND 4 — THE RELAY IS FINALLY CHECKED BY SOMETHING IT DOES NOT
      * CONTROL. Everything above this line validated the relay against the relay.
      *
@@ -5331,9 +5372,11 @@ export class CelloDirectoryNode {
      * inside would become the relay checking itself again.
      *
      * The roster is passed so the module enforces the participant half itself rather than trusting
-     * this call site to have done it.
+     * this call site to have done it — and it is the roster from the SESSION RECORD, never the one
+     * derived from the relay's leaves. See the note above `roster` for why that distinction is the
+     * difference between this check having teeth and merely appearing to.
      */
-    const finalRoots = verifySealFinalRoots(leaves, sessionId, [pA, pB]);
+    const finalRoots = verifySealFinalRoots(leaves, sessionId, roster);
     if (!finalRoots.ok) {
       if (finalRoots.reason === SEAL_FINAL_ROOT_REASONS.NOT_CARRIED) {
         /**
