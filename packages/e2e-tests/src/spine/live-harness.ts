@@ -1052,30 +1052,28 @@ export async function awaitSealedRoot(
     // An empty answer means "still running", not "failed" — the daemon's own words.
     if (receipt.ok === true && typeof receipt.sealed_root === "string") {
       /**
-       * ─── DOD-M15-SEALWIRE-1 bullet 8, asserted HERE so every journey gets it ────────────────
+       * ─── DOD-M15-SEALWIRE-1 bullet 8 — WHY THERE IS NO ROOT COMPARISON HERE ─────────────────
        *
-       * The assertion journeys used to make — that both parties' `sealed_root` matched — is hollow:
-       * both sides read the same field out of the same certificate, so it holds even if the
-       * directory certified a root over a leaf set neither party has. It proves the two clients got
-       * identical bytes, which was never the question.
+       * I wrote one and it was WRONG. `local_tree_root !== sealed_root` is not a defect: it is the
+       * design. `session-node-manager.ts` says it outright — *"`submitSealLeaf` deliberately
+       * computes its root without mutating the durable tree"* — so the CERTIFIED root covers this
+       * side's leaves PLUS the transient SEAL ctrl leaf, while the durable tree does not contain
+       * that leaf. The two roots differ on every healthy seal.
        *
-       * `local_tree_root` is THIS side's root, recomputed from its own stored leaves. Requiring it
-       * to equal the certified root is the real claim: **the certificate covers the conversation
-       * this party actually holds.**
+       * The assertion ran once and failed on a green journey with *"the certificate does NOT cover
+       * this party's own tree"* — alarming, and false. Left in, it would have reddened every
+       * converted journey for a reason that reads as the product's core promise failing.
        *
-       * It lives in the helper rather than in each journey deliberately — an assertion every
-       * journey must remember to make is one a new journey will omit, and the omission is silent.
+       * **Bullet 8's real claim still stands and is NOT yet checkable here.** *"Each side's own tree
+       * matching the certified root"* requires recomputing the certified root FROM this side's
+       * leaves plus the seal leaf — which is bullet 2, *"the client verifies the certified root
+       * against its own tree before accepting or co-signing"*, and that is CELLO_Coder_1's bullet
+       * and not yet landed. Until it exposes a verification result, a journey can only compare two
+       * roots that are not supposed to be equal.
+       *
+       * `local_tree_root` is left on the receipt deliberately: it is the raw material that
+       * verification needs, and it costs nothing to carry.
        */
-      if (typeof receipt.local_tree_root === "string" && receipt.local_tree_root !== receipt.sealed_root) {
-        throw new Error(
-          `${label}: the certificate does NOT cover this party's own tree.\n` +
-            `  certified root : ${receipt.sealed_root}\n` +
-            `  this side's root: ${receipt.local_tree_root}\n` +
-            `  Both parties can still agree on the certified root while it certifies a leaf set ` +
-            `neither of them holds — that is why matching the two parties' sealed_root is not ` +
-            `sufficient, and why this compares against a LOCALLY derived root instead.`,
-        );
-      }
       return receipt.sealed_root;
     }
     await new Promise((r) => setTimeout(r, 500));
