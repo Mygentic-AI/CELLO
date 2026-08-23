@@ -800,6 +800,35 @@ one could ship safely. **Neither of these is visible to `sealReadiness` today.**
 - **Do not gate either on suspicion alone.** The bar is a signal separating a relay catching up from
   a leaf it will never carry.
 
+### `DOD-M15-MIGRATION-GUARD-1` — ❌ The upgrade guard checks all seven rebuilt tables, not one
+**Found 2026-08-23 while adding a column for `DOD-M15-SEALWIRE-1` B2b, and it is why that column's
+neighbours were found missing.** Raised with `CELLO_Support` over CELLO because it exposes both
+lanes; test-only, and in neither lane's current unit.
+
+`agent-id-migration.ts` rebuilds **seven** tables from a pinned DDL and copies the INTERSECTION of
+the old and new column lists. So a column added by an inline `ALTER TABLE` and omitted from that DDL
+is **dropped on the one boot where a legacy database upgrades** — and then re-added EMPTY by the same
+ALTER moments later, which is what makes it silent: every observation after the fact shows the column
+present.
+
+`dod-agent-id-joinkey-migration` is the guard for exactly this, and it has caught the class **four
+times** — `read_at`, `diverged_at`, `content_salt`, and `retry_queue`'s ordering record. **It replays
+only the `sessions` inline ALTERs.** The other six rebuilt tables have nothing between a forgotten
+column and silent data loss.
+
+- **The bar:** the guard replays EVERY rebuilt table's inline ALTERs in the real boot order, not just
+  `sessions`'. `retry_queue`'s live in `retry-queue.ts`'s constructor and `contacts`' in
+  `contacts-tier-migration.ts`, so this means the guard reaches across files — which is precisely why
+  it did not.
+- **Not a schema comparison — a DATA one.** A matching column set is what already passes today for
+  `retry_queue`: the column is present after the rebuild and empty. The guard must seed a value
+  before migrating and assert the value afterwards, as the `content_salt` and `retry_queue` upgrade
+  tests do.
+- **The rule this makes precise, and it is narrower than either lane was holding it:** not "a
+  client-side column needs two entries" but *"a column added to any of the seven rebuilt tables needs
+  two entries, and only one of the seven is guarded."*
+- **Enforcer:** receipt.
+
 ### `DOD-M15-DIVERGE-DURABLE-1` — ✅ The divergence flag survives a daemon restart
 > **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F4 (`readLock` →
 > null → proceed) [blocking]; F5 (mode silently not applied on overwrite) [blocking]; F6/F7
