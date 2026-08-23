@@ -945,11 +945,27 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 >
 > | # | Cluster | Files | Status |
 > |---|---|---|---|
-> | 1 | **`register-agent` prints prose after its JSON** — dies at the journey's FIRST line | 5 | **CAUSE ESTABLISHED**, reproduced. → `DOD-M15-CLIJSON-1` |
+> | 1 | **`register-agent` prints prose after its JSON** — dies at the journey's FIRST line | **8** | **CAUSE ESTABLISHED**, reproduced, FIXED. → `DOD-M15-CLIJSON-1` |
 > | 2 | **Cascade inside `j-multiplayer`** — 5 × `MCP -32001 Request timed out` at ~70s each, all AFTER an earlier real failure in the same file (*"agentA has no sealed root"*) | 1 file, 5 tests | **Likely ONE cause, not five.** Re-run the file alone after cluster 3 before treating any as real |
 > | 3 | **The seal path hands back `undefined` where a value is expected** — five `.toMatch() received undefined`, in unilateral seal, the ABSENT gate, auto-acknowledge close, bilateral seal, and loopback | 5 | **LEAD ONLY.** All five are seal/notarization. `SEALWIRE-1` is mid-flight in the other lane and the spine runs the BUILT binaries, so version skew is as plausible as a regression. **Raised with `CELLO_Coder_1` rather than diagnosed from this side** |
 > | 4 | **The portal database has been down 11 days** — `j-end`'s 7 failures are all portal HOPs | ~2 | **ENVIRONMENTAL, confirmed.** Not a product defect. Start the container and re-run before counting these |
 > | 5 | Singletons — `same_operator` envelope field, the 2-of-3 quorum registration, the built-artifact layer boundary, and others | ~8 | Unexamined |
+>
+> ### ⚠️ RE-SCAN, and it moves the number the wrong way for my earlier reporting
+>
+> I first clustered **5** journeys onto the registration bug. Scanning the receipt for the parse
+> error properly gives **EIGHT distinct files**: `j-persist`, `j-refresh`, `j-relaysig`, `j-remove`,
+> `j-sign`, `j-suspend-tofn`, `j-tofn`, `j-tofn-dkg`.
+>
+> **What that means for everything I concluded from the first run: any characterisation of those
+> eight is UNRELIABLE.** They died in `register-agent` before reaching the assertions they are named
+> for, so "this journey proves X is broken" was never established for any of them — the same error I
+> made about the quorum invariant, eight times over rather than once.
+>
+> **The re-runs ARE trustworthy**, because they happened after the fix: `j-refresh` ✅, `j-remove`
+> (real finding — `DOD-M15-REVOKED-READS-OFFLINE-1`), `j-relaysig` (real finding — a renamed command
+> the failure did not name). The rule is simply that a pre-fix red file proves nothing about its
+> subject, and each has to be re-run before anyone reasons from it.
 >
 > **So the honest headline is not "half the lane is broken."** It is: **five journeys die on one CLI
 > defect, seven on a stopped container, five look like one cascade, and five share a seal-shaped
