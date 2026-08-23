@@ -149,6 +149,55 @@ how every notification system has degraded. Publisher-declared priority is *advi
 subscriber's own rule decides what escalates. The operator sets it once and their agent enforces it.
 That gives an escape hatch for a genuine emergency without handing every publisher a red button.
 
+### The publisher still needs a way to signal, and the channel needs to promise how it will use it
+
+*Subscriber-side control* does not mean the publisher has no voice. It means the publisher's voice is
+**input to a rule the subscriber owns.** Three pieces:
+
+**Messages carry TITLES as a first-class field.** Not a convention inside the body — a field. That is
+what makes a subscriber-side rule expressible without reading bodies (*"anything from this channel
+whose title contains URGENT wakes me"*), and it is what makes a digest possible at all: *six topics
+have new messages, here are the counts and titles* is answerable without opening anything.
+
+**The channel publishes its notification GUIDANCE at subscribe time.** Set by the channel creator and
+delivered to every new subscriber as part of joining: *"I promise not to overuse this. URGENT in the
+title means genuinely urgent — set immediate notification for it."*
+
+> That guidance is a **promise, and it is reputation-bearing.** A channel that cries urgent gets
+> downgraded by its subscribers individually, which is the correct feedback loop and needs no central
+> moderation. The publisher gets a way to be heard; the subscriber keeps the authority; abuse costs
+> the publisher its own reach.
+
+**Notifications range from trivial to fully custom.** Simple standing ones that are not about
+broadcast at all — *notify me when the daemon restarts, notify me on `use_agent`* — through digests
+(*six topics with new messages, call this for counts*) up to per-channel custom rules where something
+genuinely needs prioritising.
+
+### Escalation is three layers, each with its own authority
+
+The worked example is an infrastructure monitor, and it matters because it shows what the broadcast
+primitive is *not* responsible for.
+
+1. **A monitoring agent** wakes every twenty minutes, runs a cheap model against three directories
+   and five relays, checks health and logs. On finding something, it **publishes to a channel** with
+   a title carrying its severity. It does not contact a human. It does not hold anyone's phone
+   number. **It has no escalation policy at all.**
+2. **A personal agent subscribes** — `Miss_Chelly`, online continuously. It applies **its own**
+   policy: what time zone is the operator in, when did they say goodnight, how urgent is this
+   really. That agent holds the human's preferences, and it is the only thing that does.
+3. **The human is reached through tools that already exist** — a phone tool, a Telegram message, a
+   watch configured to let a specific sender through regardless of do-not-disturb. Moderately
+   important at 23:30 gets one ping. Genuinely critical at 02:00 gets contacted relentlessly until
+   answered.
+
+> **The monitoring bot is never given the human's contact details.** It is told *go talk to my
+> personal agent.* Publisher signals, subscriber routes, personal agent escalates — three separate
+> authorities, and only the last one knows how to wake somebody up.
+
+This also shows the reply-direct path being used for **escalation rather than reply**: the personal
+agent receives a broadcast and then acts one-to-one, or reaches outside CELLO entirely. The channel
+carries the signal and takes no responsibility for what any subscriber does with it.
+
 **The offline case needs no new machinery.** Come back, ask for everything after N, receive a batch
 and a count. Same catch-up primitive, not a separate notification system.
 
@@ -176,29 +225,63 @@ one-at-a-time mode is the wrong one** — that is the competing-consumer behavio
 
 ---
 
-## Part 5 — Subscriber lists, and the fork underneath them
+## Part 5 — Access control, subscriber lists, and delivery
 
-Default **private**, with settings layered on: public, per-subscriber opt-in, or visible to channel
-admins only.
+An earlier draft treated subscriber-list privacy as the primary setting and push-versus-pull as the
+fork underneath it. **That missed the axis that actually governs both: is the channel OPEN or
+INVITE-ONLY?** Once that is named, most of the privacy question stops being a setting and becomes a
+consequence.
 
-Two forks decide more than they appear to:
+### The axis that was missing
 
-**Push versus pull decides publisher-side privacy.** "Private subscriber list" has two meanings that
-come apart. Private *from other subscribers* is a setting. Private *from the publisher* is a
-consequence of the delivery model — under push the publisher must know who to send to; under pull it
-can be blind, but then it cannot know its own reach either.
+- **Open** — anyone may subscribe.
+- **Invite-only / request-and-approve** — the admin admits members.
 
-**A join step that can warn you is a publisher that knows you joined.** The "this channel is not
-monitored by CELLO agents, subscriber beware" notice needs something to interpose on. If subscribing
-is just *start pulling from this pubkey*, there is no join to hook. The warning and the
-blind-publisher property are in tension.
+> ### Invite-only ENTAILS an admin-visible subscriber list. There is no meaningful "private" setting
+> to choose, because **you cannot approve a request from someone whose key you cannot see.**
 
-**Consequences not yet chosen:**
-- Under push you can eject a subscriber. Under pull, with a public key, you cannot stop someone
-  reading — **ejection may not be expressible.**
-- Delivery still needs something to physically reach N daemons. Under the artifact model a hub is
-  **untrusted**: it can neither forge nor alter, only fail to deliver. Whether that is the relay, a
-  dedicated fan-out node, or scheduled subscriber pulls is open.
+The theoretical case — someone asks to join without revealing their address — is a curiosity with no
+use case identified, and is **deliberately set aside.** Naming it as excluded rather than leaving it
+implicit, so nobody rediscovers it as an oversight.
+
+### What that produces
+
+| Access | Delivery | Who knows the subscribers | Ejection |
+|---|---|---|---|
+| Open | Pull | **Nobody** — the publisher cannot know its own reach either | Not expressible without authenticated pull |
+| Open | Push | The publisher, necessarily — it must know where to send | Possible |
+| Invite-only | Either | **The admin, by necessity** | Possible, and this is where it is needed |
+
+So the remaining genuine setting is narrow: on an **open** channel, whether other subscribers can see
+each other. Everything else is entailed by the access model and the delivery model.
+
+### Ejection
+
+> ### DECIDED: ejection must be possible. It is only *needed* for invite-only channels — which is
+> also the only place it is cleanly *expressible*, since that is where the admin knows who to remove.
+
+One mechanism note: under **pull**, removing someone from a list does not stop them fetching, because
+they still hold the channel's public key. **Ejection under pull requires an authenticated pull** —
+the subscriber proving identity to fetch. Without that, ejection is advisory rather than enforced.
+For an encrypted channel, ejection also implies **re-keying** (Part 8), since a departing member
+keeps the group key and anything already cached.
+
+### The join step, and what it carries
+
+**A join step that can warn you is a publisher that knows you joined.** The *"this channel is not
+monitored by CELLO agents, do your own due diligence"* notice needs something to interpose on. If
+subscribing is just *start pulling from this pubkey*, there is nothing to hook.
+
+Under the corrected framing this tension mostly evaporates: **invite-only channels have a join step
+by construction**, and that step is also where the channel's notification guidance (Part 3) is
+delivered. Only the open-and-pull corner has no join, and that is the corner that already gives up
+knowing its own audience.
+
+### Delivery still has to happen
+
+Something must physically reach N daemons. Under the artifact model that hub is **untrusted**: it can
+neither forge nor alter, only fail to deliver. Whether it is the relay, a dedicated fan-out node, or
+scheduled subscriber pulls remains open.
 
 ---
 
@@ -406,24 +489,36 @@ Two edges to have answers ready for:
 3. **A listen-only flag, if one is ever needed, belongs in the directory profile**, never client
    config — and receiver-side refusal is the only path-independent enforcement.
 4. **No doorbell for broadcast.** Deliver at turn boundaries; batch; no rate limit.
-5. **Priority is subscriber-side.** Publisher-declared urgency is advisory only.
-6. **The channel holds no read state.** Monotonic sequence numbers; subscribers track their own
+5. **Priority is subscriber-side.** Publisher-declared urgency is advisory only — but the publisher
+   gets a real channel for it: **titles as a first-class field**, plus **notification guidance
+   published at subscribe time**, which is a reputation-bearing promise rather than a control.
+6. **Escalation is three separate authorities** — publisher signals, subscriber routes, personal
+   agent escalates. A monitoring agent never holds a human's contact details.
+7. **The channel holds no read state.** Monotonic sequence numbers; subscribers track their own
    position; `since_seq` is the right primitive.
-7. **Subscriber lists default to private**, with public / opt-in / admin-visible as settings.
-8. **Discovery stays gated initially** — one CELLO-governed announcements channel, no open mechanism.
-9. **The conclave is a subscriber, and the sanction is the enforcement** — no anti-removal mechanism
-   needed.
-10. **Encrypted discovery uses per-group keys**, protecting the query rather than the public
+8. **Access model is the governing axis**: open, or invite-only / request-and-approve.
+   **Invite-only entails an admin-visible subscriber list** — you cannot approve a request from a key
+   you cannot see. The only genuine remaining setting is whether subscribers on an *open* channel can
+   see each other.
+9. **Ejection must be possible**, is needed only for invite-only, and under pull requires an
+   authenticated pull or it is advisory rather than enforced.
+10. **Discovery stays gated initially** — one CELLO-governed announcements channel, no open mechanism.
+11. **The conclave is a subscriber, and the sanction is the enforcement** — no anti-removal mechanism
+    needed.
+12. **Encrypted discovery uses per-group keys**, protecting the query rather than the public
     descriptor, with access-pattern leakage disclosed alongside.
-11. **Encrypted search is not a headline feature.** The headline is safe, private agent-to-agent
+13. **Encrypted search is not a headline feature.** The headline is safe, private agent-to-agent
     communication with conclaves.
-12. **Relays are given away; directories are retained.** Consortium expansion by inviting large
+14. **Relays are given away; directories are retained.** Consortium expansion by inviting large
     operators to run nodes.
 
 ## Open
 
-- **Push or pull.** Decides publisher-side privacy, whether a join step exists, and whether ejection
-  is expressible.
+- **Push or pull.** Narrowed but not closed: it now decides only the *open* channel's behaviour,
+  since invite-only entails a known subscriber list either way. Still governs whether an open channel
+  can know its own reach, and whether an authenticated pull is needed for ejection.
+- **What a title may contain, and who validates it.** Titles are now load-bearing for notification
+  rules and digests, which makes them a surface a publisher can abuse — and a place injection lands.
 - **Retraction.** A signed artifact is permanent by design. You broadcast something wrong to five
   hundred agents that act on it — is there a correction, a supersede, a revoke, and what does a
   subscriber that already acted do with it? *The one that gets harder the longer it is left.*
