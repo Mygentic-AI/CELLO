@@ -15,28 +15,17 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟡 29 ✅, 3 🟡, 2 🅿️, 37 ❌. Both repos clean, pushed, on main.
-> **`SEAL-FAILED-TERMINAL-1` IS THE UNREVIEWED ONE** — built in `af3062f`+ (cello-client), reviewer
-> dispatched. `DIRAUTH-1` and `DEAD-WIRE-FIELD-1` are 🟡 for CARRIED halves only and do not block.
-> Gate: 4227 client tests, lint, typecheck, build — by EXIT CODE.
+> ### 🟢 30 ✅, 2 🟡 (carried halves only), 2 🅿️, 37 ❌. Both repos clean, pushed, on main.
+> **No unreviewed work.** `SEAL-FAILED-TERMINAL-1` closed in Entry 38 — nine findings fixed, verdict
+> quoted, gate green both repos BY EXIT CODE (4229 client). `DIRAUTH-1` and `DEAD-WIRE-FIELD-1` are 🟡
+> for CARRIED halves only and do not block.
 
-- **NEXT ACTION: close `SEAL-FAILED-TERMINAL-1`**, then pull ONE new ❌ line. `FREEZE-STATUS-1` needs
-  a client-side DB migration in its own reviewed unit; `UNWITNESSED-1` needs a relay-attaching fixture.
-- **`OFFER-EXPIRY-1` IS DIAGNOSED — do not re-derive it.** Recommended next line: it is in the
-  CONNECT path, which is the core value, and its second bullet is a live mutual-exclusion defect.
-  The whole cause is one field: `SessionConnectionGater.#allowedPeerId` is a SINGLE `string | null`,
-  and `admitInboundPeer(peerId)` overwrites it. So:
-  - two inbound offers close together → the second narrows the gate away from the first → the first
-    initiator is refused with a `connection.rejected` naming a peer id it never heard of;
-  - `admitOfferedDialer` records `#offeredDialer[(agent, sessionId)]` but the GATE itself is not
-    keyed by session, so `closeInbound()` for one session closes it for whichever session narrowed
-    it last;
-  - nothing expires it, so an offer never followed by an assignment leaves a standing invitation for
-    the life of the process.
-  **Fix shape:** make the gate a SET keyed by session id with an expiry, so admitting one session
-  cannot evict another and an unclaimed offer lapses on the same clock the directory uses before it
-  gives up waiting for an accept. `getStandingReceiverAllowedPeer` (added by `RESPONDER-VERIFY-1`)
-  is the read seam already in place.
+- **🔴 NEXT ACTION — ANDRE'S DIRECTION (2026-08-23, while briefly awake): START TIER 4.**
+  *"The encryption handshake and the seal-to-transcript binding still haven't started. After these
+  open [ones] are reviewed, fixed and closed they should be started."* They are now closed, so:
+  **`DOD-M15-KEYAGREE-1` FIRST, then `DOD-M15-SEALWIRE-1`** — the DoD states KEYAGREE **must precede**
+  SEALWIRE because it produces both outputs the seal change consumes. Do NOT pull anything else in
+  between; `OFFER-EXPIRY-1` is diagnosed below and waits its turn.
 - **🚨 THE WIRING GAP HAS NOW ESCAPED IN FOUR UNITS.** Roster sweep, its probe budget, the manifest
   validity tick, and this unit's WRITE side. Every time the module tests were green and nothing
   proved the daemon called the thing. In this unit I wrote a docstring naming the previous three and
@@ -3562,3 +3551,91 @@ Gate: 4212 client tests, server suite green, lint, typecheck, build — by exit 
   with a durable commitment, no receipt, and no retry until a restart. `seal_in_progress` covers
   "running"; there is still no terminal `seal_failed` an agent can discover. Persist the last
   background failure on the session row and surface it.
+
+---
+
+## Entry 38 — the unit recorded failures on the one branch that almost never fires
+
+`DOD-M15-SEAL-FAILED-TERMINAL-1` → ✅. Nine findings, five blocking.
+
+### The verdict, quoted
+
+> **SILENT FALLBACKS FOUND** — HIGH-1: the `unresolved` branch keeps a dead ceremony reporting
+> `not_sealed_yet`; HIGH-2: the remedy erases the marker; MEDIUM-4/5: stale markers presented as
+> current. All [blocking].
+> **HOLLOW TESTS FOUND** — HIGH-3 [blocking]: the wiring test does not test the wiring and its
+> docstring says it does.
+>
+> *"I am not rubber-stamping this one — the three HIGH findings are all in the class you flagged (a
+> producer/consumer claim that does not hold, and a guard with no test). The single most valuable fix
+> is HIGH-1; it also dissolves HIGH-2."*
+
+### The finding, and it is the sharpest of the milestone
+
+**`escalateToUnilateralSeal` contains ZERO `throw`s.** All nine of its failure paths RESOLVE with
+`{ ok: false, reason }` — `seal_unilateral_timeout`, `seal_carry_empty`, `seal_counterparty_pending`,
+`seal_agent_key_unavailable`, the rest. I recorded the failure only in the detached tail's `.catch`.
+
+So **every ordinary dead ceremony went unrecorded**, and `cello_sealed_receipt` kept answering
+`not_sealed_yet` — the exact answer this unit exists to replace. The unit closed roughly a tenth of
+the gap it names.
+
+Two things should have told me. My own test had to **inject a throwing key provider** to reach the
+path it covered. And the log line three lines from my fix already said it: *"this session holds a
+durable commitment but has no receipt yet."*
+
+### The remedy destroyed the diagnosis
+
+HIGH-2, which dissolves with HIGH-1 but is worth recording as a shape. The guidance said re-close.
+Re-closing cleared the marker. The retry then failed the *ordinary resolved* way and recorded
+nothing. So **one application of this unit's own advice converted `seal_failed` back into the
+pre-unit answer, permanently.**
+
+### Optional deps made a missing wiring silent
+
+HIGH-3. Deleting the daemon's `getSealFailure` line left tests, lint and typecheck green while the
+whole unit sat inert — and my wiring test's docstring claimed to cover exactly that, while injecting
+the reader's dep as a literal. **Fourth unit in a row with a wiring gap, and this time I wrote a
+comment naming the previous three and then made it one layer up.**
+
+Both deps are REQUIRED now. That turned three harnesses into type errors — the compiler catching what
+four units of tests did not.
+
+### The receipt that could be lost permanently and silently
+
+MEDIUM-6, and the one with real consequence. `restart_seal_gave_up_at` is stamped when the restart
+resolver exhausts its attempts and **nothing ever cleared it**. Path: resolver gives up → column
+stamped → session REVIVED and carries live traffic → closed → background ceremony dies → the
+in-memory marker is lost at restart → `listRestartOrphanedSessions` excludes the row forever on that
+column → and `listExpiredUnrevivableSessions` explicitly INCLUDES it, so the revival sweep
+force-abandons the session. **Receipt permanently forfeited, no surface ever saying so.**
+
+`reviveSessionNode` clears it now: a session something is talking to again is the opposite of the
+"hopeless session" the column was written for.
+
+The in-memory design decision **survived** the attack — the reviewer traced the boot sweep and the
+resolver and confirmed a persisted marker would lie — but the docstring now names the two exclusions
+instead of implying the restart path covers everything.
+
+### The claim scanner earned its keep
+
+Documenting `seal_failed` on both shipped SKILL.md copies pushed them one claim above baseline, and
+the guard says outright that **raising the baseline is the one response that is never right.** So the
+claim is adjudicated with evidence: *"commitment durable, conversation intact"* is two properties of
+code — the leaf reaches the relay witness BEFORE the caller is answered, and a failed ceremony writes
+nothing to the transcript and leaves the session `active`, which is why a later boot can still
+notarize it.
+
+### And the fix for HIGH-1 shipped without a test
+
+The revert test caught it: deleting the record on the RESOLVED branch left all sixteen tests green,
+because the only write-side test forces a throw. **I fixed the defect and reproduced its exact shape
+in the coverage for the fix.**
+
+Gate: 4229 client tests, server suite green, lint, typecheck, build — by exit code.
+
+### Carried
+
+- **`DOD-M15-SEAL-RETRY-1`** — nothing retries a failed background ceremony before the next daemon
+  restart. `seal_failed` now makes it discoverable and re-close is a working manual remedy, but an
+  unattended daemon still sits on a durable commitment doing nothing until it is restarted.

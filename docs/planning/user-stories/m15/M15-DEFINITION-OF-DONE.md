@@ -1132,17 +1132,36 @@ the only safety net standing between "the relay said sealed but lied" and "the r
 > change had made impossible, and the re-close refusal named a log event emitted nowhere in the tree.
 > **Carried:** `DOD-M15-SEAL-FAILED-TERMINAL-1`.
 
-### `DOD-M15-SEAL-FAILED-TERMINAL-1` — 🟡 A seal that FAILED is discoverable, not just a slow one
-> **BUILT 2026-08-23, review in flight.** `cello_sealed_receipt` now answers `seal_failed` with the
-> UPSTREAM cause, distinct from `seal_in_progress` (running) and `not_sealed_yet` (no ceremony).
-> **Stored in memory, not a column — and that is a correctness call, not a cost one.** A restart makes
-> "failed" the WRONG answer: the boot sweep flips the session to `interrupted/local` and the restart
-> seal resolver retries it, so a persisted marker would outlive its own truth and report a ceremony
-> as dead while it is being retried. A marker whose lifetime is the process matches the lifetime of
-> the condition it describes.
-> **The ordering is the load-bearing part:** a running ceremony outranks a remembered failure, and the
-> marker is cleared when a ceremony STARTS — because a re-close is the documented remedy, and a stale
-> verdict surviving the retry is `STALEROSTER-1`'s defect in a new subsystem.
+### `DOD-M15-SEAL-FAILED-TERMINAL-1` — ✅ A seal that FAILED is discoverable, not just a slow one
+> **CLOSED 2026-08-23** (→ Entry 38). Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — HIGH-1:
+> the `unresolved` branch keeps a dead ceremony reporting `not_sealed_yet`; HIGH-2: the remedy erases
+> the marker… **HOLLOW TESTS FOUND** — HIGH-3: the wiring test does not test the wiring and its
+> docstring says it does… I am not rubber-stamping this one — the three HIGH findings are all in the
+> class you flagged."* All nine fixed. Gate: 4229 client tests, server suite green, lint, typecheck,
+> build — by exit code.
+>
+> **The sharpest finding of the milestone:** `escalateToUnilateralSeal` contains ZERO throws — all
+> nine failure paths RESOLVE — so recording only in the detached `.catch` meant every ORDINARY dead
+> ceremony went unrecorded and the receipt surface kept answering `not_sealed_yet`. The unit closed
+> about a tenth of the gap it named.
+> **`failed` vs `unresolved`** are now different words with different guidance: an exception is
+> usually a local fault; a resolved failure most often means the counterparty has not closed yet.
+> **A receipt could be lost permanently:** `restart_seal_gave_up_at` was never cleared, so a
+> revived-then-closed session was excluded from recovery forever AND force-abandoned by the revival
+> sweep. `reviveSessionNode` clears it.
+> **Carried:** `DOD-M15-SEAL-RETRY-1`.
+
+### `DOD-M15-SEAL-RETRY-1` — ❌ A failed background ceremony retries itself
+Split from `DOD-M15-SEAL-FAILED-TERMINAL-1`. The failure is now DISCOVERABLE and re-close is a working
+manual remedy; nothing is automatic.
+- An unattended daemon sits on a durable commitment doing nothing until it is restarted — the restart
+  seal resolver is the only retry, and it only runs at boot.
+- Most of the nine resolved failure reasons are transient by nature (`seal_counterparty_pending`,
+  `seal_unilateral_timeout`, a directory briefly unreachable), so a bounded backoff would clear them
+  without an operator ever seeing `seal_failed`.
+- Reuse the resolver's discipline rather than inventing a second one: serial, staggered, with a
+  give-up stamp — and note that `DOD-M15-SEAL-FAILED-TERMINAL-1` made that stamp clearable on revive.
+
 Split from `DOD-M15-CLOSEWAIT-1` (review HIGH-1, the half that remains).
 - `seal_in_progress` now distinguishes a RUNNING ceremony from "no ceremony". What is still missing is
   the terminal case: a background ceremony that **threw** leaves the session `active` with a durable
