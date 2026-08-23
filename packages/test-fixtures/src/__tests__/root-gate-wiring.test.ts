@@ -134,14 +134,36 @@ describe("DOD-M15-CI-SKIPS-SILENT-1: files a project config hides never collect 
    * So each exclusion now declares WHICH command runs it, WHO runs it, and WHEN — and the command
    * is verified to exist in that package's `package.json`. Prose that names a missing script fails.
    *
-   * **The decision, recorded (§3a — manual-only, not scheduled):** neither lane is wired to a
-   * schedule, and that is deliberate rather than deferred. `cross-machine` cannot be scheduled at
-   * all — it needs a second physical machine. `spine` could be, but the CI that would host it is the
-   * stale AWS pipeline set, and building a scheduler for it is a larger job than the milestone-close
-   * gate needs. Manual with a named owner is the choice least likely to need reversing.
+   * **The decision, recorded (§3a — manual-only, not scheduled), for THREE reasons:**
    *
-   * **Measured, not assumed** (2026-08-23): `test:spine` was run and works — real binaries, real
-   * Postgres, `j-conn` green in 30s. The lane is not rotted; it is simply unattended.
+   * 1. `cross-machine` cannot be scheduled at all — it needs a second physical machine.
+   * 2. `vitest.spine.config.ts` resolves `PORTAL_ROOT = ../../../cello-portal` — a SECOND private
+   *    repo that must be checked out beside this one. Schedulable, but it needs a cross-repo
+   *    checkout credential, and that is real work rather than a config line.
+   * 3. The lane is **56 minutes and currently half red** (`DOD-M15-SPINERED-1`). Scheduling it today
+   *    creates a permanently red required check — and `.github/workflows/ci.yml`'s own header already
+   *    ruled on that: *"a permanently red required check teaches everyone to ignore the pipeline,
+   *    which is worse than an honest absence."* This is that ruling applied a second time.
+   *
+   * **REVISIT once `SPINERED-1` is green.** The host exists; only the portal checkout and the
+   * runtime are in the way. Without that trigger written down, "manual" silently becomes "never".
+   *
+   * ⚠️ **This previously said the only CI was "the stale AWS pipeline set". That was FALSE** —
+   * `.github/workflows/ci.yml` is live, runs on every push and PR, and already stands up a compose
+   * Postgres and runs Flyway. This same file says so 190 lines below. Two comments in one file, one
+   * saying CI is live and one saying it is dead; the false one was mine and it was the load-bearing
+   * half of a decision. Corrected rather than deleted, because "we have no CI" on the record is how
+   * nobody comes back to it.
+   *
+   * **Measured, not assumed** (2026-08-23): `test:spine` was run for the FIRST time and the lane is
+   * **half red — 21 of 36 files, 49 of 98 tests**. See `DOD-M15-SPINERED-1`. What that establishes
+   * for THIS line, and only this: the lane *executes* — real binaries, real Postgres, `j-conn` green
+   * — so it is unattended, not absent. Whether it *works* is `SPINERED-1`'s question, not this one's.
+   *
+   * ⚠️ **An earlier version of this comment said "the lane is not rotted."** It was written after one
+   * green file and before the full run, and the full run falsified it. It is called out rather than
+   * quietly replaced because a confident sentence in the milestone's own enforcement file is exactly
+   * what stops the next reader going to look.
    */
   interface Exclusion {
     readonly why: string;
@@ -218,14 +240,62 @@ describe("DOD-M15-CI-SKIPS-SILENT-1: files a project config hides never collect 
       for (const pkg of owners) {
         const pj = join(PACKAGES, pkg, "package.json");
         const scripts = (JSON.parse(readFileSync(pj, "utf8")) as { scripts?: Record<string, string> }).scripts ?? {};
-        if (!(decl.command in scripts)) {
+        const body = scripts[decl.command];
+        if (body === undefined) {
           broken.push(
             `${pkg}: "${pattern}" says it runs via \`${decl.command}\`, and ${pkg}/package.json has no such script`,
           );
+          continue;
+        }
+        /**
+         * THE COMMAND MUST COLLECT THE PATTERN, not merely exist.
+         *
+         * "The script is present" is one hop short of what is checkable. Narrow
+         * `vitest.spine.config.ts`'s `include` to a single file — or leave it stale after a
+         * directory move — and 35 files stop being collected by the only command declared to run
+         * them, with the script name untouched and this guard green. That is `CI-SKIPS-SILENT-1`
+         * reproduced INSIDE the escape hatch built to close it.
+         *
+         * Both configs satisfy this today, so it costs nothing to require.
+         */
+        const cfgName = /--config\s+(\S+)/.exec(body)?.[1];
+        if (cfgName === undefined) continue; // no --config: the package's default config, already checked
+        const cfgPath = join(PACKAGES, pkg, cfgName);
+        if (!existsSync(cfgPath)) {
+          broken.push(`${pkg}: \`${decl.command}\` names ${cfgName}, which does not exist`);
+          continue;
+        }
+        const includeBlock = /include:\s*\[([^\]]*)\]/s.exec(readFileSync(cfgPath, "utf8"));
+        const includes = includeBlock
+          ? Array.from(includeBlock[1].matchAll(/["']([^"']+)["']/g)).map((m) => m[1])
+          : [];
+        if (!includes.includes(pattern)) {
+          broken.push(
+            `${pkg}: \`${decl.command}\` runs ${cfgName}, whose include is [${includes.join(", ")}] — ` +
+              `it does NOT collect "${pattern}", so the lane this declaration points at is not the ` +
+              `lane being excluded`,
+          );
         }
       }
-      if (decl.owner.trim().split(/\s+/).length < 5) {
-        broken.push(`${pattern}: owner is too thin to be a commitment — name a person and a trigger`);
+      /**
+       * A FORMATTING FLOOR, and it says so. It counts words; it cannot tell a person from a
+       * placeholder, and `"Somebody will get to it"` is five words and passes. The earlier message
+       * claimed it checked "a person and a trigger" — a message describing a stronger check than
+       * the code performs, which is the same defect this file exists to catch, in miniature.
+       *
+       * `why` gets the same floor. It is the field the original guarantee is NAMED after — "declared
+       * with a written reason" — and until now nothing read it at all: `why: ""` passed a test whose
+       * name promises a reason.
+       */
+      for (const [field, value] of [["owner", decl.owner], ["why", decl.why]] as const) {
+        if (value.trim().split(/\s+/).length < 5) {
+          broken.push(
+            `${pattern}: \`${field}\` reads as a placeholder. A word count is ALL a machine can ` +
+              `check here — the field must carry a person or role AND the trigger that fires it ` +
+              `(owner), or the actual reason the lane is hidden (why), and only a human can confirm ` +
+              `that it does.`,
+          );
+        }
       }
     }
     expect(
@@ -244,7 +314,21 @@ describe("DOD-M15-CI-SKIPS-SILENT-1: files a project config hides never collect 
     const spine = testFilesIn(join(PACKAGES, "e2e-tests")).filter(
       (f) => basename(f).endsWith(".spine.test.ts") || basename(f).endsWith(".cross-machine.test.ts"),
     );
-    expect(spine.length, "the spine/cross-machine lane should still be present on disk").toBeGreaterThan(0);
+    /**
+     * PINNED, not `> 0`. The test's own name says the number is "on the record" and its comment says
+     * *"if the lane is ever wired into the gate, this number drops and someone has to come and say
+     * so"* — but `toBeGreaterThan(0)` stays green after deleting 36 of the 37 files, so nobody had to
+     * come and say anything. A test that names a number and asserts a floor is not counting.
+     *
+     * 37 = 36 `*.spine.test.ts` + 1 `*.cross-machine.test.ts`. The DoD line said 38; it was wrong.
+     */
+    expect(
+      spine.length,
+      `The hidden lane is ${String(spine.length)} files, not 37. If files were ADDED, they are ` +
+        `hidden too and nobody has run them — say so here. If files were REMOVED or wired into the ` +
+        `gate, that is the outcome DOD-M15-SPINE-LANE-1 wanted; update the number and the DoD line ` +
+        `together so the record moves with the code.`,
+    ).toBe(37);
   });
 });
 
