@@ -395,8 +395,26 @@ describe("J-UNILATERAL — DOD-LIVE-2: the ABSENT gate (gone→ABSENT vs alive-b
     // UPGRADE-002: an alive, verified B no longer degrades to a unilateral seal on a silent agent —
     // its node auto-co-signs, so the seal is BILATERAL (seal_type is NOT 'unilateral').
     expect(close.ok, `A close must succeed (B auto-acks):${diag}`).toBe(true);
-    expect(close.sealed_root, `A must surface a sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
-    expect(close.seal_type, `alive B auto-acks → BILATERAL, never unilateral:${diag}`).not.toBe("unilateral");
+    /**
+     * ⚠️ THE FOURTH STALE USE IN THIS FILE, and I missed it after being warned to look for exactly
+     * this. The other lane found a second use below the obvious one in `j-loopback` and told me to
+     * grep; I did, converted three, and this one sat below all of them.
+     *
+     * Worth recording rather than quietly fixing: "I checked for more" and "I found all of them" are
+     * different claims, and the grep that produced the first does not license the second.
+     *
+     * 60s, not 90: B is ALIVE and its daemon auto-acks, so this seal completes bilaterally in
+     * seconds and must never reach the escalation — the same reasoning as `j-upgrade`, which runs
+     * green in 4.6s. A generous bound here would hide auto-ack silently failing.
+     */
+    const sealedRoot = await awaitSealedRoot(connA, sessionIdA, {
+      timeoutMs: 60_000,
+      label: "A's seal with B alive and auto-acking",
+    });
+    expect(sealedRoot, `A must surface a sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
+    // `close.seal_type` is gone from the non-blocking close and has no replacement — the assertion
+    // below (no unilateral notarization for this session) is the one that actually proves BILATERAL.
+
     expect(daemonB.output, `B's daemon must auto-acknowledge:${diag}`).toMatch(/session\.seal\.autoacknowledged/);
     // DOD-LIVE-2 invariant PRESERVED: an alive B is NEVER sealed ABSENT — here it SIGNED (bilateral),
     // so there is no unilateral notarization marking B absent for this session.
