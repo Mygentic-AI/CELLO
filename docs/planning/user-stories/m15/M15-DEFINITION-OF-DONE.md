@@ -320,11 +320,31 @@ different repos, different disciplines, neither blocks the other.
       in memory: a restart between a tamper and the counterparty's SEAL ctrl leaf lets this side
       auto-co-sign. The upgrade path is accidentally covered — a refused frame was never appended,
       so its leaf count is short — and the auto-ack path has no such backstop.
-    - **`content.recover.alg_refusal_reconciled` has no test.** Deleting the whole block survives the
-      gate. It lands with the park-envelope work, which is what makes it testable.
+    - ~~**`content.recover.alg_refusal_reconciled` has no test.**~~ **CLOSED in B2a** (→ Entry 46).
     - **The salt guidance's blind spot:** the shutdown-only `!this.#db` path in `#getSessionSalt`
       logs nothing, so it falls into the "neither event is present ⇒ close the session" branch of the
       `content_hash_salt_unavailable` advice.
+  - **PART B2a IS BUILT AND TWICE-REVIEWED (2026-08-23 → Entries 45, 46).** The park envelope carries
+    the algorithm at both verifier sites. **B2b's inherited ACs, out of B2a's two passes:**
+    - **`encodeParkEnvelope` THROWS a plain-English paragraph**, and B2b is what makes that throw
+      reachable. It is caught (`#parkContent` → `{outcome:"refused"}`, `drainAwaitingToPark` keeps the
+      row), so no message is lost — but the prose lands in `cause`, a field documented as the
+      MACHINE-READABLE half and handed to callers that branch on it, and the operator-visible text
+      becomes *"the relay refused the hand-off… will be re-sent when the relay link is back"* for a
+      fault that is neither the relay nor transient. **Throw a coded error, or validate before
+      calling.**
+    - **The `retry_queue` has no `content_hash_alg` column**, so the crash-backstop producer cannot
+      follow its own marker ("the value the direct-path frame carried, not re-derived from the
+      session row"). B2b adds one — idempotent `ALTER TABLE`, **and the agent-id rebuild's `createSql`**.
+    - **Do NOT infer peer capability from "they completed the salt agreement."** The agreement landed
+      before the v3 park decoder, so an interval build has one without the other and a v3 envelope
+      there is refused as `unsigned_envelope` — the ATTACKER shape — re-pulling forever. Safe today
+      only because nothing in that interval is published (verified: `git tag --contains` empty).
+    - **`annex_decode_failed` is unreachable** and its catch would mislabel anything that ever did
+      throw there; **the "unreachable" verify catch labels a future failure `annex_alg_unknown`**,
+      whose guidance says "ask which version they run" — the wrong subsystem, one algorithm later.
+    - **`redact` with no `content` annexes the UNREDACTED bytes** (`content-park.ts`) — pre-existing,
+      unreachable only because the shipping gateway never emits `redact`.
 - **Enforcer:** receipt. *(Not run — the unit is carried by suite + review; the enforcer itself is
   built by `DOD-M15-INTERRUPTED-1` and this line is re-asserted there.)*
 
