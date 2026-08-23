@@ -40,6 +40,7 @@ import {
   startDaemon,
   provisionAgent,
   connectMcp,
+  awaitSealedRoot,
   registerAgent,
   writeSignedManifestTo,
   writeConsortiumManifest,
@@ -169,8 +170,16 @@ describe("J-LEGIBILITY — malicious-tail bilateral seal, cert read cross-proces
 
     expect(closeA.ok, `A close failed:${diag}`).toBe(true);
     expect(closeB.ok, `B close failed:${diag}`).toBe(true);
-    expect(closeA.sealed_root, `A sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
-    expect(closeB.sealed_root, `both sealed_root byte-identical:${diag}`).toBe(closeA.sealed_root);
+    /**
+     * DOD-M15-CLOSEROOT-1: close returns a COMMITMENT, not a root — made non-blocking deliberately
+     * ("exactly how seventeen sessions were lost when this call used to block"). Poll the receipt.
+     */
+    const [rootA, rootB] = await Promise.all([
+      awaitSealedRoot(connA, sessionIdA, { label: "A sealed receipt" }),
+      awaitSealedRoot(connB, sessionIdB, { label: "B sealed receipt" }),
+    ]);
+    expect(rootA, `A sealed_root:${diag}`).toMatch(/^[0-9a-f]{64}$/);
+    expect(rootB, `both sealed_root byte-identical:${diag}`).toBe(rootA);
 
     // The directory built the legibility certificate on the REAL processSeal path.
     expect(cluster.directory.output, `directory must emit seal.certificate.legibility.built:${diag}`).toMatch(/seal\.certificate\.legibility\.built/);

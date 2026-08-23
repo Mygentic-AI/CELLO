@@ -25,6 +25,7 @@ import {
   startDaemon,
   provisionAgent,
   connectMcp,
+  awaitSealedRoot,
   cello,
   registerAgent,
   psqlSpineN,
@@ -667,9 +668,17 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     expect(closeB.ok, `B close failed:${closeDiag}`).toBe(true);
 
     // The directory rebuilt + FROST-notarized the signed chain; both sides observe the SAME root.
-    expect(closeA.sealed_root, `A must surface a sealed_root:${closeDiag}`).toMatch(/^[0-9a-f]{64}$/);
-    expect(closeB.sealed_root, `B must surface a sealed_root:${closeDiag}`).toMatch(/^[0-9a-f]{64}$/);
-    expect(closeA.sealed_root, "both parties' sealed_root must be BYTE-IDENTICAL").toBe(closeB.sealed_root);
+    /**
+     * DOD-M15-CLOSEROOT-1: close returns a COMMITMENT, not a root — made non-blocking deliberately
+     * ("exactly how seventeen sessions were lost when this call used to block"). Poll the receipt.
+     */
+    const [rootA, rootB] = await Promise.all([
+      awaitSealedRoot(connA, sessionIdA, { label: "A sealed receipt" }),
+      awaitSealedRoot(connB, sessionIdB, { label: "B sealed receipt" }),
+    ]);
+    expect(rootA, `A must surface a sealed_root:${closeDiag}`).toMatch(/^[0-9a-f]{64}$/);
+    expect(rootB, `B must surface a sealed_root:${closeDiag}`).toMatch(/^[0-9a-f]{64}$/);
+    expect(rootA, "both parties' sealed_root must be BYTE-IDENTICAL").toBe(rootB);
 
     // Directory-corroborated: the relay witnessed two ctrl-leaf submissions (the SEAL leaves).
     expect(cluster.relay.output, "relay must witness both SEAL ctrl leaves").toMatch(/hash_submit/);
