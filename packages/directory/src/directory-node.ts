@@ -5098,18 +5098,55 @@ export class CelloDirectoryNode {
     // OBS-001 AC-009: initiating seal log
     protocolLog("SEAL", `Initiating seal — session ${truncHex(sessionIdHex)} (${leaves.length} leaves)`);
 
-    // (a) Rebuild Merkle tree from scratch (SI-004)
+    /**
+     * (a) TWO ROOTS, AND ONLY ONE OF THEM IS CERTIFIED — `DOD-M15-SEALWIRE-1` bullet 1.
+     *
+     * These were one root, and the one root was the wrong one to sign.
+     *
+     *   `structure2Root` — over `encodeStructure2(l.s2)`. This is the relay/directory INTERNAL
+     *   integrity root. It carries relay-assigned fields (sequence, prev_root, relay timestamps), so
+     *   **a client cannot reproduce it**: it never sees those values for the counterparty's leaves.
+     *   Kept, because comparing it to the relay's reported root is a real arithmetic check on the
+     *   leaf array — see the caveat at the comparison below.
+     *
+     *   `contentRoot` — over each leaf's `content_hash`, exactly as the UNILATERAL path already does
+     *   (`#verifyUnilateralLeafChain`, whose own comment explains why: *"the client's local
+     *   SessionTree hashes each leaf as its content_hash, NOT as encodeStructure2(s2)"*). This is the
+     *   root a client CAN rebuild from its own carry, so it is the only one worth signing.
+     *
+     * Until now the bilateral path signed the internal root. That is why the receipt could only ever
+     * prove *the directory signed something* — the client had no way to check it described its own
+     * conversation, and at co-signing time its key signed a root it had never verified. The
+     * `encodeStructure2` chain verified below is what makes these content hashes trustworthy: it
+     * proves they are authentic and correctly ordered. It just is not the thing to certify.
+     */
     const leafInputs: LeafInput[] = leaves.map((l) => ({
       kind: l.kind,
       data: encodeStructure2(l.s2),
     }));
-    const tree = buildMerkleTree(leafInputs);
-    const recomputedRoot = merkleRoot(tree);
+    const structure2Root = merkleRoot(buildMerkleTree(leafInputs));
 
-    if (!bufEqual(recomputedRoot, relayRoot)) {
+    /**
+     * ⚠️ THIS COMPARISON IS CIRCULAR AND IS NOT THE INTEGRITY GUARANTEE — `SEALWIRE-1` bullet 4.
+     *
+     * It rebuilds a root from the leaf array the relay supplied, using the same code, and compares
+     * it to the root the same relay supplied. It therefore validates ARITHMETIC, not the relay: a
+     * relay that drops or reorders a leaf and reports the matching root passes this every time.
+     *
+     * It is kept because a mismatch still means something is corrupt, and removing a check that can
+     * only ever fire on real corruption would be a regression. What replaces it as the actual guard
+     * is the client-signed `final_root` comparison — bullet 3 — which needs the SEAL payload on the
+     * wire, and is carried as `DOD-M15-SEALFINAL-1` rather than smuggled in here.
+     */
+    if (!bufEqual(structure2Root, relayRoot)) {
       this.#notifySealRejected(sessionIdHex, sessionId, "merkle_root_mismatch");
       return { ok: false, reason: "merkle_root_mismatch" };
     }
+
+    // THE CERTIFIED ROOT — client-reproducible, and the one every signature below binds.
+    const recomputedRoot = merkleRoot(
+      buildMerkleTree(leaves.map((l) => ({ kind: "hash" as const, data: l.s2.content_hash }))),
+    );
 
     // Need the genesis prev_root to validate the first leaf's prev_root.
     // The relay computes it as SHA-256(sorted(A,B) || session_id || session_timestamp).

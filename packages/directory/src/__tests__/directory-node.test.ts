@@ -33,8 +33,6 @@ import {
   merkleRoot,
   inclusionProof,
   verifyInclusion,
-  msgLeafHash,
-  ctrlLeafHash,
   MockThresholdSigner,
 } from "@cello-protocol/crypto";
 import { buildStructure2, encodeStructure2, computeGenesisPrevRoot } from "@cello-protocol/protocol-types";
@@ -1757,21 +1755,39 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     if (sealedFrame?.type !== "session_sealed") throw new Error("no session_sealed");
     const sealedRoot = sealedFrame.sealed_root;
 
-    // Build the Merkle tree from the same leaves the directory used
+    /**
+     * DOD-M15-SEALWIRE-1 bullet 1: proofs are built in the CONTENT-HASH domain, because that is now
+     * the domain the certified root lives in — and this test failing on the old construction is the
+     * point rather than a casualty.
+     *
+     * The tree was rebuilt from `encodeStructure2(l.s2)`, which carries relay-assigned fields
+     * (sequence, prev_root, relay timestamps). An operator can never reproduce that for the
+     * counterparty's leaves, so a proof against it was a proof only the directory could construct —
+     * which makes `DOD-M15-INCLUSION-1` ("an operator can prove a message sits under a sealed root")
+     * unachievable by construction.
+     *
+     * Over content hashes, the operator holds everything needed: their own carry has each leaf's
+     * `content_hash`, so they can rebuild the tree, produce the proof, and check it against the
+     * receipt they were given.
+     */
     const leafInputs = sealData.leaves.map(l => ({
-      kind: l.kind,
-      data: encodeStructure2(l.s2),
+      kind: "hash" as const,
+      data: l.s2.content_hash,
     }));
     const tree = buildMerkleTree(leafInputs);
 
-    // Verify inclusion proof for each leaf index
     for (let i = 0; i < sealData.leaves.length; i++) {
       const leaf = sealData.leaves[i];
-      const s2Cbor = encodeStructure2(leaf.s2);
-      const leafHash = leaf.kind === "ctrl" ? ctrlLeafHash(s2Cbor) : msgLeafHash(s2Cbor);
+      // A "hash" leaf is used as-is (RFC 6962 §2.1 — no domain prefix re-applied), so the leaf hash
+      // IS the content hash the sender committed to in its signed Structure 1.
+      const leafHash = leaf.s2.content_hash;
       const proof = inclusionProof(tree, i);
       const valid = verifyInclusion(leafHash, i, sealData.leaves.length, proof, sealedRoot);
-      expect(valid).toBe(true);
+      expect(
+        valid,
+        `leaf ${i} does not prove into the certified root — a receipt you cannot prove a message ` +
+          "into is a receipt that proves nothing about your conversation",
+      ).toBe(true);
     }
   });
 

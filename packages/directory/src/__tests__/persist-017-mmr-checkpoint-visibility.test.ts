@@ -142,6 +142,23 @@ async function buildMinimalSealData(
     { kind: "ctrl", data: s2CborA2 },
   ]));
 
+  /**
+   * DOD-M15-SEALWIRE-1 bullet 1 — TWO ROOTS, and this fixture used to conflate them.
+   *
+   * `merkle_root` is what the RELAY reports: the internal integrity root over
+   * `encodeStructure2(s2)`, carrying relay-assigned fields. The directory checks its own rebuild
+   * against it.
+   *
+   * `sealedRootHex` is what the directory CERTIFIES: the content-hash root, which is the only one a
+   * client can rebuild from its own carry. Returning one value for both hid the distinction the
+   * whole unit turns on.
+   */
+  const certifiedRoot = merkleRoot(buildMerkleTree([
+    { kind: "hash", data: s2ResultA.structure2.content_hash },
+    { kind: "hash", data: s2ResultB.structure2.content_hash },
+    { kind: "hash", data: s2ResultA2.structure2.content_hash },
+  ]));
+
   return {
     sealData: {
       leaves: [
@@ -152,7 +169,7 @@ async function buildMinimalSealData(
       seq_count: 3,
       merkle_root: finalRoot,
     },
-    sealedRootHex: Buffer.from(finalRoot).toString("hex"),
+    sealedRootHex: Buffer.from(certifiedRoot).toString("hex"),
   };
 }
 
