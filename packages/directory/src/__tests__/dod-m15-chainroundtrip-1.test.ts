@@ -34,6 +34,9 @@
 
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import pg from "pg";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { randomUUID, randomBytes } from "node:crypto";
 import { PgDirectoryStore } from "../adapters/pg-directory-store.js";
 import {
@@ -52,6 +55,95 @@ const describeIntegration = isLocal ? describe : describe.skip;
 function silentLogger(): Logger {
   return { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 }
+
+/** Comments are prose. A guard that reads code must not be satisfiable by writing a comment. */
+function stripComments(text: string): string {
+  return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+}
+
+/**
+ * NOT `describeIntegration` — this one needs no database, so it also holds on a machine where the
+ * integration tests skip. The rule it protects is a source rule, not a runtime one.
+ */
+describe("DOD-M15-CHAINROUNDTRIP-1: a discarded store write cannot come back", () => {
+  it("every fire-and-forget store write reports its failure to the logger", () => {
+    /**
+     * `canonicalUuid` is safe on unrecognised input BECAUSE Postgres rejects it loudly rather than
+     * the value being coerced into a hash chain. That argument only holds if somebody hears the
+     * rejection. It did not hold when this unit started: the sole production caller was
+     *
+     *     void this.#store.writeSessionWithParticipants(...).catch(() => {});
+     *
+     * which discarded the uuid syntax error AND the SI-001 ownership violation — a security guard
+     * whose alarm was connected to nothing.
+     *
+     * Fire-and-forget itself is correct and this guard does not object to it: session delivery must
+     * not block on the database. What it bans is fire-and-forget-and-SILENT. Written as a source
+     * walk rather than a behavioural test because the shape is one character wide, is trivially
+     * reintroduced by anyone tidying a catch block, and covers every future call site rather than
+     * the one that happened to be wrong.
+     */
+    const src = dirname(fileURLToPath(import.meta.url));
+    const file = join(src, "..", "directory-node.ts");
+    const text = stripComments(readFileSync(file, "utf8"));
+
+    /**
+     * The ONE legitimate exemption: a callee that logs the failure itself. `recordNotarization`
+     * logs `notarization.write.failed` with `{ sessionId, reason, attempt }` on BOTH of its retry
+     * attempts before rethrowing, so its callers' `.catch()` really does have nothing left to say.
+     *
+     * I verified that by reading the method, not by trusting the `/* logged inside *​/` comment at
+     * the call site — a comment asserting a safety property is how these survive review. Counted,
+     * so a third silent notarization write cannot hide behind a reason checked for two.
+     */
+    const LOGS_INTERNALLY: Record<string, { count: number; why: string }> = {
+      recordNotarization: {
+        count: 2,
+        why: "logs notarization.write.failed at ERROR on attempt 1 and 2, then rethrows",
+      },
+    };
+    const exempted: Record<string, number> = {};
+
+    const silent: string[] = [];
+    const marker = "void this.#store.";
+    for (let i = text.indexOf(marker); i !== -1; i = text.indexOf(marker, i + 1)) {
+      const stmt = text.slice(i, i + 1400);
+      const method = /void this\.#store\.(\w+)/.exec(stmt)?.[1] ?? "<unknown>";
+      const catchAt = stmt.indexOf(".catch(");
+      if (catchAt === -1) {
+        silent.push(`${method} — no .catch() at all: the rejection becomes an unhandled promise`);
+        continue;
+      }
+      // The handler must actually do something with the error. `#logger` is the only reporting
+      // channel this class has; `console` is banned project-wide.
+      const handler = stmt.slice(catchAt, catchAt + 700);
+      if (handler.includes("#logger")) continue;
+      if (LOGS_INTERNALLY[method]) {
+        exempted[method] = (exempted[method] ?? 0) + 1;
+        continue;
+      }
+      silent.push(`${method} — .catch() does not reach #logger: the failure is discarded`);
+    }
+
+    // A shrink is as wrong as a growth: if a call site went away, the count comes down with it,
+    // deliberately. An exemption that silently covers fewer sites than it claims is a stale reason.
+    for (const [method, { count, why }] of Object.entries(LOGS_INTERNALLY)) {
+      expect(
+        exempted[method] ?? 0,
+        `${method} is exempted for ${count} call site(s) because it ${why}. The count no longer ` +
+          `matches — re-read the method and confirm the reason still holds before adjusting this.`,
+      ).toBe(count);
+    }
+
+    expect(
+      silent,
+      `These writes fail without telling anyone:\n  ${silent.join("\n  ")}\n\n` +
+        `A store write whose failure is discarded means the operator's first evidence is a ` +
+        `missing row hours later, with nothing connecting it to the cause. Keep the write ` +
+        `non-blocking — log the rejection instead of dropping it.`,
+    ).toEqual([]);
+  });
+});
 
 describeIntegration("DOD-M15-CHAINROUNDTRIP-1: the production write shape verifies", () => {
   let pool: pg.Pool;
