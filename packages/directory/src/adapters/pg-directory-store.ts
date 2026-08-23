@@ -1885,7 +1885,12 @@ export class PgDirectoryStore implements DirectoryStore {
    * @throws OwnershipViolationError if session_id already exists with a different owning_node_id
    * @throws on DB unique constraint violation if session_id already exists (SQLSTATE 23505)
    */
-  async writeSession(sessionId: string, owningNodeId: string): Promise<void> {
+  async writeSession(sessionIdInput: string, owningNodeId: string): Promise<void> {
+    // DOD-M15-CHAINROUNDTRIP-1 — same canonicalisation as writeSessionWithParticipants, and it
+    // matters here even though this method has NO production caller today: the two write the same
+    // `uuid` column, and leaving one un-normalised means the defect returns the moment anyone wires
+    // this up. Fixing only the path that is currently used is how a class becomes an instance.
+    const sessionId = PgDirectoryStore.canonicalUuid(sessionIdInput);
     // SI-001: check existing ownership before any chain write
     const existing = await this.#pool.query<{ owning_node_id: string }>(
       `SELECT owning_node_id FROM sessions WHERE session_id = $1`,
@@ -2547,6 +2552,34 @@ export class PgDirectoryStore implements DirectoryStore {
   }
 
   /**
+   * ─── DOD-M15-CHAINROUNDTRIP-1: hash the value the DATABASE will return ─────────────────────────
+   *
+   * `sessions.session_id` is a `uuid` column. Postgres accepts the 32-character undashed hex form
+   * and **stores the canonical dashed form**, so `SELECT *` returns something different from what
+   * was handed in. `insertWithChain` hashes the caller's record, `verifyChain` hashes the row — so
+   * a row written with the undashed form can never verify. Not once, not after a reset, never.
+   *
+   * `directory-node.ts` passes `sessionIdHex` (32 chars, no dashes) and `writeSession` has no
+   * production caller, so **every session row a live directory has ever written was a hole in the
+   * chain that exists to prove nobody touched it.**
+   *
+   * Normalised HERE rather than in `serializeRecord`, and that is the load-bearing choice:
+   * `serializeRecord` sees values, never column types, so a rule keyed on "looks like 32 hex" is a
+   * guess about the schema. It would also corrupt `connection_requests`, whose `request_id` is a
+   * TEXT column holding exactly-32-hex ids — thirteen live rows at the time of writing. The caller
+   * that knows the column is `uuid` is the one that can normalise safely.
+   */
+  static canonicalUuid(value: string): string {
+    const bare = value.replace(/-/g, "").toLowerCase();
+    if (!/^[0-9a-f]{32}$/.test(bare)) {
+      // Not a UUID at all — hand it back untouched and let Postgres reject it. Coercing an
+      // unrecognised value here would turn a loud constraint error into a silently different row.
+      return value;
+    }
+    return `${bare.slice(0, 8)}-${bare.slice(8, 12)}-${bare.slice(12, 16)}-${bare.slice(16, 20)}-${bare.slice(20)}`;
+  }
+
+  /**
    * Write a session with participant pubkeys to the sessions table.
    *
    * M6B-010 AC-002/AC-003: extends writeSession() to also store initiator and target
@@ -2562,11 +2595,16 @@ export class PgDirectoryStore implements DirectoryStore {
    * @param targetPubkeyHex - K_local pubkey hex of the session target (agent B)
    */
   async writeSessionWithParticipants(
-    sessionId: string,
+    sessionIdInput: string,
     owningNodeId: string,
     initiatorPubkeyHex: string,
     targetPubkeyHex: string,
   ): Promise<void> {
+    // DOD-M15-CHAINROUNDTRIP-1 — canonicalise ONCE, at the top, and use it everywhere below.
+    // Production passes the undashed hex form; the `uuid` column returns the dashed one. Every use
+    // of the id after this point must be the form the database will hand back, or the chain hash is
+    // computed over a string that no longer exists.
+    const sessionId = PgDirectoryStore.canonicalUuid(sessionIdInput);
     // SI-001: check existing ownership before any chain write (same as writeSession)
     const existing = await this.#pool.query<{ owning_node_id: string }>(
       `SELECT owning_node_id FROM sessions WHERE session_id = $1`,
