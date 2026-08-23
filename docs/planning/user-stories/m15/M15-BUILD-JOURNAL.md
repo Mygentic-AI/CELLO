@@ -6485,3 +6485,56 @@ covered it.
    number in the assertion.
 4. **A test that stops at a return value has not tested a hop.** The wire is the boundary, and a
    boundary whose failure mode just changed from degrade to refuse is where coverage is owed.
+
+
+---
+
+## Entry S13 (CELLO_Support) — I asserted a property the design deliberately does not have
+
+`SEALWIRE-1` bullet 8 says the ten spine journeys assert a hollow thing: both parties' `sealed_root`
+matching proves they read the same field out of the same certificate, **not that the certificate
+covers either party's conversation.** It stays green if the directory certifies a root over a leaf
+set neither of them holds.
+
+Nothing exposed a locally-derived root, so no journey COULD make the real assertion — the missing
+surface is the reason the hollow one existed. I added `local_tree_root` to `cello_sealed_receipt`,
+recomputed from this side's own leaves, then asserted it must equal the certified root.
+
+**It failed on a journey that was green, and my premise was wrong.** `session-node-manager.ts` says
+it outright: *"`submitSealLeaf` deliberately computes its root without mutating the durable tree."*
+The certified root covers this side's leaves PLUS the transient SEAL ctrl leaf; the durable tree does
+not contain that leaf. **They differ on every healthy seal.**
+
+Left in, that assertion reddens every converted journey with *"the certificate does NOT cover this
+party's own tree"* — which reads as the product's core promise failing, and is false.
+
+**The only reason I caught it is that I ran it.** Earlier tonight I committed a change on typecheck
+and lint alone and shipped a red test into `core/cli`. This is the same lesson arriving from the
+other side: the run is not a formality after the reasoning, it is the part that disagrees with you.
+
+Bullet 8's claim stands and is **not yet checkable** — it needs the certified root recomputed from
+this side's leaves *plus* the seal leaf, which is bullet 2 (the client verifying the certified root
+against its own tree) and belongs to the other lane. Sequenced. `local_tree_root` stays: it is the
+raw material verification needs and costs nothing to carry.
+
+### Bullet 5 is not a storage change, and I did not build the half I could
+
+`transcript` is `(agent_id, session_id, sequence, direction, blob, created_at)` — **no sender field,
+no signature**, exactly as the bullet says. But `recordTranscriptMessage` has no signature to store
+even if the column existed, and `ingestReceivedContent` never receives one: `sender_signature` lives
+in `structure2`, which threads through the **send/park** path and not into receive.
+
+**I deliberately did not add a nullable `sender_sig` column and start writing rows with NULL in it.**
+A schema that names a field it never populates says the record proves authorship when it proves
+nothing — the exact claims-versus-reality defect this milestone exists to close, committed into the
+one table that would be shown to a third party. Asked the lane that owns the wire whether the
+signature is in hand at verification time and merely not passed down, or never held at all. The
+answer decides whose bullet it is.
+
+### `NORMHASH-1` closed, and the guard is one character
+
+Both sides hash the WIRE bytes — the sender screens then hashes, the receiver hashes then screens.
+No fold happens between the two hashes. **The ordering is the load-bearing fact and nothing pinned
+it**, so `j-loopback`'s message now carries `…`: the journey that already asserted byte-identical
+roots is now the thing that catches a future reorder of the receiver's hash-check. Verified green
+with the fold in place.
