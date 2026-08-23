@@ -211,6 +211,50 @@ export function deserializeRow<T extends Record<string, unknown>>(
 }
 
 
+/**
+ * ─── DOD-M15-CHAINROUNDTRIP-1: hash the value the DATABASE will return ─────────────────────────
+ *
+ * `sessions.session_id` is a `uuid` column. Postgres accepts the 32-character undashed hex form
+ * and **stores the canonical dashed form**, so `SELECT *` returns something different from what
+ * was handed in. `insertWithChain` hashes the caller's record, `verifyChain` hashes the row — so a
+ * row written with the undashed form can never verify. Not once, not after a reset, never.
+ *
+ * `directory-node.ts` passes `sessionIdHex` (32 chars, no dashes) and `writeSession` has no
+ * production caller, so **every session row a live directory has ever written was a hole in the
+ * chain that exists to prove nobody touched it.**
+ *
+ * ─── WHY THIS IS NOT IN `serializeRecord`, AND MUST NOT BE MOVED THERE ────────────────────────
+ *
+ * `serializeRecord` sees VALUES, never column types. A rule there keyed on "looks like 32 hex" is
+ * a guess about the schema, and it guesses wrong on `connection_requests`: `request_id` is a TEXT
+ * column holding exactly-32-hex ids — twenty-four live rows, several bare hex — which are stored
+ * and returned verbatim. Normalising those would break a chain that verifies today.
+ *
+ * The caller that knows the column is `uuid` is the only place that can normalise safely. This
+ * function is deliberately module-private for the same reason: exporting it would put a UUID
+ * normaliser within easy reach of `hash-chain.ts`, which is precisely the move that breaks
+ * `connection_requests`.
+ */
+function canonicalUuid(value: string): string {
+  /**
+   * Strips BRACES as well as dashes, and that is not defensive noise: `{a0eebc99…}` and
+   * `{A0EEBC99-…}` are forms Postgres ACCEPTS and canonicalises — verified against the running
+   * database, not assumed from the docs. Every other malformed input (31 chars, 33 chars, a
+   * non-hex character) Postgres REJECTS, which is safe. The braced form was the one input that
+   * would have been quietly stored as something other than what was hashed — a new unverifiable
+   * row rather than a loud error. No caller passes it today; the point is that one could.
+   */
+  const bare = value.replace(/[-{}]/g, "").toLowerCase();
+  if (!/^[0-9a-f]{32}$/.test(bare)) {
+    // Not a UUID at all — hand it back untouched and let Postgres reject it. Coercing an
+    // unrecognised value here would turn a loud constraint error into a silently different row.
+    // That rejection is only worth anything if someone hears it: see the `.catch()` on the
+    // production caller in `directory-node.ts`, which used to discard it.
+    return value;
+  }
+  return `${bare.slice(0, 8)}-${bare.slice(8, 12)}-${bare.slice(12, 16)}-${bare.slice(16, 20)}-${bare.slice(20)}`;
+}
+
 export class PgDirectoryStore implements DirectoryStore {
   readonly #pool: pg.Pool;
   readonly #logger: Logger;
@@ -1890,7 +1934,7 @@ export class PgDirectoryStore implements DirectoryStore {
     // matters here even though this method has NO production caller today: the two write the same
     // `uuid` column, and leaving one un-normalised means the defect returns the moment anyone wires
     // this up. Fixing only the path that is currently used is how a class becomes an instance.
-    const sessionId = PgDirectoryStore.canonicalUuid(sessionIdInput);
+    const sessionId = canonicalUuid(sessionIdInput);
     // SI-001: check existing ownership before any chain write
     const existing = await this.#pool.query<{ owning_node_id: string }>(
       `SELECT owning_node_id FROM sessions WHERE session_id = $1`,
@@ -2552,34 +2596,6 @@ export class PgDirectoryStore implements DirectoryStore {
   }
 
   /**
-   * ─── DOD-M15-CHAINROUNDTRIP-1: hash the value the DATABASE will return ─────────────────────────
-   *
-   * `sessions.session_id` is a `uuid` column. Postgres accepts the 32-character undashed hex form
-   * and **stores the canonical dashed form**, so `SELECT *` returns something different from what
-   * was handed in. `insertWithChain` hashes the caller's record, `verifyChain` hashes the row — so
-   * a row written with the undashed form can never verify. Not once, not after a reset, never.
-   *
-   * `directory-node.ts` passes `sessionIdHex` (32 chars, no dashes) and `writeSession` has no
-   * production caller, so **every session row a live directory has ever written was a hole in the
-   * chain that exists to prove nobody touched it.**
-   *
-   * Normalised HERE rather than in `serializeRecord`, and that is the load-bearing choice:
-   * `serializeRecord` sees values, never column types, so a rule keyed on "looks like 32 hex" is a
-   * guess about the schema. It would also corrupt `connection_requests`, whose `request_id` is a
-   * TEXT column holding exactly-32-hex ids — thirteen live rows at the time of writing. The caller
-   * that knows the column is `uuid` is the one that can normalise safely.
-   */
-  static canonicalUuid(value: string): string {
-    const bare = value.replace(/-/g, "").toLowerCase();
-    if (!/^[0-9a-f]{32}$/.test(bare)) {
-      // Not a UUID at all — hand it back untouched and let Postgres reject it. Coercing an
-      // unrecognised value here would turn a loud constraint error into a silently different row.
-      return value;
-    }
-    return `${bare.slice(0, 8)}-${bare.slice(8, 12)}-${bare.slice(12, 16)}-${bare.slice(16, 20)}-${bare.slice(20)}`;
-  }
-
-  /**
    * Write a session with participant pubkeys to the sessions table.
    *
    * M6B-010 AC-002/AC-003: extends writeSession() to also store initiator and target
@@ -2604,7 +2620,7 @@ export class PgDirectoryStore implements DirectoryStore {
     // Production passes the undashed hex form; the `uuid` column returns the dashed one. Every use
     // of the id after this point must be the form the database will hand back, or the chain hash is
     // computed over a string that no longer exists.
-    const sessionId = PgDirectoryStore.canonicalUuid(sessionIdInput);
+    const sessionId = canonicalUuid(sessionIdInput);
     // SI-001: check existing ownership before any chain write (same as writeSession)
     const existing = await this.#pool.query<{ owning_node_id: string }>(
       `SELECT owning_node_id FROM sessions WHERE session_id = $1`,

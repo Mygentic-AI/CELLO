@@ -198,6 +198,49 @@ describeIntegration("DOD-M15-CHAINROUNDTRIP-1: the production write shape verifi
     expect(result.valid, "the dashed form regressed").toBe(true);
   });
 
+  it("sessions: every id form POSTGRES accepts verifies — including the braced ones", async () => {
+    /**
+     * The normaliser is only safe if it covers every shape Postgres will silently canonicalise.
+     * Anything it misses is stored as something other than what was hashed: a new unverifiable row
+     * rather than a loud error, which is the exact defect this unit exists to close.
+     *
+     * These four forms were checked against the running database — Postgres accepts all of them
+     * and returns the canonical dashed lowercase form for each. Driven through the production
+     * entry point rather than calling the normaliser directly, because a direct test would only
+     * prove the function agrees with itself; what matters is whether the ROW verifies.
+     */
+    const hex = randomBytes(16).toString("hex");
+    const d = (h: string): string =>
+      `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+
+    const forms: Array<[string, string]> = [
+      ["undashed hex — what the daemon actually sends", hex],
+      ["uppercase", hex.toUpperCase()],
+      ["braced, undashed", `{${hex}}`],
+      ["braced and dashed, uppercase", `{${d(hex).toUpperCase()}}`],
+    ];
+
+    for (const [label, form] of forms) {
+      // A fresh id per form: the same id twice would collide on the primary key and the second
+      // write would be a no-op that trivially "verifies".
+      const fresh = randomBytes(16).toString("hex");
+      const shaped = form.replace(hex, fresh).replace(hex.toUpperCase(), fresh.toUpperCase());
+      await store.writeSessionWithParticipants(
+        shaped,
+        "chainroundtrip-node",
+        randomBytes(32).toString("hex"),
+        randomBytes(32).toString("hex"),
+      );
+      const result = await store.verifyChain("sessions");
+      expect(
+        result.valid,
+        `a session id in the "${label}" form (${shaped}) produced a row that cannot verify ` +
+          `(break at ${String(result.breakAtSequence)}). Postgres accepted and canonicalised it, ` +
+          `so the value hashed at insert is not the value the database returns.`,
+      ).toBe(true);
+    }
+  });
+
   it("seal_notarizations: a row whose bytea columns are Uint8Array still verifies", async () => {
     /**
      * THE CONSTRAINT: `recordNotarization` must keep converting every byte field with
