@@ -3222,3 +3222,37 @@ like a fixed timeout being hit than a race — but that is an observation, not a
 - **Enforcer:** journey — the five spine journeys above are the receipt, and they must go green.
 
 </details>
+
+---
+
+### `DOD-M15-UNILATERAL-NOTARIZE-1` — 🅿️ POST-LAUNCH BACKLOG. A seal with an absent counterparty attests, then stops
+**Found 2026-08-23 running the converted `j-unilateral` (bullet 8). Recorded, not fixed — the gate is
+frozen and this is not a security hole. ⚠️ I think it may warrant blocking and that is Andre's call
+to make, not mine; flagging rather than adding.**
+
+**What an operator lives through.** Their counterparty goes away. They close. The close succeeds and
+tells them a receipt is coming. **It never arrives.** The unilateral seal exists precisely so an
+absent counterparty cannot hold a receipt hostage, and on this path it produces nothing.
+
+**What is established, by running it twice:**
+
+- `session.unilateral.attestation` **fires**, with `liveness: "gone"` — the directory got as far as
+  attesting the counterparty absent, from a positive relay observation.
+- `session.unilateral.notarized` **never fires.** Zero occurrences in either run.
+- No root arrives at `cello_sealed_receipt` within 90 s, against a harness whose own guidance says
+  escalation happens *"after about 1 minutes"*.
+- **The BILATERAL path in the same file passes green**, twice: B alive with its daemon auto-acking
+  seals in 2.4 s, and `j-upgrade` does the same in 4.6 s. So this is not the harness, not the
+  conversion, and not the receipt-polling change.
+
+**What is NOT established, and is not guessed at:** what sits between the attestation and the
+notarization. It is somewhere in FROST notarization or the persist that follows it. I stopped
+looking — the gate is frozen and chasing it further is the rabbit hole the launch-triage rules name.
+
+**Why the tests hid this until now.** They asserted `close.sealed_root`, a field the non-blocking
+close stopped returning, so they failed on the retired contract and the *real* failure underneath was
+invisible. Converting them to poll the receipt is what surfaced it. That is bullet 8 doing exactly
+what bullet 8 is for: *"every one stays green if the directory certifies a root over a completely
+different leaf set"* — the same shape, one layer along.
+
+- **Enforcer:** journey — `j-unilateral`'s first two tests are the receipt and must go green.
