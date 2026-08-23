@@ -1655,23 +1655,43 @@ compromised and could weaponize "signature mismatch" as a false accusation.
   `DOD-M15-RELAYFANOUT-1`.
 
 ### `DOD-M15-DIRAUTH-1` — 🟡 Directory authentication cannot be silently skipped
-> **BUILT 2026-08-23, review in flight.** The skip is NOT removed — local dev and the e2e harness run
-> against a directory the bundled manifest cannot describe, and enforcing there would reject every
-> connection. It is made impossible to MISS and refusable.
-> **`cello_status` states the posture in BOTH directions**, which inverts this milestone's own rule
-> that a healthy path contributes nothing. The inversion is the point: elsewhere a field on the good
-> path is furniture, but here the defect IS that "enforced" looks exactly like silence, so *"I checked
-> and it is on"* has to be obtainable rather than inferred from an absence.
-> **Local vs public are separated** — a loopback directory is disabled-but-EXPECTED and says so
-> calmly; a public one with auth off is not marked expected, because that client is weaker than its
-> operator believes.
-> **`CELLO_REQUIRE_DIRECTORY_AUTH=1` refuses to START**, not to connect: a daemon that comes up and
-> then silently declines every session looks like a broken protocol, one that does not come up names
-> its own cause. The flag parses lopsided on purpose — anything not an explicit negative is ON,
-> because a security opt-in that silently fails to apply is worse than not offering one.
-> **Found while grepping the map rather than assuming it:** `signaling-manager.ts`'s
-> `processStep5Frame` carries a comment saying it is called from production `connect()`, and has no
-> production caller. Taking that at face value would have put the whole unit in the wrong file.
+> **SURFACING HALF DONE + REVIEWED 2026-08-23** (→ Entry 36); **stays 🟡 because bullet 2 is
+> untouched.** Reviewer: *"The line is not closable on this diff… make sure the DoD tag reflects that
+> rather than flipping green."* Extracted as `DOD-M15-BOOTSTRAP-AUTH-1`.
+> Verdict quoted: *"**SILENT FALLBACKS FOUND** — F1 (HIGH): the refusal runs after the irreversible
+> identity migration and after every open session is marked interrupted, violating the rule stated 90
+> lines above it in the same file. [blocking] **ERROR SUBSTITUTION FOUND** — F5… the refusal quotes a
+> re-randomised URL and asserts 'a DNS hostname… that is the usual cause' without having checked it;
+> F3 (HIGH): all three remedies name a variable that, followed literally, produces a different
+> startup crash. [blocking]… I do not think I am rubber-stamping this one."* All nine fixed.
+>
+> **What shipped:** `cello_status` states the posture in BOTH directions (the milestone's
+> healthy-path-is-silent rule is deliberately inverted here — the defect IS that "enforced" looks
+> like silence); local and public are separated so a loopback dev run is calm;
+> `CELLO_REQUIRE_DIRECTORY_AUTH` refuses at STARTUP, now as pure config validation before any disk
+> side effect.
+> **My worst defect:** the refusal originally ran after the irreversible identity migration and after
+> every open session was marked `interrupted` — a "failed to start" that changed the operator's
+> record on the way out.
+> **My claim that justified the unit was false:** `directory.signaling.connected` logs
+> `verified: !!verifier` every connect. The right reason is that a LOG IS NOT A CONTROL.
+> **Carried:** `DOD-M15-BOOTSTRAP-AUTH-1`, `DOD-M15-STEP6-REPLAY-1`.
+
+### `DOD-M15-BOOTSTRAP-AUTH-1` — ❌ The bootstrap coordinate arrives over an authenticated channel
+Extracted from `DOD-M15-DIRAUTH-1`'s second bullet so it is a line rather than a footnote.
+- The directory's `/bootstrap` coordinate comes from a **plaintext HTTP endpoint on port 9090**.
+- Step 6 converts a poisoned redirect into a refused connection — it does not prevent the redirect,
+  so the attacker retains denial-of-service, and step 6 is itself skippable (that is `DIRAUTH-1`).
+- This is the fix the byte/normalised string match was standing in for.
+
+### `DOD-M15-STEP6-REPLAY-1` — ❌ A directory identity proof cannot be replayed
+Found by `DOD-M15-DIRAUTH-1`'s review (F9), pre-existing.
+- Step 6's TBS covers `nodeId ‖ agent pubkey ‖ nonce ‖ timestamp`. The client checks **neither** the
+  timestamp against now **nor** that the nonce is one it has not seen.
+- Any party that once obtains a valid tuple for a given agent pubkey can replay it indefinitely.
+- Requires prior compromise (the signaling stream is Noise-encrypted), so it is not a pure-network
+  MITM — but it bounds how strongly the operator-facing prose about step 6 may be written.
+
 **Scoped by `DOD-M15-SPIKE-1(a)` → Entry 1: the challenge IS running in production** —
 `daemon.manifest.bundled` 115 times, `.skipped` zero. This stays hardening and does not escalate.
 The byte-match workaround is holding; the fail-open underneath it is not fixed.

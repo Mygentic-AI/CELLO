@@ -15,17 +15,19 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟡 28 ✅, 2 🟡, 2 🅿️, 38 ❌. Both repos clean, pushed, on main.
-> **`DIRAUTH-1` IS THE UNREVIEWED ONE** — built in `38aca9b` (cello-client), reviewer dispatched,
-> verdict not in. Under the WIP limit the ONLY permitted work is closing it. (`DEAD-WIRE-FIELD-1` is
-> the other 🟡 and does NOT count — carried wire half only.)
-> Gate at build time: 4189 client tests, lint, typecheck, build — by EXIT CODE.
+> ### 🟢 28 ✅, 2 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main.
+> **No unreviewed work.** `DIRAUTH-1` reviewed and all nine findings fixed (Entry 36) — it stays 🟡
+> because its SECOND bullet (authenticated bootstrap coordinate) is untouched and now lives as
+> `DOD-M15-BOOTSTRAP-AUTH-1`. `DEAD-WIRE-FIELD-1` is the other 🟡, carried wire half only. **Neither
+> counts against the WIP limit; a new line may start.**
+> Gate: 4199 client tests, lint, typecheck, build — by EXIT CODE.
 
-- **NEXT ACTION: close `DIRAUTH-1`**, then pull ONE new ❌ line. `CLOSEWAIT-1` is the most
-  user-visible remaining (an operator waits 11m 06s for a close) but its own line says **decide the
-  contract first** — answering early orphans the unilateral escalation that runs inline after the
-  wait, which changes what produces the receipt. `FREEZE-STATUS-1` needs a client-side DB migration
-  in its own reviewed unit. `UNWITNESSED-1` needs a relay-attaching fixture.
+- **NEXT ACTION: build `DOD-M15-CLOSEWAIT-1`.** Its contract is DECIDED and written into Decisions
+  Carried #4 (2026-08-23): **answer on commitment, not on notarization.** Do not re-open it. Both
+  safety nets already exist — `cello_get_sealed_receipt` returns the same certificate, and
+  `RestartSealResolver` resolves `seal_interrupted_pending` on boot — so this is plumbing, not a
+  rebuild. Counterbalance named up front: the response must say *committed, not yet notarized*, and
+  the session must keep reading as sealing until it is not.
 - **🚨 A PIPE EATS THE EXIT CODE. `pnpm run lint 2>&1 | tail -3 && git commit` reports `tail`'s
   status, not eslint's** — a lint error shipped that way on 2026-08-23. Gate with
   `cmd > /dev/null 2>&1 && echo CLEAN || echo FAILED`, never by eyeballing piped output.
@@ -3340,3 +3342,97 @@ Gate: 4176 client tests, 2265 server, lint, typecheck, build — all by exit cod
   blocked, highest stakes permitted, invisible to the operator, defended nowhere.
 - **`DOD-M15-BUNDLED-2030-1`** — on 2030-01-01 every bundled-manifest daemon refuses to start, and the
   product ships no in-band remedy other than a package upgrade.
+
+---
+
+## Entry 36 — the refusal ran after the irreversible migration, and the claim justifying the unit was false
+
+`DOD-M15-DIRAUTH-1` stays **🟡** — see "why it does not go green" below. Nine findings, five blocking.
+
+### The verdict, quoted
+
+> **SILENT FALLBACKS FOUND** — F1 (HIGH): the refusal runs after the irreversible identity migration
+> and after every open session is marked interrupted, violating the rule stated 90 lines above it in
+> the same file. [blocking]
+> **ERROR SUBSTITUTION FOUND** — F5 (MEDIUM): the refusal quotes a re-randomised URL and asserts "a
+> DNS hostname… that is the usual cause" without having checked it; F3 (HIGH): all three remedies
+> name a variable that, followed literally, produces a different startup crash. [blocking]
+> **HOLLOW TESTS FOUND** — five mutations stay green… [blocking]
+>
+> *"I do not think I am rubber-stamping this one."*
+
+### The one that would have hurt someone
+
+My refusal sat next to ADV-002 and I justified it in the commit as *"mirroring"* it. It does not.
+ADV-002 is low in the function because it MUST be — it depends on `verifyStartupManifest`, which
+depends on the anti-rollback floor in the DB. **Mine depends on nothing**, and down there it ran
+after the irreversible flat-file → SQLCipher identity migration (which renames and unlinks files),
+after `sessions.db` and its key were created, and after the sweep that marks every `active` session
+`interrupted`, `interrupted_by='local'`.
+
+So an operator adding `CELLO_REQUIRE_DIRECTORY_AUTH=1` to a systemd unit on a hostname-configured
+machine gets a daemon that "failed to start" **and permanently interrupted their two live sessions
+on the way out, blaming a local cause** — from a config check that could have run before anything was
+touched.
+
+The rule it broke is written ninety lines above it, in the same file: *"pure config validation runs
+BEFORE any disk side effect… A misconfigured daemon must fail before mutating state."*
+
+### The claim that justified the whole unit was false
+
+I wrote that the skip is invisible because *"nothing is logged at that site at all."* Grep:
+`directory.signaling.connected` carries `verified: !!verifier` six lines later, on every connect and
+every reconnect. **Fourth false claim in five units** — and this one was load-bearing, because it was
+my stated reason for inverting the milestone's own "healthy path reports nothing" rule.
+
+The conclusion survives on the right reason, which the reviewer supplied: **a log is not a control.**
+An agent reading `cello_status` cannot grep `daemon.log`, and the agent-facing surface said nothing
+in either direction. Corrected rather than deleted.
+
+### Two remedies that did not work
+
+*"Supply a matching manifest via `CELLO_CONSORTIUM_MANIFEST`"* — an operator who does exactly that
+gets a **different** startup crash, because two companion variables are mandatory on that path. And
+the off-switch said only *"unset the variable"*, which on a k8s ConfigMap or systemd drop-in is often
+not cheaply possible: they set it to `disabled`, get refused again by the deliberately-lopsided
+parse, and conclude the flag is broken.
+
+### And it accused a hostname while quoting a URL that matched fine
+
+With `CELLO_DIRECTORY_URL` unset, `resolveDirectoryUrl` returns a **random** bundled endpoint,
+re-picked on every call. So consecutive status reads printed different URLs, and the refusal quoted
+one while asserting *"the usual cause is a DNS hostname"* — about a value that is a bundled endpoint
+and matched perfectly. Now: when nothing is configured there is nothing to blame and nothing to
+print.
+
+Also two classifiers for one question. `manifest-deps` tested the NORMALISED url; I tested the raw
+one with a case-sensitive regex. `HTTP://127.0.0.1` was benign local dev to one and a
+rogue-directory alarm to the other — firing on every status call of a compose-based dev loop.
+
+### The review found the same defect in the PREVIOUS unit
+
+`describeManifestValidity` returned `undefined` for both `valid` and `not_configured`, so a daemon
+with **no consortium manifest at all** rendered byte-identically to one with a fully valid anchor.
+That is `STALEROSTER-1`'s own rule — absent and healthy must not look alike — broken twenty lines
+from where I had just applied it, in the same status response. Fixed here.
+
+### Why this line does NOT go green
+
+The DoD line has two bullets. The second — *"resolve the bootstrap coordinate over an authenticated
+channel; it currently comes from a plaintext HTTP endpoint on port 9090"* — is **untouched**. That is
+a protocol change, it is carried in both headers, and the reviewer was right to say the tag must
+reflect it: *"The line is not closable on this diff… make sure the DoD tag reflects that rather than
+flipping green."* **🟡 with the surfacing half done.**
+
+Gate: 4199 client tests, lint, typecheck, build — by exit code.
+
+### Carried
+
+- **`DOD-M15-BOOTSTRAP-AUTH-1`** — the line's second bullet, extracted so it is a line rather than a
+  footnote: the bootstrap coordinate arrives over plaintext HTTP on 9090.
+- **`DOD-M15-STEP6-REPLAY-1`** — step 6's TBS covers `nodeId ‖ agent pubkey ‖ nonce ‖ timestamp`, but
+  the client never checks the timestamp against now and never checks nonce novelty. Any party that
+  once obtains a valid tuple can replay it. Requires prior compromise (the stream is Noise-encrypted)
+  so it is not a pure-network MITM, but it bounds how strongly the operator prose may be written.
+- **A claims-ledger row**: `signaling-manager.ts`'s `processStep5Frame` says *"Called inside
+  production connect() after auth_ok"* and has no production caller in either repo.
