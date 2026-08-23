@@ -15,19 +15,18 @@ description: >
 
 ## RESUME STATE (overwrite in place — the ONLY mutable block)
 
-> ### 🟢 28 ✅, 2 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main.
-> **No unreviewed work.** `DIRAUTH-1` reviewed and all nine findings fixed (Entry 36) — it stays 🟡
-> because its SECOND bullet (authenticated bootstrap coordinate) is untouched and now lives as
-> `DOD-M15-BOOTSTRAP-AUTH-1`. `DEAD-WIRE-FIELD-1` is the other 🟡, carried wire half only. **Neither
-> counts against the WIP limit; a new line may start.**
-> Gate: 4199 client tests, lint, typecheck, build — by EXIT CODE.
+> ### 🟡 28 ✅, 3 🟡, 2 🅿️, 38 ❌. Both repos clean, pushed, on main.
+> **`CLOSEWAIT-1` IS THE UNREVIEWED ONE** — built in `bc1cf7d` + `9927e9f` (cello-client), reviewer
+> dispatched, verdict not in. `DIRAUTH-1` and `DEAD-WIRE-FIELD-1` are 🟡 for CARRIED halves only and
+> do not count against the WIP limit.
+> Gate: 4210 client tests, lint, typecheck — by EXIT CODE.
 
-- **NEXT ACTION: build `DOD-M15-CLOSEWAIT-1`.** Its contract is DECIDED and written into Decisions
-  Carried #4 (2026-08-23): **answer on commitment, not on notarization.** Do not re-open it. Both
-  safety nets already exist — `cello_get_sealed_receipt` returns the same certificate, and
-  `RestartSealResolver` resolves `seal_interrupted_pending` on boot — so this is plumbing, not a
-  rebuild. Counterbalance named up front: the response must say *committed, not yet notarized*, and
-  the session must keep reading as sealing until it is not.
+- **NEXT ACTION: close `CLOSEWAIT-1`**, then pull ONE new ❌ line.
+- **🚨 A ZSH FUNCTION WITH `$T` HOLDING MULTIPLE PATHS RUNS NOTHING.** zsh does not word-split
+  unquoted variables, so `npx vitest run $T` with three paths in `$T` passes ONE bogus argument,
+  matches no files, and the grep for `Tests` prints nothing — which reads exactly like a pass. My
+  first CLOSEWAIT revert test reported five mutations as green having executed **zero tests**.
+  **Always print a BASELINE line first**; an empty result must be visibly empty, not silently green.
 - **🚨 A PIPE EATS THE EXIT CODE. `pnpm run lint 2>&1 | tail -3 && git commit` reports `tail`'s
   status, not eslint's** — a lint error shipped that way on 2026-08-23. Gate with
   `cmd > /dev/null 2>&1 && echo CLEAN || echo FAILED`, never by eyeballing piped output.
