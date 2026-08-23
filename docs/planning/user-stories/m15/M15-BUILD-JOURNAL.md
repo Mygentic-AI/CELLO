@@ -6183,3 +6183,82 @@ and vitest marks a failing FILE with `❯`, not `×`. **A grep that matches noth
 matches no failures are the same empty output** — §0z.3's shape exactly, in my own status reporting
 rather than in a guard. The rule generalises past checkers: an absence of matches is only evidence
 if the pattern has been shown to match something.
+
+---
+
+## Entry 53 — I deleted one half of a dead exchange and left the bigger half more orphaned than before
+
+`DOD-M15-SEALWIRE-1` bullet 7: *"The dead `seal_attempt` path is deleted."*
+
+### Reviewer verdict, quoted
+
+> **The deletion is sound.** Deadness is proven, not grepped; the behaviour it removed is explicitly
+> *not* what bullet 2 or `SEALPARTIES-1` needs, and that's journaled; the directory's built artifact
+> is genuinely clean. Nothing here should be reverted.
+>
+> But it stopped at the package boundary. The same dead PERSIST-014 exchange has a second half living
+> on the relay, fully written and with the same zero senders — and **this diff made it *more*
+> orphaned, not less.** That's the one finding worth acting on.
+
+And the closing flags:
+
+> **SPEC: DEVIATIONS FOUND** — the three literal clauses are implemented; the stated *purpose* clause
+> is not fully met.
+> **HOLLOW TESTS FOUND** — the guard survives the revert test for the directory deletion (two of
+> three clauses) but not for the relay-test clause, and has three concrete bypasses.
+> **REMOVALS PROVEN** — deadness established by both-repo source, published-tarball,
+> dependency-closure and installed-tree evidence, not by grep.
+
+### The HIGH: a protocol has two ends, and I deleted one
+
+PERSIST-014 was a two-part exchange. The directory answered `seal_rejected_tree_mismatch`; the client
+was then supposed to ask the **relay** for the leaves it was missing, via `gap_fill_request`. I
+deleted the directory half and left the relay's — handler, decoder, two encoders, four types, a WAL
+method and a test file — **whose only documented trigger was the reply I had just removed.**
+
+Every literal clause of the bullet read as satisfied. Its stated purpose — that a fully written
+handler with no sender reads as abandoned work to an auditor — was defeated, because an auditor now
+finds a *bigger* example of the same protocol.
+
+The reviewer found it by doing exactly what the bullet describes an auditor doing, and proved its
+deadness to the standard I had used: no sender in cello-client source, and across all nine published
+tarballs `gap_fill` appears in one file — the same deprecated `client@0.0.50` orphan that carries the
+`seal_attempt` sender. `SessionWal.getLeaves` existed for this and nothing else, so it went too, with
+both implementations.
+
+### Three ways back into a guard I had already falsified three ways
+
+I had falsified the guard — resurrect the branch, resurrect a type name, break the anchor — and it
+went red on all three. It still had three holes:
+
+- **`SealRejectedTreeMismatch` was not a token at all**, and the deleted encoder's body used
+  `type: frame.type`, so it contains **no string literal**. It could have been restored *whole*,
+  green. That is the "decoder with no handler" half-resurrection the guard's own failure message
+  claims to prevent.
+- **Quote style.** No `quotes` lint rule and no prettier config in this repo, so `'seal_attempt'`
+  evaded a double-quoted token list.
+- **Single-package scope.** The scan covered `packages/directory` only — and the bullet's third
+  clause is *about a relay test*, so that clause had zero coverage while reading as covered.
+
+Now bare, case-insensitive, across both packages, with a written **and asserted** exemption for
+`restart_seal_attempt_timeout` — a live daemon reason code containing `seal_attempt` as a substring,
+which the widened match would otherwise trip. A guard that fails on a healthy path is a guard someone
+deletes.
+
+### And my corrected proof was still wrong
+
+Entry-52-era correction: the published client *does* ship a sender. This pass found the **next**
+sentence also false — `seal_rejected_tree_mismatch` has a consumer in that same orphan; only
+`seal_attempt_ack` has none anywhere. Two inaccurate sentences in one proof, the second surviving a
+correction round.
+
+### Rules earned
+
+1. **A protocol has two ends. Grep for the FRAME, then grep for what the frame's reply triggers.**
+   Deleting one side of a request/response pair can leave the other side more orphaned than it was.
+2. **A labelled empty section is a louder abandoned-work signal than the code that was in it.**
+3. **Falsifying a guard three ways does not mean it has three holes.** The three I picked were the
+   three I had thought of; the bypasses were in the token list's *shape*, not its contents.
+4. **When a deletion makes a name wrong, say so.** `#sessionLastActivity` holds session start, and
+   the unilateral grace window runs from it — pre-existing, and invisible until the last writer that
+   could have made the name true was removed.
