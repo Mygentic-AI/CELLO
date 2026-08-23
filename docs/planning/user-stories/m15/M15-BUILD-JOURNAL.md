@@ -83,22 +83,27 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Support (overwrite in place; CELLO_Coder_1 must not edit)
 
-> ### Lane opened 2026-08-23. `DOD-M15-LEDGER-1` IN FLIGHT — 1 🟡 in this lane, WIP limit met.
+> ### `LEDGER-1` closed 🅿️ and merged. **0 🟡 in this lane** — the three in the DoD are Coder_1's.
+> **NEXT: `DOD-M15-IDLE-CONNS-1`** (Tier 2, code).
 
-- **IN FLIGHT: `DOD-M15-LEDGER-1`** (→ Entry S1). Branch `m15/ledger-1`, worktree at
-  `/Users/andrep/cello-client-wt/ledger-1` (outside `~/Documents`, so its `node_modules` is not
-  iCloud-synced). Baseline before any edit: 8/8 on `dod-m15-claim-scanner-1.test.ts`, by exit code.
-- **THE DEBT IS MEASURED: 165 unadjudicated claim matches across 9 shipped surfaces** (182 found,
-  17 already adjudicated). Biggest: `registry.ts` 37, the tarball `SKILL.md` 30,
-  `skills/cello/SKILL.md` 29, `README.md` 19. Per-surface table in Entry S1 — do not re-measure it,
-  re-run `dump-claims.mjs` against the scanner's own enumeration instead.
-- **THE LINE IS A REDO, NOT A START.** Its first attempt was reviewed BLOCKING (Entry 14) for being
-  incomplete, not wrong. `CLAIM-SCANNER-1` — the dependency it was blocked on — is now ✅ and
-  explicitly deferred the adjudication to this line.
+- **`DOD-M15-LEDGER-1` → 🅿️** (→ Entry S2), merged to `main` at cello-client `30fb9ac`. Reviewed,
+  nine findings, five blocking, all fixed. Gate 4281 tests + lint + typecheck + build by exit code.
+- **DO NOT RE-OPEN THE CLAIMS SWEEP.** Seven surfaces parked, trigger = after Tier 4 with
+  `AUDITME-1`. Andre, 2026-08-23: claims prose describes a tree Tiers 2 and 4 are about to change,
+  so sweeping now buys a second rewrite. **Working it first was a judgement error** — the line was
+  picked for being numerically lowest when the park argument was already on the record next door.
+- **THE LEDGER'S GUARDS ARE NOW TEXT-ANCHORED, and the reason is worth keeping.** The reviewer
+  zeroed an entire unswept surface with ONE invented row and showed the green run; both old guards
+  compared the ledger to itself and neither to the surfaces. Rows now carry verbatim excerpts and
+  the count is derived from them. **A green run on `dod-m15-claim-scanner-1.test.ts` now means the
+  quoted text exists**; before, it meant only that the numbers were self-consistent.
 - **`C7d` HAS NO GATE AND WILL BE MISSED.** The public GitHub repo **description** advertises four
-  native adapters that do not exist. It is the only surface on the list that is **not a file in the
-  tree**, so the scanner cannot reach it and no green run will ever prove it fixed. It needs a human
-  action on github.com.
+  native adapters that do not exist (OpenClaw, NanoClaw, IronClaw, ZeroClaw) and omits the Hermes
+  bridge, which is the one integration that ships. It is the only surface on the list that is **not
+  a file in the tree**, so no scanner reaches it and no green run will ever prove it fixed. Human
+  action on github.com; wording is Andre's (§2f).
+- **Portal reading is owed** before two registry claims can be settled: `screened` in the attestation
+  text, and *"You cannot attest about yourself"* — nothing in `core/` refuses a self-attestation.
 - **LANE (agreed, session `e3adcaa7…`):** Tier 1 `LEDGER-1`, `DISCLOSE-1`; Tier 2 `IDLE-CONNS-1`,
   `CHAINDEBT-1`, `SPINE-LANE-1`, `FREEZE-STATUS-1`*, `UNWITNESSED-1`*, `RELAYAUTH-1`; Tier 3
   `ALERTING-1`, `NODEHEAP-1`, `SWEEP-ABORT-1`, `EXPIRY-CONSUMER-POLICY-1`, `BUNDLED-2030-1`,
