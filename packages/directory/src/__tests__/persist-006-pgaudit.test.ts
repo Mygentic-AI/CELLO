@@ -452,11 +452,31 @@ describeIntegration("PERSIST-006 AC-001: pgaudit logs INSERT on conversation_sea
     );
     const servicePool = new pg.Pool({ connectionString: serviceUrl });
     try {
-      await servicePool.query(
-        `INSERT INTO conversation_seals (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
-         VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date, $3)`,
-        [testConversationId, testSealHash, "0".repeat(64)],
-      );
+      /**
+       * DOD-M15-CHAINDEBT-1 — BEGIN/ROLLBACK around the INSERT, and the audit line survives it.
+       *
+       * The statement must really execute as `cello_service`, because that is what this test reads
+       * out of the container log. It must NOT commit: `chain_hash` here is a literal, and a literal
+       * cannot be the hash of the current chain head, so committing it leaves `conversation_seals`
+       * unverifiable from that row onward — for every other suite in the run, in files that have
+       * nothing to do with pgaudit.
+       *
+       * pgaudit logs statements as they EXECUTE, not at commit, so rolling back keeps the evidence
+       * this test is looking for and removes the hole. Verified by the assertions below still
+       * finding the entry.
+       */
+      const client = await servicePool.connect();
+      try {
+        await client.query("BEGIN");
+        await client.query(
+          `INSERT INTO conversation_seals (conversation_id, merkle_root, close_type, participant_count, seal_date, chain_hash)
+           VALUES ($1, $2, 'MUTUAL_SEAL', 2, current_date, $3)`,
+          [testConversationId, testSealHash, "0".repeat(64)],
+        );
+        await client.query("ROLLBACK");
+      } finally {
+        client.release();
+      }
     } finally {
       await servicePool.end();
     }

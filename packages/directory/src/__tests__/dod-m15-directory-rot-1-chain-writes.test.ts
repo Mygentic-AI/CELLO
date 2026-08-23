@@ -79,6 +79,20 @@ const ROLLED_BACK: Record<string, string> = {
     "its first two describe blocks wrap every test in BEGIN/ROLLBACK on the same client, so their " +
     "inserts never commit. Its third block could not (the store uses its own pool connection) and " +
     "was converted to seedAccount() + per-run ids instead.",
+  "persist-006-pgaudit.test.ts":
+    "DOD-M15-CHAINDEBT-1 — CONVERTED. Its AC-001 INSERT must really execute as `cello_service`, " +
+    "because the assertion reads that statement back out of the container's pgaudit log — so it " +
+    "could not be seeded through the chained writer or dropped. It is now wrapped in " +
+    "BEGIN/ROLLBACK on a dedicated client from the service pool. pgaudit logs statements as they " +
+    "EXECUTE rather than at commit, so the evidence survives and the hole does not. Verified by " +
+    "running the suite: 13/13, including the assertion that finds the audit entry.",
+  "persist-018-seal-notarizations.test.ts":
+    "DOD-M15-CHAINDEBT-1 — MISFILED AS DEBT, not converted. Its single literal `chain_hash` is the " +
+    "SI-002 rollback test: it opens a dedicated client, BEGINs, writes conversation_seals and " +
+    "seal_notarizations, and ROLLBACKs to prove both undo atomically when a connection drops before " +
+    "COMMIT. The row is rolled back BY THE ASSERTION — the test then reads both tables and requires " +
+    "zero rows. Its own comment said so at the time: 'chain_hash placeholder value is fine — this " +
+    "row will be rolled back.'",
   "presence-001-repository.test.ts":
     "DOD-M15-CHAINDEBT-1 — MISFILED AS DEBT, not converted. Every query in this file runs on the " +
     "one client `beforeEach` opens with BEGIN and `afterEach` ROLLBACKs; the repo functions under " +
@@ -125,9 +139,7 @@ function deleteCount(text: string): number {
 const KNOWN_DEBT_INSERTS = [
   "federation-003.test.ts",
   "persist-003-rls.test.ts",
-  "persist-006-pgaudit.test.ts",
   "persist-008-analytics.test.ts",
-  "persist-018-seal-notarizations.test.ts",
   "persist-020-connections.test.ts",
   // PARTIALLY converted: its AC-001-extended block now runs in a rolled-back transaction (7 fake
   // chain_hash inserts, 7 deletes and a TRUNCATE removed). Other blocks in the file still violate.
@@ -219,7 +231,7 @@ describe("DOD-M15-DIRECTORY-ROT-1: fixtures never put a hole in a hash-chained t
 
     // Lower these as files are converted; never raise them. DOD-M15-CHAINDEBT-1 owns driving both
     // to zero, at which point the lists and this assertion go with them.
-    expect(KNOWN_DEBT_INSERTS.length, "the insert backlog must shrink, never grow").toBeLessThanOrEqual(7);
+    expect(KNOWN_DEBT_INSERTS.length, "the insert backlog must shrink, never grow").toBeLessThanOrEqual(5);
     expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(8);
   });
 
