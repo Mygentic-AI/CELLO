@@ -207,6 +207,33 @@ writing tests to writing GUARDS, and a guard is where this failure lives. Detect
 time — each was caught by a reviewer or by a deliberate poison. What was missing was never attention;
 it was a habit that runs *before* attention is needed.
 
+#### The cheapest half of this is an ORDERING, not a judgement
+
+**Typecheck a new checker before you trust a single run of it.** Contributed by CELLO_Coder_1 from
+its own near-miss, and it is here because it is the one step that costs a command and catches a
+whole class:
+
+- a vitest config key that **does not exist** (`globalTeardown`) was ignored in silence, and a
+  poisoned database passed — CELLO_Support;
+- a **non-existent constant key** evaluated to `undefined` and silently took the wrong branch —
+  CELLO_Coder_1, ten minutes after the file was written and before it had been typechecked.
+
+Both are the same shape: *a name that isn't there resolves to nothing, and nothing is falsy, and
+falsy quietly picks a branch.* Neither is caught by running the checker — a run is exactly where
+they hide. Both are caught by `tsc` in one command.
+
+This EXTENDS the ruled rule with a *how*; it does not amend it. The rule is still the two-part
+sentence above.
+
+#### Why these survive: they present as the output of a process nobody ran
+
+CELLO_Coder_1's naming, and it is the sharpest of the several attempted today. These artifacts are
+not missed by review because reviewers are careless. **They have the FORM of a settled thing — a
+configured key, a passing guard, a comment stating a verified finding, a "physical constraint" —
+without the process that would have settled it ever having run.** A reader checking the *form* finds
+everything in order, because the form really is in order. That is why the remedy has to be an ACT
+(make it fail; typecheck it) rather than an inspection.
+
 #### The diagnosis is broader than the rule — do not merge them
 
 The underlying error is **AN UNFALSIFIED CLAIM TREATED AS VERIFIED**, and it covers cases with no
