@@ -2234,7 +2234,7 @@ written down nowhere, and a per-session salt fixes it as a side effect.
   `SHA-256(salt ‖ message)`, which has a length-extension weakness). Recorded as its own line so the
   exposure is on the record independently of the fix that closes it.
 
-### `DOD-M15-SEALWIRE-1` — 🟡 The receipt is bound to the transcript (bullets 1, 2, 6, 7 ✅; 3, 4, 5, 8 ❌)
+### `DOD-M15-SEALWIRE-1` — 🟡 The receipt is bound to the transcript (bullets 1, 2, 3, 4, 6, 7 ✅; 5, 8 ❌)
 > **✅ BULLET 6 — the content hash is salted.** All six B2b-2 constraints, both review passes spent
 > (→ Entries 49–52). A session holding an agreed salt hashes under `hmac-sha256-salt-v1`.
 >
@@ -2244,6 +2244,20 @@ written down nowhere, and a per-session salt fixes it as a side effect.
 > relay's `gap_fill_request` half, whose only trigger was the reply the first deletion removed.
 > Two POST-LAUNCH items fell out of it: `DOD-M15-GRACE-WINDOW-1` and `DOD-M15-RELAY-WAL-UNWIRED-1`.
 >
+> **✅ BULLETS 3 AND 4 — the directory checks the relay against a client signature.** Both review
+> passes spent (→ Entries 61, 62). Pass 2's verdict on the tests: *"REMOVALS PROVEN […] HOLLOW TESTS
+> FOUND — one"*, and that one is closed. What the check catches, measured: a relay that deletes a
+> message leaf and recomputes the chain over what remains passes **every** pre-existing check —
+> `sequence_number` and `prev_root` are relay-assigned and inside no client signature — and is now
+> refused by name.
+>
+> Pass 1 found the chain built except its head: four legs shipped and reviewed green while **no
+> client produced the bytes**. Pass 2 found that my fix for it checked the leaf kind and none of the
+> properties its own justification claimed. Four POST-LAUNCH lines fell out:
+> `DOD-M15-NOTCARRIED-REFUSE-1`, `DOD-M15-SEALROOT-UNILATERAL-1`, `DOD-M15-SEALREJECT-MUTE-1`
+> (classified BELOW the reviewer's severity, with the disagreement written into the entry), and
+> `DOD-M15-SEALROSTER-FEDERATED-1`.
+
 > **⚠️ BULLETS 3 AND 4 ARE ONE UNIT.** Bullet 4's circular check cannot be fixed alone: its
 > replacement is bullet 3's client-signed `final_root`, which survives only inside a SHA-256
 > pre-image that is never transmitted — so it needs the wire change bullet 3 carries. The check
