@@ -910,6 +910,43 @@ read-only against the running database, both tables verify today (16 and 15 rows
   by a different store. **Enforcer:** the teardown covers every chained table the schema has, and a
   new chained table cannot be added without appearing in it.
 
+### `DOD-M15-SPINERED-1` — ❌ The multi-process evidence lane is HALF RED, and nobody knew
+**BLOCKS LAUNCH** (§0z.1). Found by running `DOD-M15-SPINE-LANE-1`'s own lane for the first time,
+2026-08-23 — one 56-minute run, receipt in Entry S12. **Not diagnosed. Deliberately.** The
+trip-wire (§0z.2) says record and stop; a wrong root cause here is expensive because the blast
+radius looks shared.
+
+**The measurement, and nothing more:** `pnpm run test:spine` → **21 of 36 files failed, 49 of 98
+tests**, 3,387 seconds, exit 0 on the wrapper. Every file listed in Entry S12.
+
+- **Why this blocks:** `.claude/CLAUDE.md` — *"No milestone closes until a live multi-process smoke
+  test passes."* This IS that test. **A close today would be a close with no evidence**, and the
+  reason nobody knew is that the lane is excluded from every environment (that is `SPINE-LANE-1`).
+- **What is red includes the floor, not just the edges.** `J-SPINE` *"daemon up: started"* — the
+  most basic multi-process assertion there is. `J-TOFN-DKG` *"kill one directory → registration
+  still succeeds"*, which is the **sovereign-node quorum invariant** stated as non-negotiable in
+  `.claude/CLAUDE.md`. `J-CONTENT`'s entire ACK/dedup/recover set. `J-MULTIPLAYER` 7 of 7.
+- **What is GREEN is worth as much as what is red, and constrains the cause:** `j-conn`, `j-auth`,
+  `j-onboard`, `j-int`, `j-presence`, `j-sig`, `j-antientropy` (5/5), `j-suspend`,
+  `j-trust-journey`, `j-combined-journey`, `j-leg-frontier`, `j-track-record`, `j-optionb-setup`,
+  `j-sig`. **A cause that broke everything would not leave those standing.**
+- **THREE OBSERVATIONS, EACH MARKED AS WHAT IT IS. None is a diagnosis.**
+  1. **Environmental, confirmed:** `cello-portal-postgres` has been **Exited for 11 days** and
+     nothing listens on `55432`. Journeys needing the portal cannot pass. Explains the
+     `ECONNREFUSED` failures; does NOT explain most of the rest.
+  2. **A lead, not a cause:** six failures are JSON parse errors, one reading
+     `Unexpected token 'C', "CELLO — a "... is not valid JSON`. That string is the CLI banner at
+     `cello-client/core/cli/src/cli-args.ts:52`. Something that should emit JSON emitted help text
+     instead. **Which caller, and why, is unestablished** — do not assume it is the same caller in
+     all six.
+  3. **Ruled out:** the binaries are built (8 `core/*/dist` present, daemon dist newer than source),
+     so this is not a stale-build artefact.
+- **Do NOT open 21 lines from this.** First unit is a triage: cluster the 49 by cause, establish
+  how many are environment vs product, and only then decide what needs fixing. The lane has been
+  unrun for long enough that some failures will be stale expectations rather than regressions.
+- **Enforcer:** `test:spine` green, or every remaining failure carrying a written verdict of
+  environment / stale-expectation / real-defect, with the real ones lined up.
+
 ### `DOD-M15-SPINE-LANE-1` — ❌ The spine suites are run, or their absence is a decision on the record
 Split from `DOD-M15-CI-SKIPS-SILENT-1`. 38 files — the M8D spine lane plus the cross-machine
 transport tests — are excluded by `packages/e2e-tests/vitest.config.ts` and therefore **never
