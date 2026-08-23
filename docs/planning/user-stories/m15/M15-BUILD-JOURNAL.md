@@ -81,10 +81,29 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
     carries both suspected partings, names case (b) exactly, and sets the bar: *"a signal separating
     a relay catching up from a leaf it will never carry."* (`#diverged` IS consumed — seal readiness
     reads it directly; only the public `isSessionDiverged` wrapper has no caller.)
-  - **The connection worth having, unverified:** the SEAL leaf's `final_root` may BE that missing
-    signal. At close there is no catching-up left, so "the declared root matches some prefix of the
-    relay's array" is a decidable question in a way it is not mid-session. If that holds, bullets
-    3 + 4 and `UNWITNESSED-1` are one piece of work, not two. **Verify before building on it.**
+  - **VERIFIED AGAINST THE CODE 2026-08-23 (was "unverified"): the SEAL leaf's `final_root` IS that
+    missing signal, and bullets 3 + 4 and `UNWITNESSED-1` are ONE piece of work.** Three facts, each
+    read rather than assumed:
+    1. **Same domain, so the comparison is possible at all.** `SessionTree` builds `kind: "hash"`
+       leaves over stored content hashes (`session-tree.ts:150,168`), which is exactly what bullet 1
+       made the directory certify (`leaves.map(l => ({kind:"hash", data: l.s2.content_hash}))`).
+       Before bullet 1 this comparison could not have been written.
+    2. **No catching-up is left at seal time.** The seal is triggered by two SEAL ctrl leaves in the
+       relay's log, and the relay refuses further submits once `sealing` — so a leaf absent from the
+       array then will never be in it. That is precisely the discriminator `UNWITNESSED-1` says is
+       missing: mid-session "absent" means *not yet*; at seal it means *never*.
+    3. **The unwitnessed own send is what a prefix check catches.** `final_root` is the root over the
+       LOCAL tree; an unwitnessed append put a leaf there that the relay never carried, so the
+       declared root matches NO prefix of the relay's array. Held out-of-order arrivals make the
+       local tree a strict prefix, which passes — correctly.
+  - **THE CHECK IS "matches SOME prefix", NOT "matches the prefix of length N".** The two sides
+    compute `final_root` at different moments — the responder's tree may already hold the initiator's
+    SEAL ctrl leaf, the initiator's cannot hold the responder's — so the matching index differs per
+    side by design. A fixed-length comparison would refuse every honest bilateral seal.
+  - **Residual, unproven and to be settled in that unit:** whether an unwitnessed RECEIVED leaf
+    (`UNWITNESSED-1` case (a)) can sit at a DIFFERENT INDEX locally than in the relay's array. Both
+    peers hold it, so counts agree, but a position difference would break prefix-matching for an
+    honest session. That is the false positive to hunt before this ships.
 - **🚨 A CLIENT-SIDE COLUMN NEEDS TWO ENTRIES** — see the shared trap above the lane blocks. Caught me
   twice.
 - **🚨 SEALWIRE DEPLOYMENT ORDERING:** every directory node must run the new directory BEFORE any
