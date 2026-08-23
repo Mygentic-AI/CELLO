@@ -1739,6 +1739,25 @@ from the receiving operator's chair, a refused message simply never arrives.
   - **Deliberately NOT urgent.** An unsalted session is exactly as verifiable as every session
     shipped before the feature existed. This is the difference between *knowing* and *working*.
 - **Enforcer:** receipt.
+- **BUILT AND WIRED 2026-08-23/24, NOT YET RUN — tag stays ❌.** The surface exists
+  (`noteContentRefusal` / `takeContentRefusals`), both producers call it, and the consumer is spread
+  into `cello_receive` — **including the QUIET exit**, which is the one that matters: a version skew
+  refuses every message, so nothing is ingested and there is no delivered message for a notice to
+  ride along with. The guidance on that exit also switches, so it no longer says "call again and keep
+  waiting" to someone whose peer's every message is being refused.
+- **The tests I wrote first would have passed against a surface nobody reads.** They drove the store
+  API directly, so deleting the `cello_receive` spread left all of them green — proving the store
+  works and saying nothing about the defect, which was that good strings had **no reader**. Four
+  tests now drive the real `cello_receive` over IPC on the quiet exit.
+- **OWED before this flips:** run them, and run the REVERT — delete the spread at
+  `session-content-handlers.ts:1225` and confirm the two positive tests go red. Test 3 asserts
+  ABSENCE and will stay green through that revert by design (it is the false-positive guard), so it
+  is not evidence either way and must not be counted as such.
+- **A fifth test was deleted rather than shipped**, with the reasoning left in the file: content
+  never travels, but `noteContentRefusal` is never handed the content — the protection is at the two
+  producers — so a wire-level version either fails correctly (`impact` is verbatim; no layer can
+  launder a caller that puts content there) or strips the secret first and passes unconditionally,
+  testing its own setup. The property is asserted where it is enforceable.
 
 ### `DOD-M15-TRANSPORT-TERMINAL-1` — ✅ A transport blip stops killing a healthy conversation
 > **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SPEC: DEVIATIONS FOUND** … **SILENT FALLBACKS
