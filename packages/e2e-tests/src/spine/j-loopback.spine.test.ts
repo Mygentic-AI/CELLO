@@ -141,7 +141,30 @@ describe("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => 
     // to be true` names nothing, and this send crosses the read-before-write gate, the security
     // gateway and the relay submit — three different reasons that look identical when the reason is
     // thrown away.
-    const sentA = (await connA.call("cello_send", { cello_session_id: sessionIdA, content: "loopback hello", signal: "over" })) as { ok?: boolean; reason?: string; guidance?: string };
+    /**
+     * ─── DOD-M15-NORMHASH-1's GUARD. The ellipsis is load-bearing; do not "tidy" it to ASCII. ───
+     *
+     * The gateway sanitiser folds confusables via NFKC (`…` → `...`) so an attacker cannot smuggle a
+     * visually identical payload past screening. That raises the question this journey now answers:
+     * **do both ends hash the same bytes when a fold happens?**
+     *
+     * They do, and it is the ORDERING that saves it — established by reading both paths, not
+     * assumed. The SENDER screens first and hashes the screened bytes, which are the bytes it puts
+     * on the wire. The RECEIVER runs its content-hash cross-check BEFORE `screenInbound`. So both
+     * sides hash the wire bytes; no fold happens between the two hashes.
+     *
+     * **Nothing pinned that ordering, and it is one plausible tidy-up from breaking.** Moving the
+     * receiver's cross-check below `screenInbound` — which reads as "screen it before you trust it"
+     * — would make every message containing a foldable character produce two different trees, and it
+     * would present as the core promise failing on an ellipsis.
+     *
+     * This journey already asserts the two sealed roots are byte-identical. Sending a foldable
+     * character through it makes that assertion the guard, for the cost of one character.
+     */
+    const CONTENT = "loopback hello…";
+    const CONTENT_AS_DELIVERED = CONTENT.normalize("NFKC");
+    expect(CONTENT_AS_DELIVERED, "NFKC must fold the ellipsis — if not, this guard is inert").toBe("loopback hello...");
+    const sentA = (await connA.call("cello_send", { cello_session_id: sessionIdA, content: CONTENT, signal: "over" })) as { ok?: boolean; reason?: string; guidance?: string };
     expect(sentA.ok, `cello_send failed: ${JSON.stringify(sentA)}`).toBe(true);
     // The daemon APPENDS the signal token to the wire content (cello_send does it, so the token is
     // what the leaf hash binds and what the transcript records). Asserting equality with the raw
@@ -152,7 +175,11 @@ describe("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => 
     // between the two, and for a reversed order. The leaf hash binds these exact bytes, and an
     // outbound governance path can rewrite content, so the exact form is the right instrument.
     const receivedB = ((await connB.call("cello_receive", { cello_session_id: sessionIdB, timeout_ms: 15_000 })) as { content?: string | null }).content;
-    expect(receivedB, "the signal token rides the content — the MCP shim appends it").toBe("loopback hello [[OVER]]");
+    expect(
+      receivedB,
+      "the signal token rides the content — the MCP shim appends it; the ellipsis arrives FOLDED " +
+        "because the confusables defence ran (DOD-M15-NORMHASH-1)",
+    ).toBe(`${CONTENT_AS_DELIVERED} [[OVER]]`);
 
     // AC-003 isolation: A's connection cannot reach B's end and vice versa — distinct (agent,
     // session_id) records. (A receiving on B's session would mean cross-end leakage.)
