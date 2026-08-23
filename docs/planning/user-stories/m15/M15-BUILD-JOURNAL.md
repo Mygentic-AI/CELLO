@@ -3820,9 +3820,86 @@ block is untouched.
 
 ---
 
-## Entry S2 (CELLO_Support) — `LEDGER-1`: two surfaces, then parked. **REVIEW IN FLIGHT — stays 🟡.**
+## Entry S2 (CELLO_Support) — `LEDGER-1`: the guards checked the ledger against itself, never the text
 
-Heading says so per §"REVIEW IN FLIGHT IS NOT A CLOSING STATE". Verdict appends here when it lands.
+**Reviewed. Nine findings, five blocking, all fixed. Line → 🅿️** (two surfaces done and reviewed;
+the remaining seven parked with a trigger — see below).
+
+### The verdict, quoted
+
+> **SPEC: DEVIATIONS FOUND** — C5 missing outright and un-journaled **[blocking]**; C1 deviated (the
+> ledger is not in the DoD document, the DoD section left stale, argued in a code comment rather than
+> a Decisions entry) **[blocking]**; C4 deviated (a swept surface carries an unrowed screening claim).
+> **NO SILENT FALLBACKS** — none introduced… They are, however, what falsifies two of its evidence
+> statements.
+> **HOLLOW TESTS FOUND** — no new test was written, which is acceptable for a data unit; but the
+> existing guards do not constrain the thing this unit produces, and **I constructed a passing
+> laundering entry in one attempt.** **[blocking as a test-quality gap]**
+> **REMOVALS PROVEN** — both prose deletions rest on read code, not on a grep.
+>
+> *"Am I rubber-stamping? No… The three defects I found in the evidence layer were all in rows about
+> screening and the seal — which is where you predicted they would be."*
+
+### The finding that reframes what a green run here means
+
+**The reviewer zeroed an entire unswept surface with one invented row and showed the green run** —
+18 matches for *"the documents skill's safety properties"*, a sentence that exists nowhere. Both
+guards passed it, because **both compare the ledger to itself and neither to the surfaces.** The
+shrink-only test would then have driven that baseline to zero permanently.
+
+I had written in Entry S1 that the guards "constrain arithmetic, not judgement". That was too
+generous by one step: they did not constrain the arithmetic to *reality* either, only to internal
+consistency.
+
+**The fix removes the human number entirely.** A row carries the VERBATIM text it accounts for, and
+the count is derived from that text by the scanner's own regex. Three new tests: every excerpt must
+exist on the surface it names; a row accounts for exactly the claim words inside its excerpts; no two
+rows may claim the same words. The reviewer's laundering entry was replayed against the fixed guard
+and **fails on the first test**.
+
+**Deriving the count immediately found a hand-typed number that was wrong.** Both `SKILL.md` backup
+rows were paying for *"nobody can read"* — which the scanner has **never** counted, because the two
+words straddle a line break and `\bnobody can\b` needs a space. The rows had been buying a match that
+does not exist. No amount of care would have found that by reading; only arithmetic over real text
+does.
+
+### I withdrew a row rather than keep it true
+
+*"You cannot attest about yourself"* was adjudicated **true** on evidence describing the CONSENT
+gate — which governs what is **presented**, not who may **issue**. Nothing in `core/` refuses a
+self-attestation; the nearest check compares an envelope's issuer against the signal's recorded
+issuer, a different question. Either the portal refuses it or nothing does. **Back in the backlog**,
+registry baseline 3 → 4.
+
+Two more rows had the same shape and survived it: the bridge and policy-log rows both rested on
+*"`session-node-manager.ts:6326` … every inbound message passes through"*, which is **false** — there
+are three `screenInbound` call sites and a **document frame skips screening entirely**. Both
+conclusions hold, but on `recordOutcome` in the gateway, which is where recording actually happens.
+A row whose premise is false is a row nobody can re-check.
+
+### The §2f overstep was real, and my replacement copy was itself wrong
+
+Deleting a flatly false claim is ungated; writing its replacement is not, and I wrote five. All
+reverted to deletions only. **The set-tier one is the instructive failure:** my replacement said
+*"what runs today is the pattern layer"*, and the gateway's own header says the deterministic
+sanitizer **and** the pattern matcher were live throughout, with PII whitelisting and rate limiting
+outbound. Three layers run; one does not. **A false claim in the understating direction, written by
+the claims audit, in the same pass that identified understating as the costliest direction.**
+
+### Carried
+
+- **`DOD-M15-SCREENINSTALL-1`** — nothing lets an operator ask whether the semantic screener is
+  running. `cello_status` reports no layer state; the only record is a startup log line, and a log is
+  not a control.
+- **`DOD-M15-AUDITME-1` / the `LEDGER-1` park** — `core/adapter-claude-code/SKILL.md:170` says the
+  receipt is *"the notarized bilateral receipt **both sides agree on**"*, which contradicts
+  `implies_assent: false` head-on. Deleting *"both sides agree on"* is ungated and costs nothing;
+  it is named here so the park does not hide it.
+- **Portal reading** — two registry claims (`screened` in the attestation text, and
+  self-attestation) cannot be settled without reading `cello-portal`.
+
+Gate: 4281 client tests, lint, typecheck, build — all by exit code. **Lint caught a duplicate object
+key** that the earlier lint-and-typecheck-only "gate" would have shipped.
 
 ### The judgement error that matters more than anything below
 

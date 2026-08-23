@@ -75,13 +75,13 @@ evidence, and re-scope the lines each one touches.
 Everything already readable by someone outside — the public repo, the shipped package, the product's
 own output. The unpublished investor and GTM material is **not** in this tier (M15-PROCEDURE §0a.1).
 
-### `DOD-M15-LEDGER-1` — 🟡 Every live claim is in the ledger with a disposition
-> **Two of nine surfaces adjudicated (→ Entry S1), review in flight.** README 19→2 and
-> `registry.ts` 37→3 unadjudicated; 51 rows carry evidence. **The remaining seven surfaces are
-> PARKED — Andre, 2026-08-23:** claims prose describes a tree Tiers 2 and 4 are about to change,
-> so writing it now buys a second rewrite. Same argument already ruled for `DOD-M15-AUDITME-1`.
-> **Trigger: after Tier 4 lands, with `AUDITME-1`, as the last Tier 1 work.** Not dropped — the
-> scanner's shrink-only baselines hold the debt visible and a new claim still fails the build.
+### `DOD-M15-LEDGER-1` — 🅿️ Every live claim is in the ledger with a disposition
+> **Two of nine surfaces done AND reviewed (→ Entry S2).** Nine findings, five blocking, all fixed.
+> README 19→2, `registry.ts` 37→4. A row now carries the verbatim text it accounts for and the
+> count is derived from it — the reviewer had zeroed a whole surface with an invented row past both
+> old guards. **Remaining seven surfaces PARKED (Andre, 2026-08-23): trigger — after Tier 4, with
+> `AUDITME-1`, as the last Tier 1 work.** Includes `adapter-claude-code/SKILL.md:170`'s *"both sides
+> agree on"*, which contradicts `implies_assent: false` and is an ungated deletion when unparked.
 Build the claims ledger (M15-PROCEDURE §1d) as a section of this document. One row per claim: its
 current text, where it appears, and its disposition — **made true**, **withdrawn**, or **disclosed as
 a bounded property**.
