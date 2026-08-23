@@ -1138,6 +1138,13 @@ single cluster in the red lane.
 > **CARRIED:** both guards read only `exclude:` in `packages/*/vitest.config.ts` — a narrowed
 > `include:` hides files just as completely and neither sees it. That is failure mode #2 from this
 > guard file's own header, half-covered.
+>
+> **⚠️ OPERATIONAL, measured 2026-08-23: THE SPINE LANE CANNOT RUN CONCURRENTLY WITH ITSELF.** It
+> binds FIXED ports — a second run dies with `EADDRINUSE: address already in use :::65471`, the
+> relay exits code 1, and the journey reports as *skipped* with a hook timeout. **That reads as a
+> flaky test and is not one.** Two lanes sharing a machine hit it immediately; so would a CI job
+> running this beside anything else. The manual-only decision above already implies one runner at a
+> time, but nothing SAYS it, and the failure it produces does not name its own cause.
 Split from `DOD-M15-CI-SKIPS-SILENT-1`. **37** files (the line said 38; measured) — the M8D spine lane plus the cross-machine
 transport tests — are excluded by `packages/e2e-tests/vitest.config.ts` and therefore **never
 collect under any environment**. Worse than the env-gated suites, which at least print a skipped
