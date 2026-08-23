@@ -37,9 +37,9 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Coder_1 (overwrite in place; CELLO_Support must not edit)
 
-> ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 4280 client tests.
-> **THE SALT UNIT IS UNREVIEWED** — reviewer dispatched. Under the WIP limit the only permitted work
-> is closing it.
+> ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 4285 client tests.
+> **IN FLIGHT: the salt AGREEMENT EXCHANGE** — `SEALWIRE-1` bullet 6, part A. The salt primitive is
+> built and its review is CLOSED (→ Entry 40, eleven findings, all fixed).
 
 - **TIER 4 IS IN PROGRESS. `SEALWIRE-1` bullets 1 + 2 are BUILT, REVIEWED, and their blocking
   findings fixed** — the directory certifies the content-hash root, and the client verifies it
@@ -47,9 +47,21 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 - **THE KEY/SALT DECOUPLING IS DONE** (Andre's correction, Decisions #8/#9/#10): the envelope key and
   the session salt are two independent values from one exchange. `deriveSessionSecrets` returns ONE
   output; the salt lives in `core/crypto/src/session-salt.ts`; `content_salt BLOB` is persisted.
-- **NEXT, once the review closes:** the salt CONTRIBUTION EXCHANGE at session open, the fingerprint
-  mismatch check (#10), and moving `wireContentHash` onto `saltedContentHash`. Then `SEALWIRE-1`
-  bullets 3–8.
+- **BULLET 6 IS SPLIT IN TWO, and the seam is honest.** Part A (in flight) AGREES the salt: one frame
+  type on the peer-to-peer content stream, derive, persist, compare fingerprints, freeze loudly on
+  disagreement. Part B CONSUMES it: `wireContentHash` → `saltedContentHash`, the version
+  discriminator, and holding the first send until the salt is agreed. Part A is safe to ship alone
+  precisely because nothing consumes the salt yet — an old peer that never answers costs nothing.
+- **🚨 THE `REFUSAL_REASONS` AC WAS WRONG AND IS CORRECTED IN PART A.** I wrote it; `recordRefusal`
+  refuses an inbound session REQUEST, before a session exists. A salt disagreement happens on an
+  ESTABLISHED session, so its named reason belongs on the freeze path, not that union.
+- **NEXT after part A:** part B, then `SEALWIRE-1` bullets 3–8.
+- **🚨 BULLETS 3 + 4 HAVE AN UNRESOLVED DESIGN FORK — do not start them without reading this.** The
+  directory cannot hard-gate on a SEAL leaf's declared `final_root`, because the client's local tree
+  is NOT guaranteed to be a prefix of the relay's leaf array: content is appended locally even when
+  no witness bound it (`session.content.leaf.unwitnessed`). A strict comparison would refuse real
+  sessions, and a root check that is wrong makes every session unsealable. The candidate answer is a
+  PREFIX SEARCH plus making the declared root cover witnessed leaves only — unverified.
 - **🚨 A CLIENT-SIDE COLUMN NEEDS TWO ENTRIES** — see the shared trap above the lane blocks. Caught me
   twice.
 - **🚨 SEALWIRE DEPLOYMENT ORDERING:** every directory node must run the new directory BEFORE any
