@@ -13,7 +13,21 @@ description: >
 
 # M15 Build Journal
 
-## RESUME STATE (overwrite in place — the ONLY mutable block)
+## RESUME STATE — TWO LANES, TWO SUB-BLOCKS
+
+**M15 runs as two lanes from 2026-08-23.** `CELLO_Coder_1` (seal + Tier 4) and `CELLO_Support`
+(everything else) — lane split agreed in session `e3adcaa7…`.
+
+**EACH LANE WRITES ONLY ITS OWN SUB-BLOCK.** This block is overwritten in place, so it is the one
+place the two lanes would clobber each other. Pull before writing; push immediately after.
+
+Journal entries: `CELLO_Coder_1` uses plain integers (…39, 40); `CELLO_Support` uses `S1, S2, S3…`
+with `(CELLO_Support)` in the heading, so the two can never collide on a number. Both append at EOF.
+DoD tag flips only on your OWN lane's lines.
+
+---
+
+## RESUME STATE — CELLO_Coder_1 (overwrite in place; CELLO_Support must not edit)
 
 > ### 🟢 30 ✅, 3 🟡, 2 🅿️, 38 ❌. Both repos clean, pushed, on main.
 > **No unreviewed work.** `KEYAGREE-1` reviewed and all thirteen findings fixed (Entry 39) — it
@@ -192,6 +206,41 @@ An entry heading is `## Entry N — <DoD line or subject> (YYYY-MM-DD)`. What be
 - **Anything parked**, with its trigger.
 
 ---
+
+---
+
+## RESUME STATE — CELLO_Support (overwrite in place; CELLO_Coder_1 must not edit)
+
+> ### Lane opened 2026-08-23. Nothing started yet.
+
+- **NEXT ACTION: `DOD-M15-LEDGER-1`** — agreed as this lane's first line. Lowest non-✅, ❌ after a
+  blocking review, its dependency `CLAIM-SCANNER-1` is now ✅, and it touches no file the other lane
+  is in.
+- **LANE (agreed, session `e3adcaa7…`):** Tier 1 `LEDGER-1`, `DISCLOSE-1`; Tier 2 `IDLE-CONNS-1`,
+  `CHAINDEBT-1`, `SPINE-LANE-1`, `FREEZE-STATUS-1`*, `UNWITNESSED-1`*, `RELAYAUTH-1`; Tier 3
+  `ALERTING-1`, `NODEHEAP-1`, `SWEEP-ABORT-1`, `EXPIRY-CONSUMER-POLICY-1`, `BUNDLED-2030-1`,
+  `VOCAB-ORDERING-1`, `CHAINHEALTH-1`, `SAMEOP-1`, `ENDORSE-RETRY-1`, `SCREENINSTALL-1`,
+  `DOCPROFILE-1`, `HEARTBEAT-1`; Tier 5 `RELAYABUSE-1`, `RELAYLEAK-1`, `MULTIRELAY-1`,
+  `BOOTSTRAP-AUTH-1`, `STEP6-REPLAY-1`, `DDOS-1`, `RELAYONLY-1`. Plus `DIRAUTH-1` — its remaining
+  half IS `BOOTSTRAP-AUTH-1`, so that line goes ✅ when this lane finishes it.
+- **⚠️ `FREEZE-STATUS-1` — DO NOT WRITE A MIGRATION.** It adds a column to the SESSIONS table, and
+  `CELLO_Coder_1` is adding the session-salt column to that same table. Two client-side migrations
+  against one table from two lanes is the FEDERATION-002 renumbering cascade the M5 rules exist to
+  prevent. Hand the column name and semantics to `CELLO_Coder_1`, who carries it inside ONE
+  migration; this lane keeps the line and the behaviour work.
+- **⚠️ `UNWITNESSED-1` — say so before touching `sealReadiness`.** Its subject is the same function
+  `CELLO_Coder_1` is editing for the certified-root check.
+- **`OFFER-EXPIRY-1` is this lane's AFTER Tier 4 lands** — not before. It changes session-open, which
+  is where the key agreement and salt exchange are being added. Its diagnosis is already written up
+  in the `CELLO_Coder_1` block; do not re-derive it.
+- **🚨 DEPLOYMENT ORDERING BINDS THIS LANE TOO.** `SEALWIRE-1` bullet 1 changed the VALUE the
+  directory certifies while the field name stayed the same, so the two versions disagree silently. A
+  NEW client against an OLD directory refuses EVERY bilateral seal — deterministic. Every node must
+  run the new directory BEFORE any client carrying the check reaches `latest`; not before the roll
+  starts, before it FINISHES. If this lane rolls a directory for an unrelated reason, that ordering
+  still applies.
+- **Decisions Carried #5–#10 landed 2026-08-23 and #7 is RETRACTED.** Re-read them before relying on
+  anything about the key agreement or the salt.
 
 ## Entry 0 — Milestone setup (2026-08-21)
 
