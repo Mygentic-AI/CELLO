@@ -6192,3 +6192,78 @@ fires on its own, so nothing closes by timer; what is broken is that the protect
    source was deleted. Measured, not hypothetical.
 4. **Correct a wrong proof even when its conclusion holds.** Twice now the answer was right and the
    stated mechanism was wrong, and the second one had already survived a correction round.
+
+---
+
+## Entry 55 — my proof of non-circularity compared against the relay's copy of the hash
+
+`DOD-M15-SEALWIRE-1` bullets 3 and 4, receiver half. Review pass 1.
+
+### Reviewer verdict, quoted
+
+> **SPEC: DEVIATIONS FOUND** — bullet 3's deletion clause is unmet (two comments, one
+> self-describing as deleted) [blocking]; bullets 3 and 4's substantive clauses are
+> written-not-wired and must not be marked done.
+> **SILENT FALLBACKS FOUND** — F3, mixed carry returns `ok: true` with the coverage in an unread
+> field [blocking].
+> **ERROR SUBSTITUTION FOUND** — F2, `ROOT_DISAGREES` fires on a known client-side divergence with
+> relay-flavoured guidance, and `PARTIES_DISAGREE` is unreachable [blocking].
+> **HOLLOW TESTS FOUND** — the parties-disagree test fails the revert test (delete the branch, it
+> stays green) [blocking]. The other eight survive it.
+
+And on the central claim:
+
+> **your binding argument survives, but not because of anything this module does.** It survives
+> because both existing verification loops happen to prove `s2.content_hash == s1.content_hash`
+> before anyone would call you. The module states the property in prose and enforces a weaker one in
+> code.
+
+### The finding, and why it is the sharpest one of the milestone
+
+The whole unit exists to break a circle: the directory rebuilds a root from the relay's leaves and
+compares it to the relay's root, so a relay that drops a message and reports the matching root always
+passes. My fix compares against `final_root` — the client's own signed claim — and the header said,
+in bold, that this works because *"`content_hash` lives inside Structure 1, and Structure 1 is signed
+by the sending client."*
+
+**And then compared against `s2.content_hash`.** Structure 2 is the relay's envelope. The relay
+assembles it and can put anything in that field. The signed copy is inside `structure1_cbor`.
+
+The two ARE equal in practice — both existing verification loops prove it before they would ever call
+me. So the code was safe and the *reasoning* was not, and there is no caller yet to hold that line.
+The next author wires this in three weeks reading my header, not `directory-node.ts:5215`.
+
+That is precisely the pattern this codebase keeps finding and that I have now produced twice in a
+day: **a comment asserting a safety property the code does not have.** The difference here is that
+the property is the entire point of the unit.
+
+Fixed by decoding `structure1_cbor` in the module, binding against the signed hash, and refusing when
+the relay's envelope disagrees with it — plus a loud `PRECONDITION` block naming the two checks the
+module still cannot perform (signature verification, participant check) with their call sites.
+
+### The verdict that accused the wrong machine
+
+`PARTIES_DISAGREE` was unreachable — the relay comparison ran first, so any leaf reaching the
+parties check had already matched. A dead branch is cheap. **What fired instead was not.**
+
+A client whose own tree diverges is a real and already-instrumented state: `placeOwnLeaf` with an
+assigned sequence behind its frontier appends at the tail, logs `session.tree.position_behind_frontier`
+at ERROR, and marks the session diverged. That party's `final_root` is then over a reordered leaf set
+while its counterparty's still matches the relay. My code answered `ROOT_DISAGREES`, whose guidance
+reads *"the relay's leaf set is not the conversation the participant had."*
+
+So: the client logs the exact fault, and the directory sends the operator to audit a relay that is
+fine. Comparing the two signatures to **each other first** separates them.
+
+### Rules earned
+
+1. **Name the FIELD, not the concept, when writing a security claim.** "content_hash is signed" is
+   true of one of two identically-named fields, and the difference is the whole guarantee.
+2. **A module must enforce its own headline property or say loudly that it cannot.** Relying on a
+   caller is legitimate; relying on one silently is how the property evaporates at the second call
+   site.
+3. **A hedged assertion is an author who is unsure.** Mine accepted either of two verdicts and stayed
+   green when the branch it named was deleted. If you cannot predict which verdict fires, the design
+   is not settled yet.
+4. **Check the DEFINITION against the PRODUCER.** The file defining the seal payload documented
+   `0x00` where the producer uses `0x02`; I got it right only by reading the producer.
