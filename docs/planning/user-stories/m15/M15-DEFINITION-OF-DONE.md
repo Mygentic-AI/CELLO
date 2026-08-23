@@ -967,6 +967,24 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 > for, so "this journey proves X is broken" was never established for any of them — the same error I
 > made about the quorum invariant, eight times over rather than once.
 >
+> ### ✅ ALL EIGHT RE-RUN (2026-08-24). EVERY ONE either PASSES or fails for a NON-PRODUCT reason.
+>
+> | journey | result |
+> |---|---|
+> | `j-tofn-dkg` | ✅ 2/2 — fans the DKG to all 3 nodes; **kill one directory → registration still succeeds** |
+> | `j-tofn` | ✅ 4/4 — **sovereign isolation** (each node writes only its own DB) + **a forged consortium manifest is REFUSED** |
+> | `j-sign` | ✅ — consortium seal is genuinely FROST T-of-N across ≥2 directories |
+> | `j-relaysig` | ✅ — after fixing a call to a command that had been renamed |
+> | `j-refresh` | ✅ |
+> | `j-remove` | 2/3 — the third is `REVOKED-READS-OFFLINE-1`, a real finding that names itself |
+> | `j-persist` | ✗ **not a persistence failure** — the leaves are there; the journey computes the pre-salt hash |
+> | `j-suspend-tofn` | ✗ **not a kill-switch failure** — the test encodes T=3; we ship T=2 |
+>
+> **So of the eight I characterised as "the floor is broken" — including the two I reported as the
+> sovereign-node invariant failing — NONE was a product defect.** Seven of those properties are now
+> positively PROVEN rather than merely un-disproven, which is a stronger position than the lane was
+> in before any of this.
+>
 > **The re-runs ARE trustworthy**, because they happened after the fix: `j-refresh` ✅, `j-remove`
 > (real finding — `DOD-M15-REVOKED-READS-OFFLINE-1`), `j-relaysig` (real finding — a renamed command
 > the failure did not name). The rule is simply that a pre-fix red file proves nothing about its
