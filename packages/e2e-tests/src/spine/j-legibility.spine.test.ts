@@ -262,7 +262,21 @@ describe("J-LEGIBILITY — malicious-tail bilateral seal, cert read cross-proces
     expect(daemonB.output, `B must re-derive + verify the published frontier:${diag}`).toMatch(/"event":"seal\.certificate\.frontier\.verified"/);
     expect(daemonB.output, `B must NOT reject an honest frontier:${diag}`).not.toMatch(/seal\.certificate\.frontier\.unverifiable/);
 
-    // The live read path (close return) carries the same legibility — same final_message verdict.
-    expect(closeB.legibility?.final_message.answered, `B's close return must carry the legibility:${diag}`).toBe(false);
+    /**
+     * DOD-M15-CLOSEROOT-1: this asserted `closeB.legibility` — the CLOSE RETURN carrying the
+     * certificate. Close no longer carries it, for the same reason it no longer carries the root:
+     * it returns a commitment and the notarization runs in the background, so there IS no
+     * certificate yet at the moment close returns.
+     *
+     * The claim the line was making is still worth making — that the LIVE READ PATH and the stored
+     * certificate agree — but `cello_sealed_receipt` IS the live read path now. It is read at the
+     * top of this block through the real MCP boundary (a separate process, not an internal call),
+     * and `leg.final_message.answered` is asserted above. Re-asserting it here against a field that
+     * is structurally absent would be asserting the absence of the async design.
+     */
+    expect(
+      leg.final_message.answered,
+      `the live read path must carry the same verdict as the stored certificate:${diag}`,
+    ).toBe(false);
   }, 150_000);
 });
