@@ -3183,12 +3183,28 @@ portal database is running (it was 7 failures; **6 were the stopped container**)
   by endorsing themselves. Flagging a stranger's endorsement does not admit a forgery; it
   **discards the one signal that carries weight.** A wallet where every endorsement reads
   self-dealing is a wallet where third-party trust is invisible — the product's whole proposition.
-- **✅ NOW CONFIRMED BY READING THE ROWS, not inferred.** The wallet holds **FOUR endorsements and
-  every one carries `same_operator: true`** — including the `accepted` one. The earlier version of
-  this line said so by inference; `CELLO_Coder_1` correctly pointed out that inference was
-  underdetermined (`strangerRow === undefined` is equally satisfied by *"Bob's endorsement is not in
-  the wallet at all"*, a different bug in a different place). It is the first reading. The rows are
-  there and they are all flagged.
+- **⚠️ RETRACTED "CONFIRMED". IT IS STILL UNDETERMINED, AND I MADE THE SAME MISTAKE TWICE.**
+  What IS established: the wallet holds **four endorsements and every one carries
+  `same_operator: true`**. What is NOT established — and what I claimed anyway — is that **one of
+  them is Bob's.** `cello_trust_signals_list` returns `issuer_kind: "agent"` and **no issuer
+  pubkey**, so the rows cannot say who wrote them. Coder_1's second reading (*"Bob's endorsement is
+  not in her wallet at all"*) survives the data I called decisive.
+- **The evidence now points AWAY from the false-positive reading**, which is why the retraction
+  matters rather than being bookkeeping:
+  - **No pin-flip was logged.** `submission-ingress` prefers a pinned `same_operator` over a
+    recomputation and logs `signal.ingress.same_operator.pinned` when they differ. Zero occurrences
+    in the run — so the pinned value agreed with the recomputation.
+  - **The predicate fails closed on BOTH arms.** `issuerAgent !== null && subjectAgent !== null &&
+    ((accountId !== null && accountId === subject.accountId) || (phoneStubHash !== null &&
+    phoneStubHash === subject.phoneStubHash))`. A NULL on either side yields inequality, not a match.
+  - **The journey gives Bob his own account AND phone stub**, deliberately, under a comment
+    describing this exact trap — and asserts distinct accounts, passing.
+  Those three cannot all hold alongside *"Bob's endorsement is flagged"*. The likelier reading is
+  that **Bob's endorsement never reached Alice's wallet**, which is a delivery/acceptance question,
+  not a same-operator one.
+- **THE DECISIVE DATUM IS THE ISSUER, AND NOTHING SURFACES IT.** Next step is to print the issuer
+  per row — either widen the listing or query `signal_records` directly in the journey. **Do not
+  touch the predicate before that**; three converging pieces of evidence say it is behaving.
 - **✅ THE FIXTURE IS EXONERATED BY ITS OWN ASSERTION.** The journey does not seed the flag — it only
   reads it — and at HOP 1 it asserts *"Bob and Alice must be DISTINCT operators for this hop"*
   against `count(DISTINCT account_id)`, **and that assertion passes.** So the fixture establishes two
