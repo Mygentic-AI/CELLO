@@ -966,6 +966,30 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 - **Enforcer:** `test:spine` green, or every remaining failure carrying a written verdict of
   environment / stale-expectation / real-defect, with the real ones lined up.
 
+### `DOD-M15-CLIJSON-1` — ❌ A command that prints JSON prints only JSON
+**BLOCKS LAUNCH** (§0z.1): the CLI states its own contract — *"Prints JSON; use `--pretty` for
+humans"* — and `register-agent` breaks it on the SUCCESS path, so anything reading that output
+fails at the first step. Found by `DOD-M15-SPINERED-1`'s triage, 2026-08-23, and it is the largest
+single cluster in the red lane.
+
+- **What it does.** `cello register-agent` registers successfully, **exits 0**, prints its JSON —
+  and then appends a human hint to **stdout**:
+  `Next: run  cello status  to confirm 'agentA' is registered.` plus three bullet lines.
+- **What that costs a person:** anyone scripting registration — the obvious thing to script, since
+  it is step 2 of 2 in onboarding — gets a parse error on a command that WORKED. The failure names a
+  byte offset, not a cause, so it reads as "registration is broken" when registration is fine.
+- **What it costs us today:** five spine journeys die at their first line
+  (`DOD-M15-SPINERED-1`), which is a meaningful share of the 21 red files in the lane the
+  milestone-close gate depends on.
+- **The fix is where the hint goes, not whether it exists.** The hint is GOOD — it is the thing that
+  tells a new operator registration is asynchronous and may take a minute. It belongs on **stderr**,
+  which is exactly what stderr is for: guidance for a human, out of the data stream. Do not delete
+  it; do not gate it behind a flag that defaults to off.
+- **Audit the neighbours in the same pass.** `register-agent` is unlikely to be the only command
+  that appends prose to a JSON result — check every command whose help promises JSON.
+- **Enforcer:** for each command that advertises JSON, `JSON.parse` of its stdout succeeds on the
+  SUCCESS path, asserted against the shipped binary rather than a unit stub.
+
 ### `DOD-M15-SPINE-LANE-1` — ✅ The spine suites are run, or their absence is a decision on the record
 > **CLOSED 2026-08-23 (CELLO_Support) → Entry S12.** Reviewed; three blocking findings, all fixed.
 > Verdict quoted: *"SPEC: DEVIATIONS FOUND — clause 3 only. The decision is right; its recorded

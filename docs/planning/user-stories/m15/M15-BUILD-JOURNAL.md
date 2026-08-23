@@ -71,9 +71,17 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Support (overwrite in place; CELLO_Coder_1 must not edit)
 
-> ### `MIGRATION-GUARD-1` 🟡 — built + reviewed, FINAL (2nd of 2) PASS IN FLIGHT. **WIP limit met.**
-> **⏸️ TAG FLIP AND THE NEXT LINE BOTH WAIT ON ANDRE'S TRIAGE RULING.** Not a stall — he asked for
-> it explicitly. Do not start a new line until it lands.
+> ### `SPINERED-1` triage in progress. `MIGRATION-GUARD-1` ✅. `SPINE-LANE-1` ✅.
+> **The spine lane had never been run. It is 21/36 red** — receipt committed at
+> `receipts/2026-08-23_spine-lane-full-run.log` (the original was in a temp dir a reboot clears).
+> Triage findings so far: the harness merged stderr into stdout (fixed), and **`cello register-agent`
+> appends prose to stdout after its JSON on the SUCCESS path** → `DOD-M15-CLIJSON-1`, the largest
+> cluster. Next clusters, unexamined: 5× `MCP error -32001 Request timed out`, 5× `.toMatch()
+> received undefined`.
+> **⚠️ I asserted a cause and was wrong, again.** I attributed the five JSON failures to the harness
+> merge and committed that before checking. Exit status is **0** — the command succeeds. The merge
+> is a real defect and was not this one. Fourth time today: evidence CONSISTENT with a cause is not
+> the cause.
 >
 > **THREE PROCEDURE CHANGES LANDED TODAY, ALL ANDRE'S, ALL IN M15-PROCEDURE:**
 > - **§0z.1** — a NEW finding is classified when written: BLOCKS LAUNCH → the tiers, POST-LAUNCH →
