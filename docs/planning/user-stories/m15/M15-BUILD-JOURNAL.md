@@ -37,10 +37,10 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Coder_1 (overwrite in place; CELLO_Support must not edit)
 
-> ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 4319 client tests.
-> **THE SALT AGREEMENT IS BUILT AND UNREVIEWED** — `SEALWIRE-1` bullet 6, part A, commits
-> `b08e69b` → `b6f4fdf`. Reviewer dispatched. Under the WIP limit the only permitted work is closing
-> it. The salt PRIMITIVE's own review is closed (→ Entry 40, eleven findings, all fixed).
+> ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 4330 client tests.
+> **PART A IS CLOSED — built and TWICE reviewed** (→ Entries 41, 42; the two-pass cap is spent, so
+> nothing about it gets a third). Five blocking findings across the two passes, all fixed, twelve
+> mutants caught. **WIP is free: start part B.**
 
 - **TIER 4 IS IN PROGRESS. `SEALWIRE-1` bullets 1 + 2 are BUILT, REVIEWED, and their blocking
   findings fixed** — the directory certifies the content-hash root, and the client verifies it
@@ -68,8 +68,22 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
   who did nothing. Each freezing site supplies its own reason code and guidance. **Spell the revive
   reason out — do not derive it from the freeze reason**: doing that silently turned the stable
   `session_frozen_identity_failure` into a family of varying strings.
-- **NEXT after part A:** part B — `wireContentHash` → `saltedContentHash`, the version discriminator,
-  and holding the first send until the salt is agreed. Then `SEALWIRE-1` bullets 3–8.
+- **NEXT — PART B.** `wireContentHash` → `saltedContentHash`, the version discriminator, and holding
+  the first send until the salt is agreed. **Its ACs are already written on the `SEALWIRE-1` line —
+  read them, do not re-derive them**: the park-only session that never agrees a salt, the divergent
+  state that leaves the far operator with silence, and salted-vs-unsalted being a fact about the
+  PEER rather than about our own row. Then `SEALWIRE-1` bullets 3–8, which are now one unit with
+  `UNWITNESSED-1`.
+- **🚨 PART A'S TWO REVIEWS COST FIVE BLOCKING FINDINGS AND THREE WERE A SENTENCE I WROTE BEING
+  WRONG**, not a statement mistyped — a header claiming the salt halves are unrecoverable (they are
+  kept, and `deriveSessionSalt` sorts), a docblock claiming no mutant could survive a storage test
+  (one did), and a commit message claiming an invariant the code did not implement. Each made the
+  wrong code look correct on re-reading. **Run the mutant before believing the prose — including
+  your own.**
+- **THE REPAIR TERMINATES BY REMEMBERING THE PEER'S BYTES** (`#saltRepairedAgainst`). An identical
+  re-offer gets our fingerprint, which is terminal for the peer; a genuinely new half still gets our
+  contribution. Do not "simplify" it into a boolean — keying on a repair COUNT breaks a real
+  re-agreement.
 - **🚨 BULLETS 3 + 4 — read `DOD-M15-UNWITNESSED-1` FIRST; it is the same problem and it is already
   split out.** The directory cannot naively hard-gate on a SEAL leaf's declared `final_root`, because
   the client's local tree is not guaranteed to be a prefix of the relay's leaf array: an own send
