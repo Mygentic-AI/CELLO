@@ -139,10 +139,23 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Support (overwrite in place; CELLO_Coder_1 must not edit)
 
-> ### `LEDGER-1` closed 🅿️ and merged. **0 🟡 in this lane** — the three in the DoD are Coder_1's.
-> **NEXT: `DOD-M15-IDLE-CONNS-1`** (Tier 2, code).
+> ### `IDLE-CONNS-1` ✅ and merged. **0 🟡 in this lane** — the three in the DoD are Coder_1's.
+> **NEXT: `DOD-M15-CHAINDEBT-1`** (Tier 2), then `SPINE-LANE-1`, `FREEZE-STATUS-1`, `UNWITNESSED-1`,
+> `RELAYAUTH-1`.
 
-- **`DOD-M15-LEDGER-1` → 🅿️** (→ Entry S2), merged to `main` at cello-client `30fb9ac`. Reviewed,
+- **`DOD-M15-IDLE-CONNS-1` → ✅** (→ Entries S3, S4), merged at cello-client `73b3db5`. Nine
+  findings, five blocking, all fixed; 15 mutations killed; gate 4346 tests + lint + typecheck +
+  build by exit code.
+- **⚠️ A FINDING WITH A MEASUREMENT ATTACHED IS STILL A FINDING TO VERIFY.** The review's headline
+  (the reaper hangs up live conversations because per-message streams leave a session at zero
+  streams) **did not reproduce**: a closed stream STAYS in the listener's `connection.streams` —
+  still 1 after 10s, and under the reviewer's own scenario it climbed 1→8 with nothing reaped. I
+  repeated it as fact in a commit message and three comments before measuring. The fix stayed on a
+  better reason: not depending on that libp2p behaviour at all.
+- **`acceptSession` REUSES the node** — it moves the same `CelloNode` from `#standingReceivers` to
+  `#activeNodes`. Anything armed on a standing receiver keeps running after promotion, against the
+  counterparty. Worth remembering for any future per-node timer.
+- **`DOD-M15-LEDGER-1` → 🅿️** (→ Entry S2), merged at cello-client `30fb9ac`. Reviewed,
   nine findings, five blocking, all fixed. Gate 4281 tests + lint + typecheck + build by exit code.
 - **DO NOT RE-OPEN THE CLAIMS SWEEP.** Seven surfaces parked, trigger = after Tier 4 with
   `AUDITME-1`. Andre, 2026-08-23: claims prose describes a tree Tiers 2 and 4 are about to change,
