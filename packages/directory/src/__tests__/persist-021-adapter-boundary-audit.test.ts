@@ -954,8 +954,25 @@ describeIntegration("PERSIST-021 integration: AC-004 MMR round-trip with inclusi
     // avoid its constructor's configurePgTypes() call from altering pg type parsers before
     // MmrStore's appendSeal runs (MmrStore.appendSeal reads recorded_at as a Date object,
     // but configurePgTypes() makes pg return TIMESTAMPTZ columns as raw strings).
+    /**
+     * DOD-M15-CHAINDEBT-1 review F1 — `txn`, NOT `servicePool`. This one deadlocked.
+     *
+     * The block above TRUNCATEs `conversation_seals` on the transaction's client, which holds an
+     * `AccessExclusiveLock` on that table for the life of the transaction. Reaching for a SECOND
+     * connection here means asking for the same table from outside the transaction that owns the
+     * lock, and that connection waits forever.
+     *
+     * It used to "work" for the wrong reason: `insertWithChain` on a store that owns its
+     * transaction issued `BEGIN`/`COMMIT` on the client `txnPool` handed it, and that COMMIT ended
+     * the OUTER transaction — releasing the truncate's lock early and committing the truncate for
+     * real. Fixing the helper to hold its transaction (SAVEPOINTs) turned a silent data loss into a
+     * visible hang, which is the better failure and how this was found.
+     *
+     * Everything in a `inRolledBackTxn` body belongs on the one connection the transaction owns.
+     * That is the entire purpose of the pool shim.
+     */
     const pgLogger = makeLogger();
-    const pgStore = new PgDirectoryStore(servicePool, pgLogger);
+    const pgStore = new PgDirectoryStore(txn, pgLogger);
     const sealId = randomUUID();
     const sealRoot = makeMerkleRoot("ac004-ac009-seal");
     const sealRecord: Record<string, unknown> = {
