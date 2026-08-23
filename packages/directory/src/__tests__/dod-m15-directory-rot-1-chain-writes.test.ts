@@ -79,6 +79,13 @@ const ROLLED_BACK: Record<string, string> = {
     "its first two describe blocks wrap every test in BEGIN/ROLLBACK on the same client, so their " +
     "inserts never commit. Its third block could not (the store uses its own pool connection) and " +
     "was converted to seedAccount() + per-run ids instead.",
+  "presence-001-repository.test.ts":
+    "DOD-M15-CHAINDEBT-1 — MISFILED AS DEBT, not converted. Every query in this file runs on the " +
+    "one client `beforeEach` opens with BEGIN and `afterEach` ROLLBACKs; the repo functions under " +
+    "test are handed that same client rather than a pool. Verified by grep rather than by reading " +
+    "the intent: the only `pool.` references in the file are `connect()` and `end()`, and the word " +
+    "COMMIT does not appear. So its literal `chain_hash` is inert and always was — it was on the " +
+    "backlog because the guard reads source, and source cannot see a rollback.",
 };
 
 /**
@@ -125,7 +132,6 @@ const KNOWN_DEBT_INSERTS = [
   // PARTIALLY converted: its AC-001-extended block now runs in a rolled-back transaction (7 fake
   // chain_hash inserts, 7 deletes and a TRUNCATE removed). Other blocks in the file still violate.
   "persist-021-adapter-boundary-audit.test.ts",
-  "presence-001-repository.test.ts",
 ];
 
 /** Still deleting from a chained table. Shrink; do not add. */
@@ -211,9 +217,10 @@ describe("DOD-M15-DIRECTORY-ROT-1: fixtures never put a hole in a hash-chained t
       `Fixed (or gone) — remove from KNOWN_DEBT_DELETES: ${staleDeletes.join(", ")}`,
     ).toEqual([]);
 
-    // Lower these as files are converted; never raise them.
-    expect(KNOWN_DEBT_INSERTS.length, "the insert backlog must shrink, never grow").toBeLessThanOrEqual(9);
-    expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(9);
+    // Lower these as files are converted; never raise them. DOD-M15-CHAINDEBT-1 owns driving both
+    // to zero, at which point the lists and this assertion go with them.
+    expect(KNOWN_DEBT_INSERTS.length, "the insert backlog must shrink, never grow").toBeLessThanOrEqual(7);
+    expect(KNOWN_DEBT_DELETES.length, "the delete backlog must shrink, never grow").toBeLessThanOrEqual(8);
   });
 
   it("the ROLLED_BACK and ALLOWED_DELETES entries still name files that exist", () => {
