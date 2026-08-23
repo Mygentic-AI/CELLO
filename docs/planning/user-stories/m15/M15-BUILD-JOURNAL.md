@@ -3896,3 +3896,91 @@ as a finding against myself.
 the count the DoD asks for does not exist until that line builds it. Seen in passing and NOT
 diagnosed: 4,170 `directory.signaling.reconnecting` against 210 `directory.signaling.connected` and
 90 `disconnected` in the last 6 MB of `daemon.log`.
+
+---
+
+## Entry 40 — an XOR combiner passed all eight assertions and let the second mover choose the salt
+
+The session-salt unit (Decisions Carried #8/#9/#10). Eleven findings, four blocking. The reviewer
+**measured** two of them with running mutants rather than arguing them, and that is what makes this
+entry worth reading.
+
+### The verdict, quoted
+
+> **HOLLOW TESTS FOUND** — two, both **measured with running mutants**: the XOR derivation mutant
+> passes all eight assertions and enables a second-mover salt-forcing attack; the invertible
+> fingerprint mutant passes all four. **[blocking]**
+> **SPEC: DEVIATIONS FOUND** — three #8/#10 clauses unbuilt… **[blocking]** as written, because the
+> comments state the unbuilt half in the present tense.
+> **ERRORS NAME THEIR CAUSE** — no exit-point substitution anywhere in the diff. Separately: **the
+> guards have no listener** — no reason code, no surface, no caller.
+> **REMOVALS PROVEN** — deadness established by a compile error and a clean typecheck, cross-repo
+> grep, and the exports map, not by grep alone.
+
+### The attack my tests could not see
+
+Replace sorted concatenation with **XOR** and every one of my eight "both sides contribute"
+assertions still passes. XOR is commutative, so order-independence holds. Both contributions still
+"matter". A peer reusing a fixed contribution still cannot pin the salt.
+
+And it is catastrophically broken: **whoever sends SECOND sees the first contribution and sets
+`b = a XOR target`**, forcing the salt to any pre-agreed constant — shared in advance with a
+colluding relay, identical in every session, one rainbow table forever. That is *precisely* the
+"a single party unilaterally decides the salt" failure Decision #8 exists to prevent, and my test
+named **"a peer that reuses a FIXED contribution cannot fix the salt"** goes green while it happens.
+
+Same root cause the KEYAGREE review found one unit earlier: **every assertion compared the function
+against itself**, and behavioural properties cannot distinguish two commutative combiners. Only bytes
+can. I had the fix in hand — the byte-pinning block from KEYAGREE — and did not carry it across.
+
+The fingerprint had the twin defect: one-wayness was asserted as *"its hex is not a substring of the
+salt's hex"*, and a mutant returning `salt[0..8] XOR 0xff` passed **20,000 of 20,000 trials** while
+publishing 64 bits of the salt to the relay on every session open.
+
+### The finding that would have been unrepairable
+
+The salt's secrecy is **the channel's, not the construction's**, and that does not resemble the
+envelope key. The key is a DH secret a passive relay cannot compute, and a test pins exactly that.
+The salt is a function of two values that are **SENT** — anyone who reads both derives it with the
+same public label. There is no third-party-cannot-derive test in the module and there cannot be one.
+
+The trap is specific: **the only round trip at session open today runs on the DIRECTORY's signaling
+stream.** It is the natural place to put a contribution — one round trip, at open, before any leaf —
+and it is exactly the channel Decision #8 forbids. Nothing in the diff stood between an implementer
+and that choice. A session shipped that way **cannot be repaired**: the relay already holds the salt
+and the hashes.
+
+### Three comments all pointing the same wrong way
+
+In the diff that removed the coupling: the key-agreement header still said *"the salt travels wherever
+a content hash does and **the relay sees it**"*; the SPARC pseudocode **still specified `csalt`**
+derived from the same secret; and the barrel comment still advertised two outputs. Someone
+implementing from the file's own construction block would have rebuilt exactly what Andre corrected.
+
+### And the prose oversold what exists
+
+`session-salt.ts` has no production caller, `content_salt` has no writer and no reader — and three
+comments described the exchange, the storage and the lookup in the **present tense**. Shipping a
+primitive ahead of the wire is defensible; describing it as done is not. My upgrade test also sold a
+failure that cannot occur (its fixture state is unreachable, and the lookup it names does not exist),
+though the test itself survives the revert test and is kept with the story corrected.
+
+Gate: 4285 client tests, lint, typecheck — by exit code.
+
+### Process, and it is getting expensive
+
+- **`git checkout` destroyed uncommitted guards mid-mutation-run — SIXTH time**, immediately after
+  being told to commit first.
+- **A scripted replace that matches nothing is a silent no-op**, and the commit reports success. The
+  channel-rule fix — the most important of the round — did not land in its commit, and I caught it
+  only by grepping afterwards.
+
+### Carried to `DOD-M15-SEALWIRE-1` as ACs
+
+- Contributions ride the peer-to-peer content stream; **never** anything a directory brokers.
+- `SALT_FINGERPRINT_MISMATCH` and `SALT_CONTRIBUTION_DEGENERATE` join `REFUSAL_REASONS` there, not
+  here — Decision #10's "named reason" means a member of that closed union, and the guidance map must
+  be total, so they cannot land ahead of a consumer.
+- **A version discriminator is required.** Salted and unsalted hashes are both 32 bytes in the same
+  field with nothing telling them apart; a salted sender against an older peer fails EVERY frame, and
+  the fingerprint check cannot catch it because an old client sends no fingerprint.
