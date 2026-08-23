@@ -2893,3 +2893,62 @@ neither markdown nor that file, so **not one of its tool descriptions has ever b
   as `registryClaimStrings()` already does for the CLI.
 - Expect a large baseline on first run; `cello-mcp.ts` has never been adjudicated. Same
   shrink-only backlog treatment the scanner already uses, for the same reason.
+
+---
+
+### `DOD-M15-GRACE-WINDOW-1` — 🅿️ POST-LAUNCH. The unilateral-seal grace window measures the wrong thing
+**Found 2026-08-23, invariant-checking `SEALWIRE-1` bullet 7 (review pass 2).** Verified in code, not
+inferred.
+
+A unilateral seal lets one party close a session when the other has gone away, so an absent
+counterparty cannot hold a conversation hostage. It is gated on a delivery grace period —
+`elapsedMs < graceMs` — and `graceMs` defaults to **600 seconds**.
+
+**The value it measures from is `#sessionLastActivity`, which is named *last activity* and holds
+*session start*.** Two writers outside `NODE_ENV=test` hooks: session creation, and the restart
+restore seeding `genesisTimestampMs`. **Nothing refreshes it while a session runs.** So:
+
+> **Any session older than ten minutes can be unilaterally sealed by either party at any moment,
+> including in the middle of an active exchange.** A counterparty who has been replying to you for an
+> hour is exactly as sealable as one who never answered.
+
+The counterparty's liveness does not gate it — the directory's own comment says *"the seal completes
+either way … the liveness only colours how the counterparty is recorded (never whether the seal
+happens)."*
+
+**Classified POST-LAUNCH, and the reasoning:** it needs the *other* party to deliberately invoke a
+unilateral seal — it never fires on its own — so the core value (two agents connect and communicate)
+is intact, and no session is closed by a timer. What is broken is that the protection the grace
+window is *for* does not actually protect: it is meant to mean *"they have been silent for ten
+minutes"* and it means *"the session is ten minutes old."* Real, worth fixing, does not stop a ship.
+
+**⚠️ `SEALWIRE-1` bullet 7 did NOT cause this.** The deleted `seal_attempt` handler held the only
+mid-session refresh and had no sender, so the refresh could never fire. The deletion removed a
+writer that was already unreachable and made the misnaming visible.
+
+**Why it is written here rather than left in a comment.** This milestone spent a commit correcting a
+comment that pointed at a DoD line which did not exist, on the grounds that *a pointer to nothing
+reads as tracked*. A security-relevant gap with no pointer at all reads the same way — and until
+now this one lived in a single code comment.
+
+- **The fix, when taken:** refresh the timestamp on real session traffic (leaf submit is the natural
+  site), or rename the field to what it holds and re-derive whether "session age" is the gate anyone
+  wanted. Renaming alone is not enough — the gate would still be wrong, just honestly wrong.
+- **Enforcer:** receipt.
+
+### `DOD-M15-RELAY-WAL-UNWIRED-1` — 🅿️ POST-LAUNCH. Relay leaf durability has never run
+**Found in the same pass.** `bin/relay.ts` constructs a `SessionWal` and never passes it to the node —
+the `const sessionWal` has carried an `eslint-disable` for unused-vars since PERSIST-013 landed on
+**2026-05-16**. So `RelayNode`'s injected copy has always been `null`, no `open`/`append`/`reconstruct`
+ever runs, and a relay crash loses in-memory leaf state exactly as it would with no WAL at all —
+while `bin/relay.ts` still **hard-exits** if `WAL_DIR` is unset in dev/staging/production.
+
+The interface header stated the crash recovery as fact until this pass; it now separates intent from
+behaviour. The implementations are kept deliberately: they are complete and tested, and deleting
+them is a decision about whether relay leaf durability is wanted, **which is Andre's call, not a
+cleanup.**
+
+**Classified POST-LAUNCH:** nothing regresses — this has been the behaviour for three months and no
+shipped feature depends on it. It is on the backlog because the gap was invisible, not because it is
+newly broken.
+- **Enforcer:** receipt.
