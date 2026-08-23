@@ -91,21 +91,18 @@ function testSources(): Array<{ name: string; text: string }> {
  * 3. The walker took only `*.test.ts`, so `helpers/seed-account.ts` and `helpers/txn-pool.ts` were
  *    never read — and the guard's own failure message points authors at `helpers/`. Now `.ts`.
  */
-function insertRegex(table: string): RegExp {
-  // The statement head, then chain_hash anywhere in what follows. The window is generous rather
-  // than exact: a chained INSERT spanning more than ~400 characters before naming chain_hash is not
-  // a shape anyone writes, and over-matching here costs an ALLOWED_INSERTS entry, not a miss.
-  return new RegExp(`INSERT\\s+INTO\\s+${table}\\b[\\s\\S]{0,400}?chain_hash`, "i");
-}
+// The statement head, then chain_hash anywhere in what follows. The window is generous rather than
+// exact: a chained INSERT spanning more than ~400 characters before naming chain_hash is not a
+// shape anyone writes, and over-matching costs an ALLOWED_INSERTS entry, not a miss. Built inline
+// by `insertCount` — there is no boolean form, because a boolean cannot tell one declared insert
+// from two.
 
-function violates(text: string, kind: "insert" | "delete"): boolean {
-  return HASH_CHAINED_TABLES.some((table) => {
-    const re = kind === "insert"
-      ? insertRegex(table)
-      : new RegExp(`DELETE\\s+FROM\\s+${table}\\b`, "i");
-    return re.test(text);
-  });
-}
+/*
+ * `violates()` is DELETED, not left unused. Its only caller was the stale-check in "THE BACKLOG
+ * ONLY SHRINKS", which review F8 removed as vacuous once both lists reached zero. Everything now
+ * goes through the COUNTING functions (`insertCount`/`deleteCount`), because a boolean cannot tell
+ * "this file has its one declared rolled-back insert" from "this file has two".
+ */
 
 /**
  * A `DELETE FROM ${…}` whose table is INTERPOLATED, in a file that also names a chained table.
