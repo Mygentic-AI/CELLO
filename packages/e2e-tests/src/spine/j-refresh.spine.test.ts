@@ -28,6 +28,7 @@ import {
   connectMcp,
   cello,
   registerAgent,
+  celloJson,
   writeConsortiumManifest,
   writeSignedManifestTo,
   type SpineCluster,
@@ -101,7 +102,7 @@ async function setup(label: string): Promise<{ celloDir: string; daemon: Proc; c
   for (const name of ["agentA", "agentB"]) {
     const res = registerAgent(name, `DEV-${label}-${name}-${randomBytes(6).toString("hex")}`, env);
     expect(res.status, `${label}: register ${name} failed: ${res.stdout}`).toBe(0);
-    const parsed = JSON.parse(res.stdout.trim()) as { ok?: boolean; primary_pubkey?: string };
+    const parsed = celloJson<{ ok?: boolean; primary_pubkey?: string }>(res, `${label}: register ${name}`);
     expect(parsed.ok, `${label}: register ${name} not ok: ${res.stdout}`).toBe(true);
     if (name === "agentA") p1 = parsed.primary_pubkey ?? "";
   }

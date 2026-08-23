@@ -1016,6 +1016,32 @@ export function registerAgent(name: string, token: string, env: Record<string, s
 }
 
 /**
+ * Parse a CLI result as JSON, and FAIL NAMING WHAT IT CHOKED ON.
+ *
+ * `JSON.parse(res.stdout.trim())` — written at 54 spine call sites — throws
+ * `Unexpected non-whitespace character after JSON at position 156`, which names a byte offset in a
+ * string the reader cannot see. Five of the lane's 49 failures say exactly that and nothing else,
+ * so five journeys are unattributable until someone re-runs them by hand.
+ *
+ * The bytes are right there at the moment of failure. This prints them.
+ */
+export function celloJson<T>(res: CliResult, what: string): T {
+  const raw = res.stdout.trim();
+  try {
+    return JSON.parse(raw) as T;
+  } catch (err: unknown) {
+    throw new Error(
+      `${what}: the CLI's stdout is not valid JSON — ${err instanceof Error ? err.message : String(err)}\n` +
+        `  exit status: ${String(res.status)}\n` +
+        `  stdout (${String(raw.length)} chars):\n${raw.slice(0, 1200)}\n` +
+        `  stderr: ${res.stderr.trim().slice(0, 600) || "(empty)"}\n` +
+        `  A trailing line after the JSON is the usual cause — something on this path writes to ` +
+        `stdout after the result is printed, and every caller that parses stdout dies on it.`,
+    );
+  }
+}
+
+/**
  * ─── DOD-M15-SPINERED-1: STDERR IS NOT STDOUT ─────────────────────────────────────────────────
  *
  * This used to return `stdout + stderr` glued together whenever the CLI exited non-zero. 54 call
