@@ -43,6 +43,18 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 > **Bullet 7 (delete the dead `seal_attempt` path) is DONE, pass 1 findings fixed** (→ Entry 53);
 > **pass 2 is OUT on the fix diff.** Gate: client 2837, directory 1133, relay 235, interfaces 63.
 
+- **🟡 BULLETS 3+4: THE VERIFIER IS BUILT, TESTED AND FALSIFIED — AND NOT INVOKED.** `seal-final-root.ts`
+  takes the SEAL payload bytes, binds them to the hash the client SIGNED (decoded from
+  `structure1_cbor`, **not** `s2.content_hash` — that was pass 1's HIGH), and compares the client's
+  `final_root` against a root rebuilt from the relay's leaves. **The circular check at
+  `directory-node.ts` is untouched and is still the only root check that runs.** Remaining: the relay
+  must carry `content_bytes`, then the call is wired and the deferral comment deleted.
+- **⚠️ THE PRECONDITION THE VERIFIER CANNOT CHECK.** It proves the payload matches what
+  `structure1_cbor` says; it does NOT prove `structure1_cbor` was signed by a participant. That is
+  `verify(s2.sender_pubkey, structure1_cbor, s2.sender_signature)` plus a participant check, both in
+  the caller. **Wire it only from a path that has already done both** — a loud block in the module
+  says so, because without them a relay can mint a ctrl leaf with a key it holds and every comparison
+  becomes the relay checking itself.
 - **⚠️ BULLETS 3 AND 4 ARE ONE UNIT — do not scope them separately.** Bullet 4 (the directory's
   circular root check) cannot be fixed alone: it rebuilds a root from the leaf array the relay
   supplied, with the same code, and compares it to the root that same relay supplied — so it
