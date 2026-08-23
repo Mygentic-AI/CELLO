@@ -2142,6 +2142,36 @@ Rulings that bind every line above. **Re-asking one is decision theatre** (M15-P
     tokens, no throwaway registrations. Manage the side effect by choosing agents with no open
     sessions, verified before the run.
 
+15. **A SALTED SENDER FALLS BACK TO UNSALTED AGAINST AN OLDER PEER — loudly, per message, never
+    refusing the session** (§3a ruling, mine, 2026-08-23).
+
+    I had been carrying this as Andre's call. It fails the decision-theatre test: **the record has
+    already ruled it twice**, so presenting it as an open question was theatre, not deference.
+
+    - `SEALWIRE-1`'s own version-discriminator AC says *"`content_salt IS NULL → unsalted` is a
+      **legacy branch** and must announce itself."* A legacy branch that announces itself is a
+      fallback with a voice. It is not a refusal.
+    - The launch-triage lens settles the rest. The fundamental value is *two agents connect and
+      communicate — including when you control only one of them.* Refusing on version skew breaks
+      exactly that, for the exact population least able to fix it: the counterparty is someone else's
+      agent, on someone else's upgrade schedule.
+
+    **This is NOT the silent fallback the milestone exists to remove, and the distinction is the
+    whole ruling.** A silent fallback is one where a missing thing is quietly substituted and the
+    system looks healthy. This one is: an explicit `content_hash_alg` on the wire that the receiver
+    reads and verifies under; a WARN naming the peer and saying the relay can confirm guesses at
+    short messages in this session; and the session record marking itself unsalted so a transcript
+    can never claim a protection it did not have. The operator is told; nothing is hidden.
+
+    **What is refused, and this stays refused:** an *unknown* algorithm value. A peer naming
+    something we cannot verify under is not a legacy peer, it is an unreadable one, and there is no
+    correct way to hash for it. Absent → legacy; named-and-known → verify; named-and-unknown → refuse.
+
+    **Least likely to need reversing**, which is the §3a test: the fallback is deletable the day the
+    old builds are gone, and deleting it strands nobody. Refusing would strand real conversations
+    from the day it ships, and the migration trap says a launch-time refusal is the expensive
+    direction to reverse.
+
 ---
 
 # Claims Ledger
