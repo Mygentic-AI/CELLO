@@ -4205,3 +4205,102 @@ shape `ASSIGN-1` already refuses, so it proves nothing. The breaking shape is **
 that opens zero streams**, plus **a reservation relay connection that is also idle by nature and
 must SURVIVE**. If the test only asserts "idle connection closed" it will pass with a reaper that
 kills the relay too, and the agent silently loses inbound reachability.
+
+---
+
+## Entry 41 — I wrote a false sentence in a header, and it cost a session-killing defect
+
+The salt AGREEMENT (`SEALWIRE-1` bullet 6, part A). Built, reviewed, three blocking findings, all
+fixed. This entry is mostly about the first one, because the defect was not in the code — it was in
+a claim I made in prose and then implemented faithfully.
+
+### The verdict, quoted
+
+> **Headline: the scope claim does not hold.** Part A alone can permanently kill a live session, and
+> it does so on inputs that have nothing to do with a lost database… **A REFUSAL THAT BREAKS
+> AVAILABILITY, F1 [blocking]**. The failure mode here is the flip side: the code refuses cases it
+> can repair… **ERROR SUBSTITUTION FOUND [blocking]** — F3 (a local RNG defect surfaces as an
+> out-of-band accusation of the counterparty, undoing `session-salt.ts`'s own F6 fix at the guidance
+> layer)… **HOLLOW TESTS FOUND [blocking]** — F2 above all… **SPEC: FAITHFUL** for part A as scoped.
+> …the diff touches persistence, crypto and a teardown path, and it produced one blocking
+> availability defect, one live error substitution, and the single most important assertion in the
+> unit being a self-comparison.
+
+### The false sentence
+
+I wrote, in the module header, that the two off-diagonal states *"cannot be repaired by retrying —
+the salt is a one-way function of two contributions and neither party keeps the inputs once it has
+the output."*
+
+**We keep ours.** `#saltContributions` holds our half for the life of the session node, and
+`deriveSessionSalt` **sorts its two arguments** — a property I had written, tested and byte-pinned
+one unit earlier. So a side holding a salt can simply re-send its half and the peer derives
+byte-identical bytes. The cell I called unrepairable is repairable, and the sentence asserting
+otherwise is what made freezing look correct.
+
+### Why that was expensive rather than merely wrong
+
+The off-diagonal is not the exotic state my sentence described. It is reached by **one dropped
+frame**: our connect-time announce fails while theirs lands, so they derive and store while we never
+saw their half. Also by one failed persist. Also by a teardown between the two derives.
+
+So the shipped behaviour was: a healthy session, one lost stream open, **session destroyed and not
+revivable** — to protect a value that nothing in the system consumes yet. That is the failure this
+codebase already names as worse than the bug it guards, and I built it while quoting the rule.
+
+The reviewer also traced what the operator would have read, and it is the part worth keeping:
+
+> The cause was a failed `newStream` on the counterparty's machine. The message names a database,
+> asserts nothing is broken, and asserts the halves are unrecoverable — while B is still holding its
+> half in `#saltContributions`. **Three wrong statements in the one message written to make this
+> failure debuggable.**
+
+Both cells now REPAIR. The state is genuinely unrepairable in exactly one case — we hold a salt read
+back from the row and its half is gone — and the code now **checks** that rather than assuming it:
+the caller never mints a fresh half for a session that already has a salt, so `null` means precisely
+that. Minting one would be worse than freezing, because the peer would derive a DIFFERENT salt and
+both sides would believe they had agreed.
+
+### The other two blocking findings
+
+**The unit's central assertion compared the daemon against itself.** My test sent back a fingerprint
+computed over the bytes in the ROW and required a match — so both sides of the comparison came from
+the same row, and a daemon storing 32 random bytes passes. The reviewer ran it: `store
+generateSaltContribution()` instead of the agreed salt, **all 30 tests green**. My own docblock
+claimed the opposite (*"no mutant that writes something other than the agreed salt survives it"*),
+which is the third time this milestone a comment has asserted a property its code lacked. The real
+check now lives where a real peer connection puts both halves in reach.
+
+**A broken local RNG accused the counterparty.** `deriveSessionSalt` refuses four conditions and two
+are LOCAL — and `session-salt.ts` added the own-all-zero refusal one unit ago *specifically* so the
+operator whose machine is broken is not told their counterparty did it. One `catch` mapped all four
+to one peer-blaming reason, whose guidance says to raise it with them **OUT OF BAND**. A fix made at
+one layer, undone at the next, by me, four days apart. It was also a surviving mutant: swap the two
+derive arguments and every reason code and every message-regex still passes while every degenerate
+refusal blames the wrong party.
+
+### What the reviewer confirmed rather than took
+
+- Every `recordRefusal` call site is a pre-session inbound-request decision, so keeping the salt
+  reasons out of `REFUSAL_REASONS` is right, and the deviation is struck on the DoD line rather than
+  silently taken.
+- The channel rule is clean: the only wire site is on `/cello/content/1.0.0`; no salt, contribution
+  or fingerprint appears anywhere a directory brokers; nothing is logged but a state label and byte
+  lengths.
+- The shared peer gate above the dispatch is genuinely load-bearing, proven by the stranger test
+  rather than by reading.
+
+### Revert test
+
+Pass 1: five mutants, all five caught. After the fixes, six more including the reviewer's own two
+survivors — store random bytes; swap the derive args; blank the identity guidance; make `#saltState`
+always mint; drop the peer notice; turn the repair back into a freeze. **All six caught.**
+
+Gate: 4326 client tests, lint, typecheck, build — by exit code.
+
+### Carried
+
+- `F9` → part B: the announcement hangs off `onPeerConnect`, so a session living entirely on the
+  park/relay backstop never agrees a salt. Free today; a session that cannot send once the content
+  hash depends on it.
+- The version discriminator remains part B's, and is what makes part B non-optional.
