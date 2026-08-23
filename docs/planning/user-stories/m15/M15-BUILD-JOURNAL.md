@@ -38,9 +38,8 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 ## RESUME STATE — CELLO_Coder_1 (overwrite in place; CELLO_Support must not edit)
 
 > ### 🟡 30 ✅, 3 🟡, 2 🅿️, 39 ❌. Both repos clean, pushed, on main. Gate: 4330 client tests.
-> **PART A IS CLOSED — built and TWICE reviewed** (→ Entries 41, 42; the two-pass cap is spent, so
-> nothing about it gets a third). Five blocking findings across the two passes, all fixed, twelve
-> mutants caught. **WIP is free: start part B.**
+> **PART A CLOSED** (→ Entries 41, 42; two-pass cap spent). **PART B1 IS BUILT AND UNREVIEWED** —
+> commit `20cd495`, reviewer dispatched. Under the WIP limit the only permitted work is closing it.
 
 - **TIER 4 IS IN PROGRESS. `SEALWIRE-1` bullets 1 + 2 are BUILT, REVIEWED, and their blocking
   findings fixed** — the directory certifies the content-hash root, and the client verifies it
@@ -68,8 +67,16 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
   who did nothing. Each freezing site supplies its own reason code and guidance. **Spell the revive
   reason out — do not derive it from the freeze reason**: doing that silently turned the stable
   `session_frozen_identity_failure` into a family of varying strings.
-- **NEXT — PART B.** `wireContentHash` → `saltedContentHash`, the version discriminator, and holding
-  the first send until the salt is agreed. **Its ACs are already written on the `SEALWIRE-1` line —
+- **PART B SPLIT IN TWO, RECEIVER FIRST — the only safe order for a wire change.** B1 (built) teaches
+  the RECEIVER to read `content_hash_alg` off the frame and verify under it; **no sender salts.** B2
+  turns salting on. Reversed, the first upgraded sender breaks every conversation it has with a peer
+  that has not upgraded.
+- **🚨 B2 MUST FIX THE PARK ENVELOPE BEFORE IT SALTS ANYTHING.** Recovered-from-park content carries
+  no algorithm name and resolves to `sha256` — provably right today because nothing salts, and a
+  tamper report the moment something does, for a message that merely took the park route instead of
+  the direct one. `park-envelope.ts` needs the field; that is a wire change on the envelope.
+- **NEXT after B1's review — PART B2.** `wireContentHash` → `saltedContentHash` on the send paths,
+  and holding the first send until the salt is agreed. **Its ACs are already written on the `SEALWIRE-1` line —
   read them, do not re-derive them**: the park-only session that never agrees a salt, the divergent
   state that leaves the far operator with silence, and salted-vs-unsalted being a fact about the
   PEER rather than about our own row. Then `SEALWIRE-1` bullets 3–8, which are now one unit with
