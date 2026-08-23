@@ -211,11 +211,22 @@ An entry heading is `## Entry N — <DoD line or subject> (YYYY-MM-DD)`. What be
 
 ## RESUME STATE — CELLO_Support (overwrite in place; CELLO_Coder_1 must not edit)
 
-> ### Lane opened 2026-08-23. Nothing started yet.
+> ### Lane opened 2026-08-23. `DOD-M15-LEDGER-1` IN FLIGHT — 1 🟡 in this lane, WIP limit met.
 
-- **NEXT ACTION: `DOD-M15-LEDGER-1`** — agreed as this lane's first line. Lowest non-✅, ❌ after a
-  blocking review, its dependency `CLAIM-SCANNER-1` is now ✅, and it touches no file the other lane
-  is in.
+- **IN FLIGHT: `DOD-M15-LEDGER-1`** (→ Entry S1). Branch `m15/ledger-1`, worktree at
+  `/Users/andrep/cello-client-wt/ledger-1` (outside `~/Documents`, so its `node_modules` is not
+  iCloud-synced). Baseline before any edit: 8/8 on `dod-m15-claim-scanner-1.test.ts`, by exit code.
+- **THE DEBT IS MEASURED: 165 unadjudicated claim matches across 9 shipped surfaces** (182 found,
+  17 already adjudicated). Biggest: `registry.ts` 37, the tarball `SKILL.md` 30,
+  `skills/cello/SKILL.md` 29, `README.md` 19. Per-surface table in Entry S1 — do not re-measure it,
+  re-run `dump-claims.mjs` against the scanner's own enumeration instead.
+- **THE LINE IS A REDO, NOT A START.** Its first attempt was reviewed BLOCKING (Entry 14) for being
+  incomplete, not wrong. `CLAIM-SCANNER-1` — the dependency it was blocked on — is now ✅ and
+  explicitly deferred the adjudication to this line.
+- **`C7d` HAS NO GATE AND WILL BE MISSED.** The public GitHub repo **description** advertises four
+  native adapters that do not exist. It is the only surface on the list that is **not a file in the
+  tree**, so the scanner cannot reach it and no green run will ever prove it fixed. It needs a human
+  action on github.com.
 - **LANE (agreed, session `e3adcaa7…`):** Tier 1 `LEDGER-1`, `DISCLOSE-1`; Tier 2 `IDLE-CONNS-1`,
   `CHAINDEBT-1`, `SPINE-LANE-1`, `FREEZE-STATUS-1`*, `UNWITNESSED-1`*, `RELAYAUTH-1`; Tier 3
   `ALERTING-1`, `NODEHEAP-1`, `SWEEP-ABORT-1`, `EXPIRY-CONSUMER-POLICY-1`, `BUNDLED-2030-1`,
@@ -223,11 +234,24 @@ An entry heading is `## Entry N — <DoD line or subject> (YYYY-MM-DD)`. What be
   `DOCPROFILE-1`, `HEARTBEAT-1`; Tier 5 `RELAYABUSE-1`, `RELAYLEAK-1`, `MULTIRELAY-1`,
   `BOOTSTRAP-AUTH-1`, `STEP6-REPLAY-1`, `DDOS-1`, `RELAYONLY-1`. Plus `DIRAUTH-1` — its remaining
   half IS `BOOTSTRAP-AUTH-1`, so that line goes ✅ when this lane finishes it.
-- **⚠️ `FREEZE-STATUS-1` — DO NOT WRITE A MIGRATION.** It adds a column to the SESSIONS table, and
-  `CELLO_Coder_1` is adding the session-salt column to that same table. Two client-side migrations
-  against one table from two lanes is the FEDERATION-002 renumbering cascade the M5 rules exist to
-  prevent. Hand the column name and semantics to `CELLO_Coder_1`, who carries it inside ONE
-  migration; this lane keeps the line and the behaviour work.
+- **⚠️ `FREEZE-STATUS-1` — DO NOT WRITE A MIGRATION. The columns are already agreed and handed over.**
+  `CELLO_Coder_1` adds `frozen_at INTEGER` and `frozen_reason TEXT` alongside the session-salt column
+  in ONE migration and writes nothing to them; **all behaviour is this lane's.**
+  **The reason is §2e — one file, two branches — NOT a migration cascade.** The pre-filled version of
+  this block called it the FEDERATION-002 renumbering shape; that was corrected over CELLO and
+  accepted by both lanes. FEDERATION-002 was Flyway, server-side, versioned. The client-side
+  `sessions` migration is an idempotent `ALTER TABLE ADD COLUMN` loop with a per-column try/catch on
+  `duplicate column name` — no versions, no ordering, nothing to renumber. Do not re-import a
+  server-side failure shape onto a client-side mechanism that does not have it.
+  **The column semantics that must not be lost:** `frozen_reason` is NULL iff `frozen_at` is NULL;
+  it is deliberately **not a status value** and must **not** be folded into `interrupted_by` (whose
+  NULL is deliberately counted as the counterparty's and feeds the acceptance bound); and the durable
+  write lands **before** `destroySessionNode`, because that teardown writes `interrupted`, the
+  REVIVABLE status — a mark landing after it reproduces on disk the exact bug the in-memory
+  `#frozenSessions.add` was placed early to fix.
+  **Why the line matters:** `#frozenSessions` is memory-only today, so a restart un-freezes a session
+  frozen because someone signed with a key that was not the counterparty's, the next read revives it,
+  and the log still says it will not be revived.
 - **⚠️ `UNWITNESSED-1` — say so before touching `sealReadiness`.** Its subject is the same function
   `CELLO_Coder_1` is editing for the certified-root check.
 - **`OFFER-EXPIRY-1` is this lane's AFTER Tier 4 lands** — not before. It changes session-open, which
@@ -3810,3 +3834,114 @@ is a behaviour change to session revival, not just a crypto choice.
   can substitute both ephemerals and read everything. `SEALWIRE-1` must sign the ephemeral public with
   the agent's Ed25519 identity and verify the peer's before deriving. Until then the module docstring
   says passive-only in one sentence rather than letting a reader conclude MITM is covered.
+
+---
+
+## Entry S1 (CELLO_Support) — `DOD-M15-LEDGER-1` opened: the debt is 165 claims nobody has checked
+
+**Lane opened.** `CELLO_Support` takes everything except the seal work; split agreed with
+`CELLO_Coder_1` in session `e3adcaa7…` and sealed. This entry is the clause checklist required by
+M15-PROCEDURE §2 step 2, written **before** implementing. Results append to this entry.
+
+### The target, in one sentence
+
+Every claim-shaped promise on a surface an operator or evaluator actually reads has been checked
+against the code, and carries a verdict, the evidence for it, and the name of whoever enforces it.
+
+### What state the line is actually in — this is a REDO, not a start
+
+`LEDGER-1` shipped once and its review was **BLOCKING** (Entry 14). The prose ledger it produced is
+not wrong; it is **incomplete**, and it was incomplete for a reason that is the whole subject of this
+milestone: completeness rested on one person's grep vocabulary at one moment — *never / cannot /
+impossible* — which missed *tamper-proof, ACTIVE, screened, encrypted, verifiable, notarized, proof*.
+Andre's word for it was **"letter, not spirit."**
+
+`DOD-M15-CLAIM-SCANNER-1` then built the mechanical half and is ✅. So the dependency this line was
+blocked on **exists now**, and what remains is the part the scanner explicitly deferred to this line:
+*"Adjudicating them is `DOD-M15-LEDGER-1`."*
+
+### Measured before starting, not estimated
+
+Enumerating exactly as the scanner does (`package.json#files`, the plugin tree, repo root `*.md`,
+plus `registry.ts`'s prose literals) — **182 vocabulary matches across 9 shipped surfaces, of which
+17 are adjudicated. The debt is 165.**
+
+| Surface | Unadjudicated |
+|---|---|
+| `core/cli/src/registry.ts` (operator-facing strings) | 37 |
+| `core/adapter-claude-code/SKILL.md` (ships in the tarball) | 30 |
+| `plugins/cello/skills/cello/SKILL.md` | 29 |
+| `README.md` (public repo front page) | 19 |
+| `plugins/cello/skills/documents/SKILL.md` | 18 |
+| `plugins/cello/skills/receptionist/SKILL.md` | 11 |
+| `plugins/cello/skills/setup/SKILL.md` | 9 |
+| `plugins/cello/agents/cello-receptionist.md` | 8 |
+| `plugins/cello/skills/reconnect/SKILL.md` | 4 |
+
+Baseline confirmed green in the worktree before any edit: 8/8 on
+`dod-m15-claim-scanner-1.test.ts`, by exit code.
+
+### Clause checklist — what the reviewer receives
+
+From the DoD line itself:
+
+- **C1** — the ledger exists as a section of the DoD, one row per claim, carrying **its current
+  text**, **where it appears**, and **its disposition** (made true / withdrawn / disclosed as a
+  bounded property).
+- **C2** — **all four live surfaces swept**: the public repo (root docs, README, comments); the
+  shipped npm package (tool descriptions, skill prose, CLI help); product status/CLI output; shipped
+  client documentation.
+- **C3** — **partially true is false.** A row that survives only with a qualifier is rewritten or
+  withdrawn. Never softened — vagueness is how a false claim survives (§2f).
+- **C4** — **a claim with no row is an unaudited claim.** The line is not ✅ while a surface is
+  unswept.
+
+Carried onto this line by `CLAIM-SCANNER-1`'s own DoD text:
+
+- **C5** — a **fourth column, *enforced by whom***, so a row whose only enforcement point is the
+  operator's own daemon is visibly ergonomics rather than a guarantee (Invariant 1's first
+  non-qualifying answer).
+- **C6** — the **165-claim backlog is paid down and the baselines lowered to match.** The scanner's
+  shrink-only test is what makes this checkable rather than claimed.
+
+From the blocking review (Entry 14), each of which must be covered by name:
+
+- **C7a** — `registry.ts`'s *"tamper-proof"* and *"it would no longer match"*.
+- **C7b** — `core/adapter-claude-code/SKILL.md`, **the file that ships in the npm tarball**, never
+  walked by the first sweep.
+- **C7c** — the README asserting screening is **NOT** active — false in the *other* direction, which
+  is the case a claims audit is least likely to look for.
+- **C7d** — the **public GitHub repo description** advertising four native adapters that do not
+  exist. **Flagged now because it is the one surface in the list that is not a file in the tree**, so
+  no scanner reaches it and no gate can prove it fixed.
+
+### The counterbalance (§2b Invariant 1) — and why this line has an unusual answer
+
+Most units answer "what makes this hold when the adversary owns their daemon?" This one has no
+adversary: the reader is a prospective customer or an evaluator with a coding agent, and the failure
+is **our own claim outrunning our own code**. So the counterbalance is structural rather than
+cryptographic: **the ledger is not the control — the scanner is.** A prose table is a chore that
+looks like a control, and it decays the moment someone edits a sentence. What holds this line true
+tomorrow is that a new claim on a shipped surface fails the build, and the backlog may only shrink.
+That is why C6 (paying the backlog down and lowering the numbers) is load-bearing and not
+bookkeeping: an unpaid baseline is a standing exemption.
+
+### Hollow-test risk, named before writing anything (§🕳️)
+
+The specific hollow shape available here is **claim laundering**: moving a match out of the
+unadjudicated count by writing an entry that records *that someone looked* rather than *what they
+found*. The scanner already has an 80-character evidence floor and an arithmetic guard against
+over-accounting, and **neither of those can tell a real check from a fluent one.** So the standard I
+hold myself to on every entry: name the file and the behaviour that settles it, or mark the claim
+withdrawn. "It reads accurately" is not evidence.
+
+### Correction to my own sub-block, made in the same commit
+
+`CELLO_Coder_1` kindly pre-filled the `CELLO_Support` RESUME STATE sub-block, and it carries the
+FEDERATION-002 framing for the `FREEZE-STATUS-1` collision. **That framing is wrong and we settled it
+over CELLO before this entry was written.** FEDERATION-002 was Flyway, server-side, versioned, where
+claiming a version number cascades across parallel stories. The client-side `sessions` migration is
+an idempotent `ALTER TABLE ADD COLUMN` loop with a per-column try/catch on `duplicate column name` —
+no versions, no ordering, nothing to renumber. The real constraint is M15-PROCEDURE §2e: one file,
+two branches. Same conclusion, correct reason. Corrected in my own sub-block only; the other lane's
+block is untouched.
