@@ -5393,3 +5393,72 @@ The fixture that will pass over this defect is **the one that already exists**: 
 breaking shape is the **undashed hex the daemon actually sends**, and any test I write has to go
 through `writeSessionWithParticipants` rather than constructing a record by hand, or it tests my
 normalisation against itself.
+
+---
+
+## Entry 48 — I applied my own rule to two hops and left five
+
+Pass 2 of B2b-1, closing it on the two-pass cap. Two blocking, and the reviewer's own summary is the
+entry: *"both are the same shape as the two pass 1 caught — an optional parameter and a source
+assertion standing in for a type."*
+
+### The verdict, quoted
+
+> **SPEC: DEVIATIONS FOUND** — F4 is only half applied.
+> **HOLLOW TESTS FOUND** — Finding 2 (the F1 guard degrades silently under a reformat, **proven**)
+> and the complete absence of coverage on the F2 route and the durable end.
+> **SILENT FALLBACKS FOUND** — `session-relay-client.ts`'s surviving `leafKind` default rebuilds a
+> dropped kind as MESSAGE **one hop below the parameter the fix made required**.
+> **ERRORS NAME THEIR CAUSE** — nothing to fix; `declaredAlg: "(absent → sha256)"` keeps a lost-label
+> failure distinguishable from a real tamper.
+> …*"What it did not do is apply its own rule to the last five hops, which is where the next
+> occurrence will be."*
+
+### The rule, half applied
+
+Pass 1's fix made `sendContent`'s two trailing parameters required, because a default equal to the
+only value in play made four mutants unfalsifiable. **Then I left five more hops optional** — and
+`#trackAwaitingAck` is the sharp one: the very commit that applied `string | undefined` to
+`#parkContent` left its **sibling on the same code path** optional. That re-opened the exact finding
+it closed.
+
+Nothing could see it, either. The park envelope **omits the algorithm field entirely** when the value
+is `sha256` — which is every value today — so the terminal three hops were proven by reading and
+nothing else.
+
+### The guard that went blind, proven rather than suspected
+
+The single test protecting F1's writer slices `daemon.ts` between a marker and the next `\n    },`.
+The reviewer reindented that closing brace, watched the slice grow **298 → 1002 characters**, swallow
+the neighbouring hook, and every assertion pass **with the argument deleted** — satisfied by the
+other hook's line. A missing anchor was worse: `slice(start, -1)` returns the rest of the file.
+
+Bounded now, with the length asserted.
+
+### And the gate could not see a type error in my own tests
+
+Two of the three new tests passed `undefined` for a parameter that is now `number`. They compiled
+because the daemon's test typecheck is a **22-file allowlist** and neither new file was on it. At
+runtime the value was silently rebuilt as MESSAGE by `submitMessageHash`'s own default — **the last
+default on the path**, one hop below the parameter the fix had just made required.
+
+Adding both files surfaced two further genuine errors: a wrong import path, and a `let` assigned only
+inside a callback, which TypeScript narrows to `never` at the read.
+
+### Fix-forward, honestly
+
+I committed pass-2's fixes **before** running the suite — deliberately, because an uncommitted fix is
+what `git checkout` destroyed this morning — and said so in the message. It came back **red**: two
+tests that had been passing three arguments and silently receiving MESSAGE from the deleted default.
+That is the same class the fix targets, which is why the default looked harmless from production's
+side. They state their kind now; the default stays gone.
+
+Gate: 2801 daemon tests, lint, build typecheck, and the test-project typecheck now covering both new
+files.
+
+### Carried to B2b-2
+
+`#parkContent` still leans on `encodeParkEnvelope`'s catch rather than validating first — unreachable
+while every value is `sha256`, and reachable the day B2b-2 lands. The source assertions should be
+merged into the existing adapter guard rather than cloned, and `matchAll` used so a second adapter
+appearing earlier in the file cannot mask the one being checked.
