@@ -33,26 +33,90 @@ import { HASH_CHAINED_TABLES } from "../hash-chain.js";
 const TESTS_DIR = dirname(fileURLToPath(import.meta.url));
 const SELF = basename(fileURLToPath(import.meta.url));
 
+/**
+ * Strip comments before scanning — the guard reads CODE, not prose about code.
+ *
+ * ─── Why this had to exist ─────────────────────────────────────────────────────────────────────
+ *
+ * Widening the insert regex (F7) immediately flagged `schema-completeness.test.ts`, whose "match"
+ * is a docstring listing example SQL:
+ *
+ *     *   `INSERT INTO seal_notarizations ...`
+ *     *   `SELECT chain_hash FROM ${tableName} ...`
+ *
+ * Two comment lines, no statement. This project has now been bitten by the same thing three times:
+ * this, my own `persist-020` comment that quoted the SQL it was explaining, and the claims ledger
+ * counting its own correction note as a claim. **A guard that reads prose punishes documentation** —
+ * and the response it invites is to delete the explanation, which is precisely backwards.
+ *
+ * Strings are preserved: the SQL under test lives in template literals and quoted strings, and that
+ * is exactly what must still be read.
+ */
+function stripComments(text: string): string {
+  return text
+    // Block comments, including docstrings. Replaced with a newline so line-shaped patterns cannot
+    // accidentally join across the removal.
+    .replace(/\/\*[\s\S]*?\*\//g, "\n")
+    // Line comments. `//` inside a string is not matched, because the alternation consumes whole
+    // quoted spans first.
+    .replace(/(["'`])(?:\\.|(?!\1)[\s\S])*\1|\/\/[^\n]*/g, (m) => (m.startsWith("//") ? "" : m));
+}
+
 function testSources(): Array<{ name: string; text: string }> {
   const out: Array<{ name: string; text: string }> = [];
   const walk = (dir: string): void => {
     for (const entry of readdirSync(dir)) {
       const full = join(dir, entry);
       if (statSync(full).isDirectory()) { walk(full); continue; }
-      if (entry.endsWith(".test.ts") && entry !== SELF) out.push({ name: entry, text: readFileSync(full, "utf8") });
+      // Review F7: `.ts`, not `.test.ts`. `helpers/seed-account.ts` and `helpers/txn-pool.ts` were
+      // never read — and this guard's own failure message sends authors to `helpers/` to fix things.
+      // A shared fixture helper is the highest-leverage place for a chained write to hide.
+      if (entry.endsWith(".ts") && entry !== SELF) {
+        out.push({ name: entry, text: stripComments(readFileSync(full, "utf8")) });
+      }
     }
   };
   walk(TESTS_DIR);
   return out;
 }
 
+/**
+ * ─── Review F7: three ways past the old regexes, all closed here ───────────────────────────────
+ *
+ * 1. `INSERT INTO <table> (…, chain_hash)` only matched when `chain_hash` appeared inside the FIRST
+ *    parenthesis group. `INSERT INTO <table> VALUES (…)` with no column list never matched at all.
+ *    Now: match the statement head, then look for `chain_hash` anywhere in the ~400 chars after it.
+ * 2. A `DELETE FROM ${table}` built by interpolation never matched a literal table name. Now
+ *    flagged separately — see `interpolatedDelete`.
+ * 3. The walker took only `*.test.ts`, so `helpers/seed-account.ts` and `helpers/txn-pool.ts` were
+ *    never read — and the guard's own failure message points authors at `helpers/`. Now `.ts`.
+ */
+function insertRegex(table: string): RegExp {
+  // The statement head, then chain_hash anywhere in what follows. The window is generous rather
+  // than exact: a chained INSERT spanning more than ~400 characters before naming chain_hash is not
+  // a shape anyone writes, and over-matching here costs an ALLOWED_INSERTS entry, not a miss.
+  return new RegExp(`INSERT\\s+INTO\\s+${table}\\b[\\s\\S]{0,400}?chain_hash`, "i");
+}
+
 function violates(text: string, kind: "insert" | "delete"): boolean {
   return HASH_CHAINED_TABLES.some((table) => {
     const re = kind === "insert"
-      ? new RegExp(`INSERT\\s+INTO\\s+${table}\\s*\\([^)]*chain_hash`, "i")
+      ? insertRegex(table)
       : new RegExp(`DELETE\\s+FROM\\s+${table}\\b`, "i");
     return re.test(text);
   });
+}
+
+/**
+ * A `DELETE FROM ${…}` whose table is INTERPOLATED, in a file that also names a chained table.
+ *
+ * The literal-name regex cannot see these, and `writeapi-001-agent-write.live.test.ts` already uses
+ * the shape (over non-chained tables today, so no live hole). Flagged rather than banned: a
+ * templated delete is legitimate, it just cannot be checked by reading, so it has to be declared.
+ */
+function interpolatedDelete(text: string): boolean {
+  if (!/DELETE\s+FROM\s+\$\{/i.test(text)) return false;
+  return HASH_CHAINED_TABLES.some((t) => new RegExp(`\\b${t}\\b`).test(text));
 }
 
 /**
@@ -223,10 +287,27 @@ const ALLOWED_INSERTS: Record<string, { count: number; why: string }> = {
   },
 };
 
+/**
+ * Files that build `DELETE FROM ${…}` and also mention a chained table — declared, with the tables
+ * the interpolation can actually reach. Review F7: unreadable by a source guard, so it is stated.
+ */
+const INTERPOLATED_DELETE_DECLARED: Record<string, string> = {
+  "persist-003-rls.test.ts":
+    "AC-005 loops every append-only table asserting `cello_service` is REFUSED both UPDATE and " +
+    "DELETE, via `DELETE FROM ${table} WHERE false`. It deletes nothing twice over — the predicate " +
+    "matches no row AND the statement is expected to throw — and the loop's whole point is that it " +
+    "covers chained tables. Found by this check on its first run, which is the check working: no " +
+    "literal-name regex could ever have seen it.",
+  "writeapi-001-agent-write.live.test.ts":
+    "Its templated deletes target `agent_profiles` and `social_verifications`, neither of which is " +
+    "in HASH_CHAINED_TABLES. It names chained tables only in prose. Declared so that pointing the " +
+    "same loop at a chained table becomes a deliberate edit to this entry rather than an invisible one.",
+};
+
 /** How many chained-table INSERTs supplying a literal chain_hash a source contains. */
 function insertCount(text: string): number {
   return HASH_CHAINED_TABLES.reduce((n, table) => {
-    const m = text.match(new RegExp(`INSERT\\s+INTO\\s+${table}\\s*\\([^)]*chain_hash`, "gi"));
+    const m = text.match(new RegExp(`INSERT\\s+INTO\\s+${table}\\b[\\s\\S]{0,400}?chain_hash`, "gi"));
     return n + (m ? m.length : 0);
   }, 0);
 }
@@ -306,6 +387,28 @@ describe("DOD-M15-DIRECTORY-ROT-1: fixtures never put a hole in a hash-chained t
       `These fixtures DELETE from a hash-chained, append-only table: ${offenders.join(", ")}. ` +
         `Use per-run unique ids and leave the rows; if the delete IS the subject of the test, add it ` +
         `to ALLOWED_DELETES with the reason.`,
+    ).toEqual([]);
+  });
+
+  it("no fixture DELETEs from an INTERPOLATED table name while naming a chained one", () => {
+    /**
+     * Review F7. `DELETE FROM ${table}` cannot be checked by reading — the table is decided at
+     * runtime — so the literal-name regex above is blind to it. A file that does this AND mentions
+     * a chained table is one refactor away from deleting from one.
+     *
+     * Declared rather than banned: the shape is legitimate (`writeapi-001` uses it today, over
+     * non-chained tables only). What is not acceptable is it being invisible.
+     */
+    const offenders = testSources()
+      .filter(({ name }) => !INTERPOLATED_DELETE_DECLARED[name])
+      .filter(({ text }) => interpolatedDelete(text))
+      .map(({ name }) => name);
+
+    expect(
+      offenders,
+      `These fixtures DELETE from an interpolated table name and also name a hash-chained table, ` +
+        `so no source-reading guard can tell whether they delete from one: ${offenders.join(", ")}. ` +
+        `Declare it in INTERPOLATED_DELETE_DECLARED with the tables it can actually reach.`,
     ).toEqual([]);
   });
 
