@@ -25,6 +25,14 @@ Journal entries: `CELLO_Coder_1` uses plain integers (…39, 40); `CELLO_Support
 with `(CELLO_Support)` in the heading, so the two can never collide on a number. Both append at EOF.
 DoD tag flips only on your OWN lane's lines.
 
+**🚨 SHARED TRAP — BOTH LANES. A client-side column needs TWO entries, not one.**
+`session-node-manager.ts`'s idempotent `ALTER TABLE ADD COLUMN` loop is only half of adding a column.
+`agent-id-migration.ts` **REBUILDS the sessions table** and carries only the columns listed in its own
+`createSql` — so a fresh database gets your column and a legacy database upgrading **loses it on the
+one boot that matters**, silently. `dod-agent-id-joinkey-migration` ("a MIGRATED database matches a
+FRESH one") is the guard that catches it. It has now fired twice on this milestone — `diverged_at`,
+then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comment above it saying so.
+
 ---
 
 ## RESUME STATE — CELLO_Coder_1 (overwrite in place; CELLO_Support must not edit)
