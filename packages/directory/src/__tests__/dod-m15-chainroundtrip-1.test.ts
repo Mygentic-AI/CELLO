@@ -62,6 +62,66 @@ function stripComments(text: string): string {
 }
 
 /**
+ * ─── WHY THESE TWO SCANNERS EXIST ──────────────────────────────────────────────────────────────
+ *
+ * The first version of the guard below sliced fixed windows — 1400 characters for the statement,
+ * 700 for the handler — and both read straight past the end of the thing they were meant to be
+ * reading. Review proved three bypasses by execution, including the one that matters most: revert
+ * this unit's own headline fix to `.catch(() => {})` and the guard stayed GREEN, because the
+ * 700-char window ran on into an unrelated `this.#logger?.info(...)` four lines below. A guard that
+ * cannot catch the defect it was written for is worse than no guard: it retires the suspicion.
+ *
+ * So the extents are computed, not guessed. Both scanners track quote state so a bracket inside a
+ * string literal cannot skew the depth count.
+ */
+
+/** Index of the bracket that closes the one opening at `open`, or -1 if unbalanced. */
+function matchingClose(text: string, open: number): number {
+  const opens: Record<string, string> = { "(": ")", "{": "}", "[": "]" };
+  const stack: string[] = [];
+  let quote: string | null = null;
+  let escaped = false;
+  for (let i = open; i < text.length; i++) {
+    const c = text[i]!;
+    if (quote !== null) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") { quote = c; continue; }
+    const close = opens[c];
+    if (close !== undefined) { stack.push(close); continue; }
+    if (c === ")" || c === "}" || c === "]") {
+      if (stack.pop() !== c) return -1;
+      if (stack.length === 0) return i;
+    }
+  }
+  return -1;
+}
+
+/** Index of the `;` that ends the statement beginning at `start`, at bracket depth zero. */
+function statementEnd(text: string, start: number): number {
+  let depth = 0;
+  let quote: string | null = null;
+  let escaped = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i]!;
+    if (quote !== null) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'" || c === "`") { quote = c; continue; }
+    if (c === "(" || c === "{" || c === "[") depth += 1;
+    else if (c === ")" || c === "}" || c === "]") depth -= 1;
+    else if (c === ";" && depth === 0) return i;
+  }
+  return text.length;
+}
+
+/**
  * NOT `describeIntegration` — this one needs no database, so it also holds on a machine where the
  * integration tests skip. The rule it protects is a source rule, not a runtime one.
  */
@@ -104,25 +164,38 @@ describe("DOD-M15-CHAINROUNDTRIP-1: a discarded store write cannot come back", (
     };
     const exempted: Record<string, number> = {};
 
+    // The handler must CALL the logger, not merely mention it: `.catch(() => { const _x =
+    // this.#logger; })` is a token match and reports nothing. `#logger` is the only reporting
+    // channel this class has — `console` is banned project-wide.
+    const LOGS_THE_FAILURE = /this\.#logger\??\.(error|warn)\s*\(/;
+
     const silent: string[] = [];
     const marker = "void this.#store.";
     for (let i = text.indexOf(marker); i !== -1; i = text.indexOf(marker, i + 1)) {
-      const stmt = text.slice(i, i + 1400);
+      const stmt = text.slice(i, statementEnd(text, i));
       const method = /void this\.#store\.(\w+)/.exec(stmt)?.[1] ?? "<unknown>";
-      const catchAt = stmt.indexOf(".catch(");
+
+      // The TAIL `.catch()` — the last one in the statement — is the handler that sees every
+      // rejection in the chain. An inner `.catch()` inside a `.then()` does not qualify.
+      const catchAt = stmt.lastIndexOf(".catch(");
       if (catchAt === -1) {
         silent.push(`${method} — no .catch() at all: the rejection becomes an unhandled promise`);
         continue;
       }
-      // The handler must actually do something with the error. `#logger` is the only reporting
-      // channel this class has; `console` is banned project-wide.
-      const handler = stmt.slice(catchAt, catchAt + 700);
-      if (handler.includes("#logger")) continue;
+      const openParen = stmt.indexOf("(", catchAt);
+      const closeParen = matchingClose(stmt, openParen);
+      if (closeParen === -1) {
+        silent.push(`${method} — could not parse the .catch() handler; the guard will not guess`);
+        continue;
+      }
+      const handler = stmt.slice(openParen, closeParen + 1);
+
+      if (LOGS_THE_FAILURE.test(handler)) continue;
       if (LOGS_INTERNALLY[method]) {
         exempted[method] = (exempted[method] ?? 0) + 1;
         continue;
       }
-      silent.push(`${method} — .catch() does not reach #logger: the failure is discarded`);
+      silent.push(`${method} — .catch() does not report to #logger: the failure is discarded`);
     }
 
     // A shrink is as wrong as a growth: if a call site went away, the count comes down with it,
