@@ -318,6 +318,42 @@ answer was worse and different.
 > **My recommendation: B**, because the defect is not that the text says too much — it is that a
 > reader who already has the wrong model gets nothing to dislodge it. **But this is your call and I
 > have not touched the text.** Say a letter, or rewrite one, and I'll apply it in one pass.
+>
+> ### ✅ RULED: OPTION B (Andre, via `Miss_Chelly`, 2026-08-24) — APPLIED, all three, one pass.
+> `cello-mcp.ts` now carries the ruled text verbatim. `grep "auto-accepted when you're away"` → **0**.
+>
+> ### THE WHOLE-FILE AUDIT ANDRE KEPT AS A CONDITION — 56 descriptions, 28 with claim vocabulary
+> **Adjudications recorded HERE and not in the ledger, because `LEDGER-1` is 🅿️ PARKED until after
+> Tier 4** (his own ruling). Written in row shape so they lift straight into it when it unparks.
+>
+> **FALSE → FIXED (3).** The two the line named, plus one the scope clause found:
+> `cello_contacts`'s *"exempt from … anti-spam caps"* — **no tier is exempt**; `DEFAULT_TIER_BOUNDS`
+> is finite at every level, and a test (`INV-TIER-BOUND`) exists specifically to kill a
+> `tier >= KNOWN ? Infinity` implementation. **The description promised the thing a test forbids.**
+>
+> **PROTECTIVE → CHECKED AND TRUE (5). These must NOT be tidied in the same pass:**
+> - *"0=blocked (refused, indistinguishable from a full inbox)"* — real, via `maxSessionsPerSender: 0`,
+>   refusing through the SAME path an over-cap stranger takes so the refusal cannot out them.
+> - *"a higher tier only RAISES limits, it never removes them"* — the bounds table is finite at every
+>   tier.
+> - *"a higher tier never buys less screening"* — verified by ABSENCE: the screening path does not
+>   consult tier at all, so a tier cannot weaken it.
+> - `cello_contacts`'s *"exempt from the stranger-pool cap"* — the surviving half, and exact: the
+>   global cap is gated on `tier === TIER.UNKNOWN`, with the code's own note *"a KNOWN+ sender is
+>   past it by trust."*
+> - `cello_config_set`'s *"You can only make it STRICTER from here"* — **I nearly filed this as a
+>   fourth false claim from a fragment.** The store returns `{ ok:false, reason:"needs_confirmation",
+>   direction:"loosen" }`, which reads as "loosening is possible". Reading the WHOLE description
+>   reverses it: the next sentence says a loosening is refused *and names the command the human
+>   operator must run at their terminal*. "From here" means the agent surface, and that is precisely
+>   true. **Second time in one session that a fragment nearly produced a false report.**
+>
+> **DESCRIPTIVE / LOCALLY-SCOPED → no protection claimed, no evidence owed (20).** e.g. *"Read-only"*,
+> *"Always read before writing"*, *"local-only, never sent to the directory"*, *"never propagated,
+> never part of the seal"*. Each states what the tool does or a local-storage fact, not a protection
+> the system enforces against a counterparty.
+>
+> **The count is now a shrinking one: 3 fixed, 5 evidenced, 20 exempted, 0 unadjudicated.**
 
 - **⚠️ Enforcer — NOT "I read the file". A hand audit is exactly what `DOD-M15-LEDGER-1` proved
   unreliable** (raised by the receptionist against my own classification, and it is the right
