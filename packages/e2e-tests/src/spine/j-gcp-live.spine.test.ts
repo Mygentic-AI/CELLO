@@ -150,6 +150,37 @@ function cliAsync(dir: string, args: string[]): Promise<unknown> {
   });
 }
 
+/**
+ * Poll `sealed-receipt` until the root arrives — `DOD-M15-CLOSEROOT-1`.
+ *
+ * ⚠️ `close-session` DOES NOT RETURN A ROOT, and this file asserted that it does in two places.
+ * `parity-commands.ts` maps the CLI verb straight onto `cello_close_session`, which was made
+ * deliberately NON-BLOCKING — its own guidance calls the blocking version *"exactly how seventeen
+ * sessions were lost"*. It returns a COMMITMENT plus instructions to fetch the receipt afterwards.
+ *
+ * So `expect(ra.sealed_root).toMatch(...)` was asserting the pre-M12 contract, and — with no custom
+ * message on it — would have failed as a bare `TypeError` against a line number on the most
+ * expensive run in the suite.
+ *
+ * The spine lane has `awaitSealedRoot` for exactly this, but it takes an `McpConn` and this file
+ * drives the CLI. Same shape, same reason, over `cliAsync`.
+ */
+async function awaitSealedRootCli(dir: string, sessionId: string, label: string, timeoutMs = 120_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  let last: unknown = "(never queried)";
+  while (Date.now() < deadline) {
+    const r = (await cliAsync(dir, ["sealed-receipt", sessionId])) as { ok?: boolean; sealed_root?: string };
+    last = r;
+    if (r.ok === true && typeof r.sealed_root === "string") return r.sealed_root;
+    await new Promise((res) => setTimeout(res, 2_000));
+  }
+  throw new Error(
+    `${label}: no sealed_root within ${String(timeoutMs)}ms for session ${sessionId}.\n` +
+      `  last sealed-receipt response: ${JSON.stringify(last)}\n` +
+      `  close-session returns a COMMITMENT, not a root — an empty answer means "still running", not "failed".`,
+  );
+}
+
 function cli(dir: string, args: string[]): unknown {
   const out = sh("node", [CLI, ...args], {
     CELLO_DIR: dir,
@@ -391,7 +422,9 @@ describe.skipIf(!ENABLED)("J-GCP-LIVE — DOD-E2E-GCP-1 against the live GCP fle
         `interrupted cross-node close failed: ${rInt.reason} — this is the two-node seal defect, ` +
           `not a flake. A same-node run cannot reproduce it.`,
       ).toBe(true);
-      expect(rInt.sealed_root).toMatch(/^[0-9a-f]{64}$/);
+      // Polled, not read off the close — see awaitSealedRootCli. This asserted the pre-M12 contract.
+      const intRoot = await awaitSealedRootCli(a.dir, sid2, "interrupted cross-node seal");
+      expect(intRoot, "the interrupted cross-node seal must produce a root").toMatch(/^[0-9a-f]{64}$/);
 
       // ── the ACTIVE-seal assertions, deferred from above ──────────────────────────────────────
       expect(ra.ok, `initiator close failed: ${ra.reason}`).toBe(true);
@@ -414,8 +447,13 @@ describe.skipIf(!ENABLED)("J-GCP-LIVE — DOD-E2E-GCP-1 against the live GCP fle
        *
        * A comment that misstates the cost of a thing is how the thing stays undone, so it is done.
        */
-      expect(ra.sealed_root).toMatch(/^[0-9a-f]{64}$/);
-      expect(ra.sealed_root, "the two sides received different certificates").toBe(rb.sealed_root);
+      // Polled on BOTH sides — `close-session` returns a commitment, never a root.
+      const [raRoot, rbRoot] = await Promise.all([
+        awaitSealedRootCli(a.dir, sid, "initiator sealed receipt"),
+        awaitSealedRootCli(b.dir, sid, "responder sealed receipt"),
+      ]);
+      expect(raRoot, "the initiator must surface a sealed root").toMatch(/^[0-9a-f]{64}$/);
+      expect(rbRoot, "the two sides received different certificates").toBe(raRoot);
 
       /**
        * EACH SIDE RECOGNISES THE TREE IT WAS CERTIFIED OVER — the per-side half, read from each
