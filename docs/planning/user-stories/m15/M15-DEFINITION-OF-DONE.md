@@ -1484,6 +1484,25 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 | **Named lines already owned** (`j-unilateral`×2, `j-upgrade-bilateral` → `UNILATERAL-NOTARIZE-1`) | 3 | 🅿️ owned elsewhere |
 | **Individually-caused** (`j-end` 1, `j-remove` 1, `j-multiplayer` 4 timeouts) | 6 | 🔎 filed below |
 
+> #### 🔎 AND THE FAILING SET **CHANGES BETWEEN RUNS** — so no product cause can be attributed yet
+> Run in isolation 2026-08-24: **5 failed / 2 passed**, against **4 failed / 3 passed** in the batch.
+> **`GOVERN + JOIN` failed in the batch and PASSES alone; `END: closes are ENTRIES` passed in the batch
+> and FAILS alone.** Same file, same build, different victims.
+>
+> Every failure in both runs is the same signature — `MCP error -32001: Request timed out` at
+> **70003–70287 ms**, the MCP SDK's own request timeout (`protocol.ts` `Timeout.timeoutHandler`). **A
+> tool call is never answered at all**: not refused, not errored — no reply.
+>
+> **⚠️ WHAT THIS RULES OUT, AND IT IS THE USEFUL HALF.** A defect that hangs a specific operation would
+> hang the SAME test every time. **A failing set that reshuffles is shared state or resource
+> contention**, not a deterministic product fault in any one of those operations. So the tempting
+> write-up — *"the removed-holder path never replies"* — is not supportable, and would have sent the
+> next reader into the document gate for a fault that is not there.
+>
+> **What is established:** an MCP tool call goes unanswered for 70 s, in a three-daemon journey, on a
+> rotating subset of tests. **Not diagnosed further** (§0z.2): the next step is which call, captured
+> per-run rather than inferred — and the instrument must survive a run where the victim moves.
+>
 > #### 🔎 `j-multiplayer`'s FOUR TIMEOUTS ARE **NOT** THE SALT CAUSE — checked before assuming
 > All four are `MCP error -32001: Request timed out` at ~70s, on document operations: *GOVERN + JOIN*,
 > *REMOVE while OFFLINE*, *NUDGE + SURFACE*, *REMOVE surfaces to the removed holder*. The obvious move
