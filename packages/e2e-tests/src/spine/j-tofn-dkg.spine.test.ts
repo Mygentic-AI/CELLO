@@ -27,6 +27,7 @@ import {
   type SpineCluster,
   type Proc,
 } from "./live-harness.js";
+import { expectMatches } from "./expect-present.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
 let cluster: SpineCluster;
@@ -110,7 +111,7 @@ describe("J-TOFN-DKG — multi-node 2-of-3 FROST DKG (DOD-DKG-1)", () => {
     expect(res.status, `register failed: ${res.stdout}`).toBe(0);
     const parsed = JSON.parse(res.stdout.trim()) as { ok?: boolean; primary_pubkey?: string };
     expect(parsed.ok, `register not ok: ${res.stdout}`).toBe(true);
-    expect(parsed.primary_pubkey, "DKG must produce a group key").toMatch(/^[0-9a-f]{64}$/);
+    expectMatches(parsed.primary_pubkey, "DKG must produce a group key", /^[0-9a-f]{64}$/);
 
     // The directories capture stdout via async pipe 'data' events that lag the IPC response —
     // let their DKG logs flush before inspecting them.
@@ -193,7 +194,7 @@ describe("J-TOFN-DKG — multi-node 2-of-3 FROST DKG (DOD-DKG-1)", () => {
     ).toBe(0);
     const parsed = JSON.parse(res.stdout.trim()) as { ok?: boolean; primary_pubkey?: string };
     expect(parsed.ok, `quorum register not ok: ${res.stdout}`).toBe(true);
-    expect(parsed.primary_pubkey, "quorum DKG must produce a group key").toMatch(/^[0-9a-f]{64}$/);
+    expectMatches(parsed.primary_pubkey, "quorum DKG must produce a group key", /^[0-9a-f]{64}$/);
 
     await sleep(2000);
     // The DKG ran among the 2-node quorum (dir 2 dead), threshold majority(3)=2. Take the latest DKG begin.

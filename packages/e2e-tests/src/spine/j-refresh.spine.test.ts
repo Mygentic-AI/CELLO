@@ -37,6 +37,7 @@ import {
   type McpConn,
   expectOwnTreeVerified,
 } from "./live-harness.js";
+import { expectMatches } from "./expect-present.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
 let cluster: SpineCluster;
@@ -191,7 +192,7 @@ describe("J-REFRESH — proactive share refresh / epoch rollover (DOD-REFRESH-1)
     expect(r1.primary_pubkey, `group pubkey must be byte-identical after refresh (P1=${p1})`).toBe(p1);
     // (b) advanced to epoch 2.
     expect(r1.epoch, "epoch must advance to 2").toBe(2);
-    expect(r1.verifying_shares_digest, "refresh must report a verifyingShares digest").toMatch(/^[0-9a-f]{64}$/);
+    expectMatches(r1.verifying_shares_digest, "refresh must report a verifyingShares digest", /^[0-9a-f]{64}$/);
 
     // (c) ALL 3 directories applied the refresh (rotated their share to epoch 2). stdout lags — settle first.
     await sleep(2000);

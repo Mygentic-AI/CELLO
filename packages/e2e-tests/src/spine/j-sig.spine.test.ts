@@ -34,6 +34,7 @@ import {
   writeSignedManifestTo,
   writeConsortiumManifest,
 } from "./live-harness.js";
+import { expectMatches } from "./expect-present.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
 let cluster: SpineCluster;
@@ -166,10 +167,15 @@ describe("J-SIG — directory signaling resilience, live (DOD-SIG-1)", () => {
     const elapsed = Date.now() - t0;
 
     expect(result.ok, `tool call must not succeed while reconnecting:\n${JSON.stringify(result)}`).not.toBe(true);
-    expect(
+    // `reason` is optional on the response type, so the bare form would throw a TypeError BEFORE
+    // vitest attached the message — discarding the JSON.stringify(result) that is the whole point of
+    // this assertion. `DOD-M15-CLOSEROOT-1` second clause; this is the exact shape that cost an
+    // evening on the seal journeys.
+    expectMatches(
       result.reason,
       `tool call must surface a distinct signaling-degradation reason:\n${JSON.stringify(result)}`,
-    ).toMatch(/^(signaling_reconnecting|directory_signaling_timeout)$/);
+      /^(signaling_reconnecting|directory_signaling_timeout)$/,
+    );
     expect(
       typeof result.guidance === "string" && result.guidance.length > 0,
       `the degradation must carry actionable guidance:\n${JSON.stringify(result)}`,

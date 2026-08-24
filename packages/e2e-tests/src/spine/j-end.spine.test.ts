@@ -39,6 +39,7 @@ import {
   type McpConn,
   type ManifestEnv,
 } from "./live-harness.js";
+import { expectMatches } from "./expect-present.js";
 
 let cluster: SpineCluster;
 let manifestEnv: ManifestEnv;
@@ -176,7 +177,7 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
       body: statement,
     })) as { ok?: boolean; reason?: string; guidance?: string; submission_id?: string };
     expect(res.ok, `issue refused: ${res.reason} — ${res.guidance}`).toBe(true);
-    expect(res.submission_id, "the submission id is content-derived").toMatch(/^[0-9a-f]{64}$/);
+    expectMatches(res.submission_id, "the submission id is content-derived", /^[0-9a-f]{64}$/);
 
     // THE DIRECTORY HOLDS A MAILBOX IT CANNOT READ. Assert the row exists, that it is sealed to the
     // manifest's intake generation, and — the load-bearing part — that Bob's words are NOT in it.
@@ -410,7 +411,7 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     // "some endorsement, somewhere" — an unbound query here cannot fail without the assertions above
     // having already failed.
     const presentedHash = (endorsement as unknown as { signal_hash?: string }).signal_hash;
-    expect(presentedHash, "the projection carries the hash it was verified under").toMatch(/^[0-9a-f]{64}$/);
+    expectMatches(presentedHash, "the projection carries the hash it was verified under", /^[0-9a-f]{64}$/);
     expect(psqlSpine(
       `SELECT effective_status FROM signal_records_effective WHERE signal_hash = '${presentedHash}'`,
     ), "the hash Charlie holds is live in the notary ledger").toContain("active");

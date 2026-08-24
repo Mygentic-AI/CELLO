@@ -37,6 +37,7 @@ import {
   writeConsortiumManifest,
   expectOwnTreeVerified,
 } from "./live-harness.js";
+import { expectMatches } from "./expect-present.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
 // PERSIST-002 (DOD-STORE-1): per-agent identity material lives in the daemon's SQLCipher store
@@ -335,7 +336,9 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
       );
       expect(parsed.ok, `register ${name} not ok: ${res.stdout}`).toBe(true);
       expect(typeof parsed.agent_id, `register ${name} missing agent_id`).toBe("string");
-      expect(parsed.primary_pubkey, `register ${name} missing primary_pubkey`).toMatch(/^[0-9a-f]{64}$/);
+      // The line ABOVE already guards `agent_id` with an explicit `typeof … toBe("string")`. This one
+      // did not, so the correct pattern was sitting one line up from the wrong one.
+      expectMatches(parsed.primary_pubkey, `register ${name} missing primary_pubkey`, /^[0-9a-f]{64}$/);
       return { agentId: parsed.agent_id!, primaryPubkey: parsed.primary_pubkey! };
     }
     const regA = registerAndParse("agentA");
