@@ -39,7 +39,12 @@ import {
   expectOwnTreeVerified,
 } from "./live-harness.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
-import { sealToRecipient, contentHashHex } from "./content-seal-fixture.js";
+// `sealToRecipient` is deliberately no longer imported. Every park in this file that feeds the
+// RECOVER path now deposits through the daemon's own `sealParkEnvelope` (via `content:`), because a
+// bare seal with no park envelope is the unsigned shape SEC-1 refuses. The only remaining raw
+// deposits are the two that never reach recover — the transport round-trip, and the
+// deliberately-unsealable entry in DOD-MSG-7 — and both use random bytes, which need no seal.
+import { contentHashHex } from "./content-seal-fixture.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -320,25 +325,44 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     const sessionId = init.sessionId!;
     expect(((await awaitP) as { type?: string }).type).toBe("new_session");
 
-    const pubBBytes = Buffer.from(pubB, "hex");
-    const dep = (cipher: Uint8Array, hashHex: string) =>
+    /**
+     * ⚠️ THESE DEPOSITS USED TO BE UNSIGNED, AND EVERY ASSERTION BELOW WAS UNREACHABLE.
+     *
+     * They passed `ciphertext:` — a bare `sealToRecipient(...)` with no park envelope around it. Once
+     * SEC-1 required a sender signature, `authenticateParkedEntry` refused all three at the door with
+     * `reason: "unsigned_envelope"`, which `park-envelope.ts` names "the ATTACKER shape". So this test
+     * was not measuring tamper detection at all: honest, tampered and corrupt were rejected
+     * identically, one step before the hash cross-check that is the whole point.
+     *
+     * `content:` now parks through the daemon's own `sealParkEnvelope`, signed by agentA — the same
+     * producer production uses. The signature is deliberately NOT over the content, only over
+     * `(sessionId, recipient, claimed hash)`, which is what still lets case (2) exist: a properly
+     * signed entry whose claimed hash does not describe what is sealed inside. That is a malicious
+     * SENDER, not a malicious relay, and it is the case the recover path's cross-check is for.
+     */
+    const dep = (args: Record<string, unknown>) =>
       ipcCall(dirA, "content_park_deposit", {
         relayMultiaddr: cluster.relayMultiaddr,
         recipientPubkey: pubB,
-        contentHash: hashHex,
         sessionId,
-        ciphertext: Buffer.from(cipher).toString("hex"),
+        senderAgentName: "agentA",
+        ...args,
       });
 
-    // (1) HONEST — sealed content whose hash MATCHES. Must be accepted (round-trip proof too).
+    // (1) HONEST — signed, and the claimed hash MATCHES the sealed content. Must be accepted.
     const honest = Buffer.from("honest recovered message");
-    await dep(sealToRecipient(pubBBytes, honest), contentHashHex(honest));
-    // (2) TAMPER — a VALID seal of real content, deposited with the hash of DIFFERENT content.
-    //     Decrypts fine, but the cross-check fails → content_hash_mismatch (the ONE desync).
+    await dep({ content: honest.toString("hex"), contentHash: contentHashHex(honest) });
+    // (2) TAMPER — a properly SIGNED entry carrying real content, claiming the hash of DIFFERENT
+    //     content. Unseals fine, authenticates fine, and then the cross-check fails →
+    //     content_hash_mismatch (the ONE desync). Reachable only because the signature does not
+    //     bind the content.
     const realContent = Buffer.from("the actual sealed bytes");
-    await dep(sealToRecipient(pubBBytes, realContent), contentHashHex(Buffer.from("a different message entirely")));
-    // (3) RECOVERY-FAILURE — not a valid seal at all. openContentSeal fails → skipped, NOT a desync.
-    await dep(new Uint8Array(randomBytes(160)), contentHashHex(Buffer.from("whatever")));
+    await dep({ content: realContent.toString("hex"), contentHash: contentHashHex(Buffer.from("a different message entirely")) });
+    // (3) RECOVERY-FAILURE — not a valid seal at all, so it stays a RAW `ciphertext:` deposit. This
+    //     one must NOT be signed: the point is that `openContentSeal` fails on the outer layer,
+    //     before there is any envelope to decode or authenticate, which is why it is a skip and not
+    //     a desync. Signing it would move the failure to a different check and prove nothing.
+    await dep({ ciphertext: Buffer.from(randomBytes(160)).toString("hex"), contentHash: contentHashHex(Buffer.from("whatever")) });
 
     const rec = (await ipcCall(dirB, "content_park_recover", { relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB })) as { ok?: boolean; recovered?: number; pulled?: number };
     expect(rec.ok).toBe(true);
@@ -419,12 +443,24 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(firstReceive).toMatch(/"sequenceNumber":0/);
 
     // Now the SAME message also shows up via the relay park (the direct+park overlap). B recovers it.
+    //
+    // Parked SIGNED, through the daemon's own `sealParkEnvelope` — the bare `sealToRecipient(...)`
+    // this used to deposit was refused as `unsigned_envelope` before dedup was ever consulted, so
+    // the deduplication assertion below was measuring nothing.
+    //
+    // `contentHash` is the hash read off the daemon's OWN receive event a few lines up, not one
+    // recomputed here, so this stays correct whatever algorithm the direct frame used. The envelope
+    // names no algorithm, which means `sha256` — correct as long as the sending side does not salt.
+    // If a sender ever does salt, this deposit is where it shows up: the recover path would recompute
+    // unsalted, mismatch the salted hash, and report content_hash_mismatch on a message that is
+    // perfectly honest. That is the trap, and it is named here rather than discovered later.
     await ipcCall(dirA, "content_park_deposit", {
       relayMultiaddr: cluster.relayMultiaddr,
       recipientPubkey: pubB,
       contentHash: hashHex,
       sessionId,
-      ciphertext: Buffer.from(sealToRecipient(Buffer.from(pubB, "hex"), msgBytes)).toString("hex"),
+      senderAgentName: "agentA",
+      content: Buffer.from(msgBytes).toString("hex"),
     });
     const rec = (await ipcCall(dirB, "content_park_recover", { relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB })) as { ok?: boolean; pulled?: number };
     expect(rec.ok).toBe(true);
@@ -824,12 +860,17 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // message whose content never made it before the seal — the irreducible-loss case). It is a VALID
     // seal of real content (so it unseals cleanly — NOT a recovery-failure), parked for B; B recovers.
     const straggler = Buffer.from("msg2-straggler — content resurfaces after the seal");
+    // Parked SIGNED. This test's whole claim is that the straggler is refused for the RIGHT reason —
+    // `session_committed` rather than a desync or an unseal failure — and an unsigned deposit was
+    // being refused for a fourth reason entirely (`unsigned_envelope`) before the sealed-session
+    // guard ran. The assertion below named a guard that was never reached.
     await ipcCall(dirA, "content_park_deposit", {
       relayMultiaddr: cluster.relayMultiaddr,
       recipientPubkey: pubB,
       contentHash: contentHashHex(straggler),
       sessionId,
-      ciphertext: Buffer.from(sealToRecipient(Buffer.from(pubB, "hex"), straggler)).toString("hex"),
+      senderAgentName: "agentA",
+      content: straggler.toString("hex"),
     });
 
     const rec = (await ipcCall(dirB, "content_park_recover", {
