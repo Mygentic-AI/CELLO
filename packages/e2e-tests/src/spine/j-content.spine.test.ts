@@ -974,11 +974,41 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(daemonB.output, `straggler refused by the sealed-session guard:${diag}`).toMatch(
       /"event":"content\.recover\.annexed"[^\n]*"reason":"session_committed"/,
     );
-    // And NOT swallowed by the ordinary ingest-failure path: the straggler is a rejected-but-kept
-    // entry, not a lost one. Pinned so a future change that quietly reverts to dropping it is caught.
-    expect(daemonB.output, `the straggler is KEPT in the annex, not dropped:${diag}`).not.toMatch(
-      /"event":"content\.recover\.ingest_failed"[^\n]*"reason":"session_committed"/,
-    );
+    /**
+     * ⚠️ THE NEGATIVE ASSERTION THAT USED TO SIT HERE WAS VACUOUS, and review proved it structurally
+     * rather than by argument. It asserted `content.recover.ingest_failed` with
+     * `reason: "session_committed"` does NOT appear — but `annexed` is emitted from the
+     * `else if (reason === "session_committed")` arm of the same chain whose `else` emits
+     * `ingest_failed`. **The two are mutually exclusive by construction**, so that pair is
+     * unreachable and the assertion could never fail against any code keeping that shape. It also
+     * could not catch what it claimed to: a change that reverts to DROPPING the straggler fails the
+     * positive assertion above first, and one that drops under a different event name evades a
+     * negative keyed on this one.
+     *
+     * **The real proof is a readback, and the surface already exists.** `cello_get_transcript`
+     * returns the annex under its own `post_seal_annex` key — deliberately never merged into
+     * `messages`, because merging would erase the boundary between sealed content and content that
+     * arrived after the seal. Asserting the straggler's TEXT is in there proves three things the log
+     * line cannot: it was kept, it is readable, and the annex holds the decrypted content rather
+     * than the raw CBOR envelope.
+     */
+    const tx = (await connB.call("cello_get_transcript", { cello_session_id: sessionId })) as {
+      ok?: boolean;
+      messages?: Array<{ content?: string }>;
+      post_seal_annex?: Array<{ content?: string }>;
+    };
+    expect(tx.ok, `B reads its transcript:${diag}`).toBe(true);
+    const annexText = (tx.post_seal_annex ?? []).map((a) => a.content ?? "").join("\n");
+    expect(
+      annexText,
+      `the straggler must be KEPT and READABLE in the post-seal annex, not merely refused. ` +
+      `Annex was: ${JSON.stringify(tx.post_seal_annex)}${diag}`,
+    ).toContain(straggler.toString("utf8"));
+    // And it must NOT have entered the sealed transcript — the boundary the annex exists to hold.
+    expect(
+      (tx.messages ?? []).map((m) => m.content ?? "").join("\n"),
+      "a post-seal straggler must never appear among the sealed messages",
+    ).not.toContain(straggler.toString("utf8"));
 
     // The session is STILL sealed and byte-identical — the straggler never re-entered the transcript,
     // and B's certificate frontier is UNCHANGED: the rejected straggler could not inflate it.
