@@ -1011,6 +1011,18 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 > genuinely dirties the tree. **Same lesson as the eight above:** "it failed because of something I
 > did" is as unexamined an attribution as "the floor is broken", and it is the more comfortable one,
 > which is why it went unchecked longer.
+> **RE-RUN 2026-08-24 AFTER `pnpm run build` — and the rebuild is the finding.**
+> - **`j-canary` ✅ 1/1, 52s.** Recovered by the `.gitignore` trailing slash. A journey that had never
+>   passed on a dev machine now does.
+> - **`j-multiplayer` 7 failed → 5.** `SYNC-AC17` green after narrowing the scan off prose. And
+>   **`GOVERN + JOIN` — the test that failed `A has no sealed root: expected undefined to be truthy`
+>   — now PASSES.** Nothing about the seal changed between the two runs. **The binary did.** The
+>   earlier run drove a `dist/` older than the source, exactly the trap `CELLO_Coder_1` hit from the
+>   other side, and the failure blamed the seal for it.
+> - **The five that remain are all `MCP error -32001: Request timed out`**, all in the three-daemon
+>   document journey. That is one shape, not five findings, and it is the sync lane's.
+> **The lesson is now measured, not argued: a red journey proves nothing until `dist/` is newer than
+> the source.** Two of tonight's "seal defects" were stale binaries.
 - **Enforcer:** `test:spine` green, or every remaining failure carrying a written verdict of
   environment / stale-expectation / real-defect, with the real ones lined up.
 
