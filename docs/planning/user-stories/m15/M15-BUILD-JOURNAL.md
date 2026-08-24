@@ -136,6 +136,24 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
   `CLIJSON-1`, `NORMHASH-1` ✅. `SEALWIRE-1` bullet 5 (received half; sent half ruled
   not-worth-its-cost). `REFUSED-INBOUND-SILENT-1` + `UNWITNESSED-1(b)` implemented.
   `RELAYAUTH-1` liveness scoping implemented.
+- **🎯 ANDRE REPRICED EVERYTHING (2026-08-24, via `Miss_Chelly`): CLOSE `SEALWIRE-1`, nothing else.**
+  Bullets 5 and 8 are the whole remaining gate item; the rest of the milestone is queued behind them.
+  **Do not take a new line. Record findings in the backlog and keep going.**
+  - **Bullet 5 — CODE COMPLETE both lanes**, unrun (Coder_1 holds the slot for bullet 8's journeys).
+    Mine: `SubmitResult.sender_signature`, the attribution precedence, 5 call-site wirings, 3 tests.
+    Theirs: `sendContent` returns `SentAuthorship`, pubkey taken from inside `structure1_cbor`.
+  - **Bullet 8 — written, being run by Coder_1** on 4 converted journeys (~40 min), not the full lane.
+- **🖊️ THE ARGUMENT THAT DECIDED BULLET 5, because it was nearly decided the other way.** The sent
+  half was ruled OUT as *self-referential* — *"a key I control signed something, which the row
+  already claims by existing."* **I nearly agreed.** *"A third party can check it"* does NOT answer
+  that: I hold my own key, so I can sign anything and write the row.
+  **What answers it is the ANCHOR** — the leaf sits under a directory-notarized root a third party
+  already holds, so a fabricated row needs a signature that also lands under that root.
+  **`a signature is only non-repudiable against something the signer does not control`** (now §7 of
+  the procedure). Neither lane had it until the disagreement forced it out.
+  **And a bug was about to ship INSIDE the fix:** once a sent row carries a signature, the obvious
+  label is `verified_signature` — false, because we PRODUCED it rather than checking anyone's key.
+  Direction decides first now, with the negative asserted rather than commented.
 - **✅ CLOSED SINCE: `REFUSED-INBOUND-SILENT-1`, `SAMEOP-1`, `HASHCORRELATE-1`.**
   `EXPIRY-CONSUMER-POLICY-1`: all five pass-1 findings fixed, pass 2 running (cap spent after it).
 - **📊 GATE COUNT IS 30, NOT 44 — measured 2026-08-24, and the 44 is a counting artefact.** Split at
