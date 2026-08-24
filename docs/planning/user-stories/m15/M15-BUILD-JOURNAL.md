@@ -7357,3 +7357,38 @@ exists to catch**, committed by the person who wrote the enforcer. It reads thro
    the redundancy is the bug — one of the two places is wrong about where the decision lives.
 3. **Say what a fix does not do, in the same breath as what it does.** "Prevents" and "repairs" read
    the same to someone scanning a tag.
+
+## Entry 68 — the line asked for a sweep that had been running for a milestone already
+
+`DOD-M15-INTERRUPTED-1` closed without a line of code, and the reason is worth recording because it
+is now the second time in two units: **the line went stale.** Both of its bullets were built by M12B,
+*after* the line was written, and nobody walked back to cross them off.
+
+Bullet 1 wanted "a startup sweep" so a stranded session is cured without an operator. `RestartSealResolver`
+is that sweep, it starts unconditionally at boot, and its own header opens with the exact premise the
+bullet assumed was unmet. Bullet 2 wanted the session's STATUS asserted, not only the certificate —
+`msg-016-sealed-status-lands.test.ts` seeds *"the exact shape a restart leaves"* and asserts the row
+reaches `sealed`, revert tests run.
+
+**What made the close solid was that production had already run the experiment.** Andre's
+`logout`/`login` at 01:35 interrupted the open sessions, and the daemon submitted 30 interrupted seal
+leaves with nobody watching. Across the whole log, 16 sessions submitted one and 3 completed a seal —
+and I checked the ORDERING rather than assuming it, because a completion before the interruption
+proves nothing: leaf at 08:53:30.464, seal completed 08:53:35.676, `role: "unilateral"`, real
+notarized root, and the row read `sealed`.
+
+**Two things looked like defects and were not**, which is the part I nearly got wrong. The first was
+`session.seal.status.not_written` — the certificate-vs-row divergence this very line was written
+about. It says *"already sealed — nothing to write"*: idempotence. The second was 6 × `gave_up` on
+tonight's sessions. The reason is `seal_carry_bilateral_in_progress` — both parties have posted their
+leaf, so the relay can notarize bilaterally, **a better receipt than the unilateral one the resolver
+would otherwise force.** It stands down on purpose. Had I reported either as a failure I would have
+opened an investigation into correct behaviour.
+
+**The habit that paid, twice:** the searches that came back empty got a positive control before I
+drew anything from them. One of them — "no test asserts a sealed status" — would have been flatly
+false, and I would have written a duplicate of `msg-016`.
+
+**Carried:** nothing new. The deliberate scripted proof run (open → exchange → restart → close) was
+NOT performed and is not owed — production supplied 16 unstaged instances, which is better evidence
+than a staged one and costs no agent tokens.

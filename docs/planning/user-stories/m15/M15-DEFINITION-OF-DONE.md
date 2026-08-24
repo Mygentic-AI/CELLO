@@ -2386,7 +2386,52 @@ the only safety net standing between "the relay said sealed but lied" and "the r
   and a grace window may not have elapsed. Treating absence as proof would destroy genuinely
   terminal state — strictly worse than the divergence it exists to repair.
 
-### `DOD-M15-INTERRUPTED-1` — ❌ An interrupted session can seal, and it has been watched doing it
+### `DOD-M15-INTERRUPTED-1` — ✅ An interrupted session can seal, and it has been watched doing it
+> **CLOSED 2026-08-24 (CELLO_Support) against the LIVE daemon log. BOTH BULLETS WERE ALREADY BUILT —
+> by M12B, AFTER this line was written.** The line was not wrong when written; it went stale, and the
+> same reading that closed `PULLRECOVER-1` closed this one. Positive controls first, both times the
+> search came back empty.
+>
+> **1. "THE CURE ACTS ON ITS OWN INITIATIVE" — it already does.** `RestartSealResolver`
+> (`restart-seal-resolver.ts`, `DOD-M12B-PENDING-RESOLVE-1`) IS the startup sweep this bullet asks
+> for, and it is started unconditionally at boot (`daemon.ts:5349`). Its own header states the
+> premise the bullet assumed was unmet: *"A daemon shutdown flips every open session to `interrupted`
+> on the way out"* — and it selects two populations, `interrupted` with `interrupted_by = 'local'`
+> and `seal_interrupted_pending`. **Live proof, unmanufactured:** Andre's `cello logout`/`login` at
+> **01:35 tonight** interrupted the open sessions, and with no operator touching anything the daemon
+> then emitted **30 × `session.interrupted.seal.leaf.submitted`**, 24 × `restart_seal.waiting`,
+> 5 × `revival_bound.sweep`, 3 × `interrupted.responder.acked`. Nothing was stranded waiting to be
+> poked.
+>
+> **2. "ASSERT ON THE STATUS, NOT ONLY THE CERTIFICATE" — pinned by a test, and confirmed live.**
+> `msg-016-sealed-status-lands.test.ts` (`DOD-M12B-INTERRUPTED-ESCALATE-1`) is this bullet's
+> obligation discharged in full: it seeds *"the exact shape a restart leaves"* — an `interrupted` row
+> with **no in-memory node behind it** — and asserts the row reaches `sealed`, with **both revert
+> tests run**. It also records the defect this bullet was written about, and the cause is sharper
+> than the bullet knew: every seal-completion path ended with `destroySessionNode(…, "sealed")`,
+> whose `if (!entry) return` sits 26 lines ABOVE the status write — and an interrupted session has no
+> entry *by construction*, so **the guard fired every single time on exactly the path that needed it**.
+>
+> **3. THE RECEIPT — an interrupted session sealing, in production.** **16** sessions have submitted
+> an interrupted seal leaf; **3 completed a seal** (`73df5490`, `a9ae987d`, `aad859f1`). Ordering
+> verified rather than assumed, because completion only counts if it followed the interruption:
+> `session.interrupted.seal.leaf.submitted` **08:53:30.464Z** → `session.seal.completed`
+> **08:53:35.676Z**, **5.2 seconds later**, `role: "unilateral"`, notarized root
+> `1d347d8831c8e7e5…`. And the row agreed: all three report `currentStatus: "sealed"`.
+>
+> **4. THE ONE EVENT THAT LOOKED LIKE THE DEFECT IS BENIGN, AND SO ARE TONIGHT'S GIVE-UPS.**
+> `session.seal.status.not_written` reads *"already sealed — nothing to write"* — idempotence, not a
+> divergence. And the **6 × `restart_seal.gave_up`** tonight are the resolver being right: reason
+> `seal_carry_bilateral_in_progress` — *both parties have posted their SEAL leaf, so the relay can
+> notarize this BILATERALLY, a better receipt than a unilateral one.* **It stands down rather than
+> forcing a worse receipt.** Tonight's sessions are waiting on that, not stuck.
+>
+> **WHAT I DID NOT DO, named so it is not mistaken for done:** the *deliberate* scripted run (open →
+> exchange → restart → close) against chosen agents. It was not needed — production ran the
+> experiment 16 times without being asked, which is stronger evidence than a staged one, and it costs
+> no agent tokens and seals nothing that was not already interrupted. **The bullets below are the
+> original spec, retained.**
+
 `DOD-TERMINAL-STATE-DIVERGENCE-1`, both halves (launch-triage item 5).
 - **The cure acts on its own initiative.** Today the pull fires only when an operator hits the stuck
   state; a session stranded and never touched again stays stranded. A startup sweep.
