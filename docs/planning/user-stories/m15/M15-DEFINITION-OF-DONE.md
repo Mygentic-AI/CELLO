@@ -1529,6 +1529,42 @@ comes up: the initiator's first dial, the responder's inbound connection, every 
 revived node."* It also records why it cannot live at session creation: *"`newStream` never dials — it
 only finds an already-open connection."*
 
+> ### ⛔ `SALTANNOUNCE-LATE-1` DOES **NOT** FIX THIS. Measured after rebuilding the artifact.
+>
+> The fix shipped, the spine lane was rebuilt so it runs the new binary, and `j-documents` was re-run:
+>
+> ```
+> Tests  7 failed | 5 passed (12)      ← unchanged
+> session.liveness.peer_already_attached  × 0   ← my sweep never fired
+> session.liveness.*                      × 0   ← #wireSessionLiveness NEVER RAN
+> session.node.created                    × 0
+> session.salt.announced                  × 0
+> document.delivery.session_opened        × 4   ← sessions WERE opened
+> content_hash_salt_unavailable           × 8   (was 4)
+> ```
+>
+> **Four document sessions were opened and not one of them created a session node or wired liveness.**
+> So the announce cannot be late — **`#wireSessionLiveness` is never reached at all on this path**, and
+> a sweep inside it is inert here by construction.
+>
+> **⚠️ MY DIAGNOSIS WAS ONE LEVEL TOO LOW, AND THE FIX INHERITED THE ERROR.** I traced correctly that
+> the announce hangs off a listener that cannot see a pre-existing connection, and that
+> `#tryCreateStandingReceiver` never wires it — both true, and `SALTANNOUNCE-LATE-1` closes that gap
+> with a production-driven test that reddens when reverted. **But I then assumed the document path
+> reaches that code.** It does not. The evidence that it might — `no_agreement_started` — is equally
+> consistent with never getting as far as a node, and I did not distinguish the two before building.
+>
+> **The real question, one level up:** `openSessionFor` returns `ok` with a session id
+> (`document.delivery.session_opened` × 4) while `session.node.created` stays at zero. **Either
+> document delivery reaches a session by a route that creates no node, or the node is created in a
+> process whose output is not in this capture** — `j-documents` runs two daemons and the capture may
+> hold only one. **That distinction is the next step, and it is exactly the "how far did it get"
+> question this line keeps rediscovering.**
+>
+> `SALTANNOUNCE-LATE-1` stays: it fixes a real gap on the standing-receiver promotion path, is
+> mutation-proven, and costs nothing here. **It is simply not this defect's fix, and the DoD says so
+> rather than letting a green unit imply a green outage.**
+>
 > ### 🎯 ROOT CAUSE FOUND IN THE CODE — one node-creating path never wires the announce
 >
 > **The announce is wired in exactly one place**: `#wireSessionLiveness` (`session-node-manager.ts:4019`)
