@@ -917,7 +917,40 @@ Parallel with Tier 4 — different disciplines, no shared files.
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYPUBKEYS-1`.
 
 ### `DOD-M15-RELAYADMIN-1` — ✅ The directory-admin push handler is KEPT, and the keeping is justified
-> **Closed 2026-08-24 (CELLO_Support). The line's premise was FALSE and it instructed a deletion that would have broken every session** — the handler's caller is the production directory binary. Kept, with the written justification the bar demands. No diff, so no unit review (the `SPIKE-1` precedent); every claim is a quoted file:line. Replay window carried as `DOD-M15-RELAYADMIN-REPLAY-1`. Full entry → [[M15-DEFINITION-OF-DONE-ARCHIVE]].
+> **Closed 2026-08-24 (CELLO_Support). Deleting the handler would break `discard_session`, which has a
+> live production caller — so it is KEPT, and the bar's "or justify keeping it" is met in writing.**
+> ⚠️ **CORRECTED an hour later, by me:** my first correction said the handler carries all four frames
+> of the session lifecycle. **It does not — three of the four have no sender.** I verified the ADAPTER
+> was constructed and connected and generalised that to its methods without checking them one by one,
+> which is the same defect class the original bullet had. Measured per frame:
+> `discard_session` ✅ live (`directory-node.ts:2766`); `record_assignment` ❌ the directory dial was
+> REMOVED under Option B (the client presents its own); `confirm_seal` / `reject_seal` ❌ no caller
+> (*"no directory→relay confirmSeal dial — the relay idle-sweep reclaims the post-seal session"*).
+> **So there IS dead surface here after all, just not the whole handler** → `DOD-M15-RELAYADMIN-DEAD-FRAMES-1`.
+> Replay window → `DOD-M15-RELAYADMIN-REPLAY-1`. Full entry → [[M15-DEFINITION-OF-DONE-ARCHIVE]].
+
+### `DOD-M15-RELAYADMIN-DEAD-FRAMES-1` — ❌ Three of the admin stream's four frame types have no sender
+Found 2026-08-24 (CELLO_Support) correcting my own over-broad correction to `DOD-M15-RELAYADMIN-1`.
+**This is the quick win #4 that actually exists** — smaller than the original bullet claimed, and
+real, where the bullet's "delete the whole handler" was not.
+- **Measured per frame, which is what the two previous readings both skipped:**
+  - `discard_session` — **LIVE.** `directory-node.ts:2766`, on a stream close before the session is
+    fully established. **This is why the handler is kept.**
+  - `record_assignment` — **the directory no longer dials it.** Option B moved recording to the
+    CLIENT (`client_record_assignment`), verified against the any-directory set. The admin variant
+    remains, accepted, and unsent.
+  - `confirm_seal` / `reject_seal` — **no caller at all.** *"no directory→relay confirmSeal dial —
+    the relay idle-sweep reclaims the post-seal session."*
+- **Why it ranks above its size:** three fully-written, authenticated, accepted frame types with no
+  sender are exactly *"abandoned work to anyone auditing a public repo"* (`SEALWIRE-1` bullet 7) —
+  Andre's discoverability filter. They are also live attack surface: each is accepted on a
+  publicly-dialable relay and each replays (`DOD-M15-RELAYADMIN-REPLAY-1`).
+- **⚠️ Do NOT delete `record_assignment` on the strength of "Option B removed the dial".** The
+  relay may still be recording sessions from OLDER directories mid-roll, and the client path was the
+  replacement, not a proven-complete migration. Check the deployed fleet before removing that one;
+  `confirm_seal` and `reject_seal` have no such caveat.
+- **Deleting shrinks `RELAYADMIN-REPLAY-1` too** — a frame type that does not exist cannot be
+  replayed, so take these in that order and the wire change gets smaller.
 
 ### `DOD-M15-RELAYADMIN-REPLAY-1` — ❌ A directory admin frame cannot be replayed
 Split from `DOD-M15-RELAYADMIN-1` once its deletion premise was disproved and the handler was kept.
