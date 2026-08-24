@@ -1363,6 +1363,52 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 > unsalted content in every case or only when the declared algorithm matches — I read the refusal
 > branch, not every producer of the declared `alg`. If it refuses too, both operators are told and
 > this AC shrinks to guidance wording rather than a missing signal.
+>
+> #### 🔴 REVIEW PASS 1 — BLOCKING ON FOUR OF FIVE LENSES. Verdict quoted, not summarised.
+>
+> > *"This is not a rubber stamp. The unit does what its DoD says at the level of the branch it edits,
+> > but the safety argument underneath it — 'the peer told us it can never adopt a salt, therefore the
+> > peer holds no salt' — is false, and I demonstrated it by running the shipped pure function. On one
+> > reachable path the fix **destroys a live, agreed, matching salt** and manufactures exactly the
+> > user-visible failure the unit exists to prevent."*
+>
+> Lens results: **SPEC: DEVIATIONS FOUND** (three, un-journaled) · **SILENT FALLBACKS FOUND** (two
+> HIGH) · **ERROR SUBSTITUTION FOUND** (two MEDIUM) · **HOLLOW TESTS FOUND** · **REMOVALS PROVEN**
+> (n/a — 324 insertions, zero deletions).
+>
+> **I reproduced HIGH-1 before touching anything, and it was real:** 2 of 4 new pure-function tests
+> red on the shipped code, `expected 'adoption_closed' to be 'confirmed'`. **My fix was worse than the
+> defect on that path** — `adoption_closed: already_hashing` means *"I cannot adopt a NEW salt"*, and
+> `onPeerSaltFrame` tested `ownAdoption.closed` before `ownSalt`, so a side holding salt S that had
+> leafed a message answered a matching `fingerprint(S)` with a frame the receiver reads as *"I have
+> none"* — and the receiver then erased **its own copy of the same salt**. Before that commit the
+> session worked. Trigger is not exotic: one transient SQLCipher read error returns `closed: true`
+> with `frontier_unreadable` and announces the same label, so **a momentary read failure on one
+> machine would permanently destroy durable key material on the other.**
+>
+> **All six findings addressed** (`0d92725..8fac356`), each with the reasoning in the code rather than
+> only in the commit:
+> - **HIGH-1** → fixed at the PRODUCER: `state.ownAdoption?.closed && !state.ownSalt`. A side that
+>   holds a salt has nothing to adopt, so the adoption question does not apply to it. Not moved above
+>   the malformed-frame guard, because the `ownSalt` block relies on exactly one of
+>   contribution/fingerprint being set. **The suggested belt fix — a wire field so a discard requires
+>   proof — was deliberately NOT done:** pre-launch, no external installs, and the standing rule is
+>   to re-derive against an empty database rather than carry compatibility for a state nobody is in.
+> - **HIGH-2** → `#hashedWithSalt`, the missing mirror of `#hashedWithoutSalt`. The codebase already
+>   knew this window existed and had closed only the unsalted direction; `#discardUnspentSalt` is the
+>   first code to act on the answer destructively.
+> - **MEDIUM-3** → `session.salt.discarded` is now the first branch in both guidance trees.
+> - **MEDIUM-4** → `session.salt.split` branches on `adoption.label`; the unreadable case says **not**
+>   to open a new session. A second instance surfaced while fixing it — the shared *"no message is
+>   affected"* line — and branches too.
+> - **LOW-5** → the boolean return is consumed.
+> - **LOW-6 (orphaned doc block) → NOT addressed**, recorded rather than quietly dropped.
+>
+> **Revert test on every guard added: all four RED when deleted.** Gate: **277 files, 2892 tests, 0
+> failures.**
+>
+> **🟡 THE TAG DOES NOT FLIP ON THIS.** Pass 2 is out on the fix diff and is the hard cap. Given pass
+> 1 found the fix worse than the defect on one path, a second pass on the same code is the point.
 > **✅ SECOND CLAUSE — an assertion on an absent value keeps its diagnostic.** Both review passes
 > spent (→ Entry 64). Pass 2: *"NO SILENT FALLBACKS — and the unit removes one"*, *"REMOVALS
 > PROVEN"*. **Measured, not believed:** the other lane ran the `trustless-cello` root — 1742 passed,
