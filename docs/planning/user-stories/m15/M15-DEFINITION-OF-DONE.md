@@ -1170,8 +1170,32 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > is `DOD-M15-CLOSEROOT-1`'s `expectMatches` working, and it is exactly the "progress that looks like
 > a new failure" the scaffold warned about — the test did not get worse, it started talking.
 >
-> **Running now:** `j-spine`, `j-content`, `j-multiplayer` — the three heaviest files in the receipt
-> (the floor assertion, the whole ACK/dedup/recover set, and 7 of 7 respectively).
+> ### 📊 THE THREE HEAVY FILES, RUN: 12 failed / 12 passed — and 12 failures are FOUR causes
+>
+> | cause | n | where |
+> |---|---|---|
+> | `MCP error -32001: Request timed out` (all ~70s) | **4** | `j-multiplayer` — one cause, four casualties |
+> | content-delivery waits expiring (`daemon-ackA` 12s, `daemon-dedupB` 15s, `recovered:1`) | **3** | `j-content` |
+> | agent/session state at setup (`expected 'stopped' to be 'registered'`, `status must carry a connections list`) | **2** | `j-spine` |
+> | `standing_receiver_unavailable` — the known transient | **1** | `j-spine` |
+> | unclustered (`only the honest entry is accepted`, `straggler refused by the sealed-session guard`) | 2 | `j-multiplayer` |
+>
+> ### ⚠️ `DOD-SPINE-1 "daemon up: started"` IS NOT THE DAEMON BEING DOWN, AND THE LINE SAYS IT IS
+>
+> This line records the floor as red — *"`J-SPINE` 'daemon up: started' — the most basic multi-process
+> assertion there is."* **The daemon is up.** In the same file and the same run,
+> **`DOD-SPINE-4` (register two agents, real DKG), `-5` (FROST-signed SessionAssignment), `-6`
+> (send/receive through the relay), and `-7` (bilateral seal, byte-identical root) all PASS.** None of
+> those is reachable with a daemon that failed to start.
+>
+> The actual assertion text is **`agentA starts registered: expected 'stopped' to be 'registered'`** —
+> an AGENT-STATE precondition, not a process-liveness one. The test's *name* says daemon-up; its
+> *assertion* is about an agent being registered.
+>
+> **That is the `j-tofn-dkg` lesson inverted.** There, a test that asserts X was red without ever
+> reaching X. Here, a test NAMED for X fails on something that is not X, while X demonstrably works —
+> and the milestone's most alarming sentence about this lane ("the floor is red") rests on it.
+> **Reading a test's name instead of its assertion is how that sentence survived.**
 >
 > ### 🔴 `j-suspend-tofn` IS NOT A WRONG-PREMISE TEST, AND ITS FAILURE IS ABOUT THE KILL SWITCH
 >
@@ -1206,9 +1230,7 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > test copies the profile with `copyAgentProfileBetweenNodes(0→1, 0→2)` and then suspends using
 > **node 0's `agent_id`**. If the copy does not preserve that id, the suspension row on nodes 1 and 2
 > references an id their own profile row does not carry, the JOIN misses, and both nodes sign blind —
-> producing exactly this `ok:true`. **That is the "join on the stable key, never the mutable one" theme
-> in a third place.** The decisive check is one query: compare `agent_id` for `pubA` on node 0 versus
-> node 1 after the copy.
+> producing exactly this `ok:true`. **FALSIFIED, same session, by reading the helper rather than running it:** `copyAgentProfileBetweenNodes` copies an explicit column list that INCLUDES `agent_id`, and its own comment says *"the suspension JOIN needs only agent_id + k_local_pubkey"*. The id is preserved, so the JOIN key is not the cause. **Retracted before it could become an inherited fact — which is exactly what the T=3 claim above became.** The cause is still open.
 >
 > **Why this matters more than the other 20 files:** `.claude/CLAUDE.md` names a kill switch as a
 > launch requirement, and the sovereign-node invariant says *"no single node can complete a threshold
