@@ -2425,7 +2425,25 @@ Relay-audit Decision 5(b), with the PQ hook built in from the start.
   Keep the MOMENT, drop the DERIVATION: one round trip, two independent values.
 - The parked-content seal (X25519 + HKDF + AES-256-GCM) is the working in-tree pattern to extend.
 
-### `DOD-M15-HASHCORRELATE-1` — ❌ A message hash does not identify the message across sessions
+### `DOD-M15-HASHCORRELATE-1` — ✅ A message hash does not identify the message across sessions
+> **CLOSED 2026-08-24 (CELLO_Support).** The salting (`SEALWIRE-1` bullet 6) closes the exposure;
+> this line was carrying the exposure with **no test for the property it names**. 15/15 green.
+>
+> **What was missing, and it is a bypass rather than a gap.** The existing tests prove the salted
+> form differs from the unsalted one and that it is HMAC rather than `SHA-256(salt ‖ content)`. Both
+> true; neither is this. **The property is about two SESSIONS** — and a build hashing under a single
+> GLOBAL salt satisfies every one of those assertions while leaving the exposure exactly as it was:
+> one precomputed table instead of none.
+>
+> **Proven by mutation, not asserted.** Replacing the session salt with a fixed constant turns the
+> new cross-session assertion RED — and leaves the other three of my four GREEN, which is the whole
+> argument for the fourth: *"the same salt still matches itself"* and *"a different message still
+> differs"* are both true under a global salt. **They were never sufficient, and they look like
+> coverage.**
+>
+> **The old algorithm is kept in the file as the CONTROL**, pinned as producing an identical
+> fingerprint in every session — so the file reads as the defect and its removal rather than as a
+> claim about an implementation detail.
 Found by Andre 2026-08-23 and **verified against the code before recording**. Live today, previously
 written down nowhere, and a per-session salt fixes it as a side effect.
 
