@@ -290,6 +290,34 @@ answer was worse and different.
 > The findings are measured; the replacement text is his call, and the three claims want ONE
 > consistent story about what a tier does, since the honest version is *"tiers govern how much and
 > how often, not whether"*.
+>
+> ### 📋 ANDRE — three options, pick one and I'll apply it across all three descriptions
+>
+> They have to move together: the false claims all come from one idea (*a tier decides WHETHER
+> someone reaches you*) and the true behaviour is another (*a tier decides HOW MUCH*). Mixing two
+> stories across three tools is how this happened.
+>
+> **A — Say what it does, drop the gate language entirely.**
+> - set_tier: `3=whitelisted (much larger limits)` · `0=blocked (refused, indistinguishable from a full inbox)`
+> - contact_add: `…a KNOWN contact — larger limits than a stranger. Raise them further with cello_contact_set_tier.`
+> - contacts: `…the peers it treats as known (larger limits, and not counted against the stranger pool).`
+> - *Shortest, and says nothing false. Loses the reason someone would bother whitelisting.*
+>
+> **B — Say what it does AND correct the expectation it currently creates.**
+> - set_tier: `3=whitelisted (much larger limits — note EVERY tier is auto-accepted; tiers govern how much, not whether)`
+> - contact_add: `…a KNOWN contact — larger limits than a stranger. Tiers do not gate who reaches you; they gate how much.`
+> - contacts: `…known peers: larger limits, and exempt from the stranger-pool cap. Per-sender caps still apply at every tier.`
+> - *Longest. The only one that actively corrects an operator who already believes the old text —
+>   and someone does, because Andre read it and believed it, which is how this was found.*
+>
+> **C — Neutral, no claim in either direction.**
+> - set_tier: `3=whitelisted` · `4=vip` with the numbers documented elsewhere.
+> - *Safest to ship, least useful. A tier surface that will not say what a tier does invites the
+>   reader to guess, and the guess they make is the one we are trying to correct.*
+>
+> **My recommendation: B**, because the defect is not that the text says too much — it is that a
+> reader who already has the wrong model gets nothing to dislodge it. **But this is your call and I
+> have not touched the text.** Say a letter, or rewrite one, and I'll apply it in one pass.
 
 - **⚠️ Enforcer — NOT "I read the file". A hand audit is exactly what `DOD-M15-LEDGER-1` proved
   unreliable** (raised by the receptionist against my own classification, and it is the right
