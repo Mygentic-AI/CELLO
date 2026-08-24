@@ -6464,7 +6464,7 @@ clears it**, so the DoD's word "live" is not enforced.
   fails, and expire it on the same clock the directory uses before it gives up waiting for an accept.
 - **Enforcer:** journey.
 
-### `DOD-M15-RELAYLEAK-1` — 🟡 Relay clients are closed (built, review out)
+### `DOD-M15-RELAYLEAK-1` — 🟡 Relay clients are closed (built; reviewed, all findings fixed; final run pending)
 > **BOTH PREMISES VERIFIED BEFORE FIXING**, because the last three lines I picked from a list had a
 > stated subject that did not match the code. `gracefulShutdown` references `relayClient` **zero
 > times** across its whole body — it stops session NODES and leaves the client cache untouched. And
@@ -6912,6 +6912,39 @@ is not.** The test encodes a superseded threshold.
   production** — suspension replicates to every node, so all three refuse and the client alone is
   1 < 2. It breaks only this test's *artificial* 2-of-3 suspension. **Not a threshold argument:**
   T = majority(N) is settled and this line does not reopen it.
+
+> ### 🔴 ⚠️ THIS DOCUMENT GIVES TWO OPPOSITE ANSWERS ABOUT THE KILL SWITCH, AND THIS LINE'S
+> ### CLASSIFICATION RESTS ON THE ONE THAT MAY BE WRONG. Found 2026-08-24 (CELLO_Support) reading
+> ### the DoD end to end. **NOT resolved — I have no evidence either way and will not guess.**
+>
+> The bullet directly above says the kill switch is fine because *"suspension replicates to every
+> node, so all three refuse."* **`DOD-M15-SPINERED-1`'s `j-suspend-tofn` investigation says the
+> opposite, and quotes the product's own source for it** — `directory-node.ts` `#isAgentPaused`:
+>
+> > *"a node can only HONOR a suspension for an agent whose `agent_profiles` row it holds — the
+> > honor-check JOINs `agent_suspensions`→`agent_profiles`, so a missing local profile resolves to
+> > 'not suspended' and **the node SIGNS BLIND**. … single-node honoring means **a genuinely-paused
+> > agent can still reach threshold by routing around the one honoring node. That is the production
+> > gap.**"*
+>
+> **The two cannot both be true.** Either the suspension flag reaches every node (this line's
+> premise, which makes this a coverage gap and correctly POST-LAUNCH), or it does not (which is the
+> kill switch being routable-around, and `.claude/CLAUDE.md` names a kill switch as a launch
+> requirement).
+>
+> **Neither entry cites a measurement of the replication itself.** This one asserts it; `SPINERED-1`
+> quotes a code comment describing the opposite and measured `node1=never-asked node2=never-asked`,
+> which is consistent with BOTH readings and therefore settles neither.
+>
+> **What would settle it, and it is one query, not an investigation:** suspend an agent on one node
+> and read `agent_suspensions` on the other two. If the row is there, this line's premise holds. If
+> it is not, this line is misclassified and `SPINERED-1`'s reading is the right one.
+>
+> **Flagged rather than reclassified — moving a line into the gate is Andre's call (§0z.4), and I
+> would not move one on an unresolved contradiction anyway.** But the contradiction itself is a
+> defect in the record: a reader who finds this entry first concludes the kill switch is fine, and a
+> reader who finds `SPINERED-1` first concludes it is not, and nothing tells either of them that the
+> other page exists.
 
 - **⚠️ THE REAL CONSEQUENCE, and it is why this is a line rather than a one-word test edit.** Under
   T=2 this journey's premise collapses: suspending 2 of 3 SIGNS, and suspending 1 of 3 SIGNS, so
