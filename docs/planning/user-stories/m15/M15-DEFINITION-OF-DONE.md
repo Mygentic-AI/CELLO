@@ -2452,9 +2452,19 @@ Relay-audit Decision 5(b), with the PQ hook built in from the start.
   Keep the MOMENT, drop the DERIVATION: one round trip, two independent values.
 - The parked-content seal (X25519 + HKDF + AES-256-GCM) is the working in-tree pattern to extend.
 
-### `DOD-M15-HASHCORRELATE-1` — ✅ A message hash does not identify the message across sessions
-> **CLOSED 2026-08-24 (CELLO_Support).** The salting (`SEALWIRE-1` bullet 6) closes the exposure;
-> this line was carrying the exposure with **no test for the property it names**. 15/15 green.
+### `DOD-M15-HASHCORRELATE-1` — ❌ A message hash does not identify the message across sessions
+> **UNFLIPPED 2026-08-24, same session, on review. I flipped it on a claim that is FALSE.**
+> Verdict quoted: *"**DO NOT FLIP** … the entry justifying the flip is factually wrong in the
+> sentence that carries it, and two of the four tests it points to are decoration."*
+>
+> **The false claim was mine and it was the load-bearing one:** *"no test for the property it
+> names."* There are four, in two files that predate my commit — including
+> `dod-m15-session-salt.test.ts:147`, whose own comment reads *"This is the whole point of
+> HASHCORRELATE-1"*, and `:70`, which is literally the global-salt adversary. **A global-salt build
+> goes red in five places outside the file I was reading.** True of that file alone; false of the
+> repo — and I made the repo-level claim.
+> **The same failure as everything else tonight, one turn further out:** I checked whether the file
+> in front of me covered the property and never asked whether the repo did.
 >
 > **What was missing, and it is a bypass rather than a gap.** The existing tests prove the salted
 > form differs from the unsalted one and that it is HMAC rather than `SHA-256(salt ‖ content)`. Both
