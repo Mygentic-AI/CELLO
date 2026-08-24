@@ -1262,6 +1262,57 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 > **⚠️ AND IT IS THE EXACT FAILURE `REFUSED-INBOUND-SILENT-1` WAS WRITTEN FOR** — a state skew that
 > refuses EVERY message from a counterparty while the conversation looks merely quiet. That work now
 > tells the operator; it does not stop the split happening.
+>
+> ---
+>
+> #### ✅ ANSWERED 2026-08-24 (`CELLO_Coder_1`), from the code rather than another run → `DOD-M15-SALTSPLIT-1`
+>
+> **The open question was: did the agreement never START for that session, or start and fail?**
+> **It never started, and that is decidable from the code without re-running anything.**
+> `no_agreement_started` is returned from exactly one place, and only when `#saltPending` has no
+> entry **and** `#saltLastOutcome` has no entry either — i.e. `#markSaltPending` was never called, so
+> `#sendSaltFrame` never ran for that session. It provably cannot mean *started and failed*: every
+> failure mode (`announce_failed`, `timeout`, `persist_failed`, `closed`, `our_read_failed`) records
+> a last-outcome that maps to a **different** reason string. That discrimination is the whole point
+> of `#saltLastOutcome`, and it is what makes the log line load-bearing.
+>
+> **But the more damaging finding is next to it, and it is why the split is PERMANENT rather than
+> transient.** The terminal branch — the one that runs when a peer says it can never adopt — asserts
+> its own outcome in a comment, in two places:
+> *"Both sides then hold no salt and both KNOW it."* / *"neither side will use a content salt for
+> this session, and both now know it."*
+> **The code could not deliver either sentence.** `#saltForHashing` returns a held salt on its FIRST
+> line, before it looks at adoption at all, and `sessions.content_salt` had exactly one writer and
+> **no clearer**. The pure function also tests `hasClosed` *before* `state.ownSalt`, so holding a
+> salt did not even change the verdict. A side that had agreed a salt therefore kept hashing under it
+> after being told the peer could never hold one — and the peer refused every message.
+> **A comment asserting a safety property the code lacks is how this defect survived review**, which
+> is the standing rule in this repo and the reason it is written up rather than quietly patched.
+>
+> **THE FIX (`f7f742a`, `0d92725`) — two halves, split on whether the salt has been SPENT:**
+> - **Unspent** (our adoption still open ⇒ no leaf, no hold, no awaiting-ack hash used it): discard
+>   it — **row and memory cache both**, because `#saltForHashing` reads the cache first and never
+>   consults the row, so a row-only clear would hash salted in this process and unsalted in the next.
+>   That is the split transcript arriving at a daemon restart instead of at a frame.
+> - **Spent** (a leaf is already hashed under it): **never discard** — erasing it leaves a transcript
+>   no single rule can verify — and emit `session.salt.split` at **ERROR**, with the guidance that a
+>   new session is the only repair. Kept as its own event rather than a tightened sentence on
+>   `session.salt.adoption.refused`, whose ordinary case is genuinely benign; an operator who has
+>   learned to skim that one must not skim this.
+>
+> **⚠️ WHAT THIS DOES NOT DO, stated because the tag would otherwise over-read.** It **prevents** the
+> split when the losing side has not yet spent its salt, and makes it **diagnosable** when it has. It
+> does **not repair** the session in the run above — that peer had already sent eight messages under
+> its salt, so its salt is spent and nothing may erase it. That session stays dead; a new one is
+> clean. **Preventing and repairing are different claims and only the first is delivered.**
+>
+> **Revert test, and it caught one of mine.** Deleting the discard call → red; deleting the
+> `session.salt.split` error → red; deleting the adoption re-check **inside** `#discardUnspentSalt`
+> → **GREEN, a survivor.** The cause was the caller, not the check: the call sat inside
+> `if (adoption.closed) {…} else {…}`'s else, so the method's own check could never see a spent salt.
+> Two places deciding the same thing, one unreachable. Called unconditionally now — the method owns
+> the decision, and that same mutation reddens with *"a spent salt must NEVER be discarded"*.
+> **Gate: 276 files, 2887 tests, 0 failures.**
 > **✅ SECOND CLAUSE — an assertion on an absent value keeps its diagnostic.** Both review passes
 > spent (→ Entry 64). Pass 2: *"NO SILENT FALLBACKS — and the unit removes one"*, *"REMOVALS
 > PROVEN"*. **Measured, not believed:** the other lane ran the `trustless-cello` root — 1742 passed,
