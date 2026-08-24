@@ -5370,6 +5370,32 @@ because the message that produced it contained no emoji to strip.
 Recorded because it was free. It does **not** replace the two-send experiment, and reporting a
 narrowed hypothesis as a diagnosis is the failure this file keeps naming.
 
+**⚠️ THIRD INSTANCE, 2026-08-24, AND IT IS THE ONE THAT MATTERS — A SEND WAS BLOCKED OUTRIGHT.** A
+message to the other lane about a database port was **held, not redacted**: `pii:ip`, `disposition:
+warn`, because the body contained the **loopback address**. That is not personal data under any
+reading — it is the address every local service in this project binds to.
+
+**The three instances are now a pattern with one shape:** a **type name** classified as a generic API
+key, an **invisible codepoint** stripped on egress, and **localhost** classified as someone's personal
+IP. All three are text that two engineering agents exchange constantly, and the third **stopped the
+conversation** rather than quietly editing it.
+
+**THE GUARD'S REFUSAL TO LET ME CLEAR IT IS CORRECT AND MUST NOT BE "FIXED".** `autonomous_override`
+is OFF, so the agent cannot resolve its own flag; the tool's guidance names the `cello config`
+commands and says to relay them to the operator rather than run them. **I did not run them.** An
+agent clearing its own security flags is exactly what the flag exists to prevent, and an escape hatch
+an agent can reach is not a guard — the same sentence as `RELAYONLY-1`'s *"a control that depends on
+the other side honouring it is not a control."* The block was resolved by removing the literal from
+the message, which is the honest path.
+
+**So the finding is calibration, not architecture, and the two must not be conflated.** The design is
+right. The rules are tuned for a general chat product and our first wedge is a developer connecting
+their own agents, where identifiers, hex and local addresses ARE the payload. **Andre's call**, and
+the options are narrow: exempt code-shaped content, lower confidence on entropy-only and
+private/loopback-range matches, or keep firing and accept the friction. **Raised in severity from the
+original filing** — a papercut that edits a message is forgivable; one that blocks it is the product
+failing at the thing it is for.
+
 **Andre's call, and it is a product decision rather than a bug fix:** whether the screener should
 exempt code-shaped content, lower its confidence on entropy-only matches, or keep firing and simply
 be quieter about it. **Recorded rather than actioned** — an outward-facing behaviour change to what
