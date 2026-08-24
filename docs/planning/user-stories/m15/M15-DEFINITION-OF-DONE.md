@@ -2299,7 +2299,7 @@ written down nowhere, and a per-session salt fixes it as a side effect.
   `SHA-256(salt ‖ message)`, which has a length-extension weakness). Recorded as its own line so the
   exposure is on the record independently of the fix that closes it.
 
-### `DOD-M15-SEALWIRE-1` — 🟡 The receipt is bound to the transcript (bullets 1, 2, 3, 4, 6, 7 ✅; 5, 8 ❌)
+### `DOD-M15-SEALWIRE-1` — 🟡 The receipt is bound to the transcript (bullets 1, 2, 3, 4, 6, 7 ✅; 8 🟡 written-not-run; 5 ❌)
 > **✅ BULLET 6 — the content hash is salted.** All six B2b-2 constraints, both review passes spent
 > (→ Entries 49–52). A session holding an agreed salt hashes under `hmac-sha256-salt-v1`.
 >
@@ -2309,6 +2309,24 @@ written down nowhere, and a per-session salt fixes it as a side effect.
 > relay's `gap_fill_request` half, whose only trigger was the reply the first deletion removed.
 > Two POST-LAUNCH items fell out of it: `DOD-M15-GRACE-WINDOW-1` and `DOD-M15-RELAY-WAL-UNWIRED-1`.
 >
+> **🟡 BULLET 8 — written, both review passes spent, NOT RUN (→ Entry 63).** All ten `sealed_root`
+> equalities now carry a per-side assertion that the daemon compared the certified root against the
+> leaves IT holds; `cannot_judge` is explicitly not a pass. Pass 2's verdict: *"SPEC: FAITHFUL — all
+> ten converted, none declined, count verified independently."*
+>
+> **It stays yellow because nothing has been run.** The change is made entirely of journeys, the
+> spine lane belongs to the other lane, and the milestone rule is explicit: *"no milestone closes
+> until a live multi-process smoke test passes; Vitest green ≠ done."* Two questions only a run
+> settles, both raised by pass 2:
+> - `j-legibility` and `j-refresh` may legitimately land `cannot_judge` — B answers nothing in one,
+>   and the other seals three times across two epoch rollovers. If they do, the fix is to scope the
+>   assertion, not the daemon.
+> - `j-gcp-live`'s conversion is behind `CELLO_GCP_E2E=1` — written, not exercised.
+>
+> **Precondition for that run: `cello-client` must be BUILT.** Pass 2 found `dist/` five minutes
+> behind the source, which would have cost six minutes of dead wait and a red message blaming the
+> seal. A package-scoped `tsc --noEmit` does not write `dist/`.
+
 > **✅ BULLETS 3 AND 4 — the directory checks the relay against a client signature.** Both review
 > passes spent (→ Entries 61, 62). Pass 2's verdict on the tests: *"REMOVALS PROVEN […] HOLLOW TESTS
 > FOUND — one"*, and that one is closed. What the check catches, measured: a relay that deletes a
