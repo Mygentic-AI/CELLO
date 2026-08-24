@@ -465,11 +465,28 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // A sends to an ONLINE B. B's unsigned, transport-authenticated `persisted` delivery ACK
     // resolves A's awaiting-ACK timer.
     const msg = `acked-${randomBytes(4).toString("hex")}`;
-    const hashHex = contentHashHex(Buffer.from(msg));
     expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: msg, signal: "over" })) as { ok?: boolean }).ok).toBe(true);
 
-    // The ladder reaches `persisted` and the sender acts on it (content.delivery.acked, level persisted).
-    const acked = await daemonA.waitForLine(new RegExp(`"event":"content\\.delivery\\.acked"[^\\n]*"contentHash":"${hashHex}"`), 12_000);
+    /**
+     * ⚠️ THE HASH IS READ FROM THE DAEMON, NOT COMPUTED — same defect as the dedup test above.
+     *
+     * `contentHashHex` is `SHA-256(0x00 ‖ content)`, the UNSALTED hash. A session that agrees a salt
+     * hashes `HMAC-SHA256(salt, 0x00 ‖ content)` instead, so this waited 12s for a value the daemon
+     * never wrote. Measured: the hash this test computed appeared NOWHERE in the run, while
+     * `content.delivery.acked` fired twice for other hashes. The ACK ladder was working the whole
+     * time.
+     *
+     * **The negative assertion below is why this matters beyond a red test.** It asserts the content
+     * was NOT parked, keyed on this hash — with a hash the daemon never uses, it could only ever pass,
+     * whatever the product did. Reading the daemon's own value turns a vacuous assertion into a real
+     * one.
+     */
+    const acked = await daemonA.waitForLine(
+      new RegExp(`"event":"content\\.delivery\\.acked"[^\\n]*"sessionId":"${sessionId}"`),
+      12_000,
+    );
+    const hashHex = /"contentHash":"([0-9a-f]{64})"/.exec(acked)?.[1] ?? "";
+    expect(hashHex, `could not read contentHash off the daemon's own ACK: ${acked}`).toMatch(/^[0-9a-f]{64}$/);
     expect(acked, "the protocol acts on the persisted ACK").toMatch(/"level":"persisted"/);
 
     // Because delivery was confirmed persisted, the content is NOT handed to the park backstop —
