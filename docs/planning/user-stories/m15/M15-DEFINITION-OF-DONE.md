@@ -4844,3 +4844,37 @@ daily-use box, without anyone touching it.
 
 - **Enforcer:** unit — a session holding a screened message must not seal silently; and journey — a
   flagged send surfaces to the operator rather than disappearing.
+
+---
+
+### `DOD-M15-HELD-AUTHORSHIP-1` — 🅿️ POST-LAUNCH BACKLOG. A held message loses its authorship proof across a restart
+**Raised by review pass 2 on `DOD-M15-SEALWIRE-1` bullet 5 (finding H1). The in-memory half is
+closed; this is the restart half.**
+
+Bullet 5 stores our own signature on a sent transcript row so a third party can prove we wrote it.
+A message held behind a canonical-sequence gap carries that proof in memory and keeps it on release —
+that works. **`held_content` has no authorship columns**, so a held message that survives a daemon
+restart comes back without one: its row records `self_authored` with no signature, indistinguishable
+from a send the relay never witnessed.
+
+**It cannot be reconstructed at release.** The signature covers Structure-1 bytes the new process does
+not hold. **And it must not be fabricated** — a proof that cannot be checked, presented as one that
+can, is worse than the absence, and is the exact failure the write-time verify was just added to
+prevent on the live path.
+
+**Announced rather than silent, now.** `session.content.released.authorship.lost` fires with the
+sequence, the impact, and the reason it is unrecoverable. Only for entries that actually crossed a
+restart: an in-memory held entry carries its proof, and an unwitnessed send legitimately has none, so
+warning on every absent proof would fire on a designed benign state and bury the occurrence that
+matters.
+
+**The work:** two BLOB columns on `held_content` (`sender_pubkey`, `sender_sig`), carried through
+`#persistHeldContent` / `#restoreHeldContent`. The table already has two `ALTER TABLE … ADD COLUMN`
+migrations, so the pattern is in place.
+
+**Why POST-LAUNCH, and why a log first.** It needs a message held behind a gap AND a restart before
+release — narrow. And under a frozen gate the asymmetry decides it: **a log is additive and
+tightenable on evidence; a schema change is neither.** The loss is visible immediately either way.
+
+- **Enforcer:** unit — a held sent entry persisted and restored must either carry its proof or emit
+  the loss event; never release silently with `self_authored` and no signature.
