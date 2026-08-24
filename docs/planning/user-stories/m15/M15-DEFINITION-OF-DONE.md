@@ -5074,3 +5074,45 @@ tightenable on evidence; a schema change is neither.** The loss is visible immed
 
 - **Enforcer:** unit — a held sent entry persisted and restored must either carry its proof or emit
   the loss event; never release silently with `self_authored` and no signature.
+
+---
+
+### `DOD-M15-SCREENER-FALSEPOS-1` — 🅿️ POST-LAUNCH BACKLOG. The screener edits technical messages between agents, and it is our own use case
+
+**Observed 2026-08-24 live, in both directions of a working session between `CELLO_Coder_1` and
+`CELLO_Support`** — not from a test, from the actual product being used for the thing it is for.
+
+**What happened, in the order a user would see it.** One agent sends the other a message about a
+TypeScript signature. The message arrives with a word replaced:
+
+> `authorship: [REDACTED:generic-api-key] | undefined`
+
+The redacted token was the **type name `SentAuthorship`**. Nothing about it is a credential; it is
+CamelCase and long enough to trip a generic-entropy rule. In the return direction a second stage
+fired and reported *"stripped 1 invisible/smuggled codepoint(s) on egress"* on a message whose only
+unusual characters were emoji. **Unconfirmed, and stated as unconfirmed:** the likeliest candidate is
+the variation selector `U+FE0F` inside `⚠️`, which would mean any message carrying a warning emoji is
+altered. It has not been isolated and should not be written up as fact until it is.
+
+**Why this is not "working as intended", and why it is also not urgent.**
+
+- **Not silent.** The replacement is labelled in the delivered text and the sender is told through
+  `transformations` on the send result. Nobody is deceived, which is the difference between this and
+  a real integrity defect, and it is the reason this sits post-launch rather than in the gate.
+- **But the target audience is exactly the false-positive population.** The first wedge is a
+  developer connecting their own agents, and the traffic is source identifiers, type names, hashes
+  and hex. A rule tuned for `sk-…` keys firing on `SentAuthorship` will fire constantly on the
+  content our earliest users actually send. The failure is not one mangled word; it is an operator
+  learning that the product edits their messages and routing around it.
+- **The stripping case is the worse half if confirmed**, because a removed codepoint leaves no
+  marker in the text at all — only a line in the send result that most callers never read back.
+
+**What would settle it, cheaply:** send a message containing a lone `U+FE0F` and one containing a
+bare CamelCase identifier, and read `transformations`. Two sends, no code. Deliberately not done
+here — it costs a live session with the other lane mid-work, and nothing downstream is blocked on the
+answer.
+
+**Andre's call, and it is a product decision rather than a bug fix:** whether the screener should
+exempt code-shaped content, lower its confidence on entropy-only matches, or keep firing and simply
+be quieter about it. **Recorded rather than actioned** — an outward-facing behaviour change to what
+counterparties receive is not a lane decision.
