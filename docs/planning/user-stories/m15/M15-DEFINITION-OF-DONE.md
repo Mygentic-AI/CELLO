@@ -2230,10 +2230,28 @@ correctly given what they were told; one believes it holds a receipt and holds n
 >   SEALS COULD NOT COMPLETE.** `CLOSEROOT-1`'s finding above shows a session where one side salts and
 >   the other never agreed, so every message is refused, the trees diverge, and no seal can be
 >   produced. **`not_found` would then be the correct answer 157 times.**
-> - **⚠️ AND THAT CANDIDATE MUST NOT BE ADOPTED YET.** The 157/0 measurement is from one daemon in one
->   day and **may predate the salting work entirely** — I have not dated it against the salt landing.
->   **Same trap the line already names in the other direction:** treating a plausible cause as the
->   cause is how `not_found` becomes "no certificate exists". **The dating is the next measurement.**
+> - **❌ CANDIDATE ELIMINATED BY DATING — my own, killed within the hour.** `PULL-NEVER-RECOVERS-1`
+>   was found **2026-08-19**; salting landed **2026-08-23** (`git log -S "hmac-sha256-salt-v1"`).
+>   **Four days later. It cannot be the cause.** Recorded because it was a good-looking hypothesis
+>   that fitted the symptom exactly, and the dating is what killed it rather than an argument.
+>
+> ### ✅ THE EXPLANATION IS ESTABLISHED, and this project had already reasoned it — in `launch-triage.md`
+> **The certificates genuinely were not there, because the SESSIONS WERE FALSELY TERMINALISED.**
+> `launch-triage.md` §20 says it outright: *"If a transport fault left the session active and
+> retryable instead of dead, there would be no falsely-terminal row for `TERMINAL-REASON-1` to
+> misreport, and **nothing for `PULL-NEVER-RECOVERS-1`'s recovery path to need to find.** It is the
+> root; the other two are downstream symptoms."*
+> **So 157 attempts / 0 recoveries is the RECOVERY PATH WORKING CORRECTLY** on sessions that never
+> sealed — a transport blip terminalised them, so no certificate was ever created. **`not_found` was
+> the true answer 157 times.**
+> **And the root producer is already CLOSED: `DOD-M15-TRANSPORT-TERMINAL-1` ✅** — a transport failure
+> now leaves the session active and retryable instead of dead.
+> **⚠️ WHAT IS STILL UNMEASURED, and it is the whole remaining line:** whether the ATTEMPT RATE has
+> gone to zero since that fix. 157/0 is consistent with "working correctly on doomed sessions"; the
+> proof is that the doomed sessions stopped being created. **That needs fleet logs dated after
+> `TRANSPORT-TERMINAL-1` closed — not another code read, and not a spine run.**
+> **The line's own trap still stands and is now MORE important, not less:** with the producer fixed,
+> a future `not_found` is more likely to be a genuine loss. **Do not auto-repair terminal rows on it.**
 `DOD-M12B-PULL-NEVER-RECOVERS-1`. **157 attempts, 0 recoveries**, on one daemon in one day. This is
 the only safety net standing between "the relay said sealed but lied" and "the receipt is gone."
 - **Establish WHICH explanation is true first** — the certificates genuinely are not there, or the
