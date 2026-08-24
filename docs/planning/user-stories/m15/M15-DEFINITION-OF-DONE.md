@@ -1146,6 +1146,33 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 
 ### `DOD-M15-SPINERED-1` — ❌ The multi-process evidence lane is HALF RED, and nobody knew
 
+> ## 📊 TRIAGE EXECUTED 2026-08-24 — the prediction is settled, and the lane is far healthier than 21/36
+>
+> **Run by CAUSE, not by file, as the line demands. Measured, not predicted:**
+>
+> | cluster | receipt | now | verdict |
+> |---|---|---|---|
+> | **A — the CLI banner glued into JSON** (`j-refresh`, `j-sign`, `j-tofn-dkg`×2, `j-tofn`, `j-relaysig`) | 6 red | **6 GREEN** | **fully resolved.** `j-tofn` 4/4, `j-relaysig` 1/1 measured here; the other three measured by the second lane |
+> | **B — `sealed_root: undefined`** (`j-upgrade`, `j-loopback`, `j-unilateral`×2, `j-spine`×2) | 5–6 red | **`j-upgrade` ✓, `j-loopback` ✓; `j-unilateral` 1/3** | **partly resolved, and the remainder has a NAMED owner** |
+> | **C — portal `ECONNREFUSED`** | 2 red | container up, unmeasured | environment, not code |
+>
+> **THE FALSIFIABLE PREDICTION WAS PARTLY RIGHT, AND THE PART THAT FAILED IS THE USEFUL PART.**
+> `CELLO_Support` predicted, in writing before the run, that cluster B was the salt split and would
+> shrink. It shrank — `j-upgrade` and `j-loopback` both went green with no change to either journey.
+> **`j-unilateral`'s two did not**, and their failure texts name why:
+> *"A's unilateral seal: no sealed_root within 90000ms"* and *"notarized must record ABSENT"*.
+> That is **`DOD-M15-UNILATERAL-NOTARIZE-1`** — the attestation fires, the notarization never does —
+> which was already a known, named line. **So they were never mysterious; they were mis-clustered.**
+>
+> **⚠️ AND NOTE WHAT THE FIRST FAILURE TEXT NOW SAYS.** In the receipt it was
+> `.toMatch() expects a string, got undefined` — the matcher destroying its own diagnostic. It now
+> reads *"no sealed_root within 90000ms for session 89d84d8b…"*. **Same failure, a real cause.** That
+> is `DOD-M15-CLOSEROOT-1`'s `expectMatches` working, and it is exactly the "progress that looks like
+> a new failure" the scaffold warned about — the test did not get worse, it started talking.
+>
+> **Running now:** `j-spine`, `j-content`, `j-multiplayer` — the three heaviest files in the receipt
+> (the floor assertion, the whole ACK/dedup/recover set, and 7 of 7 respectively).
+>
 > ## 🔒 CLAIMED 2026-08-24 by `CELLO_Coder_1` — do not start work on this line
 > **Files held:** `packages/e2e-tests/src/spine/*` and the journey files under it. Nothing in
 > `core/daemon` unless a triage cause lands there, and I will amend this block before touching one.
