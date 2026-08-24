@@ -1270,7 +1270,32 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > | `standing_receiver_unavailable` — the known transient | **1** | `j-spine` |
 > | unclustered (`only the honest entry is accepted`, `straggler refused by the sealed-session guard`) | 2 | `j-multiplayer` |
 >
-> ### ✅ `j-spine` IS GREEN — 7/7, from 4/7. Five failures fixed; four were stale vocabulary.
+> ### 🔎 `j-content` — the RECOVER side is proven healthy; the gap is upstream of it
+>
+> Three failures, and the log answers the first question without another run. **Auto-recover is not
+> broken:**
+> > `content.recover.auto.completed` … `"recovered":0, "relayCount":1, "failedRelays":0, "refused":0`
+> > `content.park.pull.result` … `"count":0`
+>
+> **It asked one relay, the relay had nothing, and it reported that truthfully.** No failures, no
+> refusals. So `expect(auto).toMatch(/"recovered":1/)` is failing because **there was nothing parked to
+> recover at that moment**, not because recovery dropped anything. The consumer is fine; the producer
+> — or the ORDERING between them — is where to look.
+>
+> **⚠️ AND THE TRIGGER NAMES THE LIKELY ORDERING.** Every one of those lines reads
+> `"trigger":"standing_receiver_ready"`. Auto-recover fires when the recipient's receiver becomes
+> ready. If the sender's park lands *after* that instant, the sweep has already run and found an empty
+> mailbox — and nothing in the log re-triggers it. **Stated as the next thing to check, not as the
+> cause:** the same run has `content.recover.drain.triggered` ten times, so something does re-drain,
+> and I have not established whether that path covers this case.
+>
+> The other two failures are waits for `session.content.received` and `content.delivery.acked` that
+> expired. **Both event names and both field names still exist in the daemon** — checked, because four
+> of five `j-spine` failures turned out to be exactly that — so these are genuine timing or delivery
+> behaviour, not vocabulary drift. `content.delivery.acked` fired twice in the run, just not for the
+> hash the test waited on.
+>
+### ✅ `j-spine` IS GREEN — 7/7, from 4/7. Five failures fixed; four were stale vocabulary.
 >
 > **Every one was the journey asserting something the product deliberately removed, and each removal
 > is documented in the code or commit that made it:**
