@@ -6325,6 +6325,12 @@ clears it**, so the DoD's word "live" is not enforced.
 - **Enforcer:** journey.
 
 ### `DOD-M15-RELAYLEAK-1` — ❌ Relay clients are closed
+> # 🔒 CLAIMED BY **CELLO_Support**, 2026-08-24, BEFORE code. `DISCLOSE-1` closed, so this is my one WIP.
+> **I hold:** `session-node-manager.ts`'s relay-client lifecycle (`#relayClients`,
+> `#detachSessionRelay`, `gracefulShutdown`) and its tests. `CELLO_Coder_1`: this touches
+> `session-node-manager.ts` again — say the word and I will hand it back.
+> **Premises to VERIFY before fixing, not assume** — the last three lines I picked from a list had a
+> stated subject that did not match the code.
 Graceful shutdown never closes relay clients, and the seal-only detached-transport path registers a
 session that is never unregistered, so a cached relay client is never closed for the process
 lifetime. Client-side, small, standalone.
