@@ -2197,9 +2197,33 @@ a protocol failure while the actual event goes unreported.
   `usc1` had 2 linked, `euw1` 1, `use1` 0. **Searching every node does not fix this** — the
   first-node-with-a-hit strategy may return the one holding the NULL link. The reader moves to the
   replicated table, and **this is the reader to move first.**
-- **Case 1 stays open and is answered here:** the flag is false when both agents have no account and
-  no verified phone, because nothing links them. Determine whether that state is reachable by an
-  agent that can submit, and close it or record the bound.
+- **✅ THE READER HAS ALREADY BEEN MOVED — verified in the code 2026-08-24, not by me and not
+  recorded here until now.** Both readers now JOIN the replicated link on the STABLE `agent_id`:
+  `pg-directory-store.ts` `getAgentsByAccount` and, more importantly, the portal-facing endpoint in
+  `internal-api-server.ts`, which carries its own measurement — *"the old column resolved an account
+  for 0 of 14 agents on gcp-use1, 7 of 14 on gcp-usc1 and 7 of 14 on gcp-euw1. The JOIN below
+  resolves 14 of 14 on all three."* **`LEFT` JOIN deliberately**, so an agent registered but not yet
+  portal-bound still resolves as found with a null account.
+  **Why it mattered, in the code's own words:** the portal's same-operator check is
+  *"accountId match OR phone-stub match"*, and a blank account does not read as "I don't know" to
+  that expression — it flows in as "no match". **So half the check that stops an operator
+  manufacturing standing by having their own agents endorse each other was being decided by which
+  node the portal happened to ask.**
+- **Case 1 — ANSWERED by recording the bound, which is what this line asked for.** The state (no
+  account AND no verified phone, so nothing links two agents) is **not reachable by an arbitrary
+  registered agent**, because standing can only be manufactured by an agent that can SUBMIT, and
+  submitting is gated on `authorized_issuers` — active status, correct role, refused loudly
+  otherwise (`signal-write.ts`: `unknown_issuer`, `issuer_revoked`, `issuer_wrong_role`).
+  - **Enrolment into that table is NOT automatic.** The only writer in either repo is the ops script
+    `infra/scripts/publish-registry.mjs --enrol`, and it enrols the `registry` role. The portal's own
+    signing key is enrolled for the mint journey. **Registration does not put an agent in there.**
+  - **So the bound is: the Case 1 state is reachable only for an agent an operator DELIBERATELY
+    enrolled as an issuer** — a small, operator-controlled set, not "any agent that registered".
+  - **What I did NOT establish, stated rather than glossed:** I did not find the path that enrols an
+    *agent*-role issuer (the role exists — `signal-write.ts` validates a 32-byte agent
+    `issuer_pubkey`). If one exists outside `packages/`, `infra/` and the portal, this bound is
+    wrong. **That is the one thing to check before this line is closed**, and it is a search, not a
+    design question.
 - Case 2 (unresolvable issuer) was closed by `DOD-END-ISSUER-REGISTERED-1`; do not re-open it.
 
 ### `DOD-M15-ENDORSE-RETRY-1` — ❌ A trust signal reaches the directory when one node is down
