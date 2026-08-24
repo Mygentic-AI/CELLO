@@ -1270,7 +1270,38 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > | `standing_receiver_unavailable` — the known transient | **1** | `j-spine` |
 > | unclustered (`only the honest entry is accepted`, `straggler refused by the sealed-session guard`) | 2 | `j-multiplayer` |
 >
-> ### ⚠️ `DOD-SPINE-1 "daemon up: started"` IS NOT THE DAEMON BEING DOWN, AND THE LINE SAYS IT IS
+> ### ✅ `j-spine` IS GREEN — 7/7, from 4/7. Five failures fixed; four were stale vocabulary.
+>
+> **Every one was the journey asserting something the product deliberately removed, and each removal
+> is documented in the code or commit that made it:**
+>
+> | assertion | why it was removed |
+> |---|---|
+> | `state === "registered"` | a STORED FLAG, deleted **because it lied** — *"every agent on disk was labelled 'registered' at load whether or not it ever was"*. A loaded-but-not-started agent is `stopped`. |
+> | `state === "online"` right after start | `resolveAgentState` ends `attendance > 0 ? "online" : "unattended"`. Starting an agent does not make anyone ATTEND it. *"Running, reachable, nobody listening"* is a different thing to tell an operator. |
+> | `state === "current"` | dropped from the enum on purpose: *"state reports READINESS only; selection is a SEPARATE `selected` flag. **Never fold selection into state.**"* |
+> | `Array.isArray(status.connections)` | removed by `5deef4b` — *"drop the always-empty `connections` stub"*. It was always `[]`, so the assertion was true whether or not a connection existed. |
+>
+> **One fix is strictly STRONGER than what it replaced.** The old `current` assertion could not
+> distinguish *"conn1 selected it"* from *"conn1 sees it as healthier"*, because the enum conflated
+> them. It now requires both connections to **agree on readiness** and **disagree on selection** —
+> `DOD-SPINE-2`'s independence property stated directly instead of inferred from a state name.
+>
+> **The fifth was a genuine race in the test, not vocabulary.** `DOD-SPINE-5` failed with
+> `standing_receiver_unavailable` — **not a directory answer at all**, a precondition on our own side.
+> `cello_start_agent` returning does not mean the standing receiver exists yet, so an initiate landing
+> in that window is refused locally and never reaches the negotiator. The assertion reported that as
+> *"the negotiator did not reach the directory"*: an exit-point label standing in for a cause.
+> Replaced with a **readiness poll** rather than the retry-on-transient other journeys use — it waits
+> for the thing actually being waited on, and if the receiver never becomes ready it says so instead
+> of blaming the directory.
+>
+> With the race gone the directory answered **`unknown_agent`**, not the expected `target_offline`.
+> The target is `00…00`, which nobody registered: `target_offline` claims the agent exists and is
+> offline, which is false about it. Asserting the vaguer reason would have pinned the directory to a
+> less accurate answer than it gives.
+>
+### ⚠️ `DOD-SPINE-1 "daemon up: started"` IS NOT THE DAEMON BEING DOWN, AND THE LINE SAYS IT IS
 >
 > This line records the floor as red — *"`J-SPINE` 'daemon up: started' — the most basic multi-process
 > assertion there is."* **The daemon is up.** In the same file and the same run,
