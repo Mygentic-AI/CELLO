@@ -122,6 +122,48 @@ is not the same as findable**, and this filter ranks findable.
 
 ---
 
+# ⬇️ MOVED OUT OF THE GATE — 2026-08-24 (Andre)
+
+> **Two rulings, both Andre's, both made on 2026-08-24. Lines below are marked ⬇️ in place rather
+> than physically relocated, to keep the diff readable. ⬇️ means OUT OF THE GATE: launch does not
+> wait for it. It is not deleted and not descoped from the project.**
+
+### Ruling A — **shared documents are OUT OF THE GATE.**
+*"They're out of the gate, documents are out of the gate."* The launch intent is two agents
+connecting and communicating; the document feature is not part of that, and M15 exists to get the
+basic value working. Anything whose only consequence is to the `cello_doc_*` feature leaves the gate.
+
+- `DOD-M15-DOCACCEPT-UNBOUNDED-1` — accepting a document invitation hangs ~60s when another holder
+  is offline. **The bound Andre was asked for is no longer owed.**
+- **The document salt defect** (`j-documents` 7 failures, `j-stale-session` 1) — salt agreement is a
+  DIRECT-path protocol and documents are relay-only, so a document session never agrees a salt and
+  the receiver silently discards every update. **The three filed options are no longer owed.**
+- **Not affected:** `DOD-M15-SCREENINSTALL-1` stays in the gate — the semantic screener is a launch
+  item in its own right. Only its two document-specific sub-bullets follow this ruling out.
+
+### Ruling B — **nine lines that entered the gate after it was written, and are not in either anchor.**
+The gate began at **49 lines** and reached **116**. These nine were all added mid-milestone, none
+appears in the two spec-of-record investigations, and none is a security hole a reader finds by
+pointing an agent at the repo (the §Priority Override filter). One line that met that filter —
+`DOD-M15-EPHEMERAL-AUTH-1`, where our own docstring announces the gap — **stays in the gate.**
+
+| Line | Why it leaves |
+|---|---|
+| `DOD-M15-BOOTSTRAP-ADDR-1` | Cost is denial of one directory node, not impersonation; Noise refuses the connection. |
+| `DOD-M15-BOOTSTRAP-AUTH-1` | The security property is measured and holds; only the literal title (TLS on 9090) is unbuilt, and it buys little. |
+| `DOD-M15-CLOSEROOT-1` | The assertion clause is measured green; what remains is running converted journeys. |
+| `DOD-M15-DEAD-WIRE-FIELD-1` | An always-empty field nobody reads. Costs nothing at runtime. |
+| `DOD-M15-EPHEMERAL-REVIVAL-1` | Bites only on restart mid-session followed by continued talking. |
+| `DOD-M15-RELAYADMIN-KEYSET-1` | Open question, not an established defect — nobody has shown a non-primary broker cannot complete. |
+| `DOD-M15-RELAYADMIN-REPLAY-1` | Requires capturing a frame on the wire between our own directory and our own relay. |
+| `DOD-M15-STEP6-REPLAY-1` | The "make the skip loud" half shipped; the rest is an endpoint-identity change. |
+| `DOD-M15-UNWITNESSED-1` | Gating today would fire on healthy sessions — both sides hold the leaf, nothing is wrong. |
+
+**`DOD-M15-SPINERED-1` STAYS.** It is the multi-process evidence lane itself — the milestone's own
+close condition, not a finding from it.
+
+---
+
 # Tier 0 — The verification spike (blocks scoping, not building)
 
 Three questions that **cannot be answered by reading source**. Their answers change the scope of
@@ -229,7 +271,7 @@ different repos, different disciplines, neither blocks the other.
 ### `DOD-M15-DIVERGE-1` — ✅ A divergent local tree blocks the seal instead of printing a string
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-DIVERGE-1`.
 
-### `DOD-M15-DEAD-WIRE-FIELD-1` — 🟡 (client half done; the wire removal is bilateral and carried)
+### `DOD-M15-DEAD-WIRE-FIELD-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was 🟡 (client half done; the wire removal is bilateral and carried)
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
  `participant_a/b.multiaddrs` is always empty and read by nobody
 Found by the `DOD-M15-SURFACE-1` review. Not a break — it is the reverse of one.
@@ -328,7 +370,7 @@ Found by the `DOD-M15-SURFACE-1` review. Not a break — it is the reverse of on
 | **Named lines already owned** (`j-unilateral`×2, `j-upgrade-bilateral` → `UNILATERAL-NOTARIZE-1`) | 3 | 🅿️ owned elsewhere |
 | **Individually-caused** (~~`j-end` 1~~ **✅ 10/10**, `j-remove` 1, `j-multiplayer` 4 timeouts) | 6 | 🔎 filed below; `j-multiplayer`'s four are `DOCACCEPT-UNBOUNDED-1` |
 
-> ### 🟡 `DOD-M15-DOCACCEPT-UNBOUNDED-1` — ACCEPTING A DOCUMENT HANGS IF ONE HOLDER IS UNREACHABLE
+> ### ⬇️ OUT OF GATE (Andre 2026-08-24, documents ruling) · was 🟡 `DOD-M15-DOCACCEPT-UNBOUNDED-1` — ACCEPTING A DOCUMENT HANGS IF ONE HOLDER IS UNREACHABLE
 >
 > **🟡 = the hang is now VISIBLE and covered by a test; the hang itself is still there.** Bounding the
 > per-holder send changes behaviour and needs Andre's call (below). Naming the stall does not, and is
@@ -532,7 +574,7 @@ and from then on your document changes reach their machine and are silently disc
 ### `DOD-M15-NORMHASH-1` — ✅ Sanitisation cannot split the two sides' trees
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-NORMHASH-1`.
 
-### `DOD-M15-CLOSEROOT-1` — 🟡 Journeys converted (unrun); the assertion clause ✅ MEASURED
+### `DOD-M15-CLOSEROOT-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was 🟡 Journeys converted (unrun); the assertion clause ✅ MEASURED
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-CLOSEROOT-1`.
 
 ### `DOD-M15-CLIJSON-1` — ✅ A command that prints JSON prints only JSON
@@ -544,7 +586,7 @@ and from then on your document changes reach their machine and are silently disc
 ### `DOD-M15-SIGNUP-DURABLE-1` — ✅ The signup limiter survives a deploy
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-SIGNUP-DURABLE-1`.
 
-### `DOD-M15-UNWITNESSED-1` — ❌ The two SUSPECTED partings are judged, not ignored
+### `DOD-M15-UNWITNESSED-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was ❌ The two SUSPECTED partings are judged, not ignored
 Split from `DOD-M15-DIVERGE-1` on review — that clause covered three producers and only the proven
 one could ship safely. **Neither of these is visible to `sealReadiness` today.**
 - **(a) An unwitnessed RECEIVED append.** `ingestReceivedContent`: a relay is attached, no witness
@@ -764,7 +806,7 @@ harvest-now threat the line names — and NOT an active on-path relay.
   So what remains on this line is the BINDING itself, not the disclosure.
 - The module docstring states the limit in the meantime, so a reader cannot conclude MITM is covered.
 
-### `DOD-M15-EPHEMERAL-REVIVAL-1` — ❌ A revived session RE-KEYS
+### `DOD-M15-EPHEMERAL-REVIVAL-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was ❌ A revived session RE-KEYS
 Split from `DOD-M15-KEYAGREE-1` (review F5, ruled in Decisions Carried #5).
 - CELLO sessions survive daemon restarts; the ephemeral secret is deliberately NOT persisted, so a
   revived session has no key material and its content is unreadable until it RE-KEYS.
@@ -952,7 +994,7 @@ real, where the bullet's "delete the whole handler" was not.
 - **Deleting shrinks `RELAYADMIN-REPLAY-1` too** — a frame type that does not exist cannot be
   replayed, so take these in that order and the wire change gets smaller.
 
-### `DOD-M15-RELAYADMIN-REPLAY-1` — ❌ A directory admin frame cannot be replayed
+### `DOD-M15-RELAYADMIN-REPLAY-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was ❌ A directory admin frame cannot be replayed
 Split from `DOD-M15-RELAYADMIN-1` once its deletion premise was disproved and the handler was kept.
 - `discard_session`, `confirm_seal` and `reject_seal` sign only `{ type, session_id }`, and the relay
   verifies the signature without checking the dialer. A captured frame replays forever, from any peer.
@@ -1059,7 +1101,7 @@ compromised and could weaponize "signature mismatch" as a false accusation.
 ### `DOD-M15-DIRAUTH-1` — 🟡 Directory authentication cannot be silently skipped (remainder lives in `BOOTSTRAP-AUTH-1`)
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
-### `DOD-M15-RELAYADMIN-KEYSET-1` — 🟡 ANSWERED: the gap is real but small, and bounded by the idle sweep
+### `DOD-M15-RELAYADMIN-KEYSET-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was 🟡 ANSWERED: the gap is real but small, and bounded by the idle sweep
 > ### ✅ THE QUESTION IS ANSWERED IN FULL, 2026-08-24 (CELLO_Support), read-only. **The alarming
 > ### reading — "one directory is load-bearing for every session the other two broker" — is FALSE.**
 > Traced per frame rather than per stream, which is what both earlier readings skipped:
@@ -1124,7 +1166,7 @@ outside that unit, and I am not opening it on a guess.**
   `DOD-M15-RELAYADMIN-REPLAY-1`. **Sequence them** — both change what this stream accepts, and
   shipping them apart is two fleet rolls.
 
-### `DOD-M15-BOOTSTRAP-AUTH-1` — 🟡 The poisoned PEER ID is proven survivable; the poisoned ADDRESS stalls (→ `ADDR-1`); TLS not built
+### `DOD-M15-BOOTSTRAP-AUTH-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was 🟡 The poisoned PEER ID is proven survivable; the poisoned ADDRESS stalls (→ `ADDR-1`); TLS not built
 > ### ✅ THE UNPROVEN LINK IS NOW MEASURED, AND THE ANSWER IS STRONGER THAN THE SCOPING ASSUMED.
 > **2026-08-24 (CELLO_Support).** The scoping below called this line not-blocking on four points and
 > named the one it could not prove: *"that a client meeting a poisoned coordinate actually FAILS OVER
@@ -1207,7 +1249,7 @@ outside that unit, and I am not opening it on a guess.**
 > **`DOD-M15-DIRAUTH-1` is waiting on this** — its 🟡 is held deliberately with *"it closes when
 > `BOOTSTRAP-AUTH-1` does."*
 
-### `DOD-M15-BOOTSTRAP-ADDR-1` — ❌ A rogue ADDRESS under a real peer id does not pin the client
+### `DOD-M15-BOOTSTRAP-ADDR-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was ❌ A rogue ADDRESS under a real peer id does not pin the client
 Split from `DOD-M15-BOOTSTRAP-AUTH-1` once the membership guard was measured and tested.
 - The resolver checks the primary's **peer id** against manifest membership. It does **not** check
   the multiaddr, so an on-path attacker answering the plaintext `/bootstrap` with a REAL node's peer
@@ -1246,7 +1288,7 @@ Extracted from `DOD-M15-DIRAUTH-1`'s second bullet so it is a line rather than a
 
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
-### `DOD-M15-STEP6-REPLAY-1` — 🟡 A directory identity proof cannot be replayed (replay bullet ✅; byte-match fail-open OPEN)
+### `DOD-M15-STEP6-REPLAY-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was 🟡 A directory identity proof cannot be replayed (replay bullet ✅; byte-match fail-open OPEN)
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-STEP6-REPLAY-1`.
 
 ### `DOD-M15-RELAYONLY-1` — ✅ Relay-only routing is an operator setting
