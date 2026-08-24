@@ -5,10 +5,17 @@
  * These tests cover the directory-side NetworkRelayAdapter that communicates
  * with the relay over /cello/directory-relay/1.0.0.
  *
- * AC-001: NetworkRelayAdapter.recordAssignment sends record_assignment → relay stores session
  * AC-002: NetworkRelayAdapter.discardSession sends discard_session → relay removes session
- * AC-004: NetworkRelayAdapter.confirmSeal sends confirm_seal → relay destroys session
- * AC-005: NetworkRelayAdapter.rejectSeal sends reject_seal → relay marks seal_rejected
+ *
+ * DOD-M15-RELAYADMIN-DEAD-FRAMES-1 (2026-08-24): the relay's dispatch for record_assignment,
+ * confirm_seal and reject_seal was removed from this wire protocol (no deployed directory has
+ * sent them since Option B and the seal-broker cutover shipped). AC-001/AC-004/AC-005, which
+ * proved those three round-trips, are removed with them. NetworkRelayAdapter.recordAssignment(),
+ * .confirmSeal() and .rejectSeal() themselves are UNCHANGED — directory-node.ts already never
+ * calls them (Option B moved recording to the client, and the directory takes no confirm/reject
+ * action on seal outcomes) — see "Newly discovered" in 004-RELAY-admin-dead-frames.md. The
+ * updateMultiaddr regression test below now proves its redial with discardSession instead of
+ * recordAssignment, since recordAssignment is no longer a live wire call.
  *
  * AC-007 (full end-to-end session flow) is in e2e-tests/src/__tests__/node-004-e2e.test.ts
  * because it requires the full client stack.
@@ -27,109 +34,20 @@ import { randomBytes } from "node:crypto";
 import { Encoder } from "cbor-x";
 import { generateKeypair } from "@cello-protocol/crypto";
 import { createRelayNode } from "@cello-protocol/relay";
-import type { DirectoryAdapter } from "@cello-protocol/relay";
 import { createDirectoryNode } from "@cello-protocol/directory";
-import type { RelaySessionAssignment } from "@cello-protocol/directory";
 import { NetworkRelayAdapter } from "../network-relay-adapter.js";
 
 setupV3Tests();
 
 const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
-// ─── AC-001/002/004/005: NetworkRelayAdapter unit tests ───────────────────────
+// ─── AC-002: NetworkRelayAdapter unit test ─────────────────────────────────────
 //
-// These tests create a real relay node, a real directory node with NetworkRelayAdapter,
-// and verify the adapter sends correct frames over the network protocol.
-
-describe("AC-001: NetworkRelayAdapter.recordAssignment → assignment_ok from relay", () => {
-  let scope = createTestScope();
-  beforeEach(() => { scope = createTestScope(); });
-  afterEach(() => scope.run(async () => {}));
-
-  it("relay stores session and accepts hash_submit after network record_assignment", async () => {
-    const dirKp = generateKeypair();
-    const dirPubkey = await dirKp.getPublicKey();
-
-    // Start relay with a directory adapter that will be wired via network
-    let dirNodeRef: Awaited<ReturnType<typeof createDirectoryNode>> | null = null;
-    const directoryAdapter: DirectoryAdapter = {
-      async processSeal(sessionId, sealData) {
-        if (!dirNodeRef) return { ok: false, reason: "directory_not_ready" };
-        return dirNodeRef.directory.processSeal(sessionId, sealData);
-      },
-    };
-
-    const { relay: relayNode, node: relayLibp2p, stop: stopRelay } = await createRelayNode({
-      directoryPubkey: dirPubkey,
-      directory: directoryAdapter,
-    });
-    scope.addCleanup(stopRelay);
-
-    const relayPeerId = relayLibp2p.getPeerId();
-    const relayMultiaddrs = relayLibp2p.listenAddresses();
-
-    // Create NetworkRelayAdapter
-    const networkAdapter = new NetworkRelayAdapter({
-      keyProvider: dirKp,
-      relayPeerId,
-      relayMultiaddrs,
-    });
-
-    // Start directory with NetworkRelayAdapter
-    const dirResult = await createDirectoryNode({
-      keyProvider: dirKp,
-      relay: networkAdapter,
-      relayEndpoint: { peer_id: relayPeerId, multiaddrs: relayMultiaddrs },
-    });
-    dirNodeRef = dirResult;
-    scope.addCleanup(dirResult.stop);
-
-    // Connect adapter to relay
-    await networkAdapter.connect(dirResult.node);
-
-    // Create a session assignment
-    const clientKpA = generateKeypair();
-    const clientKpB = generateKeypair();
-    const pubA = await clientKpA.getPublicKey();
-    const pubB = await clientKpB.getPublicKey();
-
-    const sessionId = new Uint8Array(randomBytes(16));
-    const sessionTimestamp = Date.now();
-
-    // Sign as directory would sign (standard relay assignment TBS)
-    const tbs = CBOR_ENC.encode([
-      sessionId,
-      pubA,
-      pubB,
-      sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
-    ]) as Uint8Array;
-    const directory_signature = await dirKp.sign(tbs);
-
-    const assignment: RelaySessionAssignment = {
-      session_id: sessionId,
-      participant_a: pubA,
-      participant_b: pubB,
-      session_timestamp: sessionTimestamp,
-      directory_signature,
-    };
-
-    // Call recordAssignment over the network
-    const result = await networkAdapter.recordAssignment(assignment);
-    expect(result.ok).toBe(true);
-
-    // Verify relay accepted the session by checking we can submit a hash
-    // (session_not_found would mean relay didn't register it)
-    const sealCheckResult = relayNode.submitForSeal(sessionId);
-    // Session exists but has no leaves yet — returns ok: false with session_not_active is not right
-    // Actually submitForSeal returns ok: false with session_not_active only if status != active
-    // A fresh session has status "active", so submitForSeal should work (return leaves=[])
-    // But session IS active — so this confirms it was registered
-    expect(sealCheckResult.ok).toBe(true);
-    if (sealCheckResult.ok) {
-      expect(sealCheckResult.data.leaves.length).toBe(0);
-    }
-  }, 20_000);
-});
+// This test creates a real relay node, a real directory node with NetworkRelayAdapter,
+// and verifies the adapter sends correct frames over the network protocol.
+//
+// AC-001 (recordAssignment → assignment_ok) removed with the relay's wire dispatch for
+// record_assignment — DOD-M15-RELAYADMIN-DEAD-FRAMES-1.
 
 describe("AC-002: NetworkRelayAdapter.discardSession → relay removes session", () => {
   let scope = createTestScope();
@@ -193,123 +111,10 @@ describe("AC-002: NetworkRelayAdapter.discardSession → relay removes session",
   }, 20_000);
 });
 
-describe("AC-004: NetworkRelayAdapter.confirmSeal → relay destroys session", () => {
-  let scope = createTestScope();
-  beforeEach(() => { scope = createTestScope(); });
-  afterEach(() => scope.run(async () => {}));
-
-  it("relay destroys session after network confirm_seal", async () => {
-    const dirKp = generateKeypair();
-    const dirPubkey = await dirKp.getPublicKey();
-
-    const { relay: relayNode, node: relayLibp2p, stop: stopRelay } = await createRelayNode({
-      directoryPubkey: dirPubkey,
-    });
-    scope.addCleanup(stopRelay);
-
-    const relayPeerId = relayLibp2p.getPeerId();
-    const relayMultiaddrs = relayLibp2p.listenAddresses();
-
-    const networkAdapter = new NetworkRelayAdapter({
-      keyProvider: dirKp,
-      relayPeerId,
-      relayMultiaddrs,
-    });
-
-    const dirResult = await createDirectoryNode({
-      keyProvider: dirKp,
-      relay: networkAdapter,
-      relayEndpoint: { peer_id: relayPeerId, multiaddrs: relayMultiaddrs },
-    });
-    scope.addCleanup(dirResult.stop);
-    await networkAdapter.connect(dirResult.node);
-
-    // Register session, then put in sealing state
-    const clientKpA = generateKeypair();
-    const clientKpB = generateKeypair();
-    const pubA = await clientKpA.getPublicKey();
-    const pubB = await clientKpB.getPublicKey();
-    const sessionId = new Uint8Array(randomBytes(16));
-    const sessionTimestamp = Date.now();
-
-    const tbs = CBOR_ENC.encode([
-      sessionId, pubA, pubB,
-      sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
-    ]) as Uint8Array;
-    const directory_signature = await dirKp.sign(tbs);
-    relayNode.recordAssignment({ session_id: sessionId, participant_a: pubA, participant_b: pubB, session_timestamp: sessionTimestamp, directory_signature });
-    relayNode.submitForSeal(sessionId); // move to sealing state
-
-    // Confirm over network
-    await networkAdapter.confirmSeal(sessionId);
-
-    // Session should be destroyed
-    const result = relayNode.submitForSeal(sessionId);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.reason).toBe("session_not_found");
-    }
-  }, 20_000);
-});
-
-describe("AC-005: NetworkRelayAdapter.rejectSeal → relay marks seal_rejected", () => {
-  let scope = createTestScope();
-  beforeEach(() => { scope = createTestScope(); });
-  afterEach(() => scope.run(async () => {}));
-
-  it("relay marks seal_rejected after network reject_seal", async () => {
-    const dirKp = generateKeypair();
-    const dirPubkey = await dirKp.getPublicKey();
-
-    const { relay: relayNode, node: relayLibp2p, stop: stopRelay } = await createRelayNode({
-      directoryPubkey: dirPubkey,
-    });
-    scope.addCleanup(stopRelay);
-
-    const relayPeerId = relayLibp2p.getPeerId();
-    const relayMultiaddrs = relayLibp2p.listenAddresses();
-
-    const networkAdapter = new NetworkRelayAdapter({
-      keyProvider: dirKp,
-      relayPeerId,
-      relayMultiaddrs,
-    });
-
-    const dirResult = await createDirectoryNode({
-      keyProvider: dirKp,
-      relay: networkAdapter,
-      relayEndpoint: { peer_id: relayPeerId, multiaddrs: relayMultiaddrs },
-    });
-    scope.addCleanup(dirResult.stop);
-    await networkAdapter.connect(dirResult.node);
-
-    // Register session
-    const clientKpA = generateKeypair();
-    const clientKpB = generateKeypair();
-    const pubA = await clientKpA.getPublicKey();
-    const pubB = await clientKpB.getPublicKey();
-    const sessionId = new Uint8Array(randomBytes(16));
-    const sessionTimestamp = Date.now();
-
-    const tbs = CBOR_ENC.encode([
-      sessionId, pubA, pubB,
-      sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
-    ]) as Uint8Array;
-    const directory_signature = await dirKp.sign(tbs);
-    relayNode.recordAssignment({ session_id: sessionId, participant_a: pubA, participant_b: pubB, session_timestamp: sessionTimestamp, directory_signature });
-
-    // Reject over network
-    await networkAdapter.rejectSeal(sessionId, "merkle_root_mismatch");
-
-    // Session should be seal_rejected: submitForSeal returns session_not_active
-    const result = relayNode.submitForSeal(sessionId);
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      // seal_rejected sessions return session_not_active (status !== 'active')
-      expect(result.reason).toBe("session_not_active");
-    }
-  }, 20_000);
-});
+// AC-004 (confirmSeal → confirm_seal wire round-trip) and AC-005 (rejectSeal → reject_seal wire
+// round-trip) removed with the relay's dispatch for those frame types —
+// DOD-M15-RELAYADMIN-DEAD-FRAMES-1. NetworkRelayAdapter.confirmSeal()/.rejectSeal() are unchanged
+// (directory-node.ts already never calls them; see the note at the top of this file).
 
 // ─── Regression: transport errors and relay rejections surface real reason ─────
 
@@ -463,7 +268,7 @@ describe("updateMultiaddr: adapter dials updated address after relay IP changes"
   beforeEach(() => { scope = createTestScope(); });
   afterEach(() => scope.run(async () => {}));
 
-  it("recordAssignment succeeds after updateMultiaddr replaces a stale address", async () => {
+  it("discardSession succeeds after updateMultiaddr replaces a stale address", async () => {
     const dirKp = generateKeypair();
     const dirPubkey = await dirKp.getPublicKey();
 
@@ -500,7 +305,10 @@ describe("updateMultiaddr: adapter dials updated address after relay IP changes"
     const newMultiaddr = String(relayMultiaddrsB[0]);
     networkAdapter.updateMultiaddr(newMultiaddr);
 
-    // recordAssignment must now succeed against relay B
+    // discardSession must now reach relay B — record_assignment is no longer a live wire call
+    // (DOD-M15-RELAYADMIN-DEAD-FRAMES-1), so this proves the redial with the one admin frame that
+    // still is: discard_session. Register the session directly on relay B in-process first (that
+    // path is unaffected by the wire change) so there is something for the network call to discard.
     const clientKpA = generateKeypair();
     const clientKpB = generateKeypair();
     const pubA = await clientKpA.getPublicKey();
@@ -512,20 +320,17 @@ describe("updateMultiaddr: adapter dials updated address after relay IP changes"
       sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
     ]) as Uint8Array;
     const directory_signature = await dirKp.sign(tbs);
+    relayNodeB.recordAssignment({ session_id: sessionId, participant_a: pubA, participant_b: pubB, session_timestamp: sessionTimestamp, directory_signature });
+    expect(relayNodeB.submitForSeal(sessionId).ok).toBe(true);
 
-    const result = await networkAdapter.recordAssignment({
-      session_id: sessionId,
-      participant_a: pubA,
-      participant_b: pubB,
-      session_timestamp: sessionTimestamp,
-      directory_signature,
-    });
+    await networkAdapter.discardSession(sessionId);
 
-    expect(result.ok).toBe(true);
-
-    // Confirm relay B actually stored the session
-    const sealCheck = relayNodeB.submitForSeal(sessionId);
-    expect(sealCheck.ok).toBe(true);
+    // Confirm the discard reached relay B — proves the redial found the NEW address
+    const afterDiscard = relayNodeB.submitForSeal(sessionId);
+    expect(afterDiscard.ok).toBe(false);
+    if (!afterDiscard.ok) {
+      expect(afterDiscard.reason).toBe("session_not_found");
+    }
   }, 20_000);
 });
 

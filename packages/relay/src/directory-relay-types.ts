@@ -12,23 +12,21 @@
  *   The relay holds the directory's known public key (CELLO_DIRECTORY_PUBKEY at startup).
  *
  * Direction:
- *   directory → relay:  record_assignment, discard_session, confirm_seal, reject_seal
+ *   directory → relay:  discard_session
  *   relay → directory:  seal_submission (relay-initiated when bilateral SEAL detected)
+ *
+ * DOD-M15-RELAYADMIN-DEAD-FRAMES-1 (2026-08-24): record_assignment, confirm_seal and reject_seal
+ * were REMOVED from this wire protocol. No deployed directory has sent them since Option B
+ * (client-presented assignments) and the seal-broker cutover shipped — every recorded fleet
+ * image postdates both removal commits. discard_session remains the one live directory→relay
+ * dial (AC-011 provisional-session cleanup on stream close). An authenticated frame naming one
+ * of the three retired types now falls through to the "unknown frame type" abort in
+ * relay-node.ts, same as any other unrecognised type — not silently accepted.
  */
 
 import type { RelayLeafKind } from "./relay-types.js";
 
 // ─── Directory → Relay request frames ────────────────────────────────────────
-
-export interface RecordAssignmentFrame {
-  type: "record_assignment";
-  session_id: Uint8Array;         // 16 bytes
-  participant_a: Uint8Array;      // 32-byte K_local pubkey
-  participant_b: Uint8Array;      // 32-byte K_local pubkey
-  session_timestamp: number | bigint;  // Unix ms (bigint if > 0xffffffff)
-  assignment_signature: Uint8Array; // 64-byte Ed25519 over CBOR([session_id, participant_a, participant_b, session_timestamp])
-  directory_signature: Uint8Array; // 64-byte Ed25519 over CBOR of body without this field
-}
 
 export interface DiscardSessionFrame {
   type: "discard_session";
@@ -36,24 +34,7 @@ export interface DiscardSessionFrame {
   directory_signature: Uint8Array; // 64-byte Ed25519 over CBOR of body without this field
 }
 
-export interface ConfirmSealFrame {
-  type: "confirm_seal";
-  session_id: Uint8Array;         // 16 bytes
-  directory_signature: Uint8Array; // 64-byte Ed25519 over CBOR of body without this field
-}
-
-export interface RejectSealFrame {
-  type: "reject_seal";
-  session_id: Uint8Array;         // 16 bytes
-  reason: string;
-  directory_signature: Uint8Array; // 64-byte Ed25519 over CBOR of body without this field
-}
-
-export type DirectoryToRelayFrame =
-  | RecordAssignmentFrame
-  | DiscardSessionFrame
-  | ConfirmSealFrame
-  | RejectSealFrame;
+export type DirectoryToRelayFrame = DiscardSessionFrame;
 
 // ─── Relay → Directory request frames ────────────────────────────────────────
 
@@ -78,20 +59,8 @@ export interface SealSubmissionLeaf {
 
 // ─── Response frames ──────────────────────────────────────────────────────────
 
-export interface AssignmentOkFrame {
-  type: "assignment_ok";
-}
-
 export interface DiscardOkFrame {
   type: "discard_ok";
-}
-
-export interface ConfirmOkFrame {
-  type: "confirm_ok";
-}
-
-export interface RejectOkFrame {
-  type: "reject_ok";
 }
 
 export interface SealReceivedFrame {
@@ -103,9 +72,6 @@ export interface AuthInvalidFrame {
 }
 
 export type DirectoryRelayResponse =
-  | AssignmentOkFrame
   | DiscardOkFrame
-  | ConfirmOkFrame
-  | RejectOkFrame
   | SealReceivedFrame
   | AuthInvalidFrame;

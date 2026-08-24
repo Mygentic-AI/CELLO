@@ -356,9 +356,10 @@ export interface SessionLivenessResponse {
 /**
  * FED-OPTIONB-SETUP-001 (Option B, any-relay/any-directory): the CLIENT presents the
  * directory-signed session assignment to its chosen relay over its already-authenticated client
- * stream, replacing the old directory→relay `recordAssignment` dial. Unlike the directory-ADMIN
- * `record_assignment` frame (which requires a body-level `directory_signature` only the directory can
- * produce), this frame carries NO admin auth — the client cannot impersonate the directory. Its
+ * stream, replacing the old directory→relay `recordAssignment` dial. Unlike the retired
+ * directory-ADMIN `record_assignment` frame (removed by DOD-M15-RELAYADMIN-DEAD-FRAMES-1; it
+ * required a body-level `directory_signature` only the directory could produce), this frame
+ * carries NO admin auth — the client cannot impersonate the directory. Its
  * authority is `assignment_signature`: the per-node directory signature over the relay TBS
  * ([session_id, participant_a, participant_b, session_timestamp, (initiator_peer_id,
  * counterparty_peer_id)]). The relay verifies it against ANY consortium directory pubkey, so any
