@@ -1374,6 +1374,17 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 | **Named lines already owned** (`j-unilateral`×2, `j-upgrade-bilateral` → `UNILATERAL-NOTARIZE-1`) | 3 | 🅿️ owned elsewhere |
 | **Individually-caused** (`j-end` 1, `j-remove` 1, `j-multiplayer` 4 timeouts) | 6 | 🔎 filed below |
 | **Green all along** (`j-upgrade`, `j-loopback`, `j-persist`, `j-canary`, `j-legibility`, `j-trust`, `j-tofn`…) | — | ✅ |
+| **`j-suspend-tofn` — the kill switch** | 1 | 🔴 **highest-stakes in the lane** (below) |
+
+> ### ⚠️ THE ARITHMETIC ABOVE DOES NOT RECONSTRUCT 49, AND SAYING SO IS THE POINT — review SPEC finding
+> The rows sum to **36 of the receipt's 49**. The remainder are failures inside files whose headline
+> cause is listed but whose per-test count I did not itemise (`j-multiplayer`'s 7-of-7, `j-content`'s
+> full set at the time of the receipt, `j-documents` before it was measured).
+>
+> **My first version of this table omitted `j-suspend-tofn` entirely** — the kill-switch failure, the
+> highest-stakes item in the lane — and summed to 35 while claiming to account for 49. A summary that
+> silently drops the most important row is the same defect this milestone keeps finding, in the
+> bookkeeping instead of the code. **The count is now stated as partial rather than implied complete.**
 
 **Files now measured green that the receipt lists red:** `j-spine` 7/7, `j-tofn` 4/4, `j-relaysig` 1/1,
 `j-upgrade`, `j-loopback`, `j-trust` 1/1, plus `j-end` 9/10 and `j-remove` 2/3.
@@ -1603,12 +1614,29 @@ been withdrawn.
 > capture directory FROST logging. **That is a fact about the evidence, not about the product**, and it
 > would be very easy to report as *"the nodes did not refuse"*, which the receipt cannot support.
 >
-> #### 🔴 ANSWERED 2026-08-24, WITH A CONTROL ON THE EVIDENCE: **THE OTHER TWO DIRECTORIES ARE NEVER ASKED**
+> #### 🔴 ANSWERED 2026-08-24 — RE-ESTABLISHED AFTER REVIEW KILLED THE FIRST ANSWER
 >
 > ```
-> node1=silent(never asked)  node2=silent(never asked)
-> captured lines: node1=48, node2=48
+> node1=never-asked   node2=never-asked
+> 2 suspended directories must block signing: {"ok":true, …}   ← the bypass, measured
 > ```
+>
+> **⚠️ THE FIRST VERSION OF THIS CLASSIFIER WAS MISSING ITS FOURTH CASE, and review caught it.** It
+> offered refused / uncheckable / "silent(never asked)" as exhaustive. `#isAgentPaused` logs
+> `refused.revoked` only when PAUSED and `uncheckable` only when not-paused **and** holding no local
+> profile — so **a node that was asked, holds the profile, and reads NOT-suspended logs nothing at
+> all.** That is indistinguishable from "never asked" under the old classifier, and it is precisely
+> what a suspension row failing to land would look like. **I read `silent` as "never consulted" and
+> reported it. The evidence did not support that.**
+>
+> Corrected using the participation control that already existed — the directory logs
+> `frost.debug.frost_stream.sign_request` / `.commit_request` at **info** on every share request — and
+> re-run. **The conclusion survives on evidence that can now distinguish the missing case.**
+>
+> **And the security assertion had been rendered unreachable.** I placed the diagnostic preconditions
+> *before* `expect(blocked.ok)`, so every run died on the diagnostic and never evaluated the property
+> the test exists for. The DoD property is asserted first now, with the diagnostic as `expect.soft`;
+> the bypass (`ok:true`) is visible in the output again.
 >
 > **Both nodes were UP and LOGGING** — 48 captured stdout lines each — and **neither was ever asked for
 > a share.** No `frost.ceremony.refused.revoked`, no `frost.suspension.uncheckable`, no FROST activity
