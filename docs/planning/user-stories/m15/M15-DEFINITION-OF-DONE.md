@@ -1504,7 +1504,21 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 | **Named lines already owned** (`j-unilateral`×2, `j-upgrade-bilateral` → `UNILATERAL-NOTARIZE-1`) | 3 | 🅿️ owned elsewhere |
 | **Individually-caused** (`j-end` 1, `j-remove` 1, `j-multiplayer` 4 timeouts) | 6 | 🔎 filed below |
 
-> ### 🔴 `DOD-M15-DOCACCEPT-UNBOUNDED-1` — ACCEPTING A DOCUMENT HANGS IF ONE HOLDER IS UNREACHABLE
+> ### 🟡 `DOD-M15-DOCACCEPT-UNBOUNDED-1` — ACCEPTING A DOCUMENT HANGS IF ONE HOLDER IS UNREACHABLE
+>
+> **🟡 = the hang is now VISIBLE and covered by a test; the hang itself is still there.** Bounding the
+> per-holder send changes behaviour and needs Andre's call (below). Naming the stall does not, and is
+> shipped, reviewed, and tested.
+>
+> **↩️ AND THE MEASUREMENT TAKEN FOR THE LOG LINE ALSO UNBLOCKS THE DECISION IT WAS FILED BEHIND.**
+> This entry said picking a bound was *"a genuine product judgement"* because the cost ran both ways —
+> too short falsely marks holders un-notified, too long leaves the hang — **and nobody had a number for
+> what a healthy open costs.** There is one now, from 74 real cold opens in a 150 MB daemon log:
+> **p50 12.9 s, p90 25.1 s, min 3.6 s.** That converts the open question from a guess into an
+> arithmetic one, and it kills the obvious candidate outright: any bound at or below ~25 s would mark a
+> **normal** holder un-notified one time in ten. The 60 s `RECONCILE_INFLIGHT_BOUND_MS` is still wrong
+> for the opposite reason already recorded — 60 s per holder, sequentially, outlives the client's own
+> 60 s timeout, so the hang survives the fix. **Still Andre's call, but now a call between numbers.**
 >
 > **Found by instrumenting the harness to name the hanging call — it answered on the first run.** The
 > MCP SDK's timeout says only `MCP error -32001: Request timed out`: no tool, no arguments, no elapsed
@@ -1553,20 +1567,26 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > waited on, changes no behaviour, and turns an invisible hang into a diagnosable one. Shipped under
 > the freeze on that basis: observability, not behaviour.
 >
-> **⚠️ AC — THE NEW WARN IS UNCOVERED, AND I FAILED TWICE TO COVER IT.** Recorded rather than implied,
-> because an untested log line is the *"comment that happens to execute"* shape this milestone hunts.
-> Both attempts were measured, not guessed:
-> 1. Stalled `cello_doc_write` — the warn never fired, **correctly**: a content write is not an
->    amendment and never reaches `fanOutAmendment`.
-> 2. Stalled `cello_doc_accept`, the exact chain the live timeouts came from — still nothing. The
->    diagnostic in the failure message answered why: **`sends attempted: []`**. This fixture's plain
->    proposal-accept fans out to **nobody**.
+> **✅ AC — COVERED. And the reason I twice said it could not be is a correction, not a footnote.**
 >
-> **The accept that DOES fan out is the JOIN path** (an admin invites a third party), which needs the
-> three-party setup `JOIN-1` already builds. **The harness knob is in place and documented** — a
-> `sendHangs` beside the existing `sendFails`, defaulting to `undefined` so nothing existing changes —
-> so the eventual test needs the fixture wiring and nothing else. The failing test was **removed
-> rather than shipped red**.
+> I recorded here that the warn was untestable without `JOIN-1`'s three-party setup, on the strength of
+> a measurement: my instrumented run printed **`sends attempted: []`**, so I concluded a plain
+> proposal-accept *"fans out to nobody"* and only the admin-invites-a-third-party path reaches
+> `fanOutAmendment`. **That measurement was wrong, and review disproved it by running the path**: a
+> bilateral accept DOES fan out, with `verb: "consent"`. My instrument was reading the wrong thing;
+> I then reasoned from it as if it were ground truth and wrote a blocking dependency into this DoD on
+> that basis. The lesson worth keeping is not "I mis-measured" — it is that **a null result from my own
+> instrument got promoted to a fact about the product without anyone running the path.**
+>
+> The test exists now, on the two-party fixture, with no `JOIN-1` dependency: bilateral proposal →
+> `holderStopsAnswering()` → `cello_doc_accept` → wait for `holder_opening` → assert `holder_unanswered`
+> has **not** fired yet → release → assert `holder_settled` carries a real elapsed time. **75/75 in
+> `document-handlers.test.ts`.** Mutation-checked rather than assumed green: pushing
+> `HOLDER_OPENING_INFO_MS` out to `999_000` reddens it with
+> `expected [ Array(4) ] to include 'document.amendment.holder_opening'`.
+>
+> The harness knob shipped as designed — a `sendHangs` beside the existing `sendFails`, defaulting to
+> `undefined` so nothing existing changes.
 >
 > **User-visible today:** you accept an invitation to a shared document and it hangs for a minute,
 > because someone else in the document happens to be offline.
