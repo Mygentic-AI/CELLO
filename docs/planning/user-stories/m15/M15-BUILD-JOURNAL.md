@@ -136,6 +136,34 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
   `CLIJSON-1`, `NORMHASH-1` ✅. `SEALWIRE-1` bullet 5 (received half; sent half ruled
   not-worth-its-cost). `REFUSED-INBOUND-SILENT-1` + `UNWITNESSED-1(b)` implemented.
   `RELAYAUTH-1` liveness scoping implemented.
+- **✅ CLOSED SINCE: `REFUSED-INBOUND-SILENT-1`, `SAMEOP-1`, `HASHCORRELATE-1`.**
+  `EXPIRY-CONSUMER-POLICY-1` is built (both consumers) and under review.
+- **🧨 THE ONE PATTERN BEHIND ALMOST EVERY MISTAKE TONIGHT — read this before anything else.**
+  **I kept checking the thing in front of me and never the thing one step out.**
+  - the store had no reader → I tested the store
+  - so I added IPC tests → they passed `since_seq: 0`, a finite number, so they took a DIFFERENT exit
+    and the line they claimed to cover could be deleted with the file staying green
+  - the salted-status field went on the session record → `selectSessions` is a WHITELIST, so it never
+    reached the operator at all
+  - I claimed `HASHCORRELATE-1` had no test → **four already existed**, one named after it; I had
+    checked the file, not the repo
+  - I told `CELLO_Coder_1` to stop a publish because "my red test is in the tag" → **it was green in
+    CI**; I reasoned from a local red without checking
+  - I derived a `j-suspend-tofn` rework → it required suspending the initiator's node, which the
+    file's own header says it never does
+  **Each time the check passed and the claim was false.** The question that catches it is never "does
+  this work?" — it is **"who reads this / what else covers this / which branch does my value take?"**
+- **🎯 THE EXEMPLAR CHECK (now §7 of the procedure).** When a clause names its cases, use THOSE
+  values. `CELLO_Coder_1` tested a falsy-presence clause with `42`; I tested a "nothing after the
+  start" branch with `0`. **Exemplar chosen from INTENT rather than from the PREDICATE**, both times.
+- **🏗️ THE `dist` TRAP BIT THREE TIMES, in three different disguises:** Coder_1's journeys ran a
+  5-minute-old binary; `GOVERN + JOIN` failed `A has no sealed root` and **passed after a rebuild
+  with no code change**; and my transport edit surfaced as a *typecheck error* because the daemon
+  resolves `@cello-protocol/transport` from `dist`. **`pnpm run build` before any spine journey.**
+- **⚠️ `j-suspend-tofn` — the rework needs N=5, NOT N=3.** Under T=2 with 3 directories,
+  threshold-refusal **cannot be isolated at all**: client + 1 = T, so every directory must refuse and
+  one is always the initiator's — whose suspension trips the single-node gate instead. N=5 (T=3):
+  **4 suspended → blocks, 3 → signs, node 0 untouched in both.**
 - **🔁 IN FLIGHT — `REFUSED-INBOUND-SILENT-1`, reviewed once (blocking), every finding fixed, 12–13
   tests green, tag NOT yet flipped.** Pending: the full `core/daemon` suite (running, 0 failures so
   far) and review pass 2 — **pass 1 of the 2-pass cap is spent.**
