@@ -4242,6 +4242,19 @@ root domain the client can reproduce.
 Parallel with Tier 4 — different disciplines, no shared files.
 
 ### `DOD-M15-RELAYABUSE-1` — ❌ The relay has abuse controls
+> # 🔒 THE PARK-STORE BOUND CLAIMED BY **CELLO_Support**, 2026-08-24, BEFORE writing code.
+> **Andre's re-ranking, medium #2:** *"bounding the parked-message store per depositor."*
+> **I hold: `packages/relay/src/adapters/file-content-store.ts` and its test only.** Rate limiting
+> (the large) is NOT claimed and stays open.
+> **What the code says about itself, which is the finding:** *"the global byte/entry caps are
+> BEST-EFFORT — eviction only scans the depositing recipient's bucket… If the global cap is consumed
+> by OTHER recipients this loop drains the current recipient to empty and **then writes anyway**."*
+> **So the global cap is not a cap.** And because a deposit is unauthenticated, the attacker CHOOSES
+> the recipient key: spread across many invented recipients, no single bucket ever triggers eviction,
+> nothing is ever refused, and the store grows without bound until the disk does.
+> ⚠️ **"Per depositor" is not directly implementable and saying so is part of the unit** — a deposit
+> carries no depositor identity to key on. The bound that exists to be enforced is per-RECIPIENT plus
+> a global cap that REFUSES instead of writing past itself.
 - **Rate limiting per peer and per pubkey** on authentication, hash submission, gap-fill, the
   liveness query, and content-park deposit. There is **none of any kind** today.
 - **Bound the content-park store per depositor.** Deposit is unauthenticated by explicit design
