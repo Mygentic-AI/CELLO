@@ -2740,6 +2740,20 @@ consumes.
 > **Carried:** `DOD-M15-EPHEMERAL-REVIVAL-1`, `DOD-M15-EPHEMERAL-AUTH-1`.
 
 ### `DOD-M15-EPHEMERAL-AUTH-1` — ❌ The session ephemeral is bound to the agent's identity
+> ### ⏸️ BLOCKED BEHIND `KEYAGREE-1` HAVING A CONSUMER — measured 2026-08-24, and the reason to WAIT.
+> **The key agreement has NO consumer.** Verified with a positive control (118 files reference
+> `SessionNodeManager`, so the search works; `session-key-agreement` / `deriveSessionSecrets` /
+> `generateSessionEphemeral` appear **nowhere** in `core/daemon`, `core/client` or `core/transport` —
+> only inside `core/crypto` itself and its own re-export). That matches `KEYAGREE-1`'s own note:
+> *"STAYS 🟡 — nothing consumes either output."*
+> **So binding the ephemeral now would be hardening a primitive nothing calls** — adding a signature,
+> a wire field and a verification step to a code path that cannot execute. **That is this milestone's
+> most-repeated defect** (a value with no reader), and it would be committed deliberately rather than
+> by accident.
+> **Sequence, not scope:** the binding is real work and stays in the gate. It goes in WITH the first
+> consumer, so the signature is exercised by the path that needs it and the wire field is designed
+> against a real caller instead of a guess. **Doing it earlier costs a bilateral wire change made
+> blind.**
 Split from `DOD-M15-KEYAGREE-1` (review F6). The key agreement defeats a PASSIVE recorder — the
 harvest-now threat the line names — and NOT an active on-path relay.
 - Nothing in the key-agreement API takes an identity key, so there is nowhere to bind the ephemeral
