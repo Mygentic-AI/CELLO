@@ -198,6 +198,36 @@ its own.
 > **The check:** name the branch your value takes before you run it, then confirm it took that branch.
 > If the clause enumerates cases, use its values verbatim — do not substitute a representative.
 
+> ### 🔓 WHO CONTROLS THE ABSENCE — the guard that is optional for the party it guards against
+>
+> **Both lanes shipped one of these on 2026-08-24, in different subsystems, and neither review caught
+> it as a class until we put them side by side.**
+> - `CELLO_Support`: a lapsed-anchor report deduped **once per manifest version**. A rogue directory —
+>   *the exact party the check exists to catch* — sends any `nodeId`, **spends the dedup budget**, and
+>   every genuine authentication against that anchor is silent for the life of the version.
+> - `CELLO_Coder_1`: a cross-check keyed on `content_bytes`, which is **relay-supplied**. A tampering
+>   relay simply omits the field and the check reports nothing to see.
+>
+> **The shape:** a signal whose ABSENCE reads as *"fine"*, plus a control over that absence held by
+> the adversary. **The guard then costs an honest party something and costs the attacker nothing.**
+>
+> **The check, in two questions, and it is answerable at review time:**
+> 1. **What does the absence of this signal look like?** If it is indistinguishable from healthy, keep
+>    going.
+> 2. **WHO can cause that absence?** Enumerate them. **If the list includes the party the guard exists
+>    to catch, the guard is optional for them and it is not a guard.**
+>
+> **Two corollaries worth applying directly:**
+> - **Dedup budget is a RESOURCE. Ask who can consume it before choosing the key.** A key an attacker
+>   can fill is a mute button with your name on it.
+> - **Report on the SUCCESS path.** Every fault in the example above — text that claimed a conclusion
+>   not yet reached, an unauthenticated field in the payload, a spendable budget — came from reporting
+>   *before* the thing being reported had been established.
+>
+> **Related but NOT the same as "absence is not a pass"** (§ the four invariants). That one says a
+> missing signal must not be read as a green light. **This one asks who is holding the switch.** It is
+> possible to get the first right and this one wrong, and both lanes did exactly that.
+
 **A false CAUGHT is worse than a false GREEN, and this is why the rule exists.** A false green leaves
 the suspicion alive — the thing still looks unproven, and someone eventually re-checks. A false
 caught **retires** the suspicion: the case is recorded as covered and nobody looks again. The second
