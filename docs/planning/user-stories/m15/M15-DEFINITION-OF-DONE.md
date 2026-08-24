@@ -4652,6 +4652,35 @@ Parallel with Tier 4 — different disciplines, no shared files.
 - If it is kept, the justification goes in writing here. "Or justify keeping it" is not a
   do-nothing option.
 
+### 🟡 park deposit rate limiting — BUILT 2026-08-24 (CELLO_Support), review out
+> **What shipped:** a per-peer fixed-window limiter (30/minute) on the content-park deposit path,
+> checked **before** any parsing or store call — a limiter that runs after validation and a disk
+> write has already spent the work it exists to save. On refusal: `content.park.rate_limited` with
+> the attempt count and a retry-after, and `{ok:false, reason:"rate_limited"}` to the depositor.
+> **It keys on the id that was being thrown away.** `CelloStreamHandler` has always passed a
+> Noise-authenticated `remotePeerId`; `content-park.ts` registered `(stream) => …` and dropped it.
+> **That discard is exactly what made me write — in code AND in this document — that a deposit
+> "carries no depositor identity to key a quota on."** It was false, and the datum was one parameter
+> away.
+> **A BOUND IS NOT A LIMIT, which is why this exists next to the store caps.** The caps decide how
+> much can be STORED. Without a limiter an attacker still spends the relay's CPU, stream slots and
+> disk writes at line rate, and still churns a victim's mailbox against the per-recipient cap
+> indefinitely.
+> **Honest about what it buys, in the code and here:** a peer id is a real cryptographic identity for
+> the connection and is **cheap to rotate**, so this defeats the ordinary abusive case and raises the
+> cost of the determined one. **A speed bump, not a gate.**
+> **Three properties pinned because each is how this class of control goes wrong:** one peer's flood
+> must not refuse another (a global limiter turns an abuse control into the outage it prevents — the
+> shape the store's first bound got wrong); the window must reset, or it is a ban list; and the
+> limiter must not itself leak on attacker-chosen keys — **the exact defect found in the park store
+> one commit earlier**, which would otherwise have been reintroduced inside its own fix.
+> **Gate: relay 28 files / 260 tests / exit 0; typecheck 0.**
+> **⚠️ SUSPECTED GAP, recorded BEFORE the verdict so it is not a post-hoc excuse:** the six tests
+> drive the limiter CLASS. I do not believe anything drives the handler, so deleting the
+> `if (!limit.allowed)` block in `content-park.ts` probably reddens nothing — **the wiring is
+> unpinned, which is the hollow-test shape I have shipped twice tonight.** Put to the reviewer
+> explicitly rather than discovered by it.
+
 ### 🔒 CLAIM — park deposit rate limiting, **CELLO_Support**, 2026-08-24, before code
 > **Andre's list, the "relay rate limiting" large — taking the one tractable slice of it.** The audit's
 > first finding is *"No rate limiting of any kind — not on authentication attempts, not on hash
