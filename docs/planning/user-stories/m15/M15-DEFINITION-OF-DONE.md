@@ -3864,6 +3864,28 @@ is not.** The test encodes a superseded threshold.
   original: *two of three directories refusing is not enough to stop an agent* is exactly the
   sovereign-node redundancy claim, and *all three refusing does stop it* is exactly the kill switch.
   One scenario, both halves, under the threshold we actually ship.
+  **⚠️ AND THAT REWORK IS WRONG TOO — caught before implementing it, on the journey's own
+  constraint.** *"3 suspended → blocks"* requires suspending **node 0, the INITIATOR's node**, and
+  the file says in its header why it never does: node 0 is left unsuspended *"so node 0's single-node
+  initiator gate passes and the ceremony proceeds to the per-node share check — isolating the
+  THRESHOLD arithmetic from the single-node gate."* Suspend node 0 and the block arrives from the
+  **initiator gate**, not the threshold — a different mechanism, and the test asserts the exact
+  reason. It would go green while proving the wrong thing.
+  **So under T=2 with N=3, threshold-refusal CANNOT be isolated in this topology at all**, and that
+  is the real finding: client + 1 = T means every directory must refuse, and one of them is always
+  the initiator's.
+
+  **✅ THE REWORK THAT WORKS — N=5, where T = floor(5/2)+1 = 3, and node 0 is never touched:**
+
+  | directories suspended (never node 0) | who can sign | vs T=3 | outcome |
+  |---|---|---|---|
+  | 3 of 5 (nodes 1–3) | client + nodes 0, 4 | 3 = 3 | **signs** — three refusing nodes do not stop it |
+  | 4 of 5 (nodes 1–4) | client + node 0 | 2 < 3 | **BLOCKS** — genuine threshold refusal |
+
+  **Both halves keep the initiator's node unsuspended**, so the single-node gate is out of the
+  picture in both and the only variable is the arithmetic. That is the isolation the original test
+  was built for, restored under the threshold we actually ship. Cost: a 5-directory spine cluster
+  (`startSpineCluster({ directoryCount: 5 })`) instead of 3.
   **The existing agent-B control and the fresh-`frost.ceremony.refused.revoked` check carry over
   unchanged** — they already prove the refusal is agent-scoped and that a refusing node was genuinely
   asked rather than skipped.
