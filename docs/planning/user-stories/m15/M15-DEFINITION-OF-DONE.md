@@ -2317,7 +2317,31 @@ correctly given what they were told; one believes it holds a receipt and holds n
   misreading a new answer.
 - Wire-visible: the relay tolerates the new reasons before any client depends on them.
 
-### `DOD-M15-PULLRECOVER-1` — ❌ The certificate pull is proven to work, or proven to be asking wrong
+### `DOD-M15-PULLRECOVER-1` — ✅ The certificate pull is PROVEN TO WORK (measured, not argued)
+> **CLOSED 2026-08-24 (CELLO_Support) against the LIVE daemon log — 701,652 events, positive control
+> first.** The line asked to establish WHICH explanation is true before touching anything. It is now
+> established from data rather than from reading.
+>
+> **1. THE 157 ARE ALL PRE-FIX.** `seal.certificate.pull.not_found` by date:
+> `08-08:23, 08-09:2, 08-12:5, 08-13:5, 08-15:1, 08-16:12, 08-17:63, 08-18:38, 08-19:8` = **157**,
+> then **08-20, 08-21, 08-22, 08-23: ZERO**, and **08-24: 1**.
+> **`DOD-M15-TRANSPORT-TERMINAL-1` closed 2026-08-22.** The producer of doomed sessions was fixed and
+> **the attempt rate collapsed to nothing.** That is the confirmation the explanation needed: the
+> recovery path was working correctly on sessions that never sealed.
+>
+> **2. THE ONE RECENT ATTEMPT IS THE BENIGN CASE, AND IT IS THE ONE THIS LINE EXISTS TO PROTECT.**
+> Session `c2c43b05…` is HEALTHY — salt announced and agreed, 5 transcript rows, 5 tree appends,
+> content received and acked. Its seal story: `seal.leaf.submitted` → `seal.autoacknowledged` →
+> `seal.awaiting_counterparty` → `seal.background.unresolved` → `pull.not_found`.
+> **This side sealed and the counterparty never came back.** No certificate exists YET, so
+> `not_found` is the TRUE answer — and **this is exactly the row an auto-repair would have
+> destroyed**, on a session that may still seal when the peer returns.
+>
+> **VERDICT: the pull is not asking wrong. It answers correctly in both cases measured** — a doomed
+> session (no certificate was ever created) and a live one (no certificate yet).
+> **THE TRAP THE LINE NAMES IS NOW THE ONLY LIVE RISK, and it is sharper than before:** with the
+> producer fixed, `not_found` no longer means "another doomed session" — it means *awaiting a
+> counterparty* or a genuine loss. **Nothing was built that repairs on it, and nothing should be.**
 > ### NARROWING, 2026-08-24 (CELLO_Support) — one explanation ELIMINATED by reading, one added.
 > The line says establish WHICH explanation is true first. Two done without a run:
 > - **❌ RULED OUT: a key mismatch between the pull and the record.** The directory returns
