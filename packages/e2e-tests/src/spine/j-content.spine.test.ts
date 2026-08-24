@@ -366,9 +366,21 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
 
     const rec = (await ipcCall(dirB, "content_park_recover", { relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB })) as { ok?: boolean; recovered?: number; pulled?: number };
     expect(rec.ok).toBe(true);
-    expect(rec.pulled, "all three parked entries pulled").toBe(3);
+    /**
+     * The recover outcome and B's own recover lines ride on BOTH assertions, because "expected +0 to
+     * be 1" on its own is unactionable: `recovered: 0` is the identical number whether the entry was
+     * refused for a bad signature, a hash mismatch, an unsealable blob or a committed session, and
+     * those are four different bugs. Vitest prints only the failing test's message, not every
+     * daemon's buffer, so a bare count sends the next reader to a log that does not contain the
+     * answer — which is exactly the round this cost.
+     */
+    const recDiag = () =>
+      `\n  recover said: ${JSON.stringify(rec)}\n  B's recover lines:\n${
+        daemonB.output.split("\n").filter((l) => /content\.recover|cross_check|content\.park\.pull/.test(l)).slice(-12).join("\n") || "    (none — B logged no recover activity at all)"
+      }`;
+    expect(rec.pulled, `all three parked entries pulled${recDiag()}`).toBe(3);
     // ONLY the honest one is recovered — tamper + corrupt are rejected, neither lands.
-    expect(rec.recovered, "only the honest entry is accepted").toBe(1);
+    expect(rec.recovered, `only the honest entry is accepted${recDiag()}`).toBe(1);
 
     const tail = daemonB.output;
     // Tamper → the ONE content-path desync signal.
@@ -410,7 +422,18 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
 
     // A delivers the message DIRECTLY → B appends it as leaf 0.
     const msg = `dup-me-${randomBytes(4).toString("hex")}`;
-    const msgBytes = Buffer.from(msg);
+    /**
+     * ⚠️ THE BYTES ON THE WIRE ARE NOT `msg`. `signal: "over"` is IN-BAND — the shim appends the turn
+     * signal to the content itself, so what A actually sends, and what B hashes, is
+     * `"<msg> [[OVER]]"`. The recover test above pins the same thing from the other side
+     * (`toBe("msg1-online [[OVER]]")`).
+     *
+     * This is what the parked duplicate has to contain. Depositing bare `msg` produced a
+     * `content_hash_mismatch` under EVERY algorithm — which is what proved the algorithm was never
+     * the cause: a salted declaration and an unsalted one failed identically, because the content
+     * itself was a different string.
+     */
+    const msgBytes = Buffer.from(`${msg} [[OVER]]`);
     expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: msg, signal: "over" })) as { ok?: boolean }).ok).toBe(true);
 
     /**
@@ -448,16 +471,31 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // this used to deposit was refused as `unsigned_envelope` before dedup was ever consulted, so
     // the deduplication assertion below was measuring nothing.
     //
-    // `contentHash` is the hash read off the daemon's OWN receive event a few lines up, not one
-    // recomputed here, so this stays correct whatever algorithm the direct frame used. The envelope
-    // names no algorithm, which means `sha256` — correct as long as the sending side does not salt.
-    // If a sender ever does salt, this deposit is where it shows up: the recover path would recompute
-    // unsalted, mismatch the salted hash, and report content_hash_mismatch on a message that is
-    // perfectly honest. That is the trap, and it is named here rather than discovered later.
+    /**
+     * ⚠️ THE ALGORITHM HAS TO TRAVEL WITH THE HASH, AND OMITTING IT IS NOT NEUTRAL — absent means
+     * `sha256`. This is the trap the review warned about, and it was measured happening here: the
+     * entry authenticated cleanly (`content.recover.verified`) and then died at
+     * `session.content.cross_check.failed` with `declaredAlg: "sha256"` and
+     * `reason: "content_hash_mismatch"` — a TAMPER verdict on a message nobody touched, because the
+     * direct frame had hashed it SALTED and the parked copy claimed it had not.
+     *
+     * `contentHash` is still the hash read off the daemon's OWN receive event above, never one
+     * recomputed here — the session salt lives in the daemon's encrypted database and is on no read
+     * surface, so a test cannot compute the salted hash even if it wanted to.
+     *
+     * The salt is ASSERTED rather than assumed. If salting is ever turned off for this path, this
+     * wait fails loudly and says so, instead of the deposit silently mis-declaring its algorithm and
+     * failing later as a hash mismatch that looks like tampering.
+     */
+    await daemonB.waitForLine(
+      new RegExp(`"event":"session\\.salt\\.agreed"[^\\n]*"sessionId":"${sessionId}"`),
+      15_000,
+    );
     await ipcCall(dirA, "content_park_deposit", {
       relayMultiaddr: cluster.relayMultiaddr,
       recipientPubkey: pubB,
       contentHash: hashHex,
+      contentHashAlg: "hmac-sha256-salt-v1",
       sessionId,
       senderAgentName: "agentA",
       content: Buffer.from(msgBytes).toString("hex"),
