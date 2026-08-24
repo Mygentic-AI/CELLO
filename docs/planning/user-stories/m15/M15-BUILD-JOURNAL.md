@@ -7022,3 +7022,95 @@ Two things only a run can settle, both named by pass 2:
    printed in the failure labels, where a wrong claim costs the most.
 3. **`--noEmit` typechecks; it does not build.** If the thing under test is a spawned binary, the
    artifact is the subject and the source is not.
+
+---
+
+## Entry 64 — I undercounted the same work three times, and the third pass explained the first two
+
+`DOD-M15-CLOSEROOT-1`, second clause. Both review passes spent.
+
+### The clause, and why it is not a style rule
+
+`expect(x, msg).toMatch(/…/)` throws a raw `TypeError` when `x` is `undefined`, **before** vitest
+attaches `msg`. The diagnostic the test assembled — a whole close response, a whole relay receipt —
+is destroyed at the moment it is needed. This line exists because that is how `CLOSEROOT-1` itself
+came to be opened as a blocking product defect that did not exist: *"I could not see the response,
+and I treated `undefined` as the finding instead of as a missing observation."*
+
+### Pass 1: I built the helper and converted nothing
+
+> **SPEC: DEVIATIONS FOUND** — Unit A's clause is about call sites and **zero** were converted
+> [blocking]. The `toContain` claim is a deviation that is factually false [blocking].
+> **ERROR SUBSTITUTION FOUND** — F3: `""`, `0` and `false` are labelled `ABSENT (undefined/null)`,
+> which names a cause that did not occur.
+> **HOLLOW TESTS FOUND** — the non-string test picks `42` and thereby avoids the exact two values
+> (`0`, `false`) its own justifying comment names [blocking].
+
+Three of mine in one small file:
+
+1. **I shipped a RED test to main and called the claim measured.** I asserted `toContain` destroys
+   its message the way `toMatch` does, wrote *"verified rather than assumed"*, and it was neither.
+   Measured: `toMatch` throws before `this.assert`; `toContain` falls through to chai's `include`,
+   which **prepends the message**. The workaround I built was for a hazard that does not exist.
+2. **`.toBeTruthy()` reported `""`, `0` and `false` as ABSENT** — a cause that did not occur, sending
+   the reader to the producer for a value the producer produced. This file's own subject, inverted.
+3. **The test for that clause used `42`.** Truthy, so it sailed past the broken branch to the one
+   that was already correct.
+
+### Pass 2: the count, and the method behind it
+
+> **SPEC: DEVIATIONS FOUND** — "everywhere in the same pass" is unmet at
+> `j-relaysig.spine.test.ts:154,155,156`, un-journaled. [blocking]
+> **NO SILENT FALLBACKS** — and the unit *removes* one.
+> **HOLLOW TESTS FOUND** — one: `expect-present.test.ts:95` passes vacuously.
+> **REMOVALS PROVEN**
+
+**5 → 8 → 11, and every pass was a hand-recount.** The reasons matter more than the numbers:
+
+- **5** — I grepped for an optional property access and eyeballed the rest.
+- **8** — a reviewer resolved each subject's DECLARED TYPE. Better, and still wrong: **a cast's
+  entire function is to change the declared type.**
+- **11** — `j-relaysig` laundered three optional fields through `receipts[0] as { hash_hex: string,
+  … }`. The identical class had **already been caught one file over** as a `!`, and nobody
+  generalised from `!` to `as`.
+
+And pass 2's F4: an assertion of mine that **could not fail** — `expect(String(threw(…)?.message))
+.not.toMatch(/got /)`. If the thing it guards ever broke, `threw` returns `null`,
+`String(undefined)` is `"undefined"`, and that does not contain `"got "`. Green forever. A `.not.`
+over a possibly-absent subject, in the file about hollow assertions.
+
+### What replaced the counting
+
+An enforcer that computes the number from the tree, so a twelfth site fails on the commit that adds
+it. **It states its own limit rather than implying exhaustiveness**: a text scan for the three
+visible marks of optionality (`?.`, `!`, a nearby `as {}`), blind to optionality arriving through an
+imported type. A ratchet, not a proof — because an enforcer believed to be exhaustive is worse than
+none, it stops people looking. Its second test proves the scanner is not vacuous, since an
+empty-result assertion passes forever if the scan reads nothing.
+
+### Two things that fell out sideways
+
+**Dropping the cast surfaced a second defect underneath it.** `timestamp` was not in the local type
+declaration at all, and the test reads `r0.timestamp` to rebuild the relay's signed TBS. The daemon
+does return it, so the declaration was simply wrong and the cast made the wrongness compile.
+
+**A citation of mine argued against its own conclusion.** I justified treating `""` as present by
+pointing at `j-gcp-live` manufacturing one — and at that site `""` means *no agent row came back*,
+which IS absence. The single example I reached for was the case where the opposite was correct.
+
+### Measured, and what the measurement does not cover
+
+The other lane ran the `trustless-cello` root: **1742 passed, 0 failed.** So "believed green,
+unverified" is retired. Their qualification is the part worth keeping: **39 files and 609 tests
+skipped** — the spine lane, excluded from every environment. *"A root green has never covered the
+lane where two of tonight's findings came from."*
+
+### Rules earned
+
+1. **When a clause enumerates its cases, the test uses THOSE values, not an exemplar.** `42` is what
+   comes to mind for "a number"; `0` and `false` are what the clause was about. Two different mental
+   searches, and the test was written from the wrong one.
+2. **A cast and a `!` are the same defect.** Any search that resolves declared types must treat a
+   type assertion as evidence of optionality, not as its absence.
+3. **A `.not.` assertion over a possibly-absent subject is hollow by construction.** Assert it threw
+   first, then assert the message positively.
