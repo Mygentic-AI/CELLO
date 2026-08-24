@@ -45,6 +45,73 @@ run output quoted. Vitest green is necessary, never sufficient.
 
 ---
 
+# 🔎 PRIORITY OVERRIDE — THE DISCOVERABILITY FILTER (Andre, 2026-08-24)
+
+> **This ranking outranks tier order.** Tiers are dependency order. This is priority order, and where
+> they disagree, this wins.
+
+**The filter, in Andre's words:** *"Things like this that are security holes that a smart, motivated
+person with an AI coder could discover."*
+
+**So the test is not "is it exploitable" — it is: what would somebody find in an AFTERNOON, pointing a
+coding agent at the public repo and asking "where is this weak?"** That is a real and imminent
+adversary rather than a hypothetical one: evaluators point a coding agent at an open repo before
+trusting it, and a finding they surface costs trust whether or not anyone ever exploits it.
+
+### What the filter promotes, and it is a specific shape
+
+**An absence a grep finds.** A security control that exists and is called from nowhere. A limiter
+that does not exist at all. A function whose only caller is a test. An agent asked *"what stops abuse
+here"* returns "nothing" in minutes and it is not wrong.
+
+### ⚠️ THE UNCOMFORTABLE HALF, and it must not be misread
+
+**Our most findable weaknesses are the ones our own source announces.** The key-agreement docstring
+states that it defeats a passive recorder and not an active on-path relay. The park deposit says it is
+unauthenticated by design. A tier description described a gate that did not exist.
+
+> **DO NOT REMOVE THOSE COMMENTS. That is the exact inversion this milestone exists to prevent** — an
+> honest limit deleted is `DOD-M15-CLAIM-COMMENTS-1` run backwards, and those comments are what stop
+> our own agents over-claiming. **The comment is not the defect; the unfixed gap is.**
+>
+> What the filter changes is the ORDER: **a gap our own source announces goes to the top**, because it
+> is handed to a reader rather than merely available to one.
+
+### The ranking, with sizes — smalls first, because a quick win is a real win
+
+Sizes are the WORK, not the importance. Every line below is already in a tier; this ranks them, it
+does not move them.
+
+| Size | What a reader would find | Line |
+|---|---|---|
+| **S** | A direct session permanently reveals the operator's IP, with no gate and no remedy — and the shipped docs say nothing. The mitigation (`RELAYONLY-1`) was reopened 2026-08-24 as not working. | `DOD-M15-DISCLOSE-1` |
+| **S** | The relay's connection gater and its reservation-dial hook are **written and never installed**, so an agent's circuit address is dialable by anyone who learns it. The direct path was closed this week; this is the same door, other route. | `DOD-M15-RELAYAUTH-1` (gater bullet only) |
+| **S** | An empty `CELLO_DIRECTORY_PUBKEYS` degrades silently instead of failing startup. Config is correct today; the failure mode that would hide it going wrong is not. | `DOD-M15-RELAYABUSE-1` (that bullet only) |
+| **S** | The directory-admin push handler is live, has **no caller**, and its signed body carries no nonce and no timestamp. Deleting it is cheaper and strictly safer than hardening it. | `DOD-M15-RELAYABUSE-1` (that bullet only) |
+| **S** | Directory authentication is **skipped entirely and silently** when the URL is not a byte match. Not exposed today — production is a raw IP precisely to match — so the cheap fix is to make the skip LOUD, not to build authenticated bootstrap. | `DOD-M15-STEP6-REPLAY-1` |
+| **M** | The session ephemeral is not bound to the agent's identity, so the new encryption defeats a passive recorder and **not an active relay — and we run the relays.** The module's own docstring says so. | `DOD-M15-EPHEMERAL-AUTH-1` |
+| **M** | The content-park store is unauthenticated by design and unbounded per depositor: 4 MiB frames, 256 MB store, no rate limit. Fillable for every user at once. | `DOD-M15-RELAYABUSE-1` (that bullet only) |
+| **L** | **The relay has no rate limiting of any kind** — not on authentication, hash submission, gap-fill, the liveness query or park deposit. There is nothing to find, which is what makes it a minutes-long finding. | `DOD-M15-RELAYABUSE-1` (the rest) |
+| **L** | The semantic screener has **never run against real weights** — `installModel` has no caller, no command, and the dependency is not even declared optional. One of the three things the launch intent names as core value. | `DOD-M15-SCREENINSTALL-1` |
+
+**The five S items are mostly "wire up something that already exists" or "write down what is true."**
+They are the quick wins and should be taken first, in a batch, rather than one per unit.
+
+### What the filter DEMOTES, and this is the point of writing it down
+
+Reservation churn, federation heartbeats, and the unilateral seal's clock trigger are all real — and
+none is found by reading. They need live measurement or behavioural reasoning. **Genuinely important
+is not the same as findable**, and this filter ranks findable.
+
+> **A note on the unilateral seal, corrected here because it was overstated to Andre and he caught
+> it.** It was described as "a false record about a real person." It is not. Every message carries
+> both parties' signatures, and the line's own text says *"everything up to the absent party's last
+> signed message is exactly as strong as a bilateral seal."* The real defects are narrower: the
+> artifact does not mark where full strength stops, and the trigger has no presence check. Only the
+> uncountersigned tail — usually one message — is ever in question.
+
+---
+
 # Tier 0 — The verification spike (blocks scoping, not building)
 
 Three questions that **cannot be answered by reading source**. Their answers change the scope of
