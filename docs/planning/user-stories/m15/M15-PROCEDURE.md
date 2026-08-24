@@ -254,6 +254,26 @@ its own.
 > Same family as *who controls the absence* above: both ask who holds the thing the guarantee rests
 > on, rather than whether the guarantee is stated.
 
+> ### 🔎 AN EMPTY SEARCH RESULT IS EVIDENCE ONLY IF YOU PROVED THE SEARCH COULD SEE
+>
+> **Twice on 2026-08-24, from two different causes, both producing a confident false conclusion:**
+> - **A NUL byte.** `claims-ledger.ts` was declared to have **no importer** — in a commit message, a
+>   DoD entry and a test header. It has one. `grep` returned nothing because the importing file
+>   contains a raw `\0`, so grep classified it as **binary and never read it**. The tool said "no
+>   matches" for a file it did not open.
+> - **The wrong directory.** Checking that `seal_attempt` was gone server-side, the grep ran from
+>   `cello-client`, where `packages/` does not exist. Empty output meant *no such directory*, and it
+>   read exactly like *no such code*.
+>
+> **The check, and it costs one extra command:** before believing a negative, prove the search had
+> reach. `grep -c` something you KNOW is in that path; or `ls -d` the directory; or grep for a string
+> the file must contain. **If the positive control does not come back, the negative means nothing.**
+>
+> This is the *"make it fail on purpose AND confirm it failed for the reason you think"* rule turned
+> around: **a search that finds nothing must be shown capable of finding something.** It belongs with
+> the two checks above — all three are the same question, which is whether the thing you are relying
+> on is actually load-bearing or only looks it.
+
 **A false CAUGHT is worse than a false GREEN, and this is why the rule exists.** A false green leaves
 the suspicion alive — the thing still looks unproven, and someone eventually re-checks. A false
 caught **retires** the suspicion: the case is recorded as covered and nobody looks again. The second
