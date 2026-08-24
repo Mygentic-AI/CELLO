@@ -2846,7 +2846,7 @@ written down nowhere, and a per-session salt fixes it as a side effect.
   `SHA-256(salt ‖ message)`, which has a length-extension weakness). Recorded as its own line so the
   exposure is on the record independently of the fix that closes it.
 
-### `DOD-M15-SEALWIRE-1` — 🟡 The receipt is bound to the transcript (1, 2, 3, 4, 6, 7 ✅; 5 + 8 code-complete, UNRUN)
+### `DOD-M15-SEALWIRE-1` — 🟡 The receipt is bound to the transcript (1, 2, 3, 4, 6, 7, 8 ✅; 5 = one test short)
 > **✅ BULLET 6 — the content hash is salted.** All six B2b-2 constraints, both review passes spent
 > (→ Entries 49–52). A session holding an agreed salt hashes under `hmac-sha256-salt-v1`.
 >
@@ -2856,6 +2856,15 @@ written down nowhere, and a per-session salt fixes it as a side effect.
 > relay's `gap_fill_request` half, whose only trigger was the reply the first deletion removed.
 > Two POST-LAUNCH items fell out of it: `DOD-M15-GRACE-WINDOW-1` and `DOD-M15-RELAY-WAL-UNWIRED-1`.
 >
+> **🟢 BULLET 8 — COVERAGE COMPLETED (CELLO_Support, 2026-08-24). The `agentName` batch is GREEN:
+> `j-refresh` ✓ 65s, `j-sign` ✓ 64s, `j-loopback` ✓ 45s — 3 files, 3 tests, 0 failures.** These were
+> the three that needed the discriminator in the built artifact, and `j-refresh` was the last
+> journey `CELLO_Coder_1` listed as unmeasured. **Both of its open questions are now answered by runs
+> rather than by reasoning.**
+> **⚠️ AND THIS IS STILL NOT A GREEN LANE** — `j-documents`, `j-multiplayer` and `j-content` remain
+> red for causes that predate bullet 8, one of which (`awaitSealedRoot` timing out at 60s) is
+> `CLOSEROOT-1`'s shape and is a real lead. **A green assertion is not a green lane**, and the two
+> must not be allowed to imply each other.
 > **🟢 BULLET 8 — RUN, and `expectOwnTreeVerified` has been OBSERVED GREEN (2026-08-24 ~03:15 UTC).**
 > `j-legibility` passes, and its single test contains both assertion calls — so both executed and both
 > returned `verdict: "match"`. **The assertion has now done the thing it was written to do on a live
