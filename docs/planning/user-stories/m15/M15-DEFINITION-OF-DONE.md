@@ -1554,7 +1554,46 @@ only finds an already-open connection."*
 > reaches that code.** It does not. The evidence that it might — `no_agreement_started` — is equally
 > consistent with never getting as far as a node, and I did not distinguish the two before building.
 >
-> **The real question, one level up:** `openSessionFor` returns `ok` with a session id
+> ### 🎯 THE ACTUAL ROOT CAUSE — SALT AGREEMENT IS A DIRECT-PATH PROTOCOL; DOCUMENTS ARE RELAY-ONLY
+>
+> **Both daemons are in the capture** — 36 events tagged `agentA`, 38 tagged `agentB` — so "zero
+> session nodes" is a fact about both sides, not a capture artifact. What the document path *does*
+> produce:
+>
+> ```
+> session.relay.*    × 142        session.node.*       × 0
+> session.content.*  × 122        session.liveness.*   × 0
+> session.tree.*     × 56         standing_receiver.*  × 0
+> session.document.* × 22
+> ```
+>
+> **Document delivery runs entirely over the RELAY. It never establishes a direct session node.**
+>
+> **And the salt agreement is announced over the DIRECT connection.** `#sendSaltFrame` opens
+> `entry.node.newStream(entry.counterpartySessionPeerId, CELLO_CONTENT_PROTOCOL_ID)` and returns early
+> at its `!entry` guard when there is no active node — the same park-only exit the code already
+> documents. **No node ⇒ no stream ⇒ no announce ⇒ no agreement, for any hook, on any connect.**
+>
+> **So this is not a wiring bug at all. It is a design gap:** a per-session secret negotiated only on
+> the direct path, used by a feature that never takes the direct path. `j-content` agrees salts
+> happily (8 × `session.salt.agreed`) because its journeys establish direct sessions; documents cannot,
+> ever.
+>
+> **That is why `SALTANNOUNCE-LATE-1` was inert here** — it repairs the moment a node is promoted, and
+> on this path there is no node to promote. The fix is sound for its own case and was aimed one level
+> too low for this one.
+>
+> **⚠️ THE FIX IS A DESIGN DECISION AND NOT MINE TO PICK.** Either the salt agreement learns to travel
+> over the relay like the content it protects, or document sessions establish a direct node like
+> message sessions do, or documents are explicitly exempt from salting and the refusal path stops
+> treating an unsalted document as an error. **Each has a different blast radius**, and the third is
+> the only one that is not a protocol change. Recorded for Andre with the evidence rather than chosen.
+>
+> **What a user gets today:** two people co-editing, one side's updates silently refused, no error on
+> either screen. **Documents are `M9`'s headline feature and this is a launch-visible outage.**
+>
+> **The superseded question, kept because the reasoning trail matters:** `openSessionFor` returns `ok`
+> with a session id
 > (`document.delivery.session_opened` × 4) while `session.node.created` stays at zero. **Either
 > document delivery reaches a session by a route that creates no node, or the node is created in a
 > process whose output is not in this capture** — `j-documents` runs two daemons and the capture may
