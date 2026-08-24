@@ -1173,6 +1173,49 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > **Running now:** `j-spine`, `j-content`, `j-multiplayer` — the three heaviest files in the receipt
 > (the floor assertion, the whole ACK/dedup/recover set, and 7 of 7 respectively).
 >
+> ### 🔴 `j-suspend-tofn` IS NOT A WRONG-PREMISE TEST, AND ITS FAILURE IS ABOUT THE KILL SWITCH
+>
+> **This line has been carrying it as *"a test encoding T=3 when we ship T=2"* — a test to correct, not
+> a defect to chase. That is wrong on both counts, and I inherited it instead of re-deriving it.**
+>
+> **The notation is not a contradiction.** The header says *"N=3 directories, T=3 = client + any 2"* —
+> that is **two directory shares**, which IS `majority(3)`. The arithmetic in the test is consistent
+> with the shipped threshold; nothing about it needs correcting.
+>
+> **The actual failure, from the receipt:**
+> > `× threshold-refusal ≠ single-node: 2 of 3 directories suspended ⇒ no signature; 1 ⇒ still signs`
+> > → *"2 suspended directories must block signing: `{"ok":true,…}`: expected true to be false"*
+>
+> **With two of three directories suspended, the session formed anyway.** The test is well built — it
+> runs a POSITIVE CONTROL first (no suspension ⇒ initiate must succeed, which passed), seeds A's
+> profile to nodes 1 and 2 so they *can* honour a suspension, and retries on the same transient as the
+> control so a flake cannot masquerade as the block.
+>
+> **THE MECHANISM IS ALREADY WRITTEN DOWN IN THE PRODUCT, as a known production gap** —
+> `directory-node.ts` `#isAgentPaused`:
+> > *"a node can only HONOR a suspension for an agent whose `agent_profiles` row it holds — the
+> > honor-check JOINs `agent_suspensions`→`agent_profiles`, so a missing local profile resolves to
+> > 'not suspended' and **the node SIGNS BLIND**. … single-node honoring means **a genuinely-paused
+> > agent can still reach threshold by routing around the one honoring node. That is the production
+> > gap.**"*
+>
+> The check itself is sound — it reads the store live (not a boot cache) and **fails closed** on error.
+> The hole is the JOIN: no local profile ⇒ reads as not-suspended.
+>
+> **⚠️ HYPOTHESIS, MARKED AS ONE — not yet run, and I will not report it as a cause until it is.** The
+> test copies the profile with `copyAgentProfileBetweenNodes(0→1, 0→2)` and then suspends using
+> **node 0's `agent_id`**. If the copy does not preserve that id, the suspension row on nodes 1 and 2
+> references an id their own profile row does not carry, the JOIN misses, and both nodes sign blind —
+> producing exactly this `ok:true`. **That is the "join on the stable key, never the mutable one" theme
+> in a third place.** The decisive check is one query: compare `agent_id` for `pubA` on node 0 versus
+> node 1 after the copy.
+>
+> **Why this matters more than the other 20 files:** `.claude/CLAUDE.md` names a kill switch as a
+> launch requirement, and the sovereign-node invariant says *"no single node can complete a threshold
+> ceremony alone… any implementation that allows a single node to produce a valid ceremony output is a
+> security violation, regardless of whether tests pass."* **Either the kill switch can be routed
+> around, or the test's plumbing is wrong. Both are worth an hour; only one is forgivable at launch.**
+>
 > ## 🔒 CLAIMED 2026-08-24 by `CELLO_Coder_1` — do not start work on this line
 > **Files held:** `packages/e2e-tests/src/spine/*` and the journey files under it. Nothing in
 > `core/daemon` unless a triage cause lands there, and I will amend this block before touching one.
