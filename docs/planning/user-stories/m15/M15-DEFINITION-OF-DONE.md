@@ -1027,7 +1027,59 @@ outside that unit, and I am not opening it on a guess.**
   design (in which case this is correct and should say so), or whether a non-primary broker silently
   cannot complete. Answering that is the unit; guessing is how a working design gets "fixed".
 
-### `DOD-M15-BOOTSTRAP-AUTH-1` — ❌ The bootstrap coordinate arrives over an authenticated channel
+### `DOD-M15-BOOTSTRAP-AUTH-1` — 🟡 The poisoned coordinate is PROVEN survivable; TLS on 9090 is not built
+> ### ✅ THE UNPROVEN LINK IS NOW MEASURED, AND THE ANSWER IS STRONGER THAN THE SCOPING ASSUMED.
+> **2026-08-24 (CELLO_Support).** The scoping below called this line not-blocking on four points and
+> named the one it could not prove: *"that a client meeting a poisoned coordinate actually FAILS OVER
+> rather than stalling."*
+>
+> **The client never dials the rogue at all.** `createRosterAwareEndpointResolver` compares the
+> primary's peer id against **DECLARED manifest membership** before returning it, so an
+> attacker-chosen coordinate is discarded at RESOLUTION — one step earlier than step-6 identity auth,
+> which is where the scoping assumed the defence lived. Membership is local and signed: it costs no
+> probe, and the attacker cannot answer it.
+> **The guard is not hypothetical** — its own comment records the incident that produced it: a
+> compiled-in default URL after a consortium move that *"resolved forever while every connection died
+> at step-6 identity auth with `key_not_in_manifest`. Reachability was never the right test."*
+>
+> **⚠️ AND IT HAD NO TEST.** Nothing in the suite named `not_in_consortium`. The single guard that
+> makes this line's launch call correct was held up by nothing. **4 tests now; revert proof RUN** —
+> disabling the membership check reddens exactly the two that assert it.
+>
+> **THE RESIDUAL, TESTED AS A LIMIT rather than left to be discovered → `DOD-M15-BOOTSTRAP-ADDR-1`.**
+> Membership is checked on the PEER ID, never on the ADDRESS, so a rogue address under a real node's
+> peer id is returned and dialled. Noise refuses the connection (the attacker holds no such key), so
+> the cost is **denial of that node, not impersonation** — but the resolver keeps choosing it, and its
+> own doc says it is *"not told whether a dial/auth against the returned endpoint actually
+> succeeded."*
+>
+> **⚠️ WHY THIS IS 🟡 AND NOT ✅, and it is a scope question rather than a work question.** The
+> security property this line exists for is met and now tested. **Its literal title — a bootstrap
+> coordinate arriving over an AUTHENTICATED CHANNEL — is not built, and will not be by this work.**
+> **ANDRE:** the measurement says TLS on 9090 buys little (the roster is signed, the coordinate is
+> membership-checked, and the residual is an address the peer id already fails to authenticate).
+> Retitling this line to what it actually protects, and closing it, is a scope call and therefore
+> yours. Say the word and it closes; until then it holds its tag rather than flipping on my reading.
+> **`DOD-M15-DIRAUTH-1` is waiting on this** — its 🟡 is held deliberately with *"it closes when
+> `BOOTSTRAP-AUTH-1` does."*
+
+### `DOD-M15-BOOTSTRAP-ADDR-1` — ❌ A rogue ADDRESS under a real peer id does not pin the client
+Split from `DOD-M15-BOOTSTRAP-AUTH-1` once the membership guard was measured and tested.
+- The resolver checks the primary's **peer id** against manifest membership. It does **not** check
+  the multiaddr, so an on-path attacker answering the plaintext `/bootstrap` with a REAL node's peer
+  id and their OWN address gets past the guard and is returned as the node to dial.
+- **Bounded, and the bound is why this is not the same finding as the poisoned peer id:** libp2p's
+  Noise handshake authenticates the remote peer id and the attacker holds no such key, so the
+  connection is never established. The cost is **denial of that node**, not impersonation.
+- **What makes it stick is the missing feedback loop:** the resolver is *"not told whether a dial/auth
+  against the returned endpoint actually succeeded"* (its own doc), so it keeps returning the same
+  unreachable coordinate on every reconnect instead of failing over.
+- **Fix shape:** feed connect outcomes back into selection — a dial that fails against a resolved
+  primary should demote it the way an unreachable one already is. **Do not fix it by validating the
+  address against the manifest**: the manifest carries `/bootstrap` HTTP bases, not libp2p
+  multiaddrs, and a node legitimately changes address.
+- **Enforcer:** the existing poisoned-coordinate test file, extended — the limit is already asserted
+  there, so the day it is fixed that assertion inverts rather than being written from scratch.
 > # 🔒 CLAIMED BY **CELLO_Support**, 2026-08-24, BEFORE code. `RELAYADMIN-1` closed, so this is my one WIP.
 > **The unit is the TEST, not TLS.** My own scoping below says the authenticity half is already
 > structural and the residual is denial of one node, bounded by the signed roster — and then names
