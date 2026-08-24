@@ -1379,11 +1379,39 @@ work it never did.
 document, and one side's changes never arrive. Neither sees an error — the update is refused at the
 far end and the near end shows it sent. Documents are `M9`'s headline feature.
 
-**Not diagnosed further, deliberately** (§0z.2 trip-wire): the next step is why the salt agreement
-does not complete on the document path when it completes elsewhere — `j-content` shows
-8 × `session.salt.agreed` in its own run, so the agreement works when it runs. Whether the document
-transport opens its session by a route that skips the announce is the question, and I have **not**
-established it.
+**TRACED ONE STEP FURTHER, and the producer is identified. The announce never FIRES.**
+
+```
+session.salt.announced  × 0     ← not "answered late" — never sent
+session.salt.agreed     × 0
+session.salt.*          × 0     (no salt event of any kind in the run)
+"reason":"no_agreement_started" × 1
+```
+
+`no_agreement_started` is returned from exactly one place, and only when `#markSaltPending` was never
+called — which means **`#sendSaltFrame` never ran for this session.** So this is not a lost frame, a
+timeout, or a peer on an old build. The announcement was never attempted.
+
+**Where it should have come from.** The announce hangs off `node.onPeerConnect`, and that hook's own
+comment claims it is *"the only hook that fires on BOTH sides for every way a session's direct path
+comes up: the initiator's first dial, the responder's inbound connection, every reconnect, and a
+revived node."* It also records why it cannot live at session creation: *"`newStream` never dials — it
+only finds an already-open connection."*
+
+**⚠️ HYPOTHESIS, MARKED AS ONE — the two facts above are in tension, and that tension is the lead.**
+The document transport opens its session through `openSessionFor`, *"the same path
+`cello_initiate_session` takes"* — so the session is opened normally. If the peers are **already
+connected** when that second session opens (the delivery worker's own comment mentions the
+co-resident pair case), then `onPeerConnect` has already fired for the earlier connection and does not
+fire again — while the salt is per-SESSION. **A per-session secret announced by a per-CONNECTION hook
+is a gap wherever a second session rides an existing connection.** I have not established that this is
+what happened here; it is the one mechanism consistent with `announced: 0`.
+
+**THE DECISIVE CHECK, one query:** in a document run, count `session.node.created` against
+`session.salt.announced`. Equal means the hook fires per session and the cause is elsewhere. Fewer
+announces than session nodes means the announce is missing exactly where a session reuses a
+connection — and the fix belongs at session creation with the dial-ordering problem that comment
+describes, not at the peer-connect hook.
 
 ### ✅ `j-spine` IS GREEN — 7/7, from 4/7. Five failures fixed; four were stale vocabulary.
 >
