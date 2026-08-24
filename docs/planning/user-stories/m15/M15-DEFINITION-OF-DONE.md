@@ -1597,6 +1597,27 @@ Rulings that bind every line above. **Re-asking one is decision theatre** (M15-P
 
 ---
 
+16. **DOCUMENTS ARE OUTSIDE THE LAUNCH GATE** (Andre, 2026-08-24). *"Documents have been moving out
+    of the gate. Documents were never intended to be a launch feature. Somehow they made it in there
+    by accident. They're outside of the gate of launch. Done."*
+
+    **Every document-specific defect leaves the gate**, whatever its severity, and no document
+    finding is a launch blocker. This retires three things that were being carried as blocking or as
+    open decisions for Andre:
+    - the document salt outage (a document session never agrees a salt, so one side's updates are
+      silently refused) — **no longer needs the design decision that was filed for him**;
+    - `DOD-M15-DOCACCEPT-UNBOUNDED-1` (accepting an invitation hangs when a holder is offline) — the
+      bound no longer needs picking for launch;
+    - the document journey failures in the evidence lane.
+
+    **What this does NOT move:** the semantic screener (`DOD-M15-SCREENINSTALL-1`). Injection defense
+    is named in the launch intent in its own right; only its two document-specific sub-bullets follow
+    documents out.
+
+    **Consequence worth stating, because it changes a status rather than just a scope:** strip
+    documents out of `DOD-M15-SPINERED-1` and its remaining in-gate failure is `j-suspend-tofn`
+    **alone** — the kill switch.
+
 # Claims Ledger
 
 *Built by `DOD-M15-LEDGER-1`. Rows are added as surfaces are swept; a claim with no row is an
