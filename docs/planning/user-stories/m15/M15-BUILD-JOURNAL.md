@@ -7232,3 +7232,60 @@ refusal, or the guard remains optional for exactly the party it guards against.
    misreading.
 3. **When a permissive fallback exists, the receipt cannot be the evidence.** Verify at the layer
    that can tell the two apart — here, the directory's own verdict line.
+
+---
+
+## Entry 66 — bullet 8 ran, and the assertion was green on its first live seal
+
+`DOD-M15-SEALWIRE-1` bullet 8, RUN 2026-08-24 ~03:15 UTC. Four journeys, ~23 minutes.
+
+### The result
+
+`j-legibility` **passes**, and its single test contains both `expectOwnTreeVerified` calls — so both
+executed and both returned `verdict: "match"` on a live cross-process seal. **The assertion has done
+the thing it was written to do**, which is what "written-not-run" was blocking on since it landed.
+
+**And it never failed anywhere.** Across four journeys and 30 tests, zero occurrences of any of its
+three failure messages — not the absence message, not the mismatch message, not the
+not-`match` message.
+
+### One of the two open questions is answered, and it is the good answer
+
+`j-legibility` does **not** land `cannot_judge`. The worry — mine, recorded when the helper was
+written — was that a journey where B receives a tail it deliberately never answers would leave B's
+carry provably incomplete at seal time, so the daemon would legitimately refuse to judge and my
+assertion would fail a healthy system. It does not happen. **`j-refresh` remains unmeasured**: it is
+in the `agentName` batch and was not in this run.
+
+### Why four journeys and not thirty-five
+
+The full lane needs about five hours — the other lane started one, reached 1 file of 35 in ten
+minutes, and killed it to fix a security defect instead. **Both open questions were answerable with
+four journeys**, so the subset was the whole cost of the answer. The remaining three
+(`j-refresh`, `j-sign`, `j-loopback`) need the `agentName` discriminator and are handed over with the
+slot.
+
+### ⚠️ What this run does NOT say, recorded because a green assertion invites the wrong summary
+
+**The lane is not green.** 17 of 30 failed. But the counts match the other lane's pre-bullet-8
+baseline exactly — `j-documents` 7, `j-multiplayer` 5 (after their `SYNC-AC17` narrowing),
+`j-content` 5 — so **bullet 8 introduced no failure**, and none of the failures is at one of its
+assertions.
+
+The clearest of the pre-existing ones is worth naming because bullet 8 improved its diagnosis
+without fixing it: `j-documents`' rejection case now fails as
+
+> `A sealed receipt (tree with a rejection): no sealed_root within 60000ms for session f18cd61a…`
+
+instead of a bare `expected false to be true`. That is `DOD-M15-CLOSEROOT-1`'s shape. **Whether 60s
+is simply too short for that journey or the seal genuinely fails is not decidable from this run**, and
+guessing is what this milestone keeps punishing. It is a lead, not a diagnosis.
+
+### Rules earned
+
+1. **A targeted subset beats a full run when the questions are specific.** Five hours to answer two
+   questions that four journeys answer is not thoroughness, it is cost. Name the questions first,
+   then pick the smallest run that settles them.
+2. **A green assertion is not a green lane, and the summary must say which.** The temptation after a
+   first successful observation is to report the milestone as passing. Seventeen tests were red in
+   the same run.
