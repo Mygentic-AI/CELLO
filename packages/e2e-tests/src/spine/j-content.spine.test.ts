@@ -476,10 +476,13 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
      * `content.delivery.acked` fired twice for other hashes. The ACK ladder was working the whole
      * time.
      *
-     * **The negative assertion below is why this matters beyond a red test.** It asserts the content
-     * was NOT parked, keyed on this hash — with a hash the daemon never uses, it could only ever pass,
-     * whatever the product did. Reading the daemon's own value turns a vacuous assertion into a real
-     * one.
+     * ⚠️ **I CLAIMED THIS "TURNS A VACUOUS ASSERTION INTO A REAL ONE". IT DOES NOT — review HIGH-1.**
+     * The negative park assertion below was vacuous for TWO reasons and this fixes only one. It runs
+     * about a millisecond after the ACK, and the sole producer of a sender-side park for this hash is
+     * `#handleTtfExpiry`, armed by a **20-second** timer that `#resolveAwaitingAck` clears as its first
+     * act — before emitting the very line awaited above. **Reaching that assertion guarantees the timer
+     * is already dead, and nothing could have fired anyway.** Fixing the hash removed one vacuity and
+     * left another underneath it. The claim is corrected here and in the DoD rather than left standing.
      */
     const acked = await daemonA.waitForLine(
       new RegExp(`"event":"content\\.delivery\\.acked"[^\\n]*"sessionId":"${sessionId}"`),
@@ -487,7 +490,43 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     );
     const hashHex = /"contentHash":"([0-9a-f]{64})"/.exec(acked)?.[1] ?? "";
     expect(hashHex, `could not read contentHash off the daemon's own ACK: ${acked}`).toMatch(/^[0-9a-f]{64}$/);
-    expect(acked, "the protocol acts on the persisted ACK").toMatch(/"level":"persisted"/);
+
+    /**
+     * ⚠️ PIN THE EXTRACTION TO **THIS** MESSAGE — review MEDIUM-3.
+     *
+     * `waitForLine` scans the backlog from daemon boot and returns the FIRST match, and the filter is
+     * now the session id rather than the hash. That is correct today only because exactly one send
+     * happens on this daemon: `#trackAwaitingAck`'s sole caller is `sendContent`, and the two
+     * automatic senders (reject, away-response) are receiver-side. **Correct today, fragile by
+     * construction** — the moment a second message joins this session the extraction silently moves to
+     * a different hash.
+     *
+     * The dedup test is pinned by `sequenceNumber:0`; this one had no pin at all, because
+     * `level:"persisted"` is a literal at the single emit site and discriminates nothing. This turns
+     * "there is only one candidate" from an argument into an assertion.
+     */
+    expect(
+      daemonA.countLines(/"event":"content\.delivery\.acked"/),
+      "exactly one send, so exactly one ACK — if this is ever >1 the hash above may be another message's",
+    ).toBe(1);
+    /**
+     * ⚠️ TAUTOLOGICAL, AND KEPT ONLY AS A NAMED PLACEHOLDER — review HIGH-2.
+     *
+     * `content.delivery.acked` has exactly ONE emit site and it writes `level: "persisted"` as a
+     * **string literal**. The field can never hold anything else, so this assertion cannot fail. Its
+     * old message — *"the protocol acts on the persisted ACK"* — claimed the discrimination the test
+     * does not perform: that a `received`-level ACK does NOT resolve the timer.
+     *
+     * Kept rather than deleted because the CLAIM is the thing worth stating, and the message now says
+     * what would actually prove it. **An assertion standing next to a constant implies a proof it
+     * never gave**, so the comment is the guard until the two-level version exists.
+     */
+    expect(
+      acked,
+      "NOT a real check: `level` is a literal at the single emit site, so this cannot fail. Proving " +
+        "the claim needs B to emit a `received`-level ACK first and the timer NOT to resolve, then a " +
+        "`persisted` one and it to resolve.",
+    ).toMatch(/"level":"persisted"/);
 
     // Because delivery was confirmed persisted, the content is NOT handed to the park backstop —
     // the park is only for un-confirmed sends. (No content.park.deposited for this hash.)

@@ -1341,9 +1341,24 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 >
 > **Fixed (both the same defect):** the dedup test and the ACK ladder computed
 > `contentHashHex(...)` — `SHA-256(0x00 ‖ content)`, the **unsalted** hash — then waited for a value a
-> salted session never writes. Both now read the hash off the daemon's own event. **The ACK ladder's
-> fix also repaired a VACUOUS assertion:** it asserts the content was NOT parked, keyed on that hash —
-> with a hash the daemon never uses, it could only ever pass whatever the product did.
+> salted session never writes. Both now read the hash off the daemon's own event.
+>
+> > **⛔ CORRECTION — I claimed the ACK fix "repaired a VACUOUS assertion". It did not, and review
+> > caught the claim in this file and in the code comment.** That negative park assertion was vacuous
+> > for **two** reasons and the hash was only one. It runs ~1ms after the ACK, and the only producer of
+> > a sender-side park is a **20-second** timer that `#resolveAwaitingAck` clears as its first act —
+> > before emitting the line the test awaits. **Reaching the assertion guarantees the timer is dead.**
+> > Fixing the hash removed one vacuity and left another underneath it. **Giving it teeth needs a
+> > daemon restart after the ACK, asserting the startup flush re-parks nothing** — the shape
+> > `DOD-MSG-2` already uses in the same file. Filed, not built.
+> >
+> > Also corrected in place: `expect(acked).toMatch(/"level":"persisted"/)` **cannot fail** — `level`
+> > is a string literal at the single emit site. Kept with a message saying what would actually prove
+> > the claim, because an assertion standing next to a constant implies a proof it never gave.
+> >
+> > And the ACK extraction is now **pinned** (`countLines(...) === 1`). It filters on session id rather
+> > than hash and `waitForLine` returns the first match, so it was correct only because exactly one
+> > send happens on that daemon — an argument, not an assertion, until now.
 >
 > **⚠️ AND MY "ONE CAUSE, FOUR MORE SITES" WAS WRONG. Correcting it rather than letting it stand.**
 > The dedup test now advances *past* the hash and fails on something else entirely:
@@ -1367,6 +1382,14 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > produces the signed envelope the recover path requires. Hand-building one in the test would mean
 > reproducing `buildParkContentTbs` and the sender's signature, which is a second implementation of a
 > security-critical encoder in a test.
+>
+> **⚠️ AND A TRAP ON THAT FIX, from review — do NOT hand-build a v2 envelope to get past
+> `authenticateParkedEntry`.** The recover path resolves the hash algorithm from the **envelope**, not
+> the session: absent (v2) ⇒ `sha256`. The dedup test now deposits the daemon's **salted** hash, so a
+> v2 envelope would recompute unsalted, mismatch, and land in
+> `#markContentUnverifiable(…, "tampered")` — **a FALSE TAMPER CLAIM**, which also blocks auto-co-sign
+> at seal. A real send is safe precisely because `#parkContent` carries `contentHashAlg` through and
+> emits **v3** when salted.
 >
 > **Assuming a confirmed cause carried to everything that looked similar was the error. Measuring each
 > was the correction** — and it is the same trap this line has now sprung three times.
