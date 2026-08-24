@@ -3052,7 +3052,35 @@ Extracted from `DOD-M15-DIRAUTH-1`'s second bullet so it is a line rather than a
   so the attacker retains denial-of-service, and step 6 is itself skippable (that is `DIRAUTH-1`).
 - This is the fix the byte/normalised string match was standing in for.
 
-### `DOD-M15-STEP6-REPLAY-1` — ❌ A directory identity proof cannot be replayed
+### `DOD-M15-STEP6-REPLAY-1` — 🟡 A directory identity proof cannot be replayed (replay ✅; byte-match fail-open ❌)
+> **THE REPLAY IS CLOSED 2026-08-24 (CELLO_Support).** 17 passed, mutation-proven: disabling the gate
+> reddens exactly the replay, future-dated and unparseable tests. The line stays 🟡 because its
+> SECOND bullet — the byte-match fail-open — is untouched, and its third is `BOOTSTRAP-AUTH-1`.
+>
+> **The finding that shaped the fix: the nonce CANNOT carry the freshness.** The obvious answer is
+> "check the nonce is the one we sent" — **we did not send it.** It is `challengeFrame["nonce"]`, the
+> DIRECTORY's own, from step 1-2. **The client contributes no fresh value to this exchange at all**,
+> so it holds nothing of its own to bind against, and a replayer replays the captured nonce and the
+> captured ack together. That leaves the timestamp, and it is a real anchor: inside the signed bytes,
+> so it cannot be moved without invalidating the signature being replayed.
+> **Checked AFTER the signature, deliberately** — a stale proof is genuine and too old, a forged one
+> is an attack; collapsing them into `signature_invalid` would send an operator hunting a forgery
+> when their clock is wrong. `identity_proof_stale` now only ever describes the first.
+> **±5 min, absolute skew, unparseable = stale.** One-sided skew would leave a signed FUTURE
+> timestamp permanently valid — a better replay token than a stale one. Unparseable is the NaN lesson
+> from the manifest gate applied *before* it repeated: every comparison against NaN is false, so a
+> naive `skew > MAX` treats garbage as fresh.
+> **STATED, NOT FIXED:** this BOUNDS replay to the window rather than eliminating it. With no
+> client-chosen nonce nothing makes a proof single-use; closing the rest needs a client contribution
+> in the challenge or a seen-nonce cache — a wire or state change, and not this line.
+>
+> **⚠️ The second bullet is NOT "silent" any more, and that half should not be re-fixed.**
+> `daemon.manifest.bundled.skipped` fires at WARN when the verifier is not wired (INFO on local), and
+> `cello_status` states the posture in both directions (`directory_authentication: "enforced"`,
+> confirmed live). **What remains is the byte-match itself** — a DNS name pointing at the same
+> machine does not match a bundled endpoint, so auth is skipped. That is an endpoint-identity change
+> and **not to be attempted during a fleet roll**; `CELLO_Coder_1` is deploying directory and relay
+> as this is written.
 Found by `DOD-M15-DIRAUTH-1`'s review (F9), pre-existing.
 - Step 6's TBS covers `nodeId ‖ agent pubkey ‖ nonce ‖ timestamp`. The client checks **neither** the
   timestamp against now **nor** that the nonce is one it has not seen.
