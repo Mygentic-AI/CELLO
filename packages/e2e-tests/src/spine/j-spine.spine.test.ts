@@ -524,14 +524,60 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     const used = (await conn.call("cello_use_agent", { name: "agentA" })) as { ok?: boolean };
     expect(used.ok, `cello_use_agent failed: ${JSON.stringify(used)}`).toBe(true);
 
+    /**
+     * ⚠️ WAIT FOR THE STANDING RECEIVER BEFORE ASKING THE DIRECTORY ANYTHING.
+     *
+     * This test failed with `standing_receiver_unavailable`, and that is **not a directory answer at
+     * all** — it is a precondition on THIS side. `cello_start_agent` returning does not mean the
+     * standing receiver exists yet; the receiver is created as the agent comes up, and an initiate
+     * that lands in that window is refused locally and never reaches the negotiator.
+     *
+     * So the assertion below was measuring a local race and reporting it as *"the negotiator did not
+     * reach the directory"* — an exit-point label standing in for a cause, which is the substitution
+     * this milestone keeps finding.
+     *
+     * Other journeys paper over this by retrying the initiate on that transient. **A readiness poll is
+     * better than a retry loop:** it waits for the thing that is actually being waited on, and if the
+     * receiver never becomes ready it fails saying THAT, rather than burning the retries and blaming
+     * the directory. `standing_receiver_ready` is on the MCP surface for exactly this reason —
+     * *"so a deaf agent is visible to the operator"*.
+     */
+    let receiverReady = false;
+    for (let i = 0; i < 40 && !receiverReady; i++) {
+      const st = (await conn.call("cello_status")) as {
+        agents?: Array<{ name: string; standing_receiver_ready?: boolean }>;
+      };
+      receiverReady = st.agents?.find((a) => a.name === "agentA")?.standing_receiver_ready === true;
+      if (!receiverReady) await sleep(250);
+    }
+    expect(
+      receiverReady,
+      "agentA's standing receiver never became ready, so an initiate could not reach the directory. " +
+        "This is a LOCAL precondition — if it fails, look for session.node.created in the daemon log, " +
+        "not at the directory.",
+    ).toBe(true);
+
     // cello-mcp's required param is `target_pubkey` (z.string()). An unregistered target.
     const res = (await conn.call("cello_initiate_session", {
       target_pubkey: "00".repeat(32),
     })) as { ok?: boolean; reason?: string };
     expect(res.ok, `expected initiate to be not-ok for an unregistered target: ${JSON.stringify(res)}`).toBe(false);
-    // Directory-sourced answer (the negotiator reached the directory): NOT the wired-out
-    // directory_signaling_not_configured anymore.
-    expect(res.reason, `negotiator should reach the directory: ${JSON.stringify(res)}`).toBe("target_offline");
+    /**
+     * The assertion's INTENT is that the answer came FROM THE DIRECTORY — not the wired-out
+     * `directory_signaling_not_configured`, and not a local refusal.
+     *
+     * ⚠️ IT EXPECTED `target_offline`, AND THE DIRECTORY NOW GIVES A BETTER ANSWER. The target here is
+     * `00…00`, a pubkey **nobody ever registered**. `target_offline` says *"the agent exists and is
+     * not connected"*, which is false about it; `unknown_agent` says *"No agent is registered under
+     * that public key"*, which is true and sends the operator somewhere useful. Asserting the vaguer
+     * of the two would pin the directory to a less accurate reason than it is capable of.
+     *
+     * Both are directory-sourced, so both satisfy the intent — this takes the precise one.
+     */
+    expect(
+      res.reason,
+      `negotiator should reach the directory and name the real cause: ${JSON.stringify(res)}`,
+    ).toBe("unknown_agent");
   }, 30_000);
 
   // SKIPPED — documents the next SPINE-5 bug (J-SPINE surfaced it live, 2026-06-19).
