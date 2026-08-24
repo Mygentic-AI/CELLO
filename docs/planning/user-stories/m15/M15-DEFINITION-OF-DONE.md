@@ -2207,6 +2207,32 @@ policy for an expired manifest — it just never chose it.
 > operator to close a window that needs a roster change to be exploitable at all.**
 > **`classifyManifestValidity` already exists and is the shared policy object** — the two permitting
 > consumers simply never call it, which is what makes the split accidental rather than chosen.
+>
+> ### THE DECISION, per consumer, made 2026-08-24 (§3a — least likely to need reversing)
+>
+> **All three keep their current behaviour. What changes is that two of them stop being silent.**
+> The split is not inconsistency — it tracks WHICH FIELD of the manifest each one uses, and that is
+> the reason "make them consistent" would be the wrong fix:
+>
+> | consumer | manifest field it uses | on expiry | why |
+> |---|---|---|---|
+> | `signal-submission` | the **portal intake key** | **REFUSE** (unchanged) | a rotated key means a message the portal cannot open *or attribute* — its own comment calls it unattributable poison, with no error anywhere |
+> | `register-handler` | the **validator roster** | **PROCEED, loudly** | refusing strands a running daemon; the risk needs a validator *removed since the lapse*, not expiry itself |
+> | challenge verifier | the **node pubkeys** | **PROCEED, loudly** | refusing means a lapsed daemon can authenticate NO directory — every agent offline, for a manifest that was valid at startup |
+>
+> **The reversibility argument, which is why this is the safe call.** Startup already fails closed on
+> an expired manifest, so a lapsed one exists only inside a long-running daemon — and the obvious
+> remedy is the one move `signal-submission`'s guidance forbids: *"a restart without a REPLACEMENT
+> does not reload anything — the daemon refuses to come back and every agent goes offline."*
+> **Turning these two into refusals would brick a running operator to close a window that needs a
+> roster change to be exploitable.** Adding the events is additive and can be tightened later on
+> evidence; a refusal cannot be un-shipped from someone whose daemon will not restart.
+>
+> **Reported ONCE per manifest version in the verifier** — it runs per challenge, and an event per
+> challenge is the flood that teaches people to ignore the signal.
+> **A finding on the way past:** `ManifestDirectoryChallengeVerifier` lives in `manifest-stubs.ts`
+> and is **production** — wired twice by `manifest-deps.ts`. Anyone reading that filename and
+> assuming test-only is wrong about that class. Noted in the file itself.
 
 ### `DOD-M15-DOORBELL-1` — ✅ A daemon shutdown does not ring like an incoming message
 > **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F4 (`readLock` →
