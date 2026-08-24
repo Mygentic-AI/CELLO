@@ -2217,6 +2217,23 @@ correctly given what they were told; one believes it holds a receipt and holds n
 - Wire-visible: the relay tolerates the new reasons before any client depends on them.
 
 ### `DOD-M15-PULLRECOVER-1` — ❌ The certificate pull is proven to work, or proven to be asking wrong
+> ### NARROWING, 2026-08-24 (CELLO_Support) — one explanation ELIMINATED by reading, one added.
+> The line says establish WHICH explanation is true first. Two done without a run:
+> - **❌ RULED OUT: a key mismatch between the pull and the record.** The directory returns
+>   `not_found` unless the requester's authenticated key matches a recorded participant — a real
+>   second source of false absence, and deliberately indistinguishable. **But it is the SAME key on
+>   both sides:** `#processSealUnilateral(stream, authedPubkeyHex!, …)` stores
+>   `participant_a_pubkey = Buffer.from(senderHex, "hex")` where `senderHex` IS that
+>   `authedPubkeyHex`, and `#processSealCertificateRequest` compares against the same value. **A
+>   K_local-vs-primary_pubkey split would have explained 157/0 exactly, and it is not there.**
+> - **✅ NEW CANDIDATE, and it is not a guess: the certificates may genuinely not exist because the
+>   SEALS COULD NOT COMPLETE.** `CLOSEROOT-1`'s finding above shows a session where one side salts and
+>   the other never agreed, so every message is refused, the trees diverge, and no seal can be
+>   produced. **`not_found` would then be the correct answer 157 times.**
+> - **⚠️ AND THAT CANDIDATE MUST NOT BE ADOPTED YET.** The 157/0 measurement is from one daemon in one
+>   day and **may predate the salting work entirely** — I have not dated it against the salt landing.
+>   **Same trap the line already names in the other direction:** treating a plausible cause as the
+>   cause is how `not_found` becomes "no certificate exists". **The dating is the next measurement.**
 `DOD-M12B-PULL-NEVER-RECOVERS-1`. **157 attempts, 0 recoveries**, on one daemon in one day. This is
 the only safety net standing between "the relay said sealed but lied" and "the receipt is gone."
 - **Establish WHICH explanation is true first** — the certificates genuinely are not there, or the
