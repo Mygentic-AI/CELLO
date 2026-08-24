@@ -1044,6 +1044,30 @@ outside that unit, and I am not opening it on a guess.**
   design (in which case this is correct and should say so), or whether a non-primary broker silently
   cannot complete. Answering that is the unit; guessing is how a working design gets "fixed".
 
+> ### 🔎 HALF-ANSWERED 2026-08-24 (CELLO_Support), read-only, while `BOOTSTRAP-AUTH-1` was under review.
+> **The alarming half is DISPROVED: node 0 is NOT a precondition for a session being recorded.**
+> There are **two** routes to `recordAssignment`, and only one goes through the admin stream:
+> - **`client_record_assignment`** — the CLIENT presents its own assignment. The inner assignment
+>   signature is verified against the **any-directory set** (`#directoryPubkeys.find(...)`,
+>   `relay-node.ts:694`), so a session brokered by directory 1 or 2 records normally.
+> - **the directory admin push** — carries an OUTER `directory_signature` over the frame body,
+>   verified against the single `#directoryPubkey`. A non-primary directory's push is refused here.
+>
+> So the assignment path is federated and the admin path is not. **That is why nothing is visibly
+> broken today**, and it is also why this was easy to miss.
+>
+> **WHAT IS STILL OPEN, and it is now a sharp question rather than a vague one:** `confirm_seal`,
+> `reject_seal` and `discard_session` have **no client-presented equivalent** — they exist only on
+> the admin stream. So if the directory that BROKERED a session is also the one that confirms or
+> refuses its seal, a non-primary broker's confirmation is refused by the relay and the session's
+> relay-side lifecycle never terminates. **The next step is one trace: which node sends
+> `confirmSeal`, the broker or the primary?** I did not follow it, and this line should not be
+> closed on the half above — the recording being fine says nothing about the sealing.
+- **NOT a guess about the fix, deliberately:** if the answer is "the broker sends it", widening the
+  admin path to the consortium set is the obvious move and it is the SAME wire surface as
+  `DOD-M15-RELAYADMIN-REPLAY-1`. **Sequence them** — both change what this stream accepts, and
+  shipping them apart is two fleet rolls.
+
 ### `DOD-M15-BOOTSTRAP-AUTH-1` — 🟡 The poisoned coordinate is PROVEN survivable; TLS on 9090 is not built
 > ### ✅ THE UNPROVEN LINK IS NOW MEASURED, AND THE ANSWER IS STRONGER THAN THE SCOPING ASSUMED.
 > **2026-08-24 (CELLO_Support).** The scoping below called this line not-blocking on four points and
