@@ -1829,6 +1829,21 @@ the TCP connection is made and the handshake has begun.
   can have scrubbing in front of it.
 - Terraform; parallelises cleanly with everything.
 
+### `DOD-M15-START-AGENT-UNAWAITED-1` — ❌ `cello_start_agent` reports started before the agent can hear
+> **🔒 CLAIMED 2026-08-24 by `CELLO_Coder_1`. Files: `core/daemon/src/daemon.ts`, the
+> `cello_start_agent` handler only.** It had been referenced from two other lines and had **no line of
+> its own** — the "a bullet cannot be tagged, claimed or counted" shape this file names.
+
+`daemon.ts` fires `void sessionNodeManager.ensureStandingReceiverForAgent(name)` and returns
+`{ ok: true }` on the next line, so the response says started while the receiver may not exist. A
+session landing in that window is refused `standing_receiver_unavailable` — a precondition on our own
+side, reported as though the counterparty or the directory were at fault.
+- **The fire-and-forget is deliberate and stays:** initiate/accept ensure on demand, and awaiting it
+  would make a network failure fail the start. **The defect is the CLAIM, not the timing.**
+- Product-side cause of the race `DOD-SPINE-5` works around with a readiness poll on the test side.
+- **Enforcer:** the response distinguishes started-and-ready from started-and-still-building, and
+  `cello_status` agrees with it.
+
 ### `DOD-M15-JSPINE-REST-1` — ✅ CLOSED 2026-08-24. `j-spine` is 7/7; all three are fixed.
 Two were stale expectations (a deleted always-empty stub; a `registered` flag removed because it
 lied); the third was a real race, fixed with a readiness poll. Product-side cause filed as
