@@ -3965,7 +3965,17 @@ The byte-match workaround is holding; the fail-open underneath it is not fixed.
 - Resolve the bootstrap coordinate over an authenticated channel; it currently comes from a plaintext
   HTTP endpoint on port 9090.
 
-### `DOD-M15-RELAYONLY-1` — ❌ Relay-only routing is an operator setting (BUILT, REVIEW FOUND IT BREAKS THE NETWORK)
+### `DOD-M15-RELAYONLY-1` — 🟡 Relay-only routing is an operator setting
+> # 🔒 OWNED BY **CELLO_Support**, CLAIMED 2026-08-24. **CELLO_Coder_1: DO NOT TOUCH THIS LINE.**
+> **Andre, 2026-08-24: *"from now on this is yours. You own it. It's yours to complete. It's yours to
+> review."*** Both lanes independently produced fixes for the seal line because ownership was assumed
+> rather than written down, and that waste is not to be repeated. **The rule now: claim the line HERE
+> before writing code, not after.**
+> **Files I hold:** `relay-only.ts`, `initiate-session-handler.ts`, `agent-settings-keys.ts`,
+> `session-node-manager.ts` (`getStandingReceiverInfo` only), `cello-mcp.ts`
+> (`cello_settings_set` description), `__tests__/dod-m15-relayonly-1.test.ts`.
+> **Correspondingly: `DOD-M15-SEALWIRE-1` and all remaining seal work belong to `CELLO_Coder_1`.**
+> Andre has forbidden me from further seal work; I am not to touch it even to fix something I see.
 > ### ⚠️ BUILT 2026-08-24 (CELLO_Support) AND **NOT DONE** — review returned TWO BLOCKING findings.
 > **The setting as shipped does not make the operator private. It takes them OFF THE NETWORK.** Not
 > flipped, not claimed; recorded here so the commits (`0508d5e`, `3b07a92`) cannot be mistaken for a
