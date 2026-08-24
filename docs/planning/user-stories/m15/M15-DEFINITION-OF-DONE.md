@@ -600,7 +600,27 @@ answer was worse and different.
   If that evidence cannot be produced for a description, the honest fix is to DELETE the claim, not
   to soften it — §2f, and the same rule that governed the swept surfaces.
 
-### `DOD-M15-DISCLOSE-1` — 🟡 Shipped documentation discloses what the architecture cannot remove
+### `DOD-M15-DISCLOSE-1` — ✅ Shipped documentation discloses what the architecture cannot remove
+> ### ✅ ALL FOUR BULLETS DONE 2026-08-24 (CELLO_Support), in BOTH shipped copies.
+> The connect tarball's `SKILL.md` and the plugin's are different documents and the plugin is the
+> route most operators install by, so a disclosure in one reaches the smaller audience.
+> **Bullet 1 (IP)** — reviewed, and the review caught that my own disclosure overclaimed twice in the
+> reassuring direction. **Bullet 2 (relay metadata)** — the relay is *TOLD* who is in every
+> conversation rather than inferring it, it learns message LENGTH, and a message parked for an
+> offline recipient leaves an UNSALTED hash, so a short or predictable message can be confirmed by
+> guessing. **Bullet 4 (long-lived handle)** — the relay holds a per-agent handle from the moment an
+> agent comes ONLINE, not from when a session starts, so the record is continuous and exists whether
+> or not you are talking to anyone. **Bullet 3 (single-node relay assignment)** — read out of the
+> relay rather than assumed: a session assignment is accepted if it verifies against ANY single key
+> in the consortium set, so the relay's copy is a one-directory claim while the artifact the agent
+> verifies needs a threshold. The disclosure states the shape of the smaller claim — a relay-side
+> record and a peer-id binding, gated behind being an authenticated participant named in the session
+> — and what it cannot do: **alter the sealed record.** A single Ed25519 key cannot produce a
+> threshold signature, so that half is structural rather than a check that runs.
+> **The claim scanner caught every new claim** and each is adjudicated with the code that settles it
+> — never by raising the baseline, which the scanner says plainly is the one response that is never
+> right.
+> **Gate: adapter 21 files / 182 tests / exit 0; typecheck 0.**
 > ### ✅ BULLET 1 DONE 2026-08-24 (CELLO_Support) — written, REVIEWED, and corrected twice on review.
 > **In both shipped copies** — the connect tarball's `SKILL.md` and the plugin's, which are different
 > documents, and the plugin is the route most operators install by. A disclosure in one reaches the
