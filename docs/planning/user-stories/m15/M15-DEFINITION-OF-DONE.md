@@ -257,6 +257,40 @@ answer was worse and different.
 - **Scope:** audit **every** description in `core/adapter-claude-code/src/bin/cello-mcp.ts` in the
   same pass — fixing one claim in a file nobody has ever scanned, and leaving the rest unread, is
   the "letter, not spirit" failure `DOD-M15-CLAIM-SCANNER-1` was written against.
+
+> ### ✅ AUDIT DONE 2026-08-24 (CELLO_Support). The wording is Andre's (§2f); the FINDINGS are not.
+>
+> **The scope clause earned its keep — the audit found a THIRD claim the line did not name**, in the
+> one place an operator goes to see who is trusted.
+>
+> **1. `cello_contact_set_tier` — FALSE.** *"3=whitelisted (auto-accepted when you're away)"*.
+> **2. `cello_contact_add` — FALSE.** *"…NOT auto-accepted when you're away. Promote them to
+>    whitelisted/vip … to let them reach you unattended."*
+> Both attribute unattended acceptance to the tier. **Everyone is auto-accepted at every tier**, and
+> `isAutoAccept` — the only tier check that would gate it — has no production caller.
+>
+> **3. `cello_contacts` — HALF false, and the false half is again the reassuring one.** It ships as
+> *"the peers it treats as known/trusted (fast-tracked, **exempt from the unknown-sender gate and
+> anti-spam caps**)"*.
+> - *"exempt from the unknown-sender gate"* — **TRUE**, and precisely so: the global stranger-pool
+>   cap is gated on `tier === TIER.UNKNOWN`, with the code's own note *"a KNOWN+ sender is past it by
+>   trust."*
+> - *"exempt from … anti-spam caps"* — **FALSE. No tier is exempt.** `DEFAULT_TIER_BOUNDS` is finite
+>   at every level: whitelisted 20 sessions / 500 MB, vip 50 / 2 GB. They get LARGER caps, not none —
+>   and there is already a test (`INV-TIER-BOUND`) asserting a known contact's byte cap is finite,
+>   written specifically to kill a `tier >= KNOWN ? Infinity` implementation. **The description
+>   promises the very thing a test exists to prevent.**
+>
+> **CHECKED AND TRUE, so it must not be "fixed" in the same pass:** *"0=blocked (refused,
+> indistinguishable from a full inbox)"*. Blocking is real — a zero cap
+> (`maxSessionsPerSender: 0`) — and it refuses through the **same path** an over-cap stranger takes,
+> deliberately, so the refusal cannot tell someone they are blocked. That parenthetical is exact.
+>
+> **⚠️ PARKED FOR ANDRE — this is §2f, outward-facing wording, and the one thing I will not decide.**
+> The findings are measured; the replacement text is his call, and the three claims want ONE
+> consistent story about what a tier does, since the honest version is *"tiers govern how much and
+> how often, not whether"*.
+
 - **⚠️ Enforcer — NOT "I read the file". A hand audit is exactly what `DOD-M15-LEDGER-1` proved
   unreliable** (raised by the receptionist against my own classification, and it is the right
   objection). The audit is only trusted here because it is ONE file rather than four surfaces, and
