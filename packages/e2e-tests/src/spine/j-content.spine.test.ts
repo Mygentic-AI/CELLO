@@ -387,9 +387,34 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // A delivers the message DIRECTLY → B appends it as leaf 0.
     const msg = `dup-me-${randomBytes(4).toString("hex")}`;
     const msgBytes = Buffer.from(msg);
-    const hashHex = contentHashHex(msgBytes);
     expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: msg, signal: "over" })) as { ok?: boolean }).ok).toBe(true);
-    const firstReceive = await daemonB.waitForLine(new RegExp(`"event":"session\\.content\\.received"[^\\n]*"contentHashHex":"${hashHex}"`), 15_000);
+
+    /**
+     * ⚠️ THE HASH IS READ FROM THE DAEMON, NOT COMPUTED HERE — and computing it is why this test failed.
+     *
+     * It used `contentHashHex(msgBytes)`, which is `SHA-256(0x00 ‖ content)` — the **unsalted** hash.
+     * Once `SEALWIRE-1` bullet 6 landed, a session that agrees a salt hashes content as
+     * `HMAC-SHA256(salt, 0x00 ‖ content)` instead, so the daemon wrote one hash and this test waited
+     * for a different one. **Measured:** `session.content.received` fired twice in the run, and the
+     * hash this test computed appeared NOWHERE in it — not late, not anywhere. The message was
+     * delivered the whole time; the wait was for a value that never existed.
+     *
+     * A salted variant of the helper exists (`saltedContentHashHex`), but taking it here would mean
+     * fetching the session's salt and mirroring the daemon's algorithm choice in the test — a second
+     * implementation that has to be kept in step with a decision the daemon makes per session.
+     *
+     * Reading the hash off the daemon's own event removes the question entirely: it is correct
+     * whether the session is salted or not, and it stays correct if the algorithm changes again.
+     */
+    const firstReceive = await daemonB.waitForLine(
+      new RegExp(`"event":"session\\.content\\.received"[^\\n]*"sessionId":"${sessionId}"`),
+      15_000,
+    );
+    const hashHex = /"contentHashHex":"([0-9a-f]{64})"/.exec(firstReceive)?.[1] ?? "";
+    expect(
+      hashHex,
+      `could not read contentHashHex off the daemon's own receive event — the line was: ${firstReceive}`,
+    ).toMatch(/^[0-9a-f]{64}$/);
     expect(firstReceive).toMatch(/"sequenceNumber":0/);
 
     // Now the SAME message also shows up via the relay park (the direct+park overlap). B recovers it.
