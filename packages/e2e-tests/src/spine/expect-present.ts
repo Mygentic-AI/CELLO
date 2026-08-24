@@ -68,7 +68,15 @@ export function expectMatches(
    * Which is the same diagnosis-destroying class this file exists to close, inverted — and it
    * contradicted this file's own doc comment, which names `0` and `false` as the case it handles.
    *
-   * `""` is not hypothetical here: `j-gcp-live.spine.test.ts` manufactures it as a sentinel.
+   * ⚠️ `""` IS THE AMBIGUOUS ONE, and my first note here cited an example that argues the OTHER way
+   * (review pass 2, F5). I pointed at `j-gcp-live.spine.test.ts`, which manufactures `""` via
+   * `?? { pubkey: "" }` — and at that site `""` means *no agent row came back*, which IS absence.
+   * The one example I reached for was the case where calling `""` ABSENT would have been right.
+   *
+   * The rule stands for `0` and `false`, which are unambiguously values a producer produced. `""`
+   * is deliberately treated as a present string: it clears the type gate and fails on the pattern,
+   * because this helper cannot know whether a given `""` is a real empty value or a stand-in for
+   * nothing — and guessing wrong in the ABSENT direction is the expensive one.
    *
    * One assertion on `typeof` handles all of it and always names the real type. Absence is called
    * out inside that message rather than by a separate truthiness gate, so `undefined` reads as

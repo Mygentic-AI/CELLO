@@ -91,8 +91,24 @@ describe("DOD-M15-CLOSEROOT-1: an assertion on an absent value must keep its dia
     // And the type is named, so the reader is sent to the producer rather than to the regex.
     expect(String(threw(() => { expectMatches(0, "x", /a/); })?.message)).toMatch(/got number/);
     expect(String(threw(() => { expectMatches(false, "x", /a/); })?.message)).toMatch(/got boolean/);
-    // An empty string IS a string, so it fails honestly on the pattern rather than on the type.
-    expect(String(threw(() => { expectMatches("", "x", /a/); })?.message)).not.toMatch(/got /);
+    /**
+     * ⚠️ THIS ASSERTION WAS VACUOUS AND COULD NOT FAIL — review pass 2, F4.
+     *
+     * It was `expect(String(threw(…)?.message)).not.toMatch(/got /)`. If `expectMatches("")` ever
+     * STOPPED throwing — the exact regression it exists to catch — `threw` returns `null`,
+     * `null?.message` is `undefined`, `String(undefined)` is `"undefined"`, and `"undefined"` does
+     * not contain `"got "`. **Green.** A `.not.` assertion over a possibly-absent subject is the
+     * hollow shape, and I wrote one in the file about hollow assertions.
+     *
+     * Asserted positively now: it must throw, and it must fail on the PATTERN.
+     */
+    const emptyErr = threw(() => { expectMatches("", "the empty case", /a/); });
+    expect(emptyErr, "an empty string must still fail a pattern it does not match").not.toBeNull();
+    expect(
+      String(emptyErr?.message),
+      "an empty string IS a string, so it must fail on the PATTERN and never be reported as the wrong type",
+    ).not.toMatch(/got /);
+    expect(String(emptyErr?.message), "and the caller's message must survive").toContain("the empty case");
   });
 
   it("★ null takes the same path as undefined — both are ABSENT", () => {

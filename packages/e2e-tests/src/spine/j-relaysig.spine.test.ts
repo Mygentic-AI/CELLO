@@ -32,6 +32,7 @@ import {
   type Proc,
   type McpConn,
 } from "./live-harness.js";
+import { expectMatches } from "./expect-present.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 import { buildRelayAckTbs, verify } from "@cello-protocol/crypto";
 
@@ -144,23 +145,50 @@ describe("J-RELAYSIG — relay-signed ordering receipts (DOD-RELAYSIG-1)", () =>
     const receiptsRes = cello(["relay-receipts", "agentA"], env);
     const receiptsOut = celloJson<{
       ok?: boolean;
-      receipts?: Array<{ hash_hex?: string; relay_id?: string; sequence_number?: number; signature_hex?: string; session_id?: string }>;
+      /**
+       * ⚠️ `timestamp` WAS MISSING FROM THIS DECLARATION, and a cast below was silently covering for
+       * it — `DOD-M15-CLOSEROOT-1` second clause, pass 2. The re-verification reads `r0.timestamp`
+       * to rebuild the relay's TBS; with the field undeclared, dropping the cast is what surfaced it.
+       * The daemon does return it (the assertion re-verifies a real Ed25519 signature and passes),
+       * so this declaration was simply wrong and the cast made the wrongness compile.
+       */
+      receipts?: Array<{ hash_hex?: string; relay_id?: string; sequence_number?: number; signature_hex?: string; session_id?: string; timestamp?: number }>;
     }>(receiptsRes, "cello relay-receipts agentA");
     expect(receiptsOut.ok, `cello receipts failed: ${JSON.stringify(receiptsOut)}`).toBe(true);
     const receipts = receiptsOut.receipts ?? [];
     expect(receipts.length, `daemon must have stored ≥1 verified relay receipt after the send: ${JSON.stringify(receiptsOut)}`).toBeGreaterThanOrEqual(1);
-    const r0 = receipts[0] as { hash_hex: string; relay_id: string; sequence_number: number; signature_hex: string; timestamp: number };
+    /**
+     * ⚠️ THE CAST IS GONE, AND IT WAS THE MECHANISM — `DOD-M15-CLOSEROOT-1` second clause, pass 2.
+     *
+     * This was `receipts[0] as { hash_hex: string; relay_id: string; … }` — a cast that laundered
+     * three genuinely OPTIONAL fields into non-optional ones. Each assertion below carries
+     * `JSON.stringify(r0)`, the entire receipt and the one thing that would name which field the
+     * relay failed to sign, and a raw `TypeError` from `toMatch(undefined)` destroys all three.
+     *
+     * It also explains how it was missed twice. My method was *"resolve each subject's declared
+     * type"* — and a cast's entire function is to change the declared type. The same class WAS
+     * caught one file over (`j-suspend-tofn:172`, where a `!` does the laundering) and the
+     * generalisation from `!` to `as` was never made. Both are type assertions hiding optionality;
+     * only one was searched for.
+     */
+    const r0 = receipts[0];
     // Well-formed.
-    expect(r0.hash_hex, `receipt hash: ${JSON.stringify(r0)}`).toMatch(/^[0-9a-f]{64}$/);
-    expect(r0.relay_id, `receipt relay_id (= relay ack-signing pubkey hex): ${JSON.stringify(r0)}`).toMatch(/^[0-9a-f]{64}$/);
-    expect(r0.signature_hex, `receipt signature (64-byte Ed25519): ${JSON.stringify(r0)}`).toMatch(/^[0-9a-f]{128}$/);
-    expect(typeof r0.sequence_number, `receipt sequence number: ${JSON.stringify(r0)}`).toBe("number");
+    expectMatches(r0?.hash_hex, `receipt hash: ${JSON.stringify(r0)}`, /^[0-9a-f]{64}$/);
+    expectMatches(r0?.relay_id, `receipt relay_id (= relay ack-signing pubkey hex): ${JSON.stringify(r0)}`, /^[0-9a-f]{64}$/);
+    expectMatches(r0?.signature_hex, `receipt signature (64-byte Ed25519): ${JSON.stringify(r0)}`, /^[0-9a-f]{128}$/);
+    expect(typeof r0?.sequence_number, `receipt sequence number: ${JSON.stringify(r0)}`).toBe("number");
+    expect(typeof r0?.timestamp, `receipt timestamp (the relay's own stamp, part of the signed TBS): ${JSON.stringify(r0)}`).toBe("number");
     // END-TO-END TEETH: independently RE-VERIFY the stored receipt's Ed25519 signature over the relay's
     // canonical TBS = SHA-256(hash || seq_BE4 || ts_BE8) against the relay_id-derived pubkey. The daemon
     // stores ONLY signature-verified receipts (#captureReceipt/evaluateRelayAck), so a genuine signature
     // here proves the daemon stored a real relay attestation — not a fabricated/garbage row.
-    const tbs = buildRelayAckTbs(unhex(r0.hash_hex), r0.sequence_number, r0.timestamp);
-    expect(verify(unhex(r0.relay_id), tbs, unhex(r0.signature_hex)), `the stored receipt's relay signature must re-verify: ${JSON.stringify(r0)}`).toBe(true);
+    /**
+     * NARROWED AFTER THE ASSERTIONS, not before them. The five lines above have each proved a field
+     * is present and the right shape, so reading them as non-optional here is a conclusion rather
+     * than a claim — which is the difference between this and the `as` that used to sit at the top.
+     */
+    const tbs = buildRelayAckTbs(unhex(r0!.hash_hex!), r0!.sequence_number!, r0!.timestamp!);
+    expect(verify(unhex(r0!.relay_id!), tbs, unhex(r0!.signature_hex!)), `the stored receipt's relay signature must re-verify: ${JSON.stringify(r0)}`).toBe(true);
 
     // The directory log confirms the relay actually signed (PERSIST-012) — the receipt is its attestation.
     const stored = daemon.output.split("\n").some((l) => /relay\.receipt\.stored/.test(l));
