@@ -3046,10 +3046,25 @@ root means. Both repos; version-bump ACs on both sides.
 > ✅ **TAKEN** — `placeOwnLeaf` carries the authorship into the held entry and on to release.
 >
 > ### BULLET 5 — REVIEWED (pass 1 + pass 2), FIXED, AND WHAT IS STILL NOT COVERED
-> **Gate: `core/daemon` 274 files / 2881 passed / 0 failures.** `CELLO_Coder_1`'s real-crypto
-> assertion is GREEN — real submit, real bytes, `verify(pubkey_from_index_2, structure1_cbor,
-> signature)` — so **the Structure-1 index is confirmed by EXECUTION, not by reading.** A wrong index
-> would have produced rows that look checkable and fail silently.
+> **Gate: `core/daemon` 274 files / 2881 passed / 0 failures.**
+>
+> ⚠️ **THIS ENTRY OVER-CLAIMED WHAT THAT TEST PROVED, and review pass 2 caught it — in the record of
+> the fix for a comment defect, which is the same class again.** It said *"the Structure-1 index is
+> confirmed by EXECUTION, not by reading."* **False.** The assertion decoded index 2 **itself** and
+> verified that, so it confirmed *the ENCODER puts the pubkey at index 2* — true and useful — and
+> confirmed **nothing about whether `sendContent` reads it there**. Measured, not argued: mutating
+> `sendContent`'s decode from `s1[2]` to `s1[3]` left all thirteen tests green. **A test that
+> reimplements the thing it is checking validates the reimplementation.**
+>
+> ✅ **CLOSED PROPERLY BY CODE INSTEAD OF BY TEST (pass 2, H2).** `sendContent` now calls
+> `verify(pk, structure1_cbor, sender_signature)` **before storing**, exactly as the received half
+> has always done. So a wrong index, a wrong key, or a mismatched pair is **impossible to persist**:
+> the row gets NULL and `session.sent.authorship.unavailable` fires with `pair_does_not_verify`, in
+> production, on the machine that caused it. That is a stronger guarantee than any test of it, and it
+> is one line.
+>
+> **What remains confirmed by READING** — and it is now backed rather than assumed: `#recordFrameOrdering`
+> and `seal-frontier-verify.ts` both use index 2 in production, and their verifies pass.
 > **THE FINDING THAT MATTERED WAS MINE, and it is the exemplar check turned on me.** Two of five call
 > sites were **dead by construction** — inside `if (!sendResult.ok)` while the helper read
 > `r.ok ? … : undefined`. They typechecked and could never fire. Consequence: **every
