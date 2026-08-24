@@ -137,7 +137,25 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
   not-worth-its-cost). `REFUSED-INBOUND-SILENT-1` + `UNWITNESSED-1(b)` implemented.
   `RELAYAUTH-1` liveness scoping implemented.
 - **✅ CLOSED SINCE: `REFUSED-INBOUND-SILENT-1`, `SAMEOP-1`, `HASHCORRELATE-1`.**
-  `EXPIRY-CONSUMER-POLICY-1` is built (both consumers) and under review.
+  `EXPIRY-CONSUMER-POLICY-1`: all five pass-1 findings fixed, pass 2 running (cap spent after it).
+- **📊 GATE COUNT IS 30, NOT 44 — measured 2026-08-24, and the 44 is a counting artefact.** Split at
+  the `# POST-LAUNCH BACKLOG` divider: **tier body 25 ❌ + 5 🟡 = 30 open**, 40 ✅, 3 🅿️; **below the
+  divider 14 ❌ + 10 🅿️**. The bulk move of existing lines DID happen — 44 counts both sides of the
+  line as if they were all still in the gate. Only two tier lines still carry POST-LAUNCH text and
+  neither is a clean lift (`SEALWIRE-1` is mixed and the other lane's; `RELAYONLY-1` is scoped, not
+  marked). `Miss_Chelly` re-measured independently and agreed.
+- **🔒 THE LESSON I WOULD CARRY OUT OF THIS MILESTONE IF I COULD ONLY KEEP ONE: I built a security
+  signal the adversary could switch off.** The lapsed-manifest report fired BEFORE the signature
+  check, so a rogue directory — *the exact party the check exists to catch* — could send any
+  `nodeId`, spend the once-per-version budget, and leave every genuine authentication silent for that
+  manifest version. **Its absence would then read as safety.** Two general rules fall out:
+  - **A report that dedups must be spendable only by something you have already VERIFIED.** Dedup
+    budget is a resource; ask who can consume it before you add the key.
+  - **Report on the SUCCESS path.** Everything wrong with it — false text, unauthenticated field,
+    burnable budget — came from reporting a conclusion before reaching it.
+  It also sat inside the crypto `catch`, so a throwing logger reported that a healthy directory
+  **forged its identity proof**: error substitution, written by me, during a milestone about error
+  substitution.
 - **🧨 THE ONE PATTERN BEHIND ALMOST EVERY MISTAKE TONIGHT — read this before anything else.**
   **I kept checking the thing in front of me and never the thing one step out.**
   - the store had no reader → I tested the store
