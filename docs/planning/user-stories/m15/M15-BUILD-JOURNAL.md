@@ -9228,3 +9228,108 @@ The full-file `j-content` run against these production changes. Verified statica
 three signed deposits pass `senderAgentName: "agentA"` with a `sessionId` from a real
 `initiate_session` to `pubB`, so the new binding is satisfied by construction; the one random-session
 deposit takes the raw branch, which skips the check by design. **That is reasoning, not a run.**
+
+---
+
+## Entry 31 — 2026-08-24, `CELLO_Support`: RELAYLEAK-1, RELAYADMIN-1, BOOTSTRAP-AUTH-1, and a mutation that reached `main`
+
+**Three units closed or completed, four reviewer passes spent, and the most useful output of the
+night was a defect I shipped into the tree that fixes it.** Verdicts quoted, per the convention that
+this file — not the DoD — is where evidence lives.
+
+### `DOD-M15-RELAYLEAK-1` ✅ — two passes, both blocking
+
+**Pass 1 verdict, quoted:**
+> *"The unit does not ship. The production code is sound … but **neither test exercises the code it
+> was written for**: `submitSealLeaf` bails out at `no_persisted_relay_endpoint` before the detached
+> branch is ever entered … Test 1 is **red as committed**. Test 2 is **green for the wrong reason**
+> and passes with the fix reverted."*
+
+It ran them and captured the return — `{"ok":false,"reason":"no_persisted_relay_endpoint"}`,
+`builderCalled: 0`. I had caught one hollow test in this unit and then shipped another.
+
+**Pass 2 verdict: SPEC: FAITHFUL** — and it killed my stated reason for the claim guard while
+supplying the real one:
+> *"the scenario your comment describes … **is not reachable through the only caller**. A passenger
+> never touches the client."* … *"The real value of the guard is one you did not write down."*
+
+`registerSession` replaces `onLeafDeliver` with `onLeafDeliver ?? (() => {})` and, unlike
+`assignment` and `recorded`, does **not** carry the existing handler forward. This path passes none.
+So a detached seal over a live registration swaps that session's inbound leaf delivery for a no-op —
+the counterparty's messages arrive at the relay client and are dropped while the session looks
+healthy. **A comment naming an unreachable reason invites the next reader to delete the guard.**
+
+**Three revert proofs, run one at a time on the shipped tree:** remove the `gracefulShutdown` close
+loop → only the shutdown test reddens; remove `releaseDetached()` from the `finally` → only the
+release test; drop the claim guard → only the passenger test.
+
+### 🔴 A REVERT-TEST MUTATION OF MINE REACHED `main`
+
+While `session-node-manager.ts` was mutated for a proof, the other lane committed that file as part
+of unrelated work and swept the mutation in (`25318ac`). For several commits `gracefulShutdown`'s
+close loop read `void key; void client;` — **this line's own defect, live in the tree that fixes
+it.** Found because my own test went red for the wrong reason, not because anything watched for it.
+
+**Both lanes commit by explicit path, which is correct and did nothing here** — explicit paths do
+not separate two agents editing one file, and this file has been shared all night despite being
+assigned one owner.
+
+**The rule, written down rather than resolved-to-be-careful:** never leave a mutation on disk across
+a turn boundary. Apply → run → restore in ONE uninterrupted command. If the shared vitest runner is
+busy, do not mutate at all — wait for the slot. I was blocked mid-mutation four times that night;
+every one was a window for this.
+
+### `DOD-M15-RELAYADMIN-1` ✅ — the premise was false, and my correction was also wrong
+
+The line said the directory-admin push handler is *"live, has no caller"* and that deleting it is
+*"cheaper and strictly safer."* **Its caller is the production directory binary** —
+`NetworkRelayAdapter` at `bin/directory.ts:814`, passed as `relay: networkRelay` (`:1195`), connected
+at `:1363`.
+
+**Then I over-corrected**, writing that it carries the whole four-frame session lifecycle. Measured
+per frame an hour later: `discard_session` **live** (`directory-node.ts:2766`); `record_assignment`
+**dial REMOVED** under Option B (the client presents its own); `confirm_seal` / `reject_seal` **no
+caller at all**. I verified the CONTAINER was live and generalised to its MEMBERS — the same defect
+class as the bullet I was correcting. → `DOD-M15-RELAYADMIN-DEAD-FRAMES-1`.
+
+**This also answered `RELAYADMIN-KEYSET-1`** without a new unit: recording is federated (the client
+presents the assignment, verified against the any-directory set), sealing does not use this stream at
+all, and the single real gap is `discard_session` from a non-primary broker — bounded by the 24 h
+idle sweep.
+
+### `DOD-M15-BOOTSTRAP-AUTH-1` 🟡 — unit complete; pass 1 found a false claim of mine
+
+**Verdict: SPEC: DEVIATIONS FOUND.** The central claim held:
+> *"**Your claim 1 is TRUE.** … This is **not** the 'safe because unreachable' defect you shipped
+> twice. The guard runs."*
+
+The claims around it did not:
+> *"F1 — HIGH — the 'it had no test' claim is false, and it is now in the permanent record."*
+
+`directory-bootstrap.test.ts:313` has carried four tests on that guard since M12. **I grepped the
+EVENT NAME, found nothing, and concluded the guard was uncovered** — deadness-by-grep, applied to
+tests instead of to code. My revert proof missed it because it was scoped to the new file.
+
+**F2:** the pre-registered *"failover does NOT hold"* branch was taken for the ADDRESS variant and I
+re-labelled it as a new line rather than firing it. The resolver returns the primary every call and
+`maxReconnectAttempts` is `MAX_SAFE_INTEGER`, so the daemon reconnect-loops forever — a **stall**,
+and the cost is denial of this daemon's directory connection, not of one node.
+
+**Carried as ACs:** the suite-level wiring gap (delete `getManifestPeerIds,` from
+`consortium-bootstrap.ts:446` and all eight tests stay green — nothing asserts it from the
+composition root); F5 a verified manifest with no `peerId`s disarms the guard silently; F6 the one
+*"you are being MITM'd"* signal has no `impact`/`guidance` and reaches no status surface.
+
+### Gate
+
+`core/daemon`: **2952 passed / 285 files**, typecheck clean. **One file failed and it is not mine** —
+`mcp-001-agent-lifecycle.test.ts:119` asserts `toEqual({ ok: true })` on `cello_start_agent`, and
+`9a41a39` (`START-AGENT-UNAWAITED-1`, the other lane) widened that response. Not fixed here:
+loosening another lane's assertion to green my own gate is the move this milestone exists to prevent.
+
+### The DoD was split and pruned (Andre)
+
+7,600 lines → ~2,500. Closed lines → `M15-DEFINITION-OF-DONE-ARCHIVE.md` with a one-line pointer left
+behind; investigation trails on open lines → this file, under *"DoD trails, moved 2026-08-24"*. The
+DoD's own second paragraph already required that and had stopped honouring it. **An open line keeps
+what it is, why it blocks, its clauses, its enforcer and any live decision — never how we found out.**
