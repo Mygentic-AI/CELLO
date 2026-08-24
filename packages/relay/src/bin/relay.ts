@@ -246,6 +246,36 @@ logger.info("relay.startup.consortium-directories", {
   anyDirectory: dirPubkeys.length > 1,
 });
 
+/**
+ * DOD-M15-RELAYABUSE-1 — **AN INCOMPLETE DIRECTORY SET IS NOW FATAL, NOT MERELY LOGGED.**
+ *
+ * The INFO line above already made this visible, and visibility was not enough: with a single
+ * configured pubkey this relay accepts assignments from ONE directory and rejects every session
+ * brokered by the other sovereign nodes. It fails closed, so nothing is forged — but the operator
+ * does not see a config gap. **They see CELLO being flaky**: a session works, the next one fails,
+ * and which it is depends on which directory happened to broker it. Retrying "fixes" it, which is
+ * the worst possible feedback because it teaches everyone to retry instead of to look.
+ *
+ * That also makes one directory a precondition for the relay, which is the redundancy invariant
+ * inverted — the whole point of sovereign nodes is that any of them can broker.
+ *
+ * ⚠️ `local` IS EXEMPT, deliberately. Single-node loopback development is a supported setup and
+ * refusing there would break the e2e harness and every developer for a fault that only exists in a
+ * federated deployment. The bar is the same one the two blocks above use: fatal in dev, staging and
+ * production; quiet where a consortium does not exist.
+ */
+if (celloEnv !== "local" && dirPubkeys.length < 2) {
+  logRelayServiceStartFailed(logger, {
+    reason:
+      `CELLO_DIRECTORY_PUBKEYS lists ${String(dirPubkeys.length)} directory pubkey(s), so this relay would accept ` +
+      `assignments from ONE directory and reject every session brokered by the other sovereign nodes — ` +
+      `which surfaces to operators as intermittent session failures rather than as a configuration gap. ` +
+      `Set CELLO_DIRECTORY_PUBKEYS to the comma-separated pubkeys of every directory in the consortium.`,
+    region: awsRegion,
+  });
+  process.exit(1);
+}
+
 // ─── Signing key loading ────────────────────────────────────────────────────────
 //
 // CELLO_ENV=local: load from key file (persisted across restarts)
