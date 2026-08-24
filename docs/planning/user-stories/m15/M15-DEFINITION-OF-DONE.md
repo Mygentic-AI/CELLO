@@ -2191,7 +2191,16 @@ doorbell, so an agent following the contract calls the inbox, gets `daemon_not_r
 a protocol failure while the actual event goes unreported.
 - Either do not forward shutdown through the channel, or give it distinguishable metadata.
 
-### `DOD-M15-SAMEOP-1` — ❌ Same-operator standing does not depend on which node answered
+### `DOD-M15-SAMEOP-1` — ✅ Same-operator standing does not depend on which node answered
+> **CLOSED 2026-08-24 (CELLO_Support) — by VERIFICATION, not by new code, and both halves are
+> evidenced below.** The reader had already been moved to the replicated link on the stable
+> `agent_id` (with a live measurement in the code: 0/7/7 of 14 agents resolved before, 14/14/14
+> after), and Case 1 turned out to be unreachable rather than merely bounded.
+> **No test was added and none is owed:** the reader move carries its own production measurement,
+> and Case 1 is closed by a structural fact — an agent is never the submitter — not by a behaviour
+> that could regress silently. **What COULD regress is the chokepoint itself**: if anything other
+> than the portal is ever enrolled in `authorized_issuers` with a submitting role, Case 1 reopens.
+> That is the line to watch, and it is an enrolment decision, not a code path.
 `DOD-SELF-STANDING-NULL-LINKAGE-1` + the security half of `CELLO-REPL-001`.
 - **The account arm reads a node-local column.** Measured live for one operator with three agents:
   `usc1` had 2 linked, `euw1` 1, `use1` 0. **Searching every node does not fix this** — the
@@ -2219,11 +2228,20 @@ a protocol failure while the actual event goes unreported.
     signing key is enrolled for the mint journey. **Registration does not put an agent in there.**
   - **So the bound is: the Case 1 state is reachable only for an agent an operator DELIBERATELY
     enrolled as an issuer** — a small, operator-controlled set, not "any agent that registered".
-  - **What I did NOT establish, stated rather than glossed:** I did not find the path that enrols an
-    *agent*-role issuer (the role exists — `signal-write.ts` validates a 32-byte agent
-    `issuer_pubkey`). If one exists outside `packages/`, `infra/` and the portal, this bound is
-    wrong. **That is the one thing to check before this line is closed**, and it is a search, not a
-    design question.
+  - **✅ THE SEARCH I SAID WOULD DECIDE THIS — done, and it CLOSES Case 1 rather than bounding it.**
+    There is no agent-role enrolment path because **an agent is never the submitter.**
+    `agent-write-validation.ts` states it: *"trust signals now enter ONLY through the signed
+    chokepoint (`POST /internal/signal/submit`, re-hashed and authorized against
+    `authorized_issuers`)"* — and the key enrolled there is **the portal's own** signing key.
+  - **So the two `issuer` concepts are different things, which is what made this look open:**
+    `authorized_issuers` answers *"who may SUBMIT"* — the portal — while the 32-byte agent
+    `issuer_pubkey` inside the payload answers *"whose endorsement is this"*. `signal-write.ts`
+    validating an agent pubkey is validating the **payload field**, not an enrolment.
+  - **Case 1's state is therefore UNREACHABLE for anything that can manufacture standing.** An
+    endorsement only reaches the directory by being minted through the portal, minting requires a
+    portal session, and a session requires an account — so the agent named as issuer necessarily has
+    one, and `agent_account_links` necessarily has its row. **"No account and no verified phone" and
+    "able to submit" cannot both be true.**
 - Case 2 (unresolvable issuer) was closed by `DOD-END-ISSUER-REGISTERED-1`; do not re-open it.
 
 ### `DOD-M15-ENDORSE-RETRY-1` — ❌ A trust signal reaches the directory when one node is down
