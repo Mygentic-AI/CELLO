@@ -320,6 +320,38 @@ The six known checked-then-ignored instances; three carry such a comment.
 > **The replacement text is pinned too**, not just the absence of the old: `isAutoAccept` has no
 > production caller, verified by a scan proven non-vacuous. If anyone wires it up, the test reddens
 > at the same moment the description becomes false.
+>
+> ### WHOLE-FILE AUDIT, 2026-08-24 (CELLO_Support) — the scope clause discharged by measurement
+> The line demands the whole surface be audited in the same pass, not just the three tier strings.
+> **58 tools; 21 carry claim vocabulary** (`never`, `always`, `cannot`, `guaranteed`, `exempt`,
+> `only`, `prevents`). Adjudicated the four that would actually cost something if false — the ones
+> making PRIVACY and INJECTION-DEFENSE promises, because a false claim there is the same class of
+> defect this line opened with. **All four are TRUE, each checked against the producer:**
+> - **`cello_name_session` — *"never sent to the counterparty, the relay, or the directory."*** 37
+>   references across 9 files, and **every one is a local surface** (MCP, CLI, daemon handlers,
+>   migration). Exactly ONE write: a local `UPDATE sessions SET session_name`. No transport, relay
+>   or signaling file touches it.
+> - **`cello_moniker` — *"local-only, never sent to the directory."*** 10 files reference a moniker;
+>   none is directory-, signaling-, registration- or transport-bound. Empty result **proven
+>   non-vacuous** by listing the 10 first.
+> - **`cello_dismiss` — *"never propagated, never part of the seal or hash chain."*** `read_at` has
+>   three references total: this description, the CLI's copy of it, and the setter. Nothing in any
+>   leaf, tree, submit or frame path.
+> - **`cello_doc_watch` — *"they cannot make you wake by claiming a field is urgent."*** The wake is
+>   `matchWatchedPaths(watches, changedKeyPaths(seen, after))` — the changed paths are **diffed
+>   locally** from the last-seen text, never taken from the peer's frame, and there is no urgency or
+>   priority field to lie in. **The code is stricter than the claim:** *"THE AGENT'S OWN PATTERNS
+>   travel, never the changed paths… a doorbell body is an unscreened route into the agent's
+>   context."*
+>
+> **ONE IMPRECISION FOUND, recorded not fixed (§0z.4 — the gate is frozen).** The ruled text says
+> tiers 1-4 are auto-accepted *"WITHIN THEIR CAPS"*. There is also
+> `ABUSE_MAX_UNKNOWN_SESSIONS_GLOBAL = 50` — a cap on ALL unknown-tier senders **combined**, so a
+> tier-1 sender inside their own 3-session cap can still be refused because of traffic that is not
+> theirs. **The error runs in the safe direction** — it under-promises protection and over-promises
+> reachability, the opposite of the defect this line exists for — so it is a note, not a blocker.
+> `DEFAULT_TIER_BOUNDS` re-verified at every tier: BLOCKED **0** (the one tier gating *whether*),
+> then 3 / 5 / 20 / 50. The ruled sentence is accurate.
 **BLOCKS LAUNCH** (§0z.1): shipped operator-facing text states a protection the system does not
 provide, and the false half is the *reassuring* half. Found 2026-08-23 while Andre was setting a
 contact's tier by hand; the receptionist raised it as "a setting that does nothing" and the measured
