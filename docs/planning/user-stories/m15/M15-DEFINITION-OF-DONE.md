@@ -1337,7 +1337,28 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > behaviour, not vocabulary drift. `content.delivery.acked` fired twice in the run, just not for the
 > hash the test waited on.
 >
-> #### ✅ 2 OF 5 FIXED, AND THE OTHER THREE HAVE A DIFFERENT CAUSE — measured, not assumed
+> #### ✅ UNIT DONE — reviewed, all findings fixed, verdict quoted
+>
+> The reviewer closed my riskiest question — *"can the session-id filter read the WRONG message's
+> hash?"* — from the producer side rather than from a log, and then refused to leave it as an argument:
+> > *"`#trackAwaitingAck`'s sole caller is `sendContent` … One send, one entry, one line. So: **correct
+> > today, fragile by construction.** … The `countLines(...)` one-liner turns 'there is only one
+> > candidate' from an argument into an assertion, and I would land that before closing the unit."*
+>
+> Landed. It also confirmed the two `?? ""` fallbacks *"fail loud, immediately, before any consumer"*,
+> that the broader filter cannot make the timeouts insufficient (*"a broader filter can only match at
+> or before the moment the old one would have"*), and that all five remaining `contentHashHex` sites
+> are correctly left alone — *"each is the test producing a hash the daemon then consumes or echoes,
+> none is a wait key."*
+>
+> Lens lines: **SPEC: DEVIATIONS FOUND** (my false claim) · **NO SILENT FALLBACKS** ·
+> **ERRORS NAME THEIR CAUSE** · **HOLLOW TESTS FOUND** (both now labelled or pinned) ·
+> **REMOVALS PROVEN** (n/a).
+>
+> **Revert test, quoted:** *"Revert to `contentHashHex(msgBytes)` and the 15 s wait expires —
+> measured, red."*
+
+#### ✅ 2 OF 5 FIXED, AND THE OTHER THREE HAVE A DIFFERENT CAUSE — measured, not assumed
 >
 > **Fixed (both the same defect):** the dedup test and the ACK ladder computed
 > `contentHashHex(...)` — `SHA-256(0x00 ‖ content)`, the **unsalted** hash — then waited for a value a
