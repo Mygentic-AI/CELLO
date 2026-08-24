@@ -257,6 +257,44 @@ from this document.
 > libp2p stream to a directory; its redial does not recover it; a restart does. Nothing else about
 > the mechanism is known, because nothing observes that connection between seals.
 
+**Directory nodes rolled onto `directory:e0aae57a…` 2026-08-24 ~02:30 UTC — `DOD-M15-SEALWIRE-1`
+bullets 3+4, the directory half. THE WHOLE FLEET IS NOW ON `e0aae57a`.** All three regions, one at a
+time per `infra/CLAUDE.md` §2, `-target` on the directory template + MIG only. Instances
+`cello-gcp-use1-7jjd`, `cello-gcp-usc1-vkwp`, `cello-gcp-euw1-3602` replaced `-7d7m` / `-6q6t` /
+`-r059`. `directory_image_tag` moved off `0d00e3bf…`.
+
+**What it changes, and it is the point of the whole line.** Until this roll, every root check the
+directory could make compared the relay against values the relay itself supplied — it validated
+ARITHMETIC, not the relay. A relay that dropped a message leaf and recomputed the chain passed every
+time, and both participants received a signed certificate over a conversation neither of them had.
+The directory now compares the presented leaves against `final_root` — **the client's own signed
+claim about its own transcript, the one value in reach the relay cannot produce.**
+
+**⚠️ ORDER MATTERS AND IT WAS FOLLOWED: relay first, directory second.** The relay legs only accept
+and forward; the directory leg is the one that starts REFUSING seals, so it went last, onto a fleet
+already able to carry what it asks for.
+
+**⚠️ THE CHECK IS STILL PERMISSIVE BY DESIGN, AND A GREEN SEAL DOES NOT PROVE IT RAN.** An absent
+payload is treated as `not_carried` and the seal proceeds exactly as before — because every client is
+un-upgraded until it upgrades, and refusing would have taken the federation down the moment this
+shipped. Tracked as `DOD-M15-NOTCARRIED-REFUSE-1`: once clients and relays all carry it, absence must
+become a refusal, or the guard stays optional for the party it guards against.
+
+**Verification actually performed**, since the file's own banner warns that image tags and cloud-init
+templates drift independently and a clean plan does not catch it:
+- every running instance's image read from `metadata.items[].value`, **not** from the tag — all five
+  on `e0aae57a`;
+- capacity probed for all five (zone, machine-type) pairs BEFORE any roll — all had capacity, no
+  downsize needed;
+- health from the fleet's own signals: `antientropy.round.*` per zone for the directories,
+  `relay.health.check.passed` per `relayId` for the relays, each back to baseline before the next
+  node was touched.
+
+**A measurement trap worth recording: a 90-second anti-entropy window read as an outage.** Straight
+after the `us-central1` roll, a 90s window showed only `europe-west1` and looked like two of three
+nodes missing. A 4-minute window showed all three healthy. The node had simply not been up long
+enough to fill the shorter window. **Use ≥3 minutes; the baseline itself is quoted per 3 minutes.**
+
 **Relays rolled onto `relay:e0aae57a…` 2026-08-24 ~02:15 UTC — `DOD-M15-SEALWIRE-1` bullets 3+4, the
 relay half.** Both regions, one at a time per `infra/CLAUDE.md` §2, `-target` on the relay template +
 MIG only. Instances `cello-gcp-relay-use1-7qkx` and `cello-gcp-relay-euw1-v468` replaced `-1593` /
