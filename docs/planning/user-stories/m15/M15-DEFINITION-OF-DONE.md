@@ -1444,11 +1444,47 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > capture directory FROST logging. **That is a fact about the evidence, not about the product**, and it
 > would be very easy to report as *"the nodes did not refuse"*, which the receipt cannot support.
 >
-> **NEXT STEP, precisely:** re-run `j-suspend-tofn` with the three directory processes' output captured
-> and grep for those two events. If nodes 1 and 2 logged `refused.revoked` and a signature still
-> formed, that is a **threshold defect** and a launch blocker. If they logged `uncheckable`, it is the
-> **known replication gap** already documented in `#isAgentPaused`. If neither appears, the client
-> never asked them, and the question moves to the client's quorum selection.
+> #### 🔴 ANSWERED 2026-08-24, WITH A CONTROL ON THE EVIDENCE: **THE OTHER TWO DIRECTORIES ARE NEVER ASKED**
+>
+> ```
+> node1=silent(never asked)  node2=silent(never asked)
+> captured lines: node1=48, node2=48
+> ```
+>
+> **Both nodes were UP and LOGGING** — 48 captured stdout lines each — and **neither was ever asked for
+> a share.** No `frost.ceremony.refused.revoked`, no `frost.suspension.uncheckable`, no FROST activity
+> at all. A `session_assignment` was produced anyway (`ok:true`).
+>
+> **The capture control is why this is a finding rather than a guess.** An empty stdout buffer reads
+> identically to a node that was never asked — the same ambiguity one level down, in the evidence
+> instead of the product. The test now fails saying *"the harness is not recording this directory"* if
+> the buffer is empty. It is not empty; the control did not fire.
+>
+> **What is ESTABLISHED, and nothing beyond it:**
+> 1. A session assignment is produced **without shares from a majority of the consortium** — two of
+>    three directories are not consulted at all.
+> 2. Therefore **suspending an agent on a node that is not brokering its session does nothing to that
+>    agent's ability to open sessions.** The kill switch bites only on the brokering node.
+> 3. The plumbing is not at fault — profile copy, suspension write and the JOIN were each verified
+>    before this run.
+>
+> **⚠️ WHY THIS IS FOR ANDRE AND NOT FOR ME TO RULE ON.** `.claude/CLAUDE.md` states the invariant as
+> *"no single node can complete a threshold ceremony alone… any implementation that allows a single
+> node to produce a valid ceremony output is a security violation, regardless of whether tests pass."*
+> A FROST-signed `SessionAssignment` is a ceremony output. **But the session ceremony is
+> CLIENT-DELEGATED** — `ClientDelegatedSigner` asks the agent to sign over its own signaling stream —
+> so what the directories contribute to THIS path, and what the intended threshold for a session
+> assignment actually is, is a design question I can state but must not answer by assumption. The
+> registration DKG genuinely fans out to all three (`j-tofn` proves per-node isolation and real
+> per-node DKG, 4/4 green); **session assignment demonstrably does not.**
+>
+> **The user-facing consequence, which is the part that matters at launch:** an operator who suspends
+> an agent — the kill switch the launch bar names — stops that agent only if the suspension has
+> reached the node that happens to broker its next session. On a three-node consortium with
+> single-node replication, that is a **one-in-three chance** unless the flag is replicated first. The
+> code already says so in `#isAgentPaused` (*"a genuinely-paused agent can still reach threshold by
+> routing around the one honoring node — that is the production gap"*); this run measures it end to
+> end and shows the agent does not even need to route around anything.
 >
 > ## 🔒 CLAIMED 2026-08-24 by `CELLO_Coder_1` — do not start work on this line
 > **Files held:** `packages/e2e-tests/src/spine/*` and the journey files under it. Nothing in
