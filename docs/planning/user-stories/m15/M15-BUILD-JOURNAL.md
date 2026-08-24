@@ -7463,3 +7463,1698 @@ false, and I would have written a duplicate of `msg-016`.
 **Carried:** nothing new. The deliberate scripted proof run (open → exchange → restart → close) was
 NOT performed and is not owed — production supplied 16 unstaged instances, which is better evidence
 than a staged one and costs no agent tokens.
+
+
+---
+
+# DoD trails, moved 2026-08-24
+
+**Why these are here.** [[M15-DEFINITION-OF-DONE]] says of itself: *"This document is the
+scoreboard… Evidence, proofs, reviewer verdicts and run output live in [[M15-BUILD-JOURNAL]], never
+here."* It had stopped honouring that — the open lines carried investigation trails, retractions and
+review verdicts inline, and the file reached 7,600 lines. Andre, 2026-08-24: *"do we need such long
+prose for the remaining items — full history of what happened? Isn't that the build journal's job?"*
+
+**Nothing is edited.** Each block below is verbatim, under the DoD line it came from. The DoD keeps
+the line's DEFINITION — what it is, why it blocks, the bar, the enforcer — and points here.
+
+
+## ⚠️ THE UNCOMFORTABLE HALF, and it must not be misread
+
+> **DO NOT REMOVE THOSE COMMENTS. That is the exact inversion this milestone exists to prevent** — an
+> honest limit deleted is `DOD-M15-CLAIM-COMMENTS-1` run backwards, and those comments are what stop
+> our own agents over-claiming. **The comment is not the defect; the unfixed gap is.**
+>
+> What the filter changes is the ORDER: **a gap our own source announces goes to the top**, because it
+> is handed to a reader rather than merely available to one.
+
+
+## The ranking, with sizes — smalls first, because a quick win is a real win
+
+> ### 🔀 EVERY ROW ABOVE NOW NAMES A LINE WITH ITS OWN TAG (Andre, 2026-08-24).
+> Four of these were BULLETS inside larger lines, and a bullet cannot be tagged, claimed or counted.
+> The cost was concrete: two were **finished and still read as untouched**, and one was **unclaimed and
+> read as taken** — for a week nobody would have picked it up, because its parent was red for an
+> unrelated reason. Split into `RELAYPARK-1`, `RELAYPUBKEYS-1` and `RELAYADMIN-1`.
+>
+> **The rule:** if something is worth ranking, it is worth a line. Ranking a bullet produces a
+> priority nobody can act on and a status nobody can read.
+
+> ### ✅ TABLE RECONCILED WITH THE LINES BELOW IT, 2026-08-24 (CELLO_Support) — four rows were STALE
+> Andre reads this table first, and a finished row that still reads as open sends the next lane to
+> redo it. Corrected against each line's own entry:
+> - **`DISCLOSE-1` said "the shipped docs say nothing".** They do now — all four bullets, in both
+>   copies of `SKILL.md`. The row also said `RELAYONLY-1` "was reopened as not working"; it CLOSED
+>   the same day, after two review passes.
+> - **`STEP6-REPLAY-1` said the cheap fix "is to make the skip LOUD".** That was done under
+>   `DIRAUTH-1`. What is left is the byte-match, which is not cheap and is not a documentation fix.
+> - **`RELAYABUSE-1` said "no rate limiting of any kind".** The park deposit has a reviewed per-peer
+>   limiter on both halves, and the liveness query is scoped. Three paths remain.
+> - **⚠️ `RELAYAUTH-1`'s gater was sized **S** on "written and never installed", and that sizing is
+>   WRONG** — this line's own claim block records the measurement:
+>   `@libp2p/circuit-relay-v2@4.2.11`'s `ServerReservationStoreInit` exposes only `maxReservations`,
+>   `reservationClearInterval`, `applyDefaultLimit` and `ttl`, with **no per-peer ACL hook**, and a
+>   `connectionGater` cannot stand in because CELLO's relay auth runs on `/cello/relay/1.0.0` AFTER a
+>   libp2p connection exists. **Restricting who may reserve needs a mechanism that does not exist
+>   yet.** Left at **S**, it reads as an afternoon's wiring and would be picked up as a quick win by
+>   whoever trusts this table — which is precisely the cost this table was rewritten to stop.
+
+
+## What the filter DEMOTES, and this is the point of writing it down
+
+> **A note on the unilateral seal, corrected here because it was overstated to Andre and he caught
+> it.** It was described as "a false record about a real person." It is not. Every message carries
+> both parties' signatures, and the line's own text says *"everything up to the absent party's last
+> signed message is exactly as strong as a bilateral seal."* The real defects are narrower: the
+> artifact does not mark where full strength stops, and the trigger has no presence check. Only the
+> uncountersigned tail — usually one message — is ever in question.
+
+
+## `DOD-M15-LEDGER-1` — 🅿️ Every live claim is in the ledger with a disposition
+
+> **Two of nine surfaces done AND reviewed (→ Entry S2).** Nine findings, five blocking, all fixed.
+> README 19→2, `registry.ts` 37→4. A row now carries the verbatim text it accounts for and the
+> count is derived from it — the reviewer had zeroed a whole surface with an invented row past both
+> old guards. **Remaining seven surfaces DEFERRED — see the section banner above.** Ruled by Andre
+> 2026-08-24; runs last, after the encryption and receipt work, with `AUDITME-1`. *(The earlier
+> "(Andre, 2026-08-23)" stamp here was wrong — that was a lane decision recorded under his name. He
+> has since ruled it and it stands.)* Includes `adapter-claude-code/SKILL.md:170`'s *"both sides
+> agree on"*, which contradicts `implies_assent: false` and is an ungated deletion when unparked.
+
+
+## `DOD-M15-DEAD-WIRE-FIELD-1` — 🟡 (client half done; the wire removal is bilateral and carried)
+
+> **CLIENT HALF CLOSED 2026-08-23.** Reviewer verdict: *"**SPEC: FAITHFUL** — for the client half as
+> scoped… **HOLLOW TESTS FOUND [blocking]** — question 4 fails: the outcome (`[]`) is unasserted, and
+> four mutations stay green."* All findings fixed; the reviewer's green mutations re-run red.
+> Gate: 4121 client tests, 2265 relay tests with the database live.
+>
+> **It also verified the premise independently rather than taking it from me** — no signature covers
+> the field (both TBS builders, both repos), nothing reads it (every consumer takes `.pubkey`), and
+> it is `[]` on the wire. With one caveat worth keeping: that describes THIS TREE, not the deployed
+> fleet — a client older than `SURFACE-1` still announces real addresses.
+>
+> **F1, and it is the finding of the round: the identical defect sat one line above.**
+> `participant.peer_id` met every clause, and was WORSE — the killing value is not a bug's output but
+> a DEFAULT the directory writes on purpose (`directory-node.ts:2049` on auth, `:3867` on a map
+> miss, `:4120` copies it in), and nothing gates it because the only announce requirement checks the
+> INITIATOR, never the TARGET. So an agent whose announce is late could not be talked to at all: a
+> valid FROST-signed assignment, refused by both clients over an empty string neither reads. **My
+> suite could not tell — deleting the peer_id guard left all five tests green.** Fixed and tested.
+>
+> **F3:** a tolerated-but-malformed field is now reported (optional callback, no logger dependency in
+> a pure shape-validator). ABSENT is deliberately silent — once the wire half lands that is the
+> normal case, and a signal that fires on the normal case is not a signal.
+>
+> **CARRIED, both:**
+> - **The wire removal itself** — bilateral, sequenced with `SUBMIT-ID-1`'s 7-element Structure 1 and
+>   `TERMINAL-REASON-1`'s reasons so the two repos move once. ⚠️ `directory-frames.ts:1182`'s
+>   `parseParticipant` requires both fields and is called from ~110 test sites; loosen it in the SAME
+>   commit as the removal or that suite goes red the day the field leaves.
+> - **→ `DOD-M15-PARSEFAIL-CAUSE-1` (new):** `assignment_parse_failed` is one exit-point label over
+>   ~12 distinct causes. This unit removed two of them, which is why the class is now visible:
+>   returning the FIELD that failed instead of `null` would make the next one an afternoon rather
+>   than a week. Invariant 3.
+
+
+## `DOD-M15-SPINERED-1` — 🟡 The multi-process evidence lane is HALF RED, and nobody knew
+
+> # 🔒 CLAIMED BY `CELLO_Coder_1`, on Andre's instruction 2026-08-24: *"Don't abandon SPINERED-1. Make
+> # sure that completes."* Not unclaimed, and not released.
+>
+> **State: the lane is no longer half red.** `j-spine` 7/7 · `j-end` 10/10 · `j-content` 10/10 ·
+> `j-tofn` 4/4 · `j-relaysig`, `j-trust`, `j-upgrade`, `j-loopback` green.
+>
+> **What is left is TWO things, and NEITHER is a coding task:**
+> 1. `j-documents` 7 + `j-stale-session` 1 — **needs Andre's design decision.** Salt agreement is a
+>    direct-path protocol; documents are relay-only, so a document session never agrees a salt. Three
+>    options filed. Nothing to implement until he picks one.
+> 2. `j-multiplayer` 4 — cause named and instrumented (`DOCACCEPT-UNBOUNDED-1`); the bound is his call,
+>    and it is now a choice between measured numbers rather than a guess.
+>
+> ~~🔓 CLAIM RELEASED 2026-08-24 — Andre re-ranked; this is no longer my WIP. Unclaimed and available.~~
+> **Struck: that was the OTHER lane releasing it, and it then read as ownerless while Andre had assigned
+> it here.** Kept visible because "unclaimed" on a line somebody owns is how work sits still.
+> # (prior claim, kept for the trail) CELLO_Support, 2026-08-24 — `CELLO_Coder_1` handed it over
+> (*"the vitest slot is yours for the full lane… I am asking you to take it"*), and it is claimed
+> here rather than only in conversation because ownership living in a conversation is exactly how
+> both lanes independently fixed the seal line.
+> **My two lines are closed** (`SEALWIRE-1` ✅, `RELAYONLY-1` ✅), so this is my one WIP.
+> **What I hold:** the `pnpm run test:spine` runner and the triage of its output. **I hold no source
+> files yet** — the line's first unit is a TRIAGE, and it explicitly says do not open 21 items from
+> it. Any fix that follows gets claimed here first.
+> **Blocked on one thing only: exclusive use of the test runner for ~90 minutes.** The guard hook
+> permits one run at a time and both lanes share it.
+
+> ## 📊 TRIAGE EXECUTED 2026-08-24 — the prediction is settled, and the lane is far healthier than 21/36
+>
+> **Run by CAUSE, not by file, as the line demands. Measured, not predicted:**
+>
+> | cluster | receipt | now | verdict |
+> |---|---|---|---|
+> | **A — the CLI banner glued into JSON** (`j-refresh`, `j-sign`, `j-tofn-dkg`×2, `j-tofn`, `j-relaysig`) | 6 red | **6 GREEN** | **fully resolved.** `j-tofn` 4/4, `j-relaysig` 1/1 measured here; the other three measured by the second lane |
+> | **B — `sealed_root: undefined`** (`j-upgrade`, `j-loopback`, `j-unilateral`×2, `j-spine`×2) | 5–6 red | **`j-upgrade` ✓, `j-loopback` ✓; `j-unilateral` 1/3** | **partly resolved, and the remainder has a NAMED owner** |
+> | **C — portal `ECONNREFUSED`** | 2 red | container up, unmeasured | environment, not code |
+>
+> **THE FALSIFIABLE PREDICTION WAS PARTLY RIGHT, AND THE PART THAT FAILED IS THE USEFUL PART.**
+> `CELLO_Support` predicted, in writing before the run, that cluster B was the salt split and would
+> shrink. It shrank — `j-upgrade` and `j-loopback` both went green with no change to either journey.
+> **`j-unilateral`'s two did not**, and their failure texts name why:
+> *"A's unilateral seal: no sealed_root within 90000ms"* and *"notarized must record ABSENT"*.
+> That is **`DOD-M15-UNILATERAL-NOTARIZE-1`** — the attestation fires, the notarization never does —
+> which was already a known, named line. **So they were never mysterious; they were mis-clustered.**
+>
+> **⚠️ AND NOTE WHAT THE FIRST FAILURE TEXT NOW SAYS.** In the receipt it was
+> `.toMatch() expects a string, got undefined` — the matcher destroying its own diagnostic. It now
+> reads *"no sealed_root within 90000ms for session 89d84d8b…"*. **Same failure, a real cause.** That
+> is `DOD-M15-CLOSEROOT-1`'s `expectMatches` working, and it is exactly the "progress that looks like
+> a new failure" the scaffold warned about — the test did not get worse, it started talking.
+>
+> ### 📊 THE THREE HEAVY FILES, RUN: 12 failed / 12 passed — and 12 failures are FOUR causes
+>
+> | cause | n | where |
+> |---|---|---|
+> | `MCP error -32001: Request timed out` (all ~70s) | **4** | `j-multiplayer` — one cause, four casualties |
+> | ~~content-delivery waits expiring (`daemon-ackA` 12s, `daemon-dedupB` 15s, `recovered:1`)~~ **✅ CLOSED — `j-content` is 10/10** | ~~3~~ **0** | `j-content` — and it was never ONE cause: four separate defects, detailed below |
+> | agent/session state at setup (`expected 'stopped' to be 'registered'`, `status must carry a connections list`) | **2** | `j-spine` |
+> | `standing_receiver_unavailable` — the known transient | **1** | `j-spine` |
+> | unclustered (`only the honest entry is accepted`, `straggler refused by the sealed-session guard`) | 2 | `j-multiplayer` |
+>
+> ### ✅ `j-content` IS 10/10 — CLOSED 2026-08-24. And three things written below it were wrong.
+>
+> Measured, full-file run, not per-test: **10 passed / 0 failed**, tamper case included. Four separate
+> defects, none of which was the one this section predicted.
+>
+> **⛔ CORRECTION 1 — "auto-recover is not broken, the mailbox was empty" was wrong, and the reasoning
+> under it was wrong in a way worth keeping.** This section quoted
+> `"recovered":0, "relayCount":1, "failedRelays":0` and concluded the relay genuinely had nothing, then
+> reasoned from `"trigger":"standing_receiver_ready"` that the park must be landing *after* the sweep.
+> **The actual first sweep reads `"trigger":"signaling_reconnect","recovered":0,"failedRelays":1`** —
+> a different trigger, and `failedRelays: 1` means the sweep **could not reach the relay at all**. It
+> was not an empty mailbox; it was a sweep that never got to look. The park was confirmed deposited
+> before B ever restarted.
+>
+> **The defect was in the test, and it is a shape worth naming: `waitForLine` returns the FIRST match.**
+> B runs several sweeps coming back up. The test matched the bare event name, latched onto the earliest
+> one — the one that had failed to reach the relay — and asserted `recovered:1` against it, while the
+> later `standing_receiver_ready` sweep did the work correctly. **Auto-recovery was working the entire
+> time.** The wait now selects a sweep that actually recovered, and prints every sweep with a note that
+> a non-zero `failedRelays` means unreachable rather than empty.
+>
+> **The general lesson: I read `failedRelays:0` off one sweep and attributed it to the sweep that
+> mattered.** Two sweeps, two different triggers, two different outcomes — and the quoted line was the
+> wrong one.
+>
+> **⛔ CORRECTION 2 — "not vocabulary drift" was wrong for the straggler.** This section said the two
+> expiring waits were "genuine timing or delivery behaviour, not vocabulary drift" because the event
+> names still exist. One of them was **exactly** vocabulary drift: `DOD-MSG-8` matched
+> `content.recover.ingest_failed` with `reason: "session_committed"`, and since M12-P17 gave the daemon
+> an annex, refused content is no longer dropped — it is written to the annex and the line is
+> **`content.recover.annexed`**. Same reason, retired event. Checking that an event name still exists
+> somewhere in the daemon does not establish that it is still the one THIS path emits.
+>
+> **⛔ CORRECTION 3 — the second read was missing, not the first.** `DOD-MSG-4 (auto-recover)` also
+> asserted a single `cello_receive` returning the parked message. B never read the earlier live message
+> before going offline, so that one is still queued and is delivered first. The test was therefore
+> asserting that B had **lost** it. Both reads are pinned now, in order, with the in-band `[[OVER]]`
+> suffix — the ordering the recover test in the same file already documents.
+>
+> **✅ WHAT THIS SECTION GOT RIGHT, and it was the load-bearing half.** The trap warning below —
+> *"a v2 envelope would recompute unsalted, mismatch, and land in a FALSE TAMPER CLAIM"* — is
+> **correct and now proven by mutation**: with everything else right, removing `contentHashAlg` from
+> the dedup deposit reddens the test. The direct frame really does hash salted.
+>
+> #### ✅ UNIT DONE — reviewed, all findings fixed, verdict quoted
+>
+> The reviewer closed my riskiest question — *"can the session-id filter read the WRONG message's
+> hash?"* — from the producer side rather than from a log, and then refused to leave it as an argument:
+> > *"`#trackAwaitingAck`'s sole caller is `sendContent` … One send, one entry, one line. So: **correct
+> > today, fragile by construction.** … The `countLines(...)` one-liner turns 'there is only one
+> > candidate' from an argument into an assertion, and I would land that before closing the unit."*
+>
+> Landed. It also confirmed the two `?? ""` fallbacks *"fail loud, immediately, before any consumer"*,
+> that the broader filter cannot make the timeouts insufficient (*"a broader filter can only match at
+> or before the moment the old one would have"*), and that all five remaining `contentHashHex` sites
+> are correctly left alone — *"each is the test producing a hash the daemon then consumes or echoes,
+> none is a wait key."*
+>
+> Lens lines: **SPEC: DEVIATIONS FOUND** (my false claim) · **NO SILENT FALLBACKS** ·
+> **ERRORS NAME THEIR CAUSE** · **HOLLOW TESTS FOUND** (both now labelled or pinned) ·
+> **REMOVALS PROVEN** (n/a).
+>
+> **Revert test, quoted:** *"Revert to `contentHashHex(msgBytes)` and the 15 s wait expires —
+> measured, red."*
+
+>
+> **Fixed (both the same defect):** the dedup test and the ACK ladder computed
+> `contentHashHex(...)` — `SHA-256(0x00 ‖ content)`, the **unsalted** hash — then waited for a value a
+> salted session never writes. Both now read the hash off the daemon's own event.
+>
+> > **⛔ CORRECTION — I claimed the ACK fix "repaired a VACUOUS assertion". It did not, and review
+> > caught the claim in this file and in the code comment.** That negative park assertion was vacuous
+> > for **two** reasons and the hash was only one. It runs ~1ms after the ACK, and the only producer of
+> > a sender-side park is a **20-second** timer that `#resolveAwaitingAck` clears as its first act —
+> > before emitting the line the test awaits. **Reaching the assertion guarantees the timer is dead.**
+> > Fixing the hash removed one vacuity and left another underneath it. **Giving it teeth needs a
+> > daemon restart after the ACK, asserting the startup flush re-parks nothing** — the shape
+> > `DOD-MSG-2` already uses in the same file. Filed, not built.
+> >
+> > Also corrected in place: `expect(acked).toMatch(/"level":"persisted"/)` **cannot fail** — `level`
+> > is a string literal at the single emit site. Kept with a message saying what would actually prove
+> > the claim, because an assertion standing next to a constant implies a proof it never gave.
+> >
+> > And the ACK extraction is now **pinned** (`countLines(...) === 1`). It filters on session id rather
+> > than hash and `waitForLine` returns the first match, so it was correct only because exactly one
+> > send happens on that daemon — an argument, not an assertion, until now.
+>
+> **⚠️ AND MY "ONE CAUSE, FOUR MORE SITES" WAS WRONG. Correcting it rather than letting it stand.**
+> The dedup test now advances *past* the hash and fails on something else entirely:
+>
+> ```
+> content.recover.ingest_failed   reason: "unsigned_envelope"
+> content.recover.unauthenticated
+> ```
+>
+> **These tests deposit through the raw `content_park_deposit` IPC shortcut, which produces no sender
+> signature.** `authenticateParkedEntry` refuses that — correctly. `park-envelope.ts` calls it *"the
+> ATTACKER shape"* and the refusal is deliberate: production never parks that way, it parks through
+> `#parkContent`, which builds a signed v2/v3 envelope. **So this is a test shortcut invalidated by a
+> security tightening — not a product defect, and nothing to do with hashing.**
+>
+> The auto-recover test cannot be the hash cause either: it **injects** its hash through
+> `enqueue_awaiting_content` rather than waiting for one.
+>
+> **⛔ THE FIX SHAPE PROPOSED HERE WAS PARTLY WRONG, AND THE WRONG HALF IS THE INTERESTING ONE.**
+> It said: park via a **real send** to an offline recipient instead of the IPC shortcut. **A real send
+> cannot express the tamper case at all.** `DOD-MSG-7`'s whole point is an entry whose CLAIMED hash
+> does not describe the content sealed inside, and a real send always produces a matching pair — the
+> case would have become unreachable, and the test would have been quietly deleted or hollowed to suit
+> the fix.
+>
+> **What was right:** hand-building an envelope in the test is not acceptable, for the reason given —
+> it is a second implementation of a security-critical encoder.
+>
+> **What actually shipped:** the deposit IPC now takes plaintext `content` and parks through the
+> daemon's own `sealParkEnvelope`, the sole signer. No encoder is duplicated, and the tamper case
+> survives, because the signature covers `(sessionId, recipient, claimed hash)` and deliberately does
+> **not** bind the content — so a sender can still sign an entry that lies about its own hash. That is
+> a malicious SENDER rather than a malicious relay, and it is exactly what the recover cross-check
+> exists to catch.
+>
+> **Worth recording about the handler itself:** it had **no production caller**. Its only four callers
+> were these tests, which is why it drifted from the shape production emits and kept emitting the one
+> SEC-1 refuses. A test-only affordance sitting in production code, diverging silently.
+>
+> **And the deeper cause under all of it was not the envelope at all.** The dedup deposit carried the
+> bare message text while the daemon had hashed `"<msg> [[OVER]]"` — the turn signal is IN-BAND, part
+> of the content the shim sends. Two different strings. That is why it failed identically whether the
+> envelope declared `sha256` or `hmac-sha256-salt-v1`, **and two algorithms failing the same way is
+> what proved the algorithm was never the cause.** I had read the mismatch as a salt problem first.
+>
+> **⚠️ AND A TRAP ON THAT FIX, from review — do NOT hand-build a v2 envelope to get past
+> `authenticateParkedEntry`.** The recover path resolves the hash algorithm from the **envelope**, not
+> the session: absent (v2) ⇒ `sha256`. The dedup test now deposits the daemon's **salted** hash, so a
+> v2 envelope would recompute unsalted, mismatch, and land in
+> `#markContentUnverifiable(…, "tampered")` — **a FALSE TAMPER CLAIM**, which also blocks auto-co-sign
+> at seal. A real send is safe precisely because `#parkContent` carries `contentHashAlg` through and
+> emits **v3** when salted.
+>
+> **Assuming a confirmed cause carried to everything that looked similar was the error. Measuring each
+> was the correction** — and it is the same trap this line has now sprung three times.
+
+> **↑ SUPERSEDED — the file is 10/10 as of 2026-08-24 (full-file run). Kept for the diagnostic trail.**
+>
+> **The batch run showed 3 failures; alone it shows 5.** So there is genuine cross-test interaction in
+> this file — worth knowing before anyone tunes a timeout to make a number move.
+>
+> | passing | failing |
+> |---|---|
+> | `MSG-3` transport deposit · `MSG-3` send-park · `MSG-3/4` recover · `MSG-2` startup-flush · `MSG-4` self-ordering frame | `MSG-7` tamper · `MSG-5` dedup · `MSG-1` ACK ladder · `MSG-4` auto-recover · `MSG-8` straggler |
+>
+> > **⛔ THE "CROSS-TEST INTERACTION" READING DID NOT SURVIVE.** The counts moved between runs because
+> > `MSG-7` was genuinely intermittent, and every other difference was a test asserting the wrong thing
+> > — four independent defects, each reproducible ALONE once the assertion was corrected. There was no
+> > shared-state interaction to find. **A moving failure set is evidence of non-determinism somewhere;
+> > it is not evidence that the tests interfere with each other**, and this section treated the second
+> > as established by the first.
+>
+> **⚠️ "TOO SLOW" IS RULED OUT, MEASURED.** The dedup test waits 15s for `session.content.received`
+> carrying a specific `contentHashHex`. **That hash appears NOWHERE in the run except the failure text
+> itself** — not in a late event, not in any other event. The same is true of the ACK ladder's hash.
+> Both events DID fire in the run, twice each, for other hashes. A longer timeout would change nothing.
+>
+> **And it is not being refused either:** zero `session.content.cross_check.failed`, zero
+> `content_hash_*` refusal reasons, and the salt is healthy (8 × `session.salt.agreed`,
+> 8 × `session.salt.announced`).
+>
+> > **⛔ CORRECTION — the conclusion drawn from this was wrong.** It read *"So content is neither
+> > rejected nor late — it is not delivered."* **The content WAS delivered, every time.** The event
+> > fired, under a hash the test had computed itself and the daemon never writes. An absent hash means
+> > *nobody produced this value*; it does not mean *no message arrived*. The two look identical in a
+> > grep and they are opposite diagnoses — one sends you to the transport, the other to the hash.
+> >
+> > The tell was in the same paragraph and was read past: *"both events DID fire, twice each, for other
+> > hashes."* That IS the message, under its real hash.
+>
+> That is as far as this log goes: the sender-side lines for those hashes are in a different process's
+> capture, so the produce half needs a run with both daemons' output retained.
+>
+
+
+## 🔴 `j-documents` — 7 of 12 RED, AND IT IS THE SALT SPLIT, STILL LIVE
+
+> ### ⛔ THE RETRACTION BELOW IS ITSELF WITHDRAWN — verified 2026-08-24. THE ORIGINAL FINDING STANDS.
+>
+> I retracted on the premise that `session.salt.announced` is `debug` and *"would not appear in an
+> info-level capture"*. **There is no info-level capture. The daemon's logger has NO level gate** —
+> `core/daemon/src/bin/cello-daemon.ts:39` writes `debug` to stdout unconditionally, exactly like
+> `info`. So a debug event absent from the capture is absent because it did not fire.
+>
+> **And the anomaly that triggered the retraction is itself the finding.** I argued the capture must be
+> partial because `session.node.created` is `info` and read 0 while sessions plainly existed. Checked:
+> `session.node.created` (`session-node-manager.ts:3779`) and `session.relay.leaf.delivered` (`:3849`)
+> are **`this.#logger.info` in the same class, seventy lines apart.** One appears **76 times** in that
+> run; the other appears **zero**. The capture is proven working. **So no session node was created in
+> the document run** — which is not a gap in the evidence, it is evidence.
+>
+> **That materially strengthens the hypothesis rather than killing it:** the salt announce hangs off
+> `onPeerConnect`, which fires when a session's node attaches a peer. No node created ⇒ no attach ⇒ no
+> announce ⇒ `no_agreement_started`, which is the reason string actually observed. Every measurement
+> now points the same way.
+>
+> **⚠️ STILL SHORT OF PROOF, and the gap is narrow and named:** `session.node.created` is logged at two
+> sites. If document delivery reaches a session node by a third path that logs neither, the zero would
+> mislead — so *"documents create no session node"* is established for those two sites, not for every
+> route into a node. The per-session-id comparison below remains the thing that closes it.
+>
+> **Kept rather than deleted** because the reasoning error is the lesson: I inferred a capture problem
+> from a level I never checked, and used it to discard a correct result. **Verifying the instrument
+> cuts both ways — it can restore a finding as easily as destroy one.**
+>
+> ### ⚠️ RETRACTION, same session, before this was acted on — ITSELF WRONG, see above
+> I wrote that `session.salt.announced × 0` proved the announce *"was never sent"*. **That inference
+> is invalid and I am withdrawing it.** `session.salt.announced` is logged at **`debug`**
+> (`session-node-manager.ts:10729`), so it would not appear in an info-level capture whether it fired
+> or not. **Counting a debug event in an info capture and reading zero as absence is exactly the
+> "how far did the test actually get" error this line has already been bitten by twice.**
+>
+> Worse, the capture is demonstrably partial for **info** events too: `session.node.created` is
+> `logger.info` and also reads **0** in the same run — while that run contains 76
+> `session.relay.leaf.delivered` and 56 `session.tree.appended`. Sessions plainly existed. **So
+> `session.salt.agreed × 0` is not solid either**, and I had leaned on it.
+>
+> **Found by running the one-query check I had written down as the decisive next step** — which
+> returned `node.created: 0` and immediately falsified the method rather than the hypothesis.
+
+
+## ⚠️ `DOD-SPINE-1 "daemon up: started"` IS NOT THE DAEMON BEING DOWN, AND THE LINE SAYS IT IS
+
+>
+> This line records the floor as red — *"`J-SPINE` 'daemon up: started' — the most basic multi-process
+> assertion there is."* **The daemon is up.** In the same file and the same run,
+> **`DOD-SPINE-4` (register two agents, real DKG), `-5` (FROST-signed SessionAssignment), `-6`
+> (send/receive through the relay), and `-7` (bilateral seal, byte-identical root) all PASS.** None of
+> those is reachable with a daemon that failed to start.
+>
+> The actual assertion text is **`agentA starts registered: expected 'stopped' to be 'registered'`** —
+> an AGENT-STATE precondition, not a process-liveness one. The test's *name* says daemon-up; its
+> *assertion* is about an agent being registered.
+>
+> **That is the `j-tofn-dkg` lesson inverted.** There, a test that asserts X was red without ever
+> reaching X. Here, a test NAMED for X fails on something that is not X, while X demonstrably works —
+> and the milestone's most alarming sentence about this lane ("the floor is red") rests on it.
+> **Reading a test's name instead of its assertion is how that sentence survived.**
+>
+> ### 🔴 `j-suspend-tofn` IS NOT A WRONG-PREMISE TEST, AND ITS FAILURE IS ABOUT THE KILL SWITCH
+>
+> **This line has been carrying it as *"a test encoding T=3 when we ship T=2"* — a test to correct, not
+> a defect to chase. That is wrong on both counts, and I inherited it instead of re-deriving it.**
+>
+> **The notation is not a contradiction.** The header says *"N=3 directories, T=3 = client + any 2"* —
+> that is **two directory shares**, which IS `majority(3)`. The arithmetic in the test is consistent
+> with the shipped threshold; nothing about it needs correcting.
+>
+> **The actual failure, from the receipt:**
+> > `× threshold-refusal ≠ single-node: 2 of 3 directories suspended ⇒ no signature; 1 ⇒ still signs`
+> > → *"2 suspended directories must block signing: `{"ok":true,…}`: expected true to be false"*
+>
+> **With two of three directories suspended, the session formed anyway.** The test is well built — it
+> runs a POSITIVE CONTROL first (no suspension ⇒ initiate must succeed, which passed), seeds A's
+> profile to nodes 1 and 2 so they *can* honour a suspension, and retries on the same transient as the
+> control so a flake cannot masquerade as the block.
+>
+> **THE MECHANISM IS ALREADY WRITTEN DOWN IN THE PRODUCT, as a known production gap** —
+> `directory-node.ts` `#isAgentPaused`:
+> > *"a node can only HONOR a suspension for an agent whose `agent_profiles` row it holds — the
+> > honor-check JOINs `agent_suspensions`→`agent_profiles`, so a missing local profile resolves to
+> > 'not suspended' and **the node SIGNS BLIND**. … single-node honoring means **a genuinely-paused
+> > agent can still reach threshold by routing around the one honoring node. That is the production
+> > gap.**"*
+>
+> The check itself is sound — it reads the store live (not a boot cache) and **fails closed** on error.
+> The hole is the JOIN: no local profile ⇒ reads as not-suspended.
+>
+> **⚠️ HYPOTHESIS, MARKED AS ONE — not yet run, and I will not report it as a cause until it is.** The
+> test copies the profile with `copyAgentProfileBetweenNodes(0→1, 0→2)` and then suspends using
+> **node 0's `agent_id`**. If the copy does not preserve that id, the suspension row on nodes 1 and 2
+> references an id their own profile row does not carry, the JOIN misses, and both nodes sign blind —
+> producing exactly this `ok:true`. **FALSIFIED, same session, by reading the helper rather than running it:** `copyAgentProfileBetweenNodes` copies an explicit column list that INCLUDES `agent_id`, and its own comment says *"the suspension JOIN needs only agent_id + k_local_pubkey"*. The id is preserved, so the JOIN key is not the cause. **Retracted before it could become an inherited fact — which is exactly what the T=3 claim above became.** The cause is still open.
+>
+> **Why this matters more than the other 20 files:** `.claude/CLAUDE.md` names a kill switch as a
+> launch requirement, and the sovereign-node invariant says *"no single node can complete a threshold
+> ceremony alone… any implementation that allows a single node to produce a valid ceremony output is a
+> security violation, regardless of whether tests pass."* **Either the kill switch can be routed
+> around, or the test's plumbing is wrong. Both are worth an hour; only one is forgivable at launch.**
+>
+> #### 🔎 INVESTIGATION 2026-08-24 — the test's plumbing is VERIFIED CORRECT, and the evidence runs out
+>
+> **Every producer checks out. The "wrong plumbing" explanation is dead:**
+> - `copyAgentProfileBetweenNodes` copies an explicit column list that **includes `agent_id`** — its
+>   own comment says *"the suspension JOIN needs only agent_id + k_local_pubkey"*.
+> - `setPaused` inserts into `agent_suspensions (agent_id, paused, …)` keyed on that same id.
+> - `isAgentSuspended` is `SELECT 1 FROM agent_suspensions s JOIN agent_profiles p ON p.agent_id =
+>   s.agent_id WHERE p.k_local_pubkey = $1 AND s.paused = true`, and returns on `rows.length` — the
+>   comment notes that deliberately, *"a security gate must not default fail-OPEN"*.
+> - `#isAgentPaused` reads the store **live**, not from a boot cache, and **fails closed** on error.
+>
+> **The threshold is majority: for a 3-node consortium the client needs 2 directories** (`Math.floor(declared / 2) + 1`).
+> With two suspended, one remains — **below threshold — and a signature formed anyway.**
+>
+> **⚠️ THE ARCHITECTURE POINT THAT REFRAMES THE WHOLE QUESTION: the session ceremony is DELEGATED TO
+> THE CLIENT.** `ClientDelegatedSigner` sends a `ceremony_request` over the agent's own signaling
+> stream and waits for the client to return a signature; the directory does not assemble it. **So the
+> threshold is enforced client-side**, and a directory's suspension refusal only bites if the client
+> actually needs that node's share. Whether the client asked nodes 1 and 2 at all is the open question.
+>
+> **🛑 WHERE THE EVIDENCE RUNS OUT, AND I AM NOT GUESSING PAST IT.** The decisive artifact is the
+> directory-side log: `frost.ceremony.refused.revoked` (the node refused) or
+> `frost.suspension.uncheckable` (the node signed blind). **The committed receipt contains ZERO
+> `frost.*` events of any kind** — not zero refusals, zero events, so the receipt simply does not
+> capture directory FROST logging. **That is a fact about the evidence, not about the product**, and it
+> would be very easy to report as *"the nodes did not refuse"*, which the receipt cannot support.
+>
+> #### 🔴 ANSWERED 2026-08-24 — RE-ESTABLISHED AFTER REVIEW KILLED THE FIRST ANSWER
+>
+> ```
+> node1=never-asked   node2=never-asked
+> 2 suspended directories must block signing: {"ok":true, …}   ← the bypass, measured
+> ```
+>
+> **⚠️ THE FIRST VERSION OF THIS CLASSIFIER WAS MISSING ITS FOURTH CASE, and review caught it.** It
+> offered refused / uncheckable / "silent(never asked)" as exhaustive. `#isAgentPaused` logs
+> `refused.revoked` only when PAUSED and `uncheckable` only when not-paused **and** holding no local
+> profile — so **a node that was asked, holds the profile, and reads NOT-suspended logs nothing at
+> all.** That is indistinguishable from "never asked" under the old classifier, and it is precisely
+> what a suspension row failing to land would look like. **I read `silent` as "never consulted" and
+> reported it. The evidence did not support that.**
+>
+> Corrected using the participation control that already existed — the directory logs
+> `frost.debug.frost_stream.sign_request` / `.commit_request` at **info** on every share request — and
+> re-run. **The conclusion survives on evidence that can now distinguish the missing case.**
+>
+> **And the security assertion had been rendered unreachable.** I placed the diagnostic preconditions
+> *before* `expect(blocked.ok)`, so every run died on the diagnostic and never evaluated the property
+> the test exists for. The DoD property is asserted first now, with the diagnostic as `expect.soft`;
+> the bypass (`ok:true`) is visible in the output again.
+>
+> **Both nodes were UP and LOGGING** — 48 captured stdout lines each — and **neither was ever asked for
+> a share.** No `frost.ceremony.refused.revoked`, no `frost.suspension.uncheckable`, no FROST activity
+> at all. A `session_assignment` was produced anyway (`ok:true`).
+>
+> **The capture control is why this is a finding rather than a guess.** An empty stdout buffer reads
+> identically to a node that was never asked — the same ambiguity one level down, in the evidence
+> instead of the product. The test now fails saying *"the harness is not recording this directory"* if
+> the buffer is empty. It is not empty; the control did not fire.
+>
+> **What is ESTABLISHED, and nothing beyond it:**
+> 1. A session assignment is produced **without shares from a majority of the consortium** — two of
+>    three directories are not consulted at all.
+> 2. Therefore **suspending an agent on a node that is not brokering its session does nothing to that
+>    agent's ability to open sessions.** The kill switch bites only on the brokering node.
+> 3. The plumbing is not at fault — profile copy, suspension write and the JOIN were each verified
+>    before this run.
+>
+> **⚠️ WHY THIS IS FOR ANDRE AND NOT FOR ME TO RULE ON.** `.claude/CLAUDE.md` states the invariant as
+> *"no single node can complete a threshold ceremony alone… any implementation that allows a single
+> node to produce a valid ceremony output is a security violation, regardless of whether tests pass."*
+> A FROST-signed `SessionAssignment` is a ceremony output. **But the session ceremony is
+> CLIENT-DELEGATED** — `ClientDelegatedSigner` asks the agent to sign over its own signaling stream —
+> so what the directories contribute to THIS path, and what the intended threshold for a session
+> assignment actually is, is a design question I can state but must not answer by assumption. The
+> registration DKG genuinely fans out to all three (`j-tofn` proves per-node isolation and real
+> per-node DKG, 4/4 green); **session assignment demonstrably does not.**
+>
+> **The user-facing consequence, which is the part that matters at launch:** an operator who suspends
+> an agent — the kill switch the launch bar names — stops that agent only if the suspension has
+> reached the node that happens to broker its next session. On a three-node consortium with
+> single-node replication, that is a **one-in-three chance** unless the flag is replicated first. The
+> code already says so in `#isAgentPaused` (*"a genuinely-paused agent can still reach threshold by
+> routing around the one honoring node — that is the production gap"*); this run measures it end to
+> end and shows the agent does not even need to route around anything.
+>
+> ## 🔒 CLAIM AMENDED 2026-08-24 — `DOD-M15-SALTANNOUNCE-LATE-1`, and it enters `core/daemon`
+> **Files now held, beyond the spine lane:** `cello-client/core/daemon/src/session-node-manager.ts`
+> — specifically `#wireSessionLiveness` and its `onPeerConnect` registration. Amended **before**
+> writing, per the rule this milestone paid for. `CELLO_Support` holds `getStandingReceiverInfo` in
+> that same file and `RELAYONLY-1`; I touch neither.
+> **The unit:** after the announce handler is registered, sweep for a counterparty already attached
+> and announce for it — the connect event cannot fire for a connection that predates the listener.
+>
+> ## 🔒 CLAIMED 2026-08-24 by `CELLO_Coder_1` — do not start work on this line
+> **Files held:** `packages/e2e-tests/src/spine/*` and the journey files under it. Nothing in
+> `core/daemon` unless a triage cause lands there, and I will amend this block before touching one.
+> **Claimed BEFORE writing code**, which is the rule that came out of `SEALWIRE-1`: both lanes built
+> bullet 5's held-path test independently because ownership lived in a conversation instead of here.
+> `CELLO_Support` holds `RELAYONLY-1` and its files; I do not touch them.
+> ### PRE-RUN TRIAGE, 2026-08-24 (CELLO_Support) — read off the COMMITTED log, no runner used
+> The line's first unit is a triage, not 21 tickets. Done against
+> `receipts/2026-08-23_spine-lane-full-run.log` — which is exactly why that log was committed, and it
+> cost nothing to read where re-running costs an hour. **Two clusters account for ~11 of the 49
+> failures, and they are not the same kind of thing at all.**
+>
+> **CLUSTER A — 6 failures, ALREADY FIXED, and it was never a product defect.** `J-REFRESH`,
+> `J-TOFN-DKG` ×2, `J-TOFN`, `J-SIGN` all die on *"Unexpected non-whitespace character after JSON at
+> position 156"*, and `J-RELAYSIG` on *"Unexpected token 'C', `"CELLO — a "`"*. That last string is
+> the CLI's own **help banner** (`cli-args.ts`: *"CELLO — a peer-to-peer identity & trust layer…"*).
+> The harness's `cello()` returned **`stdout + stderr` glued together** whenever the CLI exited
+> non-zero, and 54 call sites across 22 spine files do `JSON.parse(cello(...).stdout.trim())`. So a
+> failing command handed them valid JSON followed by error prose. **This is ERROR SUBSTITUTION at
+> the one choke point every spine journey runs through:** whatever the CLI actually said — the
+> reason the command failed — was replaced by a parse error about position 156, so **none of those
+> six names its own cause.** That is why the lane looked mysterious rather than merely broken. The
+> fix is in (`stdout` is stdout, `stderr` is its own field, and a failing command names itself with
+> argv/status/stderr), so **the next run reports these six for the first time. Expect six NEW
+> failure texts, not six fixes** — they were never diagnosed, only unmasked.
+>
+> **CLUSTER B — 5 failures, and this one is real: `sealed_root` is `undefined`.** `J-UNILATERAL` ×2,
+> `J-UPGRADE`, `J-SPINE` ×2, `J-LOOPBACK` fail as *".toMatch() expects to receive a string, but got
+> undefined"*, and the assertion underneath is `expect(rootA).toMatch(/^[0-9a-f]{64}$/)`. **A seal
+> that produced no root.** I checked and rejected the tempting explanation first: these do NOT assert
+> on `.stderr`, so the harness defect above does not account for them.
+>
+> **FALSIFIABLE PREDICTION, recorded BEFORE the run so it cannot be fitted afterwards.** Cluster B is
+> the same family as `DOD-M15-SALTSPLIT-1` — one side salting, the other refusing every message, so
+> divergent trees and a seal that can never complete. **That fix landed after this receipt was
+> taken.** So: cluster B should **shrink, or fail with a different signature**. If all five still fail
+> as `sealed_root: undefined`, the salt split was NOT their cause and the family is wider than we
+> think. Either answer is worth the run.
+>
+> **⚠️ AND THE BASELINE IS NOT COMPARABLE ON THE PORTAL JOURNEYS** (CELLO_Coder_1, measured):
+> observation 1 of this line recorded `cello-portal-postgres` as Exited for 11 days and that is
+> **stale** — it is now `Up (healthy)` and accepting connections. **Any delta on portal-dependent
+> journeys is that container, not the code**, and must not be read as a product improvement.
+>
+> **The discipline this lane needs, from its own text:** `J-TOFN-DKG`'s two failures were read as the
+> sovereign-node quorum invariant breaking. They were not — both died in `register-agent` at their
+> first line and **never reached the quorum assertion.** *"A test that asserts X is red" only means
+> "X is broken" if the test reached X.* Check how far each failure got before believing what it says.
+
+> ### 🔎 TRIAGE SCAFFOLD, built 2026-08-24 FROM THE COMMITTED RECEIPT — no re-run, and it is not a result
+>
+> The line asks for a triage before any fixing, and the receipt exists so that costs nothing. Clustering
+> the 49 by error text gives **four causes, not 21 problems**:
+>
+> | cluster | n | what it is | status |
+> |---|---|---|---|
+> | `.toMatch() expects to receive a string, but got undefined` | **5** | `DOD-M15-CLOSEROOT-1`'s second clause — the matcher destroys its own diagnostic on an absent value, so these five printed nothing about what actually failed | **fixed since**: `expectMatches` + enforcer. These five should now report a real cause — **which may be a different failure, not a pass** |
+> | `Unexpected non-whitespace character after JSON` / `Unexpected token 'C'` | **6** | `DOD-M15-CLIJSON-1` — the CLI banner emitted where JSON was expected. Journeys die at their FIRST line, in `register-agent` | open |
+> | `ECONNREFUSED` | **2** | the portal database | **environment, now up** — see the correction above |
+> | timeouts / envelope / MCP | remainder | `daemon-ackA`, `daemon-dedupB`, a trust-signal envelope missing a mandatory field, one MCP request timeout | genuinely unexamined |
+>
+> **The 21 files, with what tonight already changed.** Reported closed since the receipt — by both
+> lanes, and NOT re-verified in one run: `j-tofn-dkg` (green 2/2), `j-persist` (fixed by the salting
+> lane), `j-canary` (a `.gitignore` `node_modules/` trailing slash vs iCloud symlinks — never a product
+> failure), `j-refresh` / `j-sign` / `j-loopback` (3/3), `j-legibility`, `j-upgrade`. Known-blocked for
+> a named reason: `j-unilateral` and `j-upgrade-bilateral` on `DOD-M15-UNILATERAL-NOTARIZE-1`.
+> ~~Known-wrong-premise: `j-suspend-tofn` encodes **T=3 when we ship T=2**, so it is a test to correct,
+> not a defect to chase.~~ **⚠️ RETRACTED — see this line's own `j-suspend-tofn` investigation below,
+> which calls this "wrong on both counts."** The test's header says *"N=3 directories, T=3 = client +
+> any 2"* — **two directory shares, which IS `majority(3)`** — so the arithmetic was never stale.
+> The measured failure is that nodes 1 and 2 were **never asked for a share at all**. Struck rather
+> than deleted because this sentence is how a kill-switch finding got downgraded to a test edit, and
+> it was still being read that way after the retraction was written.
+>
+> **⚠️ THIS IS A SCAFFOLD FOR READING THE NEXT RUN, NOT A CLAIM ABOUT TODAY.** Every "fixed since" above
+> is a report, several of them mine, and the whole point of `SPINERED-1` is that reports about this lane
+> have been wrong before — that is how it came to be marked BLOCKS LAUNCH. **The fresh run replaces
+> this table; it does not confirm it.** And two traps are already visible in it: a `CLOSEROOT-1` file
+> going from "no diagnostic" to "a real error" is **progress that looks like a new failure**, and the
+> portal-dependent files changing at all is **the container, not the code.**
+>
+
+> ### TRIAGE, FIRST PASS (2026-08-23) — 49 failures are NOT 49 causes
+> **This is a CLUSTERING, not a diagnosis.** Each group is "these fail the same way", established by
+> reading the receipt. Where a cause is named it is marked as established or as a lead.
+>
+> | # | Cluster | Files | Status |
+> |---|---|---|---|
+> | 1 | **`register-agent` prints prose after its JSON** — dies at the journey's FIRST line | **8** | **CAUSE ESTABLISHED**, reproduced, FIXED. → `DOD-M15-CLIJSON-1` |
+> | 2 | **Cascade inside `j-multiplayer`** — 5 × `MCP -32001 Request timed out` at ~70s each, all AFTER an earlier real failure in the same file (*"agentA has no sealed root"*) | 1 file, 5 tests | **Likely ONE cause, not five.** Re-run the file alone after cluster 3 before treating any as real |
+> | 3 | **The seal path hands back `undefined` where a value is expected** — five `.toMatch() received undefined`, in unilateral seal, the ABSENT gate, auto-acknowledge close, bilateral seal, and loopback | 5 | **LEAD ONLY.** All five are seal/notarization. `SEALWIRE-1` is mid-flight in the other lane and the spine runs the BUILT binaries, so version skew is as plausible as a regression. **Raised with `CELLO_Coder_1` rather than diagnosed from this side** |
+> | 4 | **The portal database has been down 11 days** — `j-end`'s 7 failures are all portal HOPs | ~2 | **ENVIRONMENTAL, confirmed** at the time. Container is up since; **`j-end` is now 10/10** — but note the last failure to clear was NOT environmental, it was a stale fixture writing a superseded column |
+> | 5 | Singletons — `same_operator` envelope field, the 2-of-3 quorum registration, the built-artifact layer boundary, and others | ~8 | Unexamined |
+>
+> ### ⚠️ RE-SCAN, and it moves the number the wrong way for my earlier reporting
+>
+> I first clustered **5** journeys onto the registration bug. Scanning the receipt for the parse
+> error properly gives **EIGHT distinct files**: `j-persist`, `j-refresh`, `j-relaysig`, `j-remove`,
+> `j-sign`, `j-suspend-tofn`, `j-tofn`, `j-tofn-dkg`.
+>
+> **What that means for everything I concluded from the first run: any characterisation of those
+> eight is UNRELIABLE.** They died in `register-agent` before reaching the assertions they are named
+> for, so "this journey proves X is broken" was never established for any of them — the same error I
+> made about the quorum invariant, eight times over rather than once.
+>
+> ### ✅ ALL EIGHT RE-RUN (2026-08-24). EVERY ONE either PASSES or fails for a NON-PRODUCT reason.
+>
+> | journey | result |
+> |---|---|
+> | `j-tofn-dkg` | ✅ 2/2 — fans the DKG to all 3 nodes; **kill one directory → registration still succeeds** |
+> | `j-tofn` | ✅ 4/4 — **sovereign isolation** (each node writes only its own DB) + **a forged consortium manifest is REFUSED** |
+> | `j-sign` | ✅ — consortium seal is genuinely FROST T-of-N across ≥2 directories |
+> | `j-relaysig` | ✅ — after fixing a call to a command that had been renamed |
+> | `j-refresh` | ✅ |
+> | `j-remove` | 2/3 — the third is `REVOKED-READS-OFFLINE-1`, a real finding that names itself |
+> | `j-persist` | ✅ — fixed by the salting lane; **now also proves the session salt is agreed BEFORE the first leaf is hashed**, which nothing previously tested |
+> | `j-suspend-tofn` | ✗ **⚠️ THIS CELL WAS WRONG — see the investigation below.** It is NOT "the test encodes T=3": that reading was retracted on the test's own header. Nodes 1 and 2 were **never asked for a share**, and an assignment was produced anyway |
+>
+> **So of the eight I characterised as "the floor is broken" — including the two I reported as the
+> sovereign-node invariant failing — SEVEN were not product defects, and SEVEN are now GREEN.** Those
+> properties are positively PROVEN rather than merely un-disproven, which is a stronger position than
+> the lane was in before any of this started.
+>
+> > **⛔ THE EIGHTH SENTENCE HERE WAS WRONG AND IT IS THE ONE THAT MATTERED.** It read: *"NONE was a
+> > product defect… the eighth (`j-suspend-tofn`) needs its premise reworked for T=2 rather than
+> > fixed."* **`j-suspend-tofn` IS a product finding, not a test edit.** Its header says *"N=3
+> > directories, T=3 = client + any 2"* — two directory shares, which IS `majority(3)` — so the
+> > arithmetic was never stale and there is no premise to rework. The measured failure is that
+> > **nodes 1 and 2 were never asked for a share at all** (`node1=never-asked node2=never-asked`, 48
+> > captured stdout lines each) and a `session_assignment` was produced anyway.
+> >
+> > **This is the THIRD place the same downgrade had to be struck**, which is why it is corrected here
+> > rather than only in the investigation below. A blanket "none was a product defect" is how a
+> > kill-switch finding keeps being read as bookkeeping — and the kill switch is named in the launch
+> > bar. **A summary sentence that generalises over the one item that breaks the generalisation is the
+> > defect this milestone keeps finding in its own record.**
+>
+> **The re-runs ARE trustworthy**, because they happened after the fix: `j-refresh` ✅, `j-remove`
+> (real finding — `DOD-M15-REVOKED-READS-OFFLINE-1`), `j-relaysig` (real finding — a renamed command
+> the failure did not name). The rule is simply that a pre-fix red file proves nothing about its
+> subject, and each has to be re-run before anyone reasons from it.
+>
+> **So the accurate headline is not "half the lane is broken."** It is: **five journeys die on one CLI
+> defect, seven on a stopped container, five look like one cascade, and five share a seal-shaped
+> shape that may be version skew.** What remains genuinely unexplained is a much smaller number than
+> 49, and the next unit should re-run AFTER starting the portal database and fixing `CLIJSON-1` —
+> re-running before those two is spending an hour to re-measure known causes.
+> **`j-canary` — a NINTH, and I had written it off as my own mess (fixed 2026-08-24).** It asserts
+> `git status --porcelain` is empty in both repos. I recorded its failure as "my tree was dirty" and
+> moved on. **It was not my tree.** On ANY clean checkout of `cello-client`, a dozen
+> `core/*/node_modules` entries read as untracked, so the canary could never pass on a dev machine —
+> it was failing for a reason with nothing to do with what it tests.
+> **The cause was a trailing slash.** `.gitignore` had `node_modules/`, which matches DIRECTORIES
+> only, while the iCloud workaround recorded in that same file makes each package's `node_modules` a
+> **symlink** to `node_modules.nosync` — and a symlink is not a directory, so the pattern matched
+> none of them. Dropping the slash matches both; `git check-ignore` now confirms it and the tree
+> reports clean.
+> **Fixed at the source, not by loosening `gitClean`.** `node_modules` must not be tracked whether it
+> is a directory or a symlink, and relaxing the assertion would have hidden the next thing that
+> genuinely dirties the tree. **Same lesson as the eight above:** "it failed because of something I
+> did" is as unexamined an attribution as "the floor is broken", and it is the more comfortable one,
+> which is why it went unchecked longer.
+> **RE-RUN 2026-08-24 AFTER `pnpm run build` — and the rebuild is the finding.**
+> - **`j-canary` ✅ 1/1, 52s.** Recovered by the `.gitignore` trailing slash. A journey that had never
+>   passed on a dev machine now does.
+> - **`j-multiplayer` 7 failed → 5.** `SYNC-AC17` green after narrowing the scan off prose. And
+>   **`GOVERN + JOIN` — the test that failed `A has no sealed root: expected undefined to be truthy`
+>   — now PASSES.** Nothing about the seal changed between the two runs. **The binary did.** The
+>   earlier run drove a `dist/` older than the source, exactly the trap `CELLO_Coder_1` hit from the
+>   other side, and the failure blamed the seal for it.
+> - **The five that remain are all `MCP error -32001: Request timed out`**, all in the three-daemon
+>   document journey. That is one shape, not five findings, and it is the sync lane's.
+> **The lesson is now measured, not argued: a red journey proves nothing until `dist/` is newer than
+> the source.** Two of tonight's "seal defects" were stale binaries.
+
+
+## `DOD-M15-RELAYAUTH-1` — ❌ No relay service without a directory-issued assignment
+
+> ### ✅ THE LIVENESS SCOPING IS DONE (2026-08-24), and the falsification found something better
+> The handler echoed `session_id` back **without ever reading it** and answered from a global
+> pubkey lookup with no caller check. Both halves of the bar now hold: the caller must be a named
+> participant of the session it cites, **and** the subject must be the OTHER participant of THAT
+> session — the second half matters as much, or a participant of one real session can still
+> enumerate everyone else using it as a ticket. The refusal deliberately does not distinguish
+> *no such session* from *not your session*; that difference is itself the enumeration signal.
+>
+> **THE EXISTING TEST ASSERTED THE LEAK.** AC-002 asked about a random 32-byte key and expected a
+> real answer. So the behaviour was not unguarded, it was **PINNED** — anyone tightening it would
+> have met a failing test that looks like a regression, and the instinct on a red test is to restore
+> the old behaviour. A test defending a vulnerability is worse than no test.
+>
+> **AND NOTHING SENDS THE FRAME.** Falsifying the fix — *what breaks if this is applied?* — found no
+> caller in either repo: an encoder, a decoder, a handler, and the only exerciser was that test. So
+> the scoping costs nothing, and the oracle was **an attack surface with no legitimate user**.
+> **NOT deleted**, deliberately: `DOD-LIVE-2` expects this query and this line's own bar specifies
+> its behaviour, so it is planned surface rather than dead code. But it is the same shape bullet 7
+> names for `seal_attempt` — *"a fully written handler with no sender reads as abandoned work to
+> anyone auditing a public repo"* — and it should either gain its caller or be removed before
+> launch. **Andre's call; recorded, not taken.**
+
+
+## `DOD-M15-ENDORSE-RETRY-1` — ❌ A trust signal reaches the directory when one node is down
+
+> ### SCOPED 2026-08-24 — the gap is NOT where "fails over to another node" suggests
+> **Transport failover already exists and works.** `getAgentSignaling` dials through
+> `failoverEndpointResolver`, explicitly *"so this agent's signaling stream routes around a down
+> primary node"*. So the case everyone pictures — a node that is DOWN — is already handled, and
+> implementing it again would be building something that exists.
+>
+> **The unhandled case is a node that is UP and answers wrongly.** `sendSealedSubmission` takes ONE
+> already-connected `signaling` and has no node list. Its two failure reasons are
+> `submission_unsupported_by_node` (the node has not deployed submission support — **nodes deploy
+> independently, so this is the ordinary state during a roll**) and `submission_write_timeout`.
+> Neither retries anywhere. The operator re-runs the command by hand, and gets the same node.
+>
+> **So the work is: on those two reasons, retry the submission against a DIFFERENT node** — not
+> reconnect, which already happens. That needs the caller to obtain signaling to a NAMED node rather
+> than "this agent's stream", which `getAgentSignaling` does not offer today. That is the actual
+> unit, and it is connection-management work rather than a retry loop.
+>
+> **Sized, not built** — under the freeze this stays in the gate (it is an existing tier line, not a
+> new finding), and the next lane to pick it up should start from the caller's node selection, not
+> from `signal-submission.ts`, which has no node to choose between.
+
+
+## `DOD-M15-KEYAGREE-1` — 🟡 CELLO owns its own confidentiality guarantee
+
+> **PRIMITIVE BUILT + REVIEWED 2026-08-23** (→ Entry 39); **STAYS 🟡 — nothing consumes either
+> output.** That is `SEALWIRE-1`'s work and the reason KEYAGREE precedes it. Reviewer: *"it ships a
+> primitive while the DoD clause it most needs to satisfy — destruction at close — has neither code
+> nor caller."* Verdict quoted: *"**HOLLOW TESTS FOUND** — six of eight mutations stay green,
+> including deleting the pubkey binding, inverting the sort, swapping the two labels, and replacing
+> the content-hash salt with a constant [blocking]… **ERROR SUBSTITUTION FOUND**… I am not
+> rubber-stamping this one. The construction is sound… almost none of that is pinned by a test."*
+> All thirteen findings fixed. Gate: 4254 client tests, lint, typecheck, build.
+>
+> **The construction was verified sound** — salt/info assignment conventional per RFC 5869, IKM
+> concatenation unambiguous because the X25519 secret is fixed-length, and matching TLS/NIST hybrid
+> practice. What was missing was any test that constrained the BYTES: every property I had tested is
+> satisfied by X25519 alone.
+> **`pqTranscript` added while there are no callers** — a hybrid must bind the KEM's ciphertext and
+> public key, not just its secret (X-Wing; eprint 2026/140 says necessary, not optional). After a wire
+> format exists it is a wire change, i.e. the rewrite the hook exists to avoid.
+> **Refuses:** a non-canonical peer key (bit 255 — a one-bit undiagnosable session kill), a reflected
+> key, a wrong-length key on either side, an empty session id.
+> **Carried:** `DOD-M15-EPHEMERAL-REVIVAL-1`, `DOD-M15-EPHEMERAL-AUTH-1`.
+
+
+## `DOD-M15-EPHEMERAL-AUTH-1` — ❌ The session ephemeral is bound to the agent's identity
+
+> ### ⏸️ BLOCKED BEHIND `KEYAGREE-1` HAVING A CONSUMER — measured 2026-08-24, and the reason to WAIT.
+> **The key agreement has NO consumer.** Verified with a positive control (118 files reference
+> `SessionNodeManager`, so the search works; `session-key-agreement` / `deriveSessionSecrets` /
+> `generateSessionEphemeral` appear **nowhere** in `core/daemon`, `core/client` or `core/transport` —
+> only inside `core/crypto` itself and its own re-export). That matches `KEYAGREE-1`'s own note:
+> *"STAYS 🟡 — nothing consumes either output."*
+> **So binding the ephemeral now would be hardening a primitive nothing calls** — adding a signature,
+> a wire field and a verification step to a code path that cannot execute. **That is this milestone's
+> most-repeated defect** (a value with no reader), and it would be committed deliberately rather than
+> by accident.
+> **Sequence, not scope:** the binding is real work and stays in the gate. It goes in WITH the first
+> consumer, so the signature is exercised by the path that needs it and the wire field is designed
+> against a real caller instead of a guess. **Doing it earlier costs a bilateral wire change made
+> blind.**
+
+
+## `DOD-M15-SEALWIRE-1` — bullets
+
+> ### BULLET 5 — SENT HALF: a ruling was REVERSED on its merits 2026-08-24, and the reasoning is the record
+> **`CELLO_Coder_1` had ruled the sent half out** as *"judged not-worth-its-cost"* — a sent row's
+> signature proves only that a key you control signed something, *"which the row already claims by
+> existing"*. **It reversed after re-derivation, in its own words: *"The row claims nothing to a third
+> party. It is in MY database. I could have written anything into it."***
+>
+> **⚠️ AND "SELF-REFERENTIAL" IS NOT ANSWERED BY "A THIRD PARTY CAN CHECK IT".** I hold my own key,
+> so I can sign anything and write the row; my signature over my own message does not stop me
+> fabricating one. The answer has to be an ANCHOR the signer does not control.
+>
+> ### ⚠️ CORRECTION 2026-08-24 — I WROTE THAT THE ANCHOR MAKES IT "CHECKABLE", AND IT DOES NOT. YET.
+> I recorded: *"The signature is checkable against an EXTERNAL anchor, not against itself."*
+> **Review measured the schema and that claim is false today.** Precisely:
+> - **The certified root covers CONTENT HASHES ONLY.** `sender_pubkey`, `sender_sig`, `attribution`
+>   and `direction` are **under no root at all** — a plain `UPDATE transcript SET sender_sig = …`
+>   breaks nothing, because nothing recomputes anything from those columns.
+> - **The signed BYTES are not stored with the signature.** Structure 1 is
+>   `[1, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]`; from a transcript row
+>   `last_seen_seq` is unrecoverable and `timestamp` is the SUBMIT-time clock, not the row's
+>   `created_at`. **So the signature cannot be reconstructed and checked by anyone — including its
+>   owner.**
+> - **What ISreal:** the signature is a non-repudiable commitment by the key-holder to a content
+>   hash that IS under the notarized root, and content cannot be fabricated (that needs a preimage).
+>   It is asymmetric in the safe direction — it lets you incriminate yourself, never falsely blame a
+>   counterparty.
+> **So the honest statement of what shipped is: a durable record of a value we already held,
+> correctly labelled — NOT YET A PROOF.** The bullet is not decoration (it is the prerequisite for
+> `DOD-M15-INCLUSION-1`), but the sentence I wrote asserted a property the schema does not provide,
+> which is the exact defect class this milestone is about, in my own description of the fix for it.
+> **What would make it true:** store `structure1_cbor` on the row, or write the transcript↔seal-leaf
+> join (and its 0-based/1-based off-by-one). **Andre's call whether that lands here or on
+> `INCLUSION-1` — with a recommendation rather than just a question:**
+>
+> **STORE THE BYTES, and defer it to `INCLUSION-1`.**
+> - **Store rather than join**, because the bullet's own sentence is *"the record must prove
+>   authorship INDEPENDENTLY"* — a row that needs a second table to mean anything is not
+>   independent. The join also couples the transcript to the seal-leaf store's numbering (0-based vs
+>   the relay's 1-based), and a cross-table off-by-one is the defect that outlives everyone who
+>   remembers it. Cost is ~100 bytes a row against a column that already stores the message.
+> - **Defer rather than do it here**, because nothing reads these columns yet: `INCLUSION-1` is the
+>   named consumer and is a `not_implemented` stub. **Storing bytes for a reader that does not exist
+>   is how this milestone got its most-repeated defect** — and unlike the signature (which is
+>   discarded at send time if not captured), `structure1_cbor` remains recoverable later for any leaf
+>   with a receipt. **The proof is not lost by waiting; it is only lost by not capturing it, which is
+>   what bullet 5 just fixed.**
+>
+> ### 🟡 CLOSING STATUS 2026-08-24 — the held path is COVERED and mutation-proven; two limits are named, not buried
+>
+> **The gap that reopened this bullet is closed.** `placeOwnLeaf`'s `authorship` argument is dead by
+> construction on the DELIVERED path — the row's proof arrives from the `recordTranscriptMessage`
+> call on the next line — and is load-bearing in exactly one case: a leaf **HELD** behind a sequence
+> gap, where `recordTranscriptMessage` never runs at all because it sits inside `if (placed.placed)`.
+> The held entry is then the only carrier to the eventual row. Measured, and it is the asymmetry that
+> proved the first close wrong:
+>
+> | mutation | result |
+> |---|---|
+> | `recordTranscriptMessage(..., sentAuthorship(sendResult))` → `undefined` | **RED** |
+> | `placeOwnLeaf(..., "msg", sentAuthorship(sendResult))` → `undefined` | **GREEN across the whole suite** |
+> | the carry into the held entry (`...(authorship ? { authorship } : {})`, `session-node-manager.ts:8587`) → deleted | **RED** on the held-path test, the other four in its file GREEN |
+>
+> **All six `placeOwnLeaf` call sites verified to carry the proof**: `session-content-handlers.ts`
+> 575 and 625, `daemon.ts` 1443/1677/1691 (the away-reply path — the highest-traffic sent-writer, and
+> the three that were silently omitting it), and `daemon.ts` 4860, the document transport, which
+> passes `undefined` with its reason written down because docs never go through `sendContent`.
+>
+> **⚠️ LIMIT 1 — A HOLD RELEASED ACROSS A DAEMON RESTART STILL LOSES THE PROOF.**
+> `held_content` has no authorship columns, so `#restoreHeldContent` rebuilds entries without one and
+> the released row commits `self_authored` with **no signature** — indistinguishable from a send the
+> relay never witnessed. It **cannot** be reconstructed (the signature covers Structure-1 bytes the
+> new process no longer holds) and **must not** be fabricated. It is announced at release rather than
+> hidden, and tracked as **`DOD-M15-HELD-AUTHORSHIP-1`**. **This bullet's green does not cover it,
+> and the tag must not be read as if it does.**
+>
+> **⚠️ LIMIT 2 — what is stored is still not a proof**, per the correction above: the columns are
+> under no root and the signed bytes are not stored beside the signature. *"A durable record of a
+> value we already held, correctly labelled."*
+>
+> ### ✅ CLOSED 2026-08-24 — TWO REVIEWS, BOTH BLOCKING, ALL BLOCKING FINDINGS FIXED
+>
+> **REVIEW A — the held-path coverage. Verdict quoted:**
+> > *"**The bullet cannot honestly close.** It has been closed wrongly twice for the same reason, and
+> > the third attempt repeats it one layer out."* … *"the code is right and nothing is holding it
+> > right."*
+>
+> **The blocking finding was MINE, and it was the deduplication.** Two held-path tests existed and I
+> deleted one as redundant. They are not: **one covers the CARRIER** (it calls `placeOwnLeaf` directly
+> with a hand-built proof), **the other covers the CALL SITES** (it drives a real `cello_send`). With
+> both production call sites passing `undefined`, the package stayed **green at 278 files / 2910
+> tests**, because no production call site is in the carrier test's call graph.
+>
+> **I had told Andre I "mutation-tested both before choosing."** I had — against the carrier mutation
+> only, which they *both* catch. I never ran the call-site mutation, the one that separates them, and
+> reported the check as conclusive. Restored; each header now states which half it covers.
+>
+> **Measured after the restore — the two mutations, run separately:**
+>
+> | mutation | held-authorship (call sites) | sent-proof-wired (carrier) |
+> |---|---|---|
+> | both `session-content-handlers.ts` call sites → `undefined` | **RED** | green |
+> | the carry into the held entry → deleted | **RED** | **RED** |
+>
+> **Neither test alone is sufficient. That is the proof the dedup was wrong.**
+>
+> **REVIEW B — the signature guard. Verdict quoted:**
+> > *"**HOLLOW TESTS FOUND** … the three `daemon.ts` call-site fixes — the actual subject of commit
+> > `01a23c1` — **do not** [survive the revert test]: measured green, typecheck exit 0, with the fix
+> > fully reverted."*
+>
+> Fixed by `dod-m15-sealwire-1-callsite-enforcer.test.ts`, verified against that exact mutation: both
+> its assertions redden and it names the sites. **Recorded as what it is — a RATCHET, not a runtime
+> proof.** It is a text scan; it does not execute the away responder, so it proves the *wiring* is
+> still there, not that the *value* is right at runtime. **The runtime test is an AC below.**
+>
+> **Also fixed from Review B:**
+> - **HIGH-1 — my own comment was false and the DoD carried it as measured.** It said *"the document
+>   transport does not go through `sendContent`, so no Structure-1 was signed."* Traced: it **does**
+>   call `sendContent`, and the Structure-1 is signed with **no `leafKind` gate**, so a doc leaf is
+>   signed exactly like a message. A proof exists and is discarded. Harmless today — a released doc
+>   hold writes no transcript row, so there is no consumer — but *"no consumer"* is the true reason and
+>   *"no signature"* was a false one, in the unit whose thesis is that `undefined` must be a claim the
+>   author actually made.
+> - **HIGH-2 — SEALWIRE-1's own four test files were outside the typecheck allowlist**, missed in the
+>   very commit that widened it for two other units and wrote down *"the files most likely to be
+>   missing are your own newest ones."* It hid a real error: `Stream` imported from
+>   `@cello-protocol/transport`, **which does not export it**, used three times as `as unknown as
+>   Stream` — so the acking relay's stream shape was unconstrained in the file this bullet rests on.
+> - **F2** — the held signature was asserted by LENGTH and never by value; a wrong well-formed 64
+>   bytes passed. Now compared exactly. **F3** — a header advertised a gap closed days earlier while
+>   staying silent about the open one. **MEDIUM-3** — the four `m12-p14` caller fixes are now recorded
+>   as *unverified by any compiler* rather than implied fine.
+>
+> **Gate: all 30 seal tests green across six files** (`-authorship` 6, `-sender-leg` 7, `-sent-proof-wired`
+> 5, `-held-authorship` 1, `-root-check` 9, `-callsite-enforcer` 2). The only failures in that run are
+> the other lane's in-flight `RELAYONLY-1` work plus a daemon-lock test broken by its missing
+> `@multiformats/multiaddr` dependency — reported to them, not seal.
+>
+> #### 🅿️ ACs CARRIED OUT OF THIS CLOSE — named, not hidden by the tick
+> 1. **The away-path RUNTIME test.** Drive the away responder with the tail one short so its own leaf
+>    is held, close the gap, read `sender_sig` off the released row. Only that proves the VALUE at
+>    those three sites; the enforcer proves the wiring. **This is the one the reviewer wanted.**
+> 2. **`DOD-M15-HELD-AUTHORSHIP-1`** — a hold released across a daemon restart still loses the proof
+>    (`held_content` has no authorship columns). Announced at runtime, deferred by ruling. **Review A
+>    confirmed this does NOT block bullet 5.**
+> 3. **No test asserts `session.content.released.authorship.lost` ever fires** — and that log is the
+>    entire consideration accepted in exchange for deferring the schema fix. Belongs on
+>    `HELD-AUTHORSHIP-1`, where its enforcer already asks for it.
+> 4. **`"peer_gone"` in `m12-p14`** — ruled **dead test code**, not a live bug: every non-`sealed`
+>    reason is identical at runtime and no production caller emits it. Still a one-word type fix.
+>
+> **What is honestly closed:** the coverage gap that made the defect invisible. Both mutations that
+> previously left the suite green now redden. **What is honestly not:** the runtime value-proof for the
+> away path, and the restart case. Both are written above rather than left for the next reader to
+> discover.
+>
+> **The COST argument was also wrong, and on a premise nobody had checked.** It assumed the signature
+> exists only after the relay ack, forcing either a mutation of the append-only transcript or the
+> operator's words held hostage to that ack. **Neither: `keyProvider.sign(structure1)` runs BEFORE
+> anything goes on the wire** — it was simply never handed back. So it is threading a value we
+> already hold, at insert time, with no mutation; on the relay-degraded path there is no signature
+> and the row says so.
+>
+> **DONE (CELLO_Support):** `SubmitResult.sender_signature` carried back, paired with the in-flight
+> `structure1` and cleared with it — *a signature paired with the WRONG signed bytes is worse than
+> none*. Plus **the bug that would have shipped WITH the fix**: the attribution expression read
+> `authorship ? "verified_signature" : …`, so a sent row carrying a signature would have been
+> labelled **verified** — and we did not verify it, we produced it. **Direction decides first**, with
+> the negative asserted rather than commented.
+> **REMAINING (CELLO_Coder_1, holds the file):** carry `witnessed.sender_signature` from the submit
+> site to the sent transcript write. ✅ **DONE** — plus my five call-site wirings.
+>
+> **⚠️ NEW ITEM (1 of the trip-wire's 3) — A SIXTH SENT WRITER IS UNWIRED, and it is the one that
+> matters most.** `session-node-manager.ts:8669`, the **held-content RELEASE** path. When our own
+> send lands behind a gap, `placeOwnLeaf` returns `placed: false` and **no transcript row is written
+> at the time**; the row is written later, here, on release — with **no authorship**.
+> **The signature EXISTS for it.** The hold happens after the submit, so a held message was signed
+> exactly like an unheld one. So a message that happened to arrive behind a gap ends up
+> **permanently less provable than the identical message that did not**, for a reason with nothing to
+> do with authorship — and the transcript gives the auditor no way to tell that is why.
+> **Not a lie** (the row stores no proof and claims none), which is why this is an item and not a
+> defect. **The fix is to carry the authorship into the held entry** and pass it on release.
+> ✅ **TAKEN** — `placeOwnLeaf` carries the authorship into the held entry and on to release.
+>
+> ### BULLET 5 — REVIEWED (pass 1 + pass 2), FIXED, AND WHAT IS STILL NOT COVERED
+> **Gate: `core/daemon` 274 files / 2881 passed / 0 failures.**
+>
+> ⚠️ **THIS ENTRY OVER-CLAIMED WHAT THAT TEST PROVED, and review pass 2 caught it — in the record of
+> the fix for a comment defect, which is the same class again.** It said *"the Structure-1 index is
+> confirmed by EXECUTION, not by reading."* **False.** The assertion decoded index 2 **itself** and
+> verified that, so it confirmed *the ENCODER puts the pubkey at index 2* — true and useful — and
+> confirmed **nothing about whether `sendContent` reads it there**. Measured, not argued: mutating
+> `sendContent`'s decode from `s1[2]` to `s1[3]` left all thirteen tests green. **A test that
+> reimplements the thing it is checking validates the reimplementation.**
+>
+> ✅ **CLOSED PROPERLY BY CODE INSTEAD OF BY TEST (pass 2, H2).** `sendContent` now calls
+> `verify(pk, structure1_cbor, sender_signature)` **before storing**, exactly as the received half
+> has always done. So a wrong index, a wrong key, or a mismatched pair is **impossible to persist**:
+> the row gets NULL and `session.sent.authorship.unavailable` fires with `pair_does_not_verify`, in
+> production, on the machine that caused it. That is a stronger guarantee than any test of it, and it
+> is one line.
+>
+> **What remains confirmed by READING** — and it is now backed rather than assumed: `#recordFrameOrdering`
+> and `seal-frontier-verify.ts` both use index 2 in production, and their verifies pass.
+> **THE FINDING THAT MATTERED WAS MINE, and it is the exemplar check turned on me.** Two of five call
+> sites were **dead by construction** — inside `if (!sendResult.ok)` while the helper read
+> `r.ok ? … : undefined`. They typechecked and could never fire. Consequence: **every
+> relay-degraded-but-alive send** — witnessed, SIGNED, only the direct hand-off failed — wrote a row
+> with no proof **while the proof sat in the result object.** Fixed by carrying `authorship` on the
+> failure member, for the same reason `sequenceNumber` was already there.
+> **⚠️ MY END-TO-END TEST FAILED AND THE CODE WAS NOT THE REASON.** `two-connection-fixture`'s relay
+> points at a dead loopback address, so nothing is ever witnessed through it and there is legitimately
+> nothing signed to store. **I asserted a precondition the fixture never establishes** — the third
+> time tonight the instrument could not see what I claimed it measured. Rewritten to pin the
+> dead-wiring defect at its own seam instead, mutation-proven.
+> **STILL NOT COVERED — a WITNESSED send driven end to end.** It needs a relay that acks;
+> `m8c-away-1.test.ts` has one (`makeFakeRelayServerOneshot`), and promoting it to a shared helper is
+> the way in. **Named in the test file so it cannot read as done.**
+
+
+## 🔒 CLAIM — park deposit rate limiting, **CELLO_Support**, 2026-08-24, before code
+
+> **Andre's list, the "relay rate limiting" large — taking the one tractable slice of it.** The audit's
+> first finding is *"No rate limiting of any kind — not on authentication attempts, not on hash
+> submission… not on content-park deposits"*, and the park path is the one where the datum needed to
+> limit is **already present and discarded**: `CelloStreamHandler` passes a Noise-authenticated
+> `remotePeerId` and `content-park.ts` registers `(stream) => …`, dropping it. That is the correction
+> I had to make to my own false "no depositor identity" claim, and it is what makes this slice small.
+> **I hold:** `packages/relay/src/content-park.ts` and its tests.
+> **NOT claimed and NOT started:** rate limiting on relay auth or hash submission, and the relay
+> connection gater.
+> **⚠️ Recorded so nobody re-picks it as a quick win: the relay connection gater is a DESIGN piece,
+> not a wiring job.** `@libp2p/circuit-relay-v2@4.2.11`'s `ServerReservationStoreInit` exposes only
+> `maxReservations`, `reservationClearInterval`, `applyDefaultLimit` and `ttl` — **there is no
+> per-peer ACL hook.** And a `connectionGater` cannot stand in: CELLO's relay auth runs on
+> `/cello/relay/1.0.0` AFTER a libp2p connection exists, so the gater would have to decide before the
+> thing it would decide on. Restricting who may reserve needs a mechanism that does not exist yet.
+
+
+## `DOD-M15-RELAYABUSE-1` — ❌ The relay has rate limiting, and its idle timer is on in production
+
+> ### 🔀 NARROWED 2026-08-24 (Andre): three bullets became their own lines — `RELAYPARK-1`,
+> ### `RELAYPUBKEYS-1`, `RELAYADMIN-1`. What remains here is the LARGE half only.
+> **Why:** two of the three were already finished and one was an unclaimed quick win, and all three
+> were invisible because this line's tag tracked the rate limiting. **A bullet cannot be tagged,
+> claimed, or counted** — so a completed quick win reads as untouched and an available one reads as
+> taken.
+>
+> **What is left, and it is genuinely large:** rate limiting per peer and per pubkey on FIVE paths —
+> authentication, hash submission, gap-fill, the liveness query, content-park deposit — where there
+> is **none of any kind** today. Plus re-enabling the per-session idle timer the production binary
+> never passes, and restoring the duration and byte caps on relayed connections that are deliberately
+> disabled.
+>
+> **This is the one an AI coder finds in minutes** — not by spotting a weak limiter, but because
+> asking *"what stops abuse here"* returns nothing, anywhere, on any path.
+
+> ### ✅ REVIEWED 2026-08-24 — AND THE REVIEW FOUND MY FIX MADE THE ATTACK WORSE. All blocking findings fixed.
+> **The blocking finding was mine, and it was an attack rather than an inefficiency.** I evicted
+> first and refused second. Eviction only ever scans the DEPOSITING recipient's bucket —
+> deliberately, so a flood at one recipient never deletes another's mail — so a store filled by OTHER
+> recipients meant the loop drained this recipient to **EMPTY**, could not possibly make room, and
+> then refused. **Unauthenticated, repeatable, near-zero cost:** fill the store globally, then send
+> ONE 1-byte deposit addressed to a victim and their whole undelivered mailbox is unlinked while the
+> attacker's junk is untouched. The previous code at least stored the incoming message — **emptying
+> the bucket and keeping nothing was damage I introduced.** It now works out whether eviction COULD
+> make room and refuses without touching a byte when it could not.
+> **Three more, all the same shape — I bounded bytes per recipient and left everything else global:**
+> - **The entry budget was still global.** 10,000 entries of ~200 bytes is **2 MB**, far inside the
+>   16 MiB byte cap, and consumed the ENTIRE global entry budget — denying the park service to
+>   everyone for two megabytes of traffic. Per-recipient entry cap added.
+> - **Empty buckets leaked.** Every deposit creates its bucket before any bound is checked and
+>   nothing removed an empty one, so a refused flood cost the attacker **no disk at all** and grew
+>   the heap per invented recipient key until restart — **a disk DoS traded for a heap one.**
+> - ⚠️ **And I nearly shipped a data-loss bug fixing that:** dropping the empty bucket on the SUCCESS
+>   path too looks symmetrical and detaches the very map the write below sets into, leaving the file
+>   on disk and the entry invisible until a restart rebuilt the index. Caught by reading the write path.
+> **A FALSE IMPOSSIBILITY I WROTE INTO THIS DOCUMENT, corrected:** I said a deposit "carries no
+> depositor identity to key a quota on." **False** — the transport hands the handler a
+> Noise-authenticated `remotePeerId`, which the park handler discards. The true objection is
+> narrower: a peer id is not a CELLO agent identity and is cheap to rotate, so a per-peer quota
+> raises cost without being a hard bound. It matters because this line still asks for per-peer rate
+> limiting, and "impossible" would have read as already ruled out.
+> **The eviction signal is SPLIT, not renamed** — `content.store.full` keeps its original meaning
+> (global pressure) so any alert keyed on it still fires; ordinary FIFO inside a recipient's own
+> quota is a new INFO event instead of drowning it.
+> **Test teeth, both gaps found by review:** the flood test asserted only that *some* deposits were
+> refused — satisfied by an implementation that accepts one and refuses the rest — and now sums what
+> is on disk and asserts the store stayed bounded. The per-recipient test asserted only an upper
+> bound — satisfied by a deposit that always throws — and now asserts the bucket is non-empty and
+> that the NEWEST message survived, which is exactly what the bad ordering destroyed.
+> **Gate: relay + interfaces 30 files / 314 tests / exit 0; typecheck 0.**
+> **✅ CARRY CLOSED — the startup refusal now HAS a test**, spawned through the real
+> `dist/bin/relay.js` because the assertion is an exit code. Three cases, and the second is what
+> keeps the first honest: one pubkey exits 1 naming the variable; **two pubkeys get PAST the guard**
+> and fail later on a different cause — without that, "exits 1" is satisfied by a relay that cannot
+> start for any reason, and a broken binary would pass; and `local` is exempt, which is not
+> hypothetical since the spine harness runs a single directory. **Revert test RUN** (remove the
+> guard, rebuild, re-run): reddens exactly the first case and leaves the other two green.
+> **✅ BOTH REMAINING CARRIES NOW CLOSED — the unit has no open items.**
+> - **`InMemoryContentStore` carries the same bounds and the same ordering.** It is selected for
+>   `CELLO_ENV=local`, which is every local run and the ENTIRE spine harness, so while it wrote
+>   unconditionally the one behaviour the bound exists to produce was unreachable from the only lane
+>   that runs real processes — and an interface whose two implementations disagree about whether a
+>   deposit can be refused is the defect this milestone exists to remove.
+> - **The 2-of-3 gap is closed, with no new configuration.** `< 2` was a floor: a relay told about
+>   exactly ONE of its two peers passed it and was still broken for every session the third node
+>   brokered. `CELLO_DIRECTORY_ENDPOINTS` comes from the same terraform loop over the directory nodes
+>   and already states real membership, so any pubkey named there and missing from the accepted set
+>   is a directory this relay would silently reject. It now refuses and names which ones disagree.
+> **Gate: relay + interfaces 31 files / 318 tests / exit 0; typecheck 0.** Four startup cases, the
+> revert test RUN on the first.
+>
+> ### ✅ TWO ITEMS DONE 2026-08-24 (CELLO_Support) — now `RELAYPARK-1` and `RELAYPUBKEYS-1`.
+> **THE PARK STORE IS NOW ACTUALLY BOUNDED.** The store documented its own hole: eviction only scans
+> the depositing recipient's bucket, so when the store was full of OTHER recipients' entries it
+> drained that bucket and **then wrote anyway**. Exploitable with no privilege, because a park
+> deposit is unauthenticated by design — the attacker picks the recipient key, spreads across
+> invented recipients so no bucket ever triggers eviction, and the store grows until the disk does,
+> taking the relay down for everyone. Now a per-RECIPIENT byte cap, and a **REFUSAL**
+> (`content_store_full`) instead of writing past the global cap. It throws rather than returning a
+> flag because the one production caller already turns a throw into `{ok:false, reason}` — a negative
+> ACK the depositor can act on, with no interface change.
+> **AND THE JUSTIFICATION FOR REFUSING WAS VERIFIED, NOT ASSERTED.** "Refusing is safe because the
+> depositor keeps its copy and retries" is exactly the kind of comforting sentence this milestone
+> keeps catching, so it was traced end to end: the relay answers `{ok:false, reason:
+> "content_store_full"}`, `content-park-client.ts` returns that structured rather than throwing,
+> `daemon.ts` logs `content.park.deposit.failed` with the reason — and the daemon's own note confirms
+> the content is not lost: *"a failed park stays queued (drainAwaitingToPark does not evict…)"*. So a
+> refusal costs a retry, not a message.
+> **⚠️ "Per depositor" is NOT what shipped, and the code says so** rather than quietly substituting:
+> a deposit carries no depositor identity to key a quota on, so that half waits on deposit auth.
+> **3 tests; the flood test's revert test RUN** — deleting the refusal reddens exactly it, while the
+> pre-existing eviction tests stay green, because they only ever exercised ONE recipient. That is
+> precisely why this shipped.
+>
+> **AND THE REAL QUICK WIN #3, which I had built against the wrong subject:** `relay.ts` now REFUSES
+> to start in dev/staging/production when `CELLO_DIRECTORY_PUBKEYS` leaves it with fewer than two
+> directory pubkeys. With one, the relay accepts assignments from ONE directory and rejects every
+> session brokered by the other sovereign nodes — failing closed, so nothing is forged, but surfacing
+> to operators as **CELLO being flaky** rather than as a config gap: one session works, the next
+> fails depending on who brokered it, and retrying appears to fix it. It also made one directory a
+> precondition for the relay, inverting the redundancy invariant. `local` is exempt so loopback
+> development and the e2e harness are untouched.
+> **THE "WILL IT BRICK THE FLEET?" QUESTION, ANSWERED FROM THE DEPLOYED CONFIG rather than assumed** —
+> a startup refusal is the one change whose failure mode is every relay refusing to boot, so it is
+> not something to take on trust. `infra/terraform/node-relay.tf:46` builds the value as
+> `join(",", [for region, node in var.directory_nodes : var.directory_node_pubkeys[node.node_id]])`
+> — **every** directory node's pubkey, not a hand-maintained list. With the three deployed nodes that
+> is three keys, which matches the `count=3` reading the DoD already records. The guard cannot fire
+> on the current fleet.
+> **⚠️ What it WOULD refuse, stated rather than discovered:** a non-`local` deployment with a single
+> directory node. That is not a supported topology — the sovereign-node invariant is `T =
+> majority(N)` with N≥3, and a one-directory consortium has no redundancy to threshold — but anyone
+> standing up a single-node staging environment will meet this refusal, and the message names the
+> variable to set.
+> **Gate: relay 26 files / 250 tests / exit 0; typecheck 0 in both repos.**
+>
+> ### (claim, kept for the trail) CELLO_Support, 2026-08-24
+> **Andre's re-ranking, medium #2:** *"bounding the parked-message store per depositor."*
+> **I hold: `packages/relay/src/adapters/file-content-store.ts` and its test only.** Rate limiting
+> (the large) is NOT claimed and stays open.
+> **What the code says about itself, which is the finding:** *"the global byte/entry caps are
+> BEST-EFFORT — eviction only scans the depositing recipient's bucket… If the global cap is consumed
+> by OTHER recipients this loop drains the current recipient to empty and **then writes anyway**."*
+> **So the global cap is not a cap.** And because a deposit is unauthenticated, the attacker CHOOSES
+> the recipient key: spread across many invented recipients, no single bucket ever triggers eviction,
+> nothing is ever refused, and the store grows without bound until the disk does.
+> ⚠️ **"Per depositor" is not directly implementable and saying so is part of the unit** — a deposit
+> carries no depositor identity to key on. The bound that exists to be enforced is per-RECIPIENT plus
+> a global cap that REFUSES instead of writing past itself.
+
+
+## `DOD-M15-DIRAUTH-1` — 🟡 Directory authentication cannot be silently skipped (remainder lives in `BOOTSTRAP-AUTH-1`)
+
+> **WHY THIS IS STILL 🟡 AND WHAT IS ACTUALLY LEFT, because a tag that never moves stops being read.**
+> Everything inside this line is done and reviewed: the surfacing half, plus the two quick wins
+> below. **Its second bullet was EXTRACTED into `DOD-M15-BOOTSTRAP-AUTH-1`**, which is its own ❌
+> line — so there is no work left *here*, and the tag is held deliberately rather than because
+> something is unfinished. A reviewer ruled *"the line is not closable on this diff… make sure the
+> DoD tag reflects that rather than flipping green"*, and I am not overturning that from the outside;
+> **it closes when `BOOTSTRAP-AUTH-1` does.**
+> ### ✅ TWO QUICK WINS DONE 2026-08-24 (CELLO_Support) — Andre's re-ranking, items #5 and #3.
+> **#5 — a skipped identity check is no longer indistinguishable from an enforced one** — and review
+> found my first version had two defects of its own, both fixed. It fired **per connect**: the
+> signaling stream turns over every ~70s and reconnects forever, so ~48/hour/agent on a logger with
+> no level filtering, ~3,400 lines a day for three agents — **and loudest on the benign case**, since
+> local dev and the e2e harness have no verifier by design and a previous unit deliberately made that
+> path calm. *A signal that fires on the normal case is not a signal.* Now once per directory peer.
+> It also printed `directoryNodeId` — the string the REMOTE sent about itself, unchecked — inside a
+> line whose whole subject is that nobody checked which directory this is, presenting the peer's own
+> answer as the answer. Now `claimedNodeId` with `dialedPeerId` beside it, and the test asserts they
+> are distinct fields.
+> Step 6 runs
+> only `if (verifier)`; with none, this daemon takes the directory's word for which directory it is,
+> and the ONLY trace was `verified: false` — one field inside the **info** line a SUCCESSFUL connect
+> also emits. `directory.auth.skipped` now fires at WARN naming what was not checked and the setting
+> that refuses at startup. **Deliberately not presented as the fix, and the code says so:** this
+> entry's own conclusion is that a log is not a control, and a WARN is still a log. It buys the
+> absence a name and a level of its own.
+> ### ⚠️ CORRECTION AFTER REVIEW — **I RECORDED #3 AS DELIVERED AND IT WAS NOT.**
+> **I built it against the wrong subject in the wrong repo.** Andre's #3 — and the DoD bullet it
+> comes from, which is filed under `DOD-M15-RELAYABUSE-1`, not here — names **`CELLO_DIRECTORY_PUBKEYS`
+> in the RELAY**. I hardened `manifestRootKeys` in the client daemon instead. Review traced every
+> production construction and proved my guard **cannot fire**: `buildManifestDeps` has three exits and
+> none produces scheduler + provider + empty keys, and two further guards sit in front of it. So it
+> is safe *because it is unreachable*, and the failure story I wrote for it — *"the daemon started,
+> looked healthy, and never adopted a manifest again"* — **describes a state no daemon can be started
+> in.** That is the same overclaim pattern as the commit immediately before it, one unit later.
+> **The guard stays** — it costs nothing and is correct as defence-in-depth for an in-process
+> embedder — but it is NOT quick win #3 and the test proving it is a green test for an unreachable
+> branch.
+> **THE REAL ONE IS NOW DONE** (`relay.ts`): with a single configured pubkey the relay accepts
+> assignments from ONE directory and rejects every session brokered by the other sovereign nodes. It
+> fails closed, so nothing is forged — but the operator sees **CELLO being flaky**, not a config gap:
+> one session works, the next fails depending on which directory brokered it, and retrying appears to
+> fix it. It also makes one directory a precondition for the relay, inverting the redundancy
+> invariant. Now **fatal in dev/staging/production**, with the variable named in the reason; `local`
+> exempt so loopback development and the e2e harness are untouched.
+>
+> **#3 (as built here, kept for the trail) — an empty directory-key set silently disabled the manifest poll.** The guard was right and
+> stays right (a poll verifying against no keys verifies against nothing), but when it fired,
+> *nothing happened*: the daemon started, looked healthy, and never adopted a manifest again — the
+> failure you find months later when a rotated directory key was never picked up. It now REFUSES at
+> startup with the key count and threshold in the error.
+> **The distinction that makes the refusal safe rather than a blanket throw:** *no scheduler* is a
+> legitimate configuration (the M6 back-compat path runs that way, and failing there would brick a
+> supported setup); *scheduler wired with no keys* is a misconfiguration — somebody asked for
+> verification and supplied nothing to verify with. **Only the second refuses**, and both halves are
+> pinned by tests.
+> **An existing test encoded the OLD silent-disable behaviour** and was changed deliberately, with
+> the reason written into the test — silently rewriting a test to match new code is how a contract
+> gets lost.
+> **Gate: daemon 280 files / 2920 tests / exit 0; typecheck 0.**
+> **Bullet 2 (`DOD-M15-BOOTSTRAP-AUTH-1`) is untouched, so this line stays 🟡.**
+>
+> ### (claim, kept for the trail) CELLO_Support, 2026-08-24
+> **Andre's re-ranking, quick win #5:** *"Make the skipped directory authentication loud. Not the
+> full fix — just stop it disarming in silence."*
+> **The gap, read out of the code rather than assumed:** `signaling-connect.ts` runs step 6 only
+> `if (verifier)`. With none configured the whole identity check is skipped, and the ONLY trace is
+> `verified: !!verifier` — a field inside an **info** line at connect. This entry already records the
+> right principle for it: *"a LOG IS NOT A CONTROL."* Making the skip loud does not make it a control
+> either; it stops the disarm being indistinguishable from the healthy path.
+> **I hold: `signaling-connect.ts`'s step-6 branch and its test only.** Bullet 2 stays with
+> `DOD-M15-BOOTSTRAP-AUTH-1`, unclaimed.
+> **SURFACING HALF DONE + REVIEWED 2026-08-23** (→ Entry 36); **stays 🟡 because bullet 2 is
+> untouched.** Reviewer: *"The line is not closable on this diff… make sure the DoD tag reflects that
+> rather than flipping green."* Extracted as `DOD-M15-BOOTSTRAP-AUTH-1`.
+> Verdict quoted: *"**SILENT FALLBACKS FOUND** — F1 (HIGH): the refusal runs after the irreversible
+> identity migration and after every open session is marked interrupted, violating the rule stated 90
+> lines above it in the same file. [blocking] **ERROR SUBSTITUTION FOUND** — F5… the refusal quotes a
+> re-randomised URL and asserts 'a DNS hostname… that is the usual cause' without having checked it;
+> F3 (HIGH): all three remedies name a variable that, followed literally, produces a different
+> startup crash. [blocking]… I do not think I am rubber-stamping this one."* All nine fixed.
+>
+> **What shipped:** `cello_status` states the posture in BOTH directions (the milestone's
+> healthy-path-is-silent rule is deliberately inverted here — the defect IS that "enforced" looks
+> like silence); local and public are separated so a loopback dev run is calm;
+> `CELLO_REQUIRE_DIRECTORY_AUTH` refuses at STARTUP, now as pure config validation before any disk
+> side effect.
+> **My worst defect:** the refusal originally ran after the irreversible identity migration and after
+> every open session was marked `interrupted` — a "failed to start" that changed the operator's
+> record on the way out.
+> **My claim that justified the unit was false:** `directory.signaling.connected` logs
+> `verified: !!verifier` every connect. The right reason is that a LOG IS NOT A CONTROL.
+> **Carried:** `DOD-M15-BOOTSTRAP-AUTH-1`, `DOD-M15-STEP6-REPLAY-1`.
+
+
+## `DOD-M15-BOOTSTRAP-AUTH-1` — ❌ The bootstrap coordinate arrives over an authenticated channel
+
+> **SCOPED 2026-08-24 (CELLO_Support), NOT IMPLEMENTED — and the scoping says the title is aimed at
+> the wrong half of the problem.** Read as written, this line asks for TLS on 9090. Measuring what
+> the plaintext endpoint actually decides says that would buy far less than it sounds like, because
+> **the client does not learn WHO the directories are from `/bootstrap` at all.**
+>
+> **What an attacker who owns that plaintext endpoint can and cannot do:**
+> 1. **They cannot change the roster.** The node list and every node's Ed25519 pubkey come from
+>    `BUNDLED_CONSORTIUM_MANIFEST` — shipped in the client, threshold-signed, and re-verified at load
+>    against `BUNDLED_CONSORTIUM_ROOT_KEYS`. `/bootstrap` supplies only a **dial coordinate** for a
+>    node whose identity is already fixed.
+> 2. **They cannot impersonate a node.** A poisoned coordinate points the client at a machine that
+>    must then sign `nodeId ‖ agent pubkey ‖ nonce ‖ timestamp` with the manifest's node key. It has
+>    no such key, so the connection is REFUSED — the operator sees a directory that will not connect,
+>    never a directory that lies to them.
+> 3. **They cannot replay their way past it** beyond ±5 minutes, and only with a tuple captured for
+>    *that same agent pubkey* — closed today under `DOD-M15-STEP6-REPLAY-1`.
+> 4. **They CAN deny that one node.** This is the whole residual, and it is bounded: the signed
+>    manifest names every sovereign node, so the client holds N independent candidates to fall back
+>    to. Denying the service means being on-path to all of them.
+>
+> **The verifier is on by default for the shipped deployment** — pointed at a bundled endpoint,
+> `manifest-deps.ts` builds it (`daemon.manifest.bundled`); pointed elsewhere it returns `{}` and now
+> WARNs. So step 6 being "skippable", as bullet 2 has it, is no longer a silent condition.
+>
+> ⚠️ **What I could NOT prove from code, and will not claim:** that a client meeting a poisoned
+> coordinate actually FAILS OVER to another roster node rather than stalling on the refusal. The
+> roster enumeration (`manifestNodesToEndpoints`) and `failoverEndpointResolver` both exist and are
+> wired; I did not run the poisoned-coordinate case live. **That, not TLS, is the test worth
+> writing** — if failover holds, point 4 is bounded to a single node and this line is hardening; if
+> it does not, the availability bullet is real and belongs to the failover path, not to port 9090.
+>
+> **Launch call: not blocking.** No customer is ruined by a plaintext coordinate that cannot forge an
+> identity. The genuinely open item next to it is the **byte-match fail-open** already tracked in
+> `DOD-M15-STEP6-REPLAY-1` — a DNS name for a bundled machine skips auth — and that is an
+> endpoint-identity change, not to be attempted during a fleet roll.
+
+
+## `DOD-M15-RELAYLEAK-1` — 🟡 Relay clients are closed (built; reviewed, all findings fixed; final run pending)
+
+> **BOTH PREMISES VERIFIED BEFORE FIXING**, because the last three lines I picked from a list had a
+> stated subject that did not match the code. `gracefulShutdown` references `relayClient` **zero
+> times** across its whole body — it stops session NODES and leaves the client cache untouched. And
+> `#resolveSealTransport`'s DETACHED branch calls `registerSession` with no matching unregister
+> anywhere.
+> **Why the second is worse than "long-lived":** `#detachSessionRelay` closes a client only when
+> `!client.hasSessions()`. A registration that is never removed keeps that predicate false
+> **forever** — so no shutdown, no teardown and no sweep could ever close it. The client was
+> immortal, not merely leaked.
+> **Why it costs something real:** a cached client holds an authenticated libp2p stream and a reader
+> loop, and **the relay counts a reservation per client against a finite pool** — a daemon that
+> restarts repeatedly consumes them faster than they are released, which is the *"agents cannot get a
+> reservation"* failure the relay's own limits note describes, seen from the other side.
+> **The release is in a `finally`, not at each of the three returns** — a call per exit is a
+> hand-kept list, the shape this milestone has been bitten by repeatedly, where the FOURTH exit added
+> later quietly leaks. It also covers the throw path, which is where a leak matters most.
+> **⚠️ THE RISKIEST EDIT WAS A PROGRAMMATIC RE-INDENT of ~120 lines, and I checked it rather than
+> trusting it:** a whitespace-blind diff removes NOTHING beyond the two intended changes, and all 8
+> backticks in the method are markdown inside doc comments — **there are no template literals**, so
+> the re-indent cannot have altered a log message or any operator-facing string.
+> **⚠️ AND I CAUGHT MYSELF SHIPPING A HOLLOW TEST:** the first version asserted a client was NOT
+> closed against an EMPTY cache, which proves nothing about the fix. It now populates the cache the
+> production way and asserts the close happened.
+>
+> ─── **REVIEW CAME BACK BLOCKING, AND IT WAS RIGHT: I CAUGHT THE HOLLOW TEST AND THEN SHIPPED
+> ANOTHER ONE.** ────────────────────────────────────────────────────────────────────────────────
+>
+> The production code was proven sound (the re-indent verified byte-clean, no control-flow change).
+> **Neither test reached the code it was written for.** Review ran them and captured the return:
+> `{"ok":false,"reason":"no_persisted_relay_endpoint"}`, `builderCalled: 0`. One test was **red as
+> committed**; the other was **green with the fix reverted**, because it asserted
+> `hasSessions() === false` and that was true only because `registerSession` had never run.
+>
+> **What I had missed:** the detached branch needs THREE conditions and I supplied none. No live
+> `#activeNodes` entry (an entry short-circuits to the LIVE branch), a persisted `relay_peer_id` /
+> `relay_addrs` on the row, and a standing receiver for the agent. The setup now builds all three
+> through production entry points, and builds the REAL scenario: a session whose node is gone via
+> `destroySessionNode(…, "interrupted")` while its relay endpoint survives on the row — the
+> restarted-daemon case the detached path exists for.
+>
+> **Every test now asserts the branch was ENTERED before asserting anything about it**, and the
+> release test asserts the registration HAPPENED before asserting it is gone. That ordering is the
+> whole lesson: "no session is registered" is trivially true of a path that never registered one.
+>
+> **The test file was also outside `tsconfig.test.json`, and that hid a real type error:**
+> `submitSealLeaf` called with 4 arguments against a 3-argument signature, so the `Uint8Array` landed
+> in `correlationId`. Direct evidence I was writing against a method shape that does not exist —
+> the same reason the preconditions were missed. Fixed; file added to the allowlist.
+>
+> **REVERT PROOFS RUN, one mutation at a time:** removing the `gracefulShutdown` close loop reddens
+> only the shutdown test; removing `releaseDetached()` from the `finally` reddens only the release
+> test, on the registration still being present. Each leaves the other green.
+>
+> **Two more defects fixed, both found by review, both real:**
+> - **A revival failure leaked the same thing through a different door.** When `reviveSessionNode`'s
+>   status write fails, the teardown deleted the map key and stopped the node but never detached the
+>   relay — and `#reconnectRevivedSessionRelay` had already registered the session on the cached
+>   client. That registration stood with **no owner**, holding `hasSessions()` true for the life of
+>   the process.
+> - **A second seal caller closed the client the first was still awaiting.** Two `submitSealLeaf`
+>   calls can be in flight for one session (the method's own comment says so). Both released; the
+>   second unregistered the only session and closed the client mid-`submitLeaf`, settling it with
+>   `relay_client_closed` — sending the operator to `cello_status` and their relay for a client
+>   **this daemon closed on itself.** The release signal is now "this call ADDED the registration",
+>   not "this branch ran"; the flag is renamed `detached` → `releaseOnDone` so its name stops
+>   outliving its meaning.
+>
+> **And the new preconditions earned themselves immediately:** the fake relay client did not
+> implement the new `hasSession`, so the resolver threw a `TypeError`, nothing was registered, and
+> the only thing that noticed was the precondition assertion. The `.catch(() => undefined)` that
+> swallowed it is gone.
+>
+> **Typecheck 0 (source and the test config).** Final confirming run pending the shared runner.
+> # 🔒 CLAIMED BY **CELLO_Support**, 2026-08-24, BEFORE code. `DISCLOSE-1` closed, so this is my one WIP.
+> **I hold:** `session-node-manager.ts`'s relay-client lifecycle (`#relayClients`,
+> `#detachSessionRelay`, `gracefulShutdown`) and its tests. `CELLO_Coder_1`: this touches
+> `session-node-manager.ts` again — say the word and I will hand it back.
+> **Premises to VERIFY before fixing, not assume** — the last three lines I picked from a list had a
+> stated subject that did not match the code.
+
+
+## `DOD-M15-SUSPEND-UNTESTED-1` — threshold-refusal has NO test under the threshold we actually ship
+
+> ### 🔴 ⚠️ THIS DOCUMENT GIVES TWO OPPOSITE ANSWERS ABOUT THE KILL SWITCH, AND THIS LINE'S
+> ### CLASSIFICATION RESTS ON THE ONE THAT MAY BE WRONG. Found 2026-08-24 (CELLO_Support) reading
+> ### the DoD end to end. **NOT resolved — I have no evidence either way and will not guess.**
+>
+> The bullet directly above says the kill switch is fine because *"suspension replicates to every
+> node, so all three refuse."* **`DOD-M15-SPINERED-1`'s `j-suspend-tofn` investigation says the
+> opposite, and quotes the product's own source for it** — `directory-node.ts` `#isAgentPaused`:
+>
+> > *"a node can only HONOR a suspension for an agent whose `agent_profiles` row it holds — the
+> > honor-check JOINs `agent_suspensions`→`agent_profiles`, so a missing local profile resolves to
+> > 'not suspended' and **the node SIGNS BLIND**. … single-node honoring means **a genuinely-paused
+> > agent can still reach threshold by routing around the one honoring node. That is the production
+> > gap.**"*
+>
+> **The two cannot both be true.** Either the suspension flag reaches every node (this line's
+> premise, which makes this a coverage gap and correctly POST-LAUNCH), or it does not (which is the
+> kill switch being routable-around, and `.claude/CLAUDE.md` names a kill switch as a launch
+> requirement).
+>
+> **Neither entry cites a measurement of the replication itself.** This one asserts it; `SPINERED-1`
+> quotes a code comment describing the opposite and measured `node1=never-asked node2=never-asked`,
+> which is consistent with BOTH readings and therefore settles neither.
+>
+> **What would settle it, and it is one query, not an investigation:** suspend an agent on one node
+> and read `agent_suspensions` on the other two. If the row is there, this line's premise holds. If
+> it is not, this line is misclassified and `SPINERED-1`'s reading is the right one.
+>
+> **Flagged rather than reclassified — moving a line into the gate is Andre's call (§0z.4), and I
+> would not move one on an unresolved contradiction anyway.** But the contradiction itself is a
+> defect in the record: a reader who finds this entry first concludes the kill switch is fine, and a
+> reader who finds `SPINERED-1` first concludes it is not, and nothing tells either of them that the
+> other page exists.
+
+
+## `DOD-M15-SEALROOT-EMPTY-1` — 🅿️ **NOT A PRODUCT DEFECT. A STALE TEST CONTRACT.** Five spine journeys assert a `close_session` shape the product deliberately retired
+
+> ## ⚠️ I CLASSIFIED THIS "BLOCKS LAUNCH" AN HOUR AGO AND I WAS WRONG. Corrected in place, loudly,
+> because a false launch-blocker costs exactly as much attention as a real one and this milestone has
+> spent the day proving that a confident write-up is not evidence.
+>
+> **The receipt arrives.** Polled `cello_sealed_receipt` after the close and got a real
+> `sealed_root`, `leaf_count`, `legibility`, participants — the whole certificate.
+>
+> **What actually happens:** `cello_close_session` is **non-blocking by design**. It returns
+> `{ok: true, seal_status: "committed"}` plus guidance saying, verbatim, *"The receipt is NOT YET
+> available … Fetch it with `cello_sealed_receipt`."* The blocking version was removed deliberately —
+> its own guidance names the reason: *"which is exactly how seventeen sessions were lost when this
+> call used to block."*
+>
+> **The five journeys assert `closeA.sealed_root`, which is the retired shape.** The product changed
+> and the tests did not. They are red for a contract that was correctly abandoned.
+>
+> **THE FIX IS IN THE TESTS, NOT THE DAEMON:** close, then poll `cello_sealed_receipt` for the root,
+> and assert byte-identity there. Anything that "fixes" the daemon to return a root synchronously
+> would re-introduce the blocking close that lost seventeen sessions.
+>
+> **⚠️ AND THE TEST DESTROYS ITS OWN DIAGNOSTIC.** Each of these builds a rich `diag` string — close
+> responses plus twenty daemon seal lines — and attaches it to `.toMatch()`. When the value is
+> `undefined`, `.toMatch()` throws a **TypeError before the custom message is ever rendered**, so the
+> diagnostic never prints. That is why the cluster read as unexplained: three runs and a temporary
+> `console.error` to see what the first run already knew. Use `expect(typeof x).toBe("string")` first,
+> or `toBeTruthy()`, so the message survives.
+
+
+## Superseded / investigation entries moved out of the DoD, 2026-08-24
+
+Three entries that were findings or already-superseded records rather than open work.
+The DoD keeps no stub for these: two are resolved elsewhere in it, and the third is a
+sub-finding of `DOD-M15-SPINERED-1`.
+
+### 🔴 `j-documents` — 7 of 12 RED, AND IT IS THE SALT SPLIT, STILL LIVE
+
+Measured 2026-08-24, first run of these journeys in this milestone. The seven failures read as seven
+different things — *"the peer was never told about the kill"*, *"A was never told B's decision"*,
+*"B's copy with no conversation open never converged"*, *"A's update never settled"* — and they are
+**one cause**:
+
+```
+session.content.cross_check.failed        on session bfde644c…
+"reason":"content_hash_salt_unavailable"  × 4
+session.salt.agreed                       × 0
+```
+
+**The receiving side holds no salt, the sender's frames declare salted, and every document update
+between them is refused.** That is `DOD-M15-SALTSPLIT-1`'s exact failure mode — the asymmetric salt
+state — reached here by the branch where **no agreement ever completed at all** (`agreed` is zero for
+the entire run, not merely for the failing session).
+
+**⚠️ WHAT THIS DOES AND DOES NOT SAY ABOUT `SALTSPLIT-1`.** That line prevents the split where one
+side holds an *unspent* salt and the peer says it can never adopt one, and makes a spent split loud.
+**It does not make an agreement complete.** These sessions never got that far, so nothing in that unit
+applies — the fix is upstream of it, in why the agreement does not run for this path. **Reported as a
+distinct defect rather than folded into a closed line**, because folding it in would make a tag cover
+work it never did.
+
+**The user-visible shape, which is why it outranks the rest of this lane:** two people co-editing a
+document, and one side's changes never arrive. Neither sees an error — the update is refused at the
+far end and the near end shows it sent. Documents are `M9`'s headline feature.
+
+**TRACED ONE STEP FURTHER — and HALF MY OWN EVIDENCE IS WITHDRAWN. Read the retraction first.**
+
+> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
+
+**WHAT SURVIVES, and it is enough to keep the finding — just not the proof I claimed:**
+
+```
+"reason":"no_agreement_started"           × 1   ← decisive on its own
+"reason":"content_hash_salt_unavailable"  × 4
+session.content.cross_check.failed        on session bfde644c…
+```
+
+`no_agreement_started` is returned from exactly one place, and only when `#markSaltPending` was never
+called — which means **`#sendSaltFrame` never ran for this session.** So this is not a lost frame, a
+timeout, or a peer on an old build. The announcement was never attempted.
+
+**Where it should have come from.** The announce hangs off `node.onPeerConnect`, and that hook's own
+comment claims it is *"the only hook that fires on BOTH sides for every way a session's direct path
+comes up: the initiator's first dial, the responder's inbound connection, every reconnect, and a
+revived node."* It also records why it cannot live at session creation: *"`newStream` never dials — it
+only finds an already-open connection."*
+
+---
+
+### ⚠️ `DOD-SPINE-1 "daemon up: started"` IS NOT THE DAEMON BEING DOWN, AND THE LINE SAYS IT IS
+> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
+**BLOCKS LAUNCH** (§0z.1). Found by running `DOD-M15-SPINE-LANE-1`'s own lane for the first time,
+2026-08-23 — one 56-minute run, receipt in Entry S12. **Not diagnosed. Deliberately.** The
+trip-wire (§0z.2) says record and stop; a wrong root cause here is expensive because the blast
+radius looks shared.
+
+**The measurement, and nothing more:** `pnpm run test:spine` → **21 of 36 files failed, 49 of 98
+tests**, 3,387 seconds, **vitest exit 1**. Every file listed in Entry S12, and the full log is
+committed at `receipts/2026-08-23_spine-lane-full-run.log` — the original was in a temp directory a
+reboot clears, and re-running to recover the failure texts costs another hour.
+
+> **An earlier version of this line said "exit 0 on the wrapper", and that was wrong** — the 0 was
+> the last statement of a compound shell command, not vitest. `SPINE_EXIT=1`, captured. It matters
+> because the exit code is the ONLY thing a scheduler reads: the lane reports its failure honestly,
+> so wiring it up later gives an honest red rather than a false green.
+
+- **Why this blocks:** `.claude/CLAUDE.md` — *"No milestone closes until a live multi-process smoke
+  test passes."* This IS that test. **A close today would be a close with no evidence**, and the
+  reason nobody knew is that the lane is excluded from every environment (that is `SPINE-LANE-1`).
+- **What is red includes the floor, not just the edges.** `J-SPINE` *"daemon up: started"* — the
+  most basic multi-process assertion there is. `J-CONTENT`'s entire ACK/dedup/recover set.
+  `J-MULTIPLAYER` 7 of 7.
+- **⚠️ CORRECTION: I ALSO NAMED THE SOVEREIGN-NODE QUORUM INVARIANT HERE, AND THAT WAS WRONG.**
+  `J-TOFN-DKG`'s two failures — including *"kill one directory → registration still succeeds"* — are
+  **both** `Unexpected non-whitespace character after JSON at position 156`, which is
+  `DOD-M15-CLIJSON-1`: the journeys died at their FIRST line, in `register-agent`, and **never
+  reached the quorum assertion at all.**
+  **So the quorum invariant was not failing. It was untested.** Those are very different claims, and
+  I reported the alarming one about a property `.claude/CLAUDE.md` calls non-negotiable.
+  **✅ RE-RUN AND SETTLED 2026-08-24: `j-tofn-dkg` is GREEN, 2/2, 62s.** Registration fans the DKG to
+  all three nodes, and **killing one directory still lets registration succeed among the remaining
+  two.** The invariant holds. It was never broken; the journey died in `register-agent` before
+  reaching it.
+  The distinction matters beyond this line: *"a test that asserts X is red"* only means *"X is
+  broken"* **if the test reached X**, and a journey that dies at setup reaches nothing. **The loudest
+  alarm I raised all night was about a property that was fine**, and it came from reading a red test
+  without checking how far it got.
+- **What is GREEN is worth as much as what is red, and constrains the cause:** `j-conn`, `j-auth`,
+  `j-onboard`, `j-int`, `j-presence`, `j-sig`, `j-antientropy` (5/5), `j-suspend`,
+  `j-trust-journey`, `j-combined-journey`, `j-leg-frontier`, `j-track-record`, `j-optionb-setup`,
+  `j-sig`. **A cause that broke everything would not leave those standing.**
+- **THREE OBSERVATIONS, EACH MARKED AS WHAT IT IS. None is a diagnosis.**
+  1. **Environmental, confirmed:** `cello-portal-postgres` has been **Exited for 11 days** and
+     nothing listens on `55432`. Journeys needing the portal cannot pass. Explains the
+     `ECONNREFUSED` failures; does NOT explain most of the rest.
+     > **✅ NO LONGER TRUE — MEASURED 2026-08-24, BEFORE THE NEXT FULL RUN.** `cello-portal-postgres`
+     > is **Up 9 hours (healthy)**, `0.0.0.0:55432->5432/tcp`, `pg_isready` → *"accepting
+     > connections"*, and a socket probe of `127.0.0.1:55432` connects. The protocol database on
+     > `5433` is up and accepting too.
+     >
+     > **Corrected here rather than left for the run to discover, because a stale environmental note
+     > poisons the next measurement in BOTH directions.** Left standing, it invites the reader to
+     > pre-attribute a set of failures to a database that is now fine — and, worse, to read the
+     > *disappearance* of those failures as a product improvement nobody made. The 21/36 receipt was
+     > taken while this was genuinely down; **the next run is not comparable to it on these journeys**
+     > and any delta on the portal-dependent ones is this container, not the code.
+     >
+     > It also removes the excuse: the portal-dependent journeys now either pass or fail on their own
+     > merits, and whichever it is, is a real result.
+  2. **A lead, not a cause:** six failures are JSON parse errors, one reading
+     `Unexpected token 'C', "CELLO — a "... is not valid JSON`. That string is the CLI banner at
+     `cello-client/core/cli/src/cli-args.ts:52`. Something that should emit JSON emitted help text
+     instead. **Which caller, and why, is unestablished** — do not assume it is the same caller in
+     all six.
+  3. **Ruled out:** the binaries are built (8 `core/*/dist` present, daemon dist newer than source),
+     so this is not a stale-build artefact.
+> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
+- **Do NOT open 21 lines from this.** First unit is a triage: cluster the 49 by cause, establish
+  how many are environment vs product, and only then decide what needs fixing. The lane has been
+  unrun for long enough that some failures will be stale expectations rather than regressions.
+
+> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
+- **Enforcer:** `test:spine` green, or every remaining failure carrying a written verdict of
+  environment / stale-expectation / real-defect, with the real ones lined up.
+
+---
+
+### ~~`DOD-M15-SAMEOP-FALSEPOS-1`~~ — superseded by the resolution above
+**POST-LAUNCH under the frozen gate (§0z.4)** — not a security hole a customer reaches; it suppresses
+a trust signal rather than admitting one. **Flagged for reclassification: it fails in the direction
+that costs the product its value, and it sits next to `DOD-M15-SAMEOP-1`, which is IN the gate.**
+
+**Measured, 2026-08-23, `j-end` HOP 9** — the only remaining failure in that journey now that the
+portal database is running (it was 7 failures; **6 were the stopped container**).
+
+- **What the journey proves and what it does not.** HOP 9's first assertion PASSES: a genuinely
+  co-owned endorsement IS flagged `same_operator === true`. The second FAILS: no endorsement in
+  Alice's wallet is left unflagged — so **Bob's genuine third-party endorsement is flagged too.**
+- **Why that direction matters.** `same_operator` exists to stop an operator manufacturing standing
+  by endorsing themselves. Flagging a stranger's endorsement does not admit a forgery; it
+  **discards the one signal that carries weight.** A wallet where every endorsement reads
+  self-dealing is a wallet where third-party trust is invisible — the product's whole proposition.
+- **✅ SETTLED 2026-08-24 by an assertion that NAMES BOB.** The journey now filters the wallet by
+  `issuer_pubkey === pubkeys["bob"]` and asserts **his** row. *"Bob's endorsement must BE in Alice's
+  wallet"* **PASSES**; the flag assertion still fails. **So his endorsement is present AND flagged.**
+  It is the false-positive reading, not the delivery one — and the test can no longer confuse them,
+  which is worth more than this finding: `undefined` from a `.find()` over "any endorsement" was
+  satisfied by two different bugs in two different components, and the test pointed at neither.
+- **WHAT IS ESTABLISHED, precisely, because I over-claimed this twice before getting it right:**
+  Bob's endorsement is in the wallet; it carries `same_operator: true`; the journey asserts Bob and
+  Alice are distinct operators and that assertion passes. **WHAT IS NOT ESTABLISHED: which component
+  set the flag.** Three layers are ruled out by reading — the daemon's display path, the mint's
+  double `=== true`, and a stale pin (no `signal.ingress.same_operator.pinned` in the run). The
+  producer is elsewhere and I have not found it.
+- **The paradox is the lead, and it should be handed over rather than guessed at:** the predicate
+  fails closed on both arms and Bob has his own account AND phone stub, so the computation that
+  reads those fields cannot produce `true` — yet `true` is what arrives. Either the fields the
+  predicate reads are not the fields the journey set, or `sameOperator` reaches the mint from a
+  caller that does not compute it. **Start there; do not touch the predicate.**
+- **~~RETRACTED "CONFIRMED"~~ — superseded above, kept because the sequence is the lesson.**
+  What IS established: the wallet holds **four endorsements and every one carries
+  `same_operator: true`**. What is NOT established — and what I claimed anyway — is that **one of
+  them is Bob's.** `cello_trust_signals_list` returns `issuer_kind: "agent"` and **no issuer
+  pubkey**, so the rows cannot say who wrote them. Coder_1's second reading (*"Bob's endorsement is
+  not in her wallet at all"*) survives the data I called decisive.
+- **The evidence now points AWAY from the false-positive reading**, which is why the retraction
+  matters rather than being bookkeeping:
+  - **No pin-flip was logged.** `submission-ingress` prefers a pinned `same_operator` over a
+    recomputation and logs `signal.ingress.same_operator.pinned` when they differ. Zero occurrences
+    in the run — so the pinned value agreed with the recomputation.
+  - **The predicate fails closed on BOTH arms.** `issuerAgent !== null && subjectAgent !== null &&
+    ((accountId !== null && accountId === subject.accountId) || (phoneStubHash !== null &&
+    phoneStubHash === subject.phoneStubHash))`. A NULL on either side yields inequality, not a match.
+  - **The journey gives Bob his own account AND phone stub**, deliberately, under a comment
+    describing this exact trap — and asserts distinct accounts, passing.
+  Those three cannot all hold alongside *"Bob's endorsement is flagged"*. The likelier reading is
+  that **Bob's endorsement never reached Alice's wallet**, which is a delivery/acceptance question,
+  not a same-operator one.
+- **THE DECISIVE DATUM IS THE ISSUER, AND NOTHING SURFACES IT.** Next step is to print the issuer
+  per row — either widen the listing or query `signal_records` directly in the journey. **Do not
+  touch the predicate before that**; three converging pieces of evidence say it is behaving.
+- **✅ THE FIXTURE IS EXONERATED BY ITS OWN ASSERTION.** The journey does not seed the flag — it only
+  reads it — and at HOP 1 it asserts *"Bob and Alice must be DISTINCT operators for this hop"*
+  against `count(DISTINCT account_id)`, **and that assertion passes.** So the fixture establishes two
+  separate operators and the product flags the endorsement between them as same-operator anyway.
+- **✅ TWO PRODUCER LAYERS RULED OUT.** The daemon's display path sets the flag on a strict
+  `=== true` and omits it when false. The mint writes `composed.sameOperator === true` over
+  `args.sameOperator === true` — strict twice, so an absent input resolves to FALSE. **Both fail
+  CLOSED**, which is the opposite of the everything-gets-flagged shape. Whatever computes
+  `sameOperator` for submission is the remaining suspect.
+- **This is a real defect, not a stale test.** It fails OPEN on trust while looking like it fails
+  closed: a stranger's endorsement is discarded as self-dealing, which removes the only endorsement
+  that carries independent weight. **Post-launch by the freeze, not by severity** — Andre's call.
+- **First step:** read the printed `signals` array from the next run. If Bob's row carries
+  `same_operator: true`, trace the producer; if it is absent from the wallet entirely, the finding is
+  a different one and this line is wrong.
+- **ONE LAYER ALREADY RULED OUT, so nobody re-checks it.** The hypothesis was that a predicate
+  returns true when its input is ABSENT rather than when it matches — the absent-collapses-into-a-
+  verdict shape this milestone keeps finding. **Not here.** `inbound-sessions.ts` sets the flag on
+  `s.sameOperator === true`, strict, and omits the key entirely when false, under a comment saying
+  the field's APPEARANCE is the signal. That is the correct shape. The flag arrives already set,
+  from `envelope.same_operator`.
+- **So the producer is upstream of the daemon** — whatever mints the envelope, or the journey's own
+  seeding. That is where to look, and it is NOT the display path.
