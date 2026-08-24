@@ -174,8 +174,11 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
      * is why it passed and made the fixture look sound — *a stale fixture whose self-check is stale
      * the same way cannot detect its own staleness.*
      *
-     * Both halves now target the table the resolver reads. `agent_profiles` is still updated because
-     * the same-operator check also compares `phone_stub_hash`, which lives there.
+     * `agent_profiles` is still updated, for THREE reasons and not the one I first gave: the resolver
+     * reads `phone_stub_hash` from it (`internal-api-server.ts` selects the stub from the profile and
+     * the account from the LEFT-JOINed link); registration writes BOTH, so a fixture that writes one
+     * does not look like a registration; and `agent-presence-repository` still reads
+     * `agent_profiles.account_id` directly, so that column is not retirable yet.
      */
     const bobAccount = randomUUID();
     psqlSpine(
@@ -189,13 +192,26 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
       `INSERT INTO agent_account_links (agent_id, account_id) ` +
       `SELECT agent_id, '${bobAccount}' FROM agent_profiles ` +
       `WHERE lower(k_local_pubkey) = lower('${pubkeys["bob"]}') ` +
+      // ⚠️ FIXTURE-ONLY. V59 grants INSERT+SELECT and states "NO UPDATE and NO DELETE, neither policy
+      // nor grant — a binding that can be rewritten is a binding an attacker can rewrite"; re-homing is
+      // deliberately not an UPDATE. This runs as superuser, past RLS and grants, to reach a state
+      // production reaches by registering Bob under his own account in the first place. DO NOT copy
+      // this into product code.
       `ON CONFLICT (agent_id) DO UPDATE SET account_id = EXCLUDED.account_id`,
     );
     const linkage = psqlSpine(
       // Asserted against `agent_account_links`, NOT `agent_profiles` — checking the column the
       // fixture writes rather than the one the product reads is what made this undetectable.
-      `SELECT count(DISTINCT l.account_id) FROM agent_account_links l ` +
-      `JOIN agent_profiles p ON p.agent_id = l.agent_id ` +
+      //
+      // ⚠️ BOTH LEGS, because D-29 is a DISJUNCTION: `accountId` match OR `phoneStubHash` match
+      // (`submission-ingress.ts`). My first version counted accounts only, under a message claiming
+      // *"Bob and Alice must be DISTINCT operators"* — and a shared phone stub alone makes them the
+      // same operator with the account count still at 2. The two cannot diverge today (one statement,
+      // one transaction, identical WHERE), and the edit that would split them is the obvious next one:
+      // "is the `agent_profiles` UPDATE still needed?" — which would drop the phone-stub half while
+      // this kept asserting distinctness.
+      `SELECT count(DISTINCT l.account_id) || '/' || count(DISTINCT p.phone_stub_hash) ` +
+      `FROM agent_account_links l JOIN agent_profiles p ON p.agent_id = l.agent_id ` +
       `WHERE lower(p.k_local_pubkey) IN (lower('${pubkeys["bob"]}'), lower('${pubkeys["alice"]}'))`,
     );
     /**
@@ -205,9 +221,9 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
      */
     expect(
       linkage.replace(/\s/g, ""),
-      "Bob and Alice must be DISTINCT operators for this hop, in the table the resolver reads — " +
-        `got ${JSON.stringify(linkage)}`,
-    ).toBe("2");
+      "Bob and Alice must be DISTINCT operators on BOTH legs of D-29 — two accounts and two phone " +
+        `stubs, in the tables the resolver reads. Got ${JSON.stringify(linkage)}`,
+    ).toBe("2/2");
 
     const statement = "Alice led the payments migration and shipped it with no incident.";
     const res = (await conn.call("cello_attestations_issue", {
@@ -707,11 +723,35 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     // holds. But he still shares Alice's `account_id` in `agent_profiles` (the harness registers every
     // agent under one dev account; HOP 1 split only BOB off), so the PORTAL — the party that can see
     // account linkage — is the one that catches it. That division of labour is the point of D-29.
+    /**
+     * ⚠️ THIS PRECONDITION WAS THE SAME DEFECT HOP 1 JUST FIXED, 500 LINES DOWN IN THE SAME FILE.
+     *
+     * It read `count(DISTINCT account_id) FROM agent_profiles` — the **superseded** column — with a
+     * substring matcher. `CELLO-REPL-001` moved the resolver to `agent_account_links` joined on the
+     * stable `agent_id`, so this asserted a fixture claim against a column the product no longer reads.
+     * **It measured the fixture, not the product**, and would stay green even if the resolver's answer
+     * changed underneath it — which is precisely the shape `SAMEOP-FALSEPOS-1` cost three
+     * investigations to unpick.
+     *
+     * Benign today (both tables say 1). Fixed anyway: a precondition that cannot fail is not a
+     * precondition, and leaving one screen of the same defect behind is how it comes back.
+     *
+     * **BOTH LEGS OF D-29 ARE ASSERTED**, not just the account. The predicate is a DISJUNCTION —
+     * `accountId` match **OR** `phoneStubHash` match — so an account count alone cannot establish
+     * "they share an operator", and for the co-owned POSITIVE it must not: if a later edit split the
+     * accounts, this hop would silently start exercising the phone-stub leg while claiming the
+     * account one.
+     */
     const linkage = psqlSpine(
-      `SELECT count(DISTINCT account_id) FROM agent_profiles ` +
-      `WHERE lower(k_local_pubkey) IN (lower('${pubkeys["charlie"]}'), lower('${pubkeys["alice"]}'))`,
+      `SELECT count(DISTINCT l.account_id) || '/' || count(DISTINCT p.phone_stub_hash) ` +
+      `FROM agent_account_links l JOIN agent_profiles p ON p.agent_id = l.agent_id ` +
+      `WHERE lower(p.k_local_pubkey) IN (lower('${pubkeys["charlie"]}'), lower('${pubkeys["alice"]}'))`,
     );
-    expect(linkage.replace(/\s/g, ""), "Charlie and Alice must SHARE an account for this hop").toContain("1");
+    expect(
+      linkage.replace(/\s/g, ""),
+      `Charlie and Alice must SHARE an operator on BOTH legs of D-29 for this hop — one account and ` +
+        `one phone stub, in the tables the resolver reads. Got ${JSON.stringify(linkage)}`,
+    ).toBe("1/1");
 
     const charlie = await connectMcp(dirFor["charlie"], "jend-charlie-coowned");
     mcpConns.push(charlie);

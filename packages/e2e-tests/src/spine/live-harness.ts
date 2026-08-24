@@ -331,7 +331,11 @@ export function ensurePostgres(dbNames: string[] = [SPINE_DB]): void {
 }
 
 // ─── Spine DB query (directory-side corroboration the daemon cannot fabricate) ──
-// Runs a read-only SQL statement against the harness-owned `cello_spine` Postgres
+// ⚠️ NOT read-only, despite what this line said until 2026-08-24 — four call sites WRITE through it
+// (j-end seeds operator identity in `agent_profiles`, `user_accounts` and `agent_account_links`).
+// Corrected rather than renamed: the function is fine, the contract was stale, and a "read-only"
+// label sitting on a writer is how the next reader stops checking what a call actually does.
+// Runs a SQL statement against the harness-owned `cello_spine` Postgres
 // via the same `docker compose exec` path used to provision it. `-tAc` = tuples-only,
 // unaligned, single command → the raw scalar/row text with no decoration. This is how
 // SPINE-4 asserts the directory's OWN writes (agent_profiles / user_accounts) rather
