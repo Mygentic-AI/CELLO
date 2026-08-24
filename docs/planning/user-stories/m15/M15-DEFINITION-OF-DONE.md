@@ -1359,6 +1359,38 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > That is as far as this log goes: the sender-side lines for those hashes are in a different process's
 > capture, so the produce half needs a run with both daemons' output retained.
 >
+## ✅ TRIAGE UNIT DONE — reviewed, findings fixed, verdict quoted
+
+> **Review pass 1, on the code changes.** Verdict on the thing this unit was most at risk of, quoted:
+> > *"Directly on the thing you were most worried about: **no assertion in `j-spine` was weakened**.
+> > Four were corrected to values the product actually emits, one (`current` → `online` + `selected`)
+> > is measurably stronger, and the deleted one was provably content-free with its replacement guard
+> > living in cello-client."*
+>
+> And it did not take the numbers on trust: *"**j-spine is 7/7 — VERIFIED INDEPENDENTLY.** I ran it:
+> 7 passed / 0 failed, 91s, exit 0."*
+>
+> Lens lines: **SPEC: DEVIATIONS FOUND** (the causes table) · **NO SILENT FALLBACKS** in the diff ·
+> **ERRORS NAME THEIR CAUSE** · **HOLLOW TESTS FOUND** — `j-suspend-tofn` [blocking] ·
+> **REMOVALS PROVEN**.
+>
+> **All findings fixed and re-run** (`HIGH-1` fourth case + participation control, `HIGH-2` assertion
+> ordering, `MEDIUM-3` scoping/windowing, `LOW-5` symbol name, `SPEC` table arithmetic). The reviewer's
+> own summary of where the weakness actually was: *"The weakening, such as it is, is in
+> `j-suspend-tofn` — not in the assertions, but in the diagnostic that now stands in front of them."*
+> That diagnostic no longer stands in front of them.
+>
+> **🅿️ ONE PRODUCT FINDING FILED FROM THIS REVIEW — `DOD-M15-START-AGENT-UNAWAITED-1`.**
+> `daemon.ts:2703` does `void sessionNodeManager.ensureStandingReceiverForAgent(name)` and returns
+> `ok: true` **before the receiver exists**; a permanent failure only produces a `warn`. **The operator
+> is told the agent started, and the agent is deaf.** That is the product-side cause of the race the
+> `DOD-SPINE-5` readiness poll works around on the test side, and the surface already carries
+> `standing_receiver_ready` to hang a truthful answer on.
+>
+> **🔵 THE LINE IS NOT DONE — the triage UNIT is.** Remaining: the salt-announce defect
+> (`j-documents` 7 + `j-stale-session` 1), the four `j-content` deposit-side hash sites, the four
+> `j-multiplayer` timeouts, and `j-end`'s trust-signal misclassification.
+
 ## ✅ TRIAGE COMPLETE 2026-08-24 — every journey file measured, 49 failures resolve to SIX causes
 
 **This is the unit the line asked for** (*"First unit is a triage: cluster the 49 by cause… do NOT open
