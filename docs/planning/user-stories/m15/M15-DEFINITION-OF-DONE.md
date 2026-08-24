@@ -1489,6 +1489,45 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 >
 > **🟡 THE TAG DOES NOT FLIP ON THIS.** Pass 2 is out on the fix diff and is the hard cap. Given pass
 > 1 found the fix worse than the defect on one path, a second pass on the same code is the point.
+>
+> #### THE DESIGN CHANGED AFTER PASS 1: SUSPEND, NOT ERASE — and the reframing was the other lane's
+>
+> I defended the immediate erase as a **compatibility** question. It was an **authorization** one: the
+> receiver destroyed durable key material on a peer's unauthenticated assertion with nothing to check
+> it against. Their sentence is the one to keep — *"a control that depends on the other side honouring
+> it is not a control"* — and my own trigger was the evidence I had written down and walked past:
+> `frontier_unreadable` is **a healthy current peer having one bad second**, not an old build. Fixing
+> the producer left *"one side of that exchange correct by construction, the other still correct by
+> luck."*
+>
+> Their recommendation was cheaper than the wire field I was weighing: **stop destroying.** A salt
+> that is not used is inert; the destruction is what turned a transient disagreement permanent, and
+> with nothing irreversible hanging on the claim, proving the claim stops being load-bearing.
+>
+> **My refinement on top, because plain mark-and-keep splits the transcript at the next restart**
+> (unsalted now, salted after a reboot) and a durable mark needs a column this milestone has twice
+> lost data over: the mark is in memory and **the erase is DEFERRED to the first unsalted hash** — the
+> moment it becomes both harmless (nothing hashed under it) and required. Placed **before** the
+> `#hashedWithoutSalt` increment on purpose: that counter closes adoption, so incrementing first would
+> make our own guard refuse the erase we had just decided was correct.
+>
+> **What it buys that erasure forecloses even in principle:** if the peer was merely unable to read
+> its own state, its next announcement with a matching fingerprint **resumes the session fully
+> salted**. A salt is a one-way function of two halves — an erased one cannot be re-derived from one
+> side. The test asserts the resumed session actually hashes `hmac-sha256-salt-v1` again, because a
+> log line reading *"resumed"* over a session still hashing `sha256` is this milestone's signature
+> defect and it was not going to ship inside the fix for it.
+>
+> #### REVERT TEST ON THE SUSPEND/RESUME GUARDS — three mutations, three reds, each naming the damage
+>
+> | mutation | result |
+> |---|---|
+> | delete the suspension check in `#saltForHashing` | **RED** — `expected 'hmac-sha256-salt-v1' to be 'sha256'` |
+> | delete the `#resumeSalt` call | **RED** — `the session must come back salted: expected +0 to be 1` |
+> | delete the deferred erase | **RED** — `keeping the salt would split the transcript at the next restart` |
+>
+> With the four from the earlier set (discard call, adoption re-check, `session.salt.split`, in-flight
+> guard) that is **seven guards, seven reds, zero survivors** on this unit.
 > **✅ SECOND CLAUSE — an assertion on an absent value keeps its diagnostic.** Both review passes
 > spent (→ Entry 64). Pass 2: *"NO SILENT FALLBACKS — and the unit removes one"*, *"REMOVALS
 > PROVEN"*. **Measured, not believed:** the other lane ran the `trustless-cello` root — 1742 passed,
