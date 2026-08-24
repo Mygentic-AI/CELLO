@@ -2811,7 +2811,7 @@ written down nowhere, and a per-session salt fixes it as a side effect.
   `SHA-256(salt ‖ message)`, which has a length-extension weakness). Recorded as its own line so the
   exposure is on the record independently of the fix that closes it.
 
-### `DOD-M15-SEALWIRE-1` — 🟡 The receipt is bound to the transcript (bullets 1, 2, 3, 4, 6, 7 ✅; 8 🟡 written-not-run; 5 ❌)
+### `DOD-M15-SEALWIRE-1` — 🟡 The receipt is bound to the transcript (1, 2, 3, 4, 6, 7 ✅; 5 + 8 code-complete, UNRUN)
 > **✅ BULLET 6 — the content hash is salted.** All six B2b-2 constraints, both review passes spent
 > (→ Entries 49–52). A session holding an agreed salt hashes under `hmac-sha256-salt-v1`.
 >
