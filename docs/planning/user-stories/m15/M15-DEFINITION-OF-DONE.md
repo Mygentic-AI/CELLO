@@ -141,6 +141,13 @@ basic value working. Anything whose only consequence is to the `cello_doc_*` fea
 - **Not affected:** `DOD-M15-SCREENINSTALL-1` stays in the gate — the semantic screener is a launch
   item in its own right. Only its two document-specific sub-bullets follow this ruling out.
 
+### Ruling C — **the kill switch is OUT OF THE GATE.**
+*"The kill switch is outside of the gate"* (Andre, 2026-08-24). `DOD-M15-SUSPEND-UNTESTED-1` already
+sat in the POST-LAUNCH BACKLOG, but it was put there by a lane under the freeze, not ruled. It is now
+ruled, by the person the frozen gate says must rule it. **The open design question — whether suspend
+is meant to stop new sessions being brokered or to stop the agent doing anything at all — is no
+longer owed and is not blocking anyone.**
+
 ### Ruling B — **nine lines that entered the gate after it was written, and are not in either anchor.**
 The gate began at **49 lines** and reached **116**. These nine were all added mid-milestone, none
 appears in the two spec-of-record investigations, and none is a security hole a reader finds by
