@@ -2886,7 +2886,31 @@ written down nowhere, and a per-session salt fixes it as a side effect.
   `SHA-256(salt ‖ message)`, which has a length-extension weakness). Recorded as its own line so the
   exposure is on the record independently of the fix that closes it.
 
-### `DOD-M15-SEALWIRE-1` — ✅ The receipt is bound to the transcript (all 8 bullets)
+### `DOD-M15-SEALWIRE-1` — ❌ The receipt is bound to the transcript (bullet 5 REOPENED)
+> ### ⚠️ I CLOSED THIS AND IT WAS NOT DONE. REOPENED 2026-08-24 on `CELLO_Coder_1`'s measurement.
+> **My witnessed test covers the DELIVERED writer, not the sixth one — and the two mutations say so
+> in the same file:**
+> - remove authorship from `recordTranscriptMessage(...)` → **RED (1 failed / 2 passed)** ✅
+> - remove it from `placeOwnLeaf(..., sentAuthorship(...))` → **GREEN (3 passed)** ❌
+>
+> **Structural, not a harness gap.** On the delivered path `placeOwnLeaf`'s authorship argument is
+> dead by construction — the row's proof arrives from the `recordTranscriptMessage` call below it.
+> That argument is load-bearing in **exactly one case: when the leaf is HELD** — and on that path
+> `recordTranscriptMessage` never runs, because it sits inside `if (placed.placed)`. **The held entry
+> is the only carrier, and it has no executing test.**
+> **So the mutation I proved reddened for the wrong writer**, and I read a green from the delivered
+> path as coverage of both. `CELLO_Coder_1` is taking the held-path test.
+>
+> ### ⚠️ AND A DEFECT IN MY HALF THAT NOTHING COULD HAVE CAUGHT
+> **`placeOwnLeaf` took `authorship?:` — optional — and THREE of seven call sites omitted it**
+> (`daemon.ts` 1440 / 1671 / 1685, the away-reply paths). Each had the proof **in a local variable
+> and handed it to `recordTranscriptMessage` one line below**, just not to the leaf. Invisible while
+> delivered; on the held path it commits `self_authored` with no signature.
+> **Nothing went red and nothing could — an optional parameter's whole behaviour on omission is to
+> look deliberate.** Fixed by `CELLO_Coder_1` at the SIGNATURE rather than the call sites:
+> `authorship: SentAuthorship | undefined`, **required**. Absence stays expressible; the caller has
+> to say it. **Both directions measured: omission → a type error; substitution → 0 errors.** The type
+> system cannot see substitution — that is the held-path test's job.
 > **CLOSED 2026-08-24. Both lanes. This was the milestone's remaining gate item.**
 > **Bullet 5's last gate — a test that EXECUTES the path — is met and mutation-proven.** Remove the
 > `authorship` argument from the delivered call site and the witnessed test reddens while the other
