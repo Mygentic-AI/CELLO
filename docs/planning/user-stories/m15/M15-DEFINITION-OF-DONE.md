@@ -1124,7 +1124,7 @@ outside that unit, and I am not opening it on a guess.**
   `DOD-M15-RELAYADMIN-REPLAY-1`. **Sequence them** — both change what this stream accepts, and
   shipping them apart is two fleet rolls.
 
-### `DOD-M15-BOOTSTRAP-AUTH-1` — 🟡 The poisoned coordinate is PROVEN survivable; TLS on 9090 is not built
+### `DOD-M15-BOOTSTRAP-AUTH-1` — 🟡 The poisoned PEER ID is proven survivable; the poisoned ADDRESS stalls (→ `ADDR-1`); TLS not built
 > ### ✅ THE UNPROVEN LINK IS NOW MEASURED, AND THE ANSWER IS STRONGER THAN THE SCOPING ASSUMED.
 > **2026-08-24 (CELLO_Support).** The scoping below called this line not-blocking on four points and
 > named the one it could not prove: *"that a client meeting a poisoned coordinate actually FAILS OVER
@@ -1139,9 +1139,41 @@ outside that unit, and I am not opening it on a guess.**
 > compiled-in default URL after a consortium move that *"resolved forever while every connection died
 > at step-6 identity auth with `key_not_in_manifest`. Reachability was never the right test."*
 >
-> **⚠️ AND IT HAD NO TEST.** Nothing in the suite named `not_in_consortium`. The single guard that
-> makes this line's launch call correct was held up by nothing. **4 tests now; revert proof RUN** —
-> disabling the membership check reddens exactly the two that assert it.
+> **⚠️ I WROTE "AND IT HAD NO TEST." THAT WAS FALSE — review F1, and it is the finding of the pass.**
+> `directory-bootstrap.test.ts:313` has carried **four** tests on this guard since M12, including one
+> that is my test 1 minus the log assertion and one that is my test 3. **I grepped the EVENT NAME,
+> found nothing, and concluded the guard was uncovered** — the deadness-by-grep shape, applied to
+> tests instead of to code. My revert proof did not catch it because it was scoped to the new file;
+> reverting the guard would also have reddened the M12 file. **Corrected here, in the test header and
+> in the commit, because the false version said the guard "was held up by nothing" and a later reader
+> would go re-derive its history.**
+> **What this unit genuinely adds:** the all-poisoned → `null` case (no analogue anywhere), the
+> address residual asserted as a bound, and one assertion each on the operator-visible event and its
+> absence on the healthy path. **4 tests, revert proof RUN** — disabling the membership check reddens
+> exactly the two that assert it.
+>
+> **⚠️ AND THE PRE-REGISTERED "FAILOVER DOES NOT HOLD" BRANCH WAS TAKEN — for the ADDRESS variant.**
+> Review F2. Branch 2 of the resolver returns the primary on every call, never sets `stuckToFallback`
+> and never probes the roster; `maxReconnectAttempts` is `MAX_SAFE_INTEGER`, so the daemon
+> reconnect-loops **forever** rather than reporting `lost`. That is a STALL, and the cost is not
+> "denial of one node" as I first wrote it — it is **denial of this daemon's directory connection with
+> no failover path**, and a restart re-picks a bundled endpoint the same attacker answers again. The
+> title now carries the qualifier rather than reading as blanket survivability.
+>
+> **CARRIED as ACs (two-pass cap not yet spent, but Andre called the wrap):**
+> - **The suite-level hollow gap review proved:** delete `getManifestPeerIds,` from
+>   `consortium-bootstrap.ts:446` and **all four of my tests stay green**, as do the four M12 ones.
+>   Nothing asserts the WIRING from the composition root. The fifth test review specified — drive
+>   `createConsortiumRouting` with the real `EmbeddedManifestProvider(BUNDLED_CONSORTIUM_MANIFEST)` and
+>   a rogue primary — is the one that would make this launch call self-defending.
+> - **F5 (silent fallback):** `peerId` is OPTIONAL on `ConsortiumNode`, so a verified in-window
+>   manifest with no peer ids disarms this guard **with no log at all**. The bundled manifest is
+>   covered by an existing assertion; the `CELLO_CONSORTIUM_MANIFEST` file path is not.
+> - **F6:** `directory.bootstrap.primary.not_in_consortium` is the one signal that says *"you are
+>   being MITM'd"* and it carries no `impact`, no `guidance`, and reaches no `cello_status` surface —
+>   while the line the operator watches loops at INFO forever.
+> - **F7:** a dial rejected for peer-id mismatch — the exact fingerprint of the ADDR-1 attack — is
+>   logged at `debug`.
 >
 > **THE RESIDUAL, TESTED AS A LIMIT rather than left to be discovered → `DOD-M15-BOOTSTRAP-ADDR-1`.**
 > Membership is checked on the PEER ID, never on the ADDRESS, so a rogue address under a real node's
