@@ -122,18 +122,58 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
   **✅ ALL EIGHT RE-RUN. NOT ONE WAS A PRODUCT DEFECT.** `j-tofn-dkg` 2/2 (**kill a directory →
   registration still succeeds**), `j-tofn` 4/4 (**sovereign isolation** + **forged manifest
   REFUSED**), `j-sign` ✅ (FROST T-of-N across ≥2 directories), `j-relaysig` ✅, `j-refresh` ✅,
-  `j-remove` 2/3. The two still red are the other lane's salting landing (`j-persist` computes the
-  pre-salt hash) and a test encoding **T=3 when we ship T=2** (`j-suspend-tofn`).
+  `j-remove` 2/3, **`j-persist` ✅** (fixed by the salting lane). The one still red is
+  `j-suspend-tofn`, a test encoding **T=3 when we ship T=2**.
+  **A NINTH belongs on this list: `j-canary`, which I wrote off as my own dirty tree.** It was not.
+  `.gitignore` had `node_modules/` — a trailing slash matches DIRECTORIES only — while the iCloud
+  workaround makes every one a **symlink**, so a dozen entries read as untracked on any clean
+  checkout and the canary could never pass on a dev machine. Fixed at the source. **"It failed
+  because of something I did" is exactly as unexamined as "the floor is broken", and it is the more
+  comfortable one, which is why it survived longest.**
   **Seven properties are now POSITIVELY PROVEN rather than un-disproven** — a stronger position than
   before any of this. The lesson stands regardless: check how far a test got before believing it.
 - **DONE tonight:** `CHAINDEBT-1`, `CHAINROUNDTRIP-1`, `MIGRATION-GUARD-1`, `SPINE-LANE-1`,
   `CLIJSON-1`, `NORMHASH-1` ✅. `SEALWIRE-1` bullet 5 (received half; sent half ruled
   not-worth-its-cost). `REFUSED-INBOUND-SILENT-1` + `UNWITNESSED-1(b)` implemented.
   `RELAYAUTH-1` liveness scoping implemented.
+- **🔁 IN FLIGHT — `REFUSED-INBOUND-SILENT-1`, reviewed once (blocking), every finding fixed, 12–13
+  tests green, tag NOT yet flipped.** Pending: the full `core/daemon` suite (running, 0 failures so
+  far) and review pass 2 — **pass 1 of the 2-pass cap is spent.**
+  **⚠️ ONE PATTERN COST ME THREE ROUNDS HERE, and it will cost the next person too: I kept building
+  a value and not checking WHO READS IT.**
+  1. Store had no reader → I tested the store.
+  2. So I added IPC tests — which passed `since_seq: 0`, and **`handleReceive` branches on
+     `since_seq` first, so 0 (a finite number) took the batch exit** and never ran the quiet exit
+     they were named for. Deleting the line I claimed they covered left them all green.
+  3. Then I put the salted-status field on the session record — and **`selectSessions` is a
+     WHITELIST**, so it never reached `cello_list_sessions` at all.
+  **Each time the test passed and the operator saw nothing.** The question that finds it is not "does
+  this work?" but "who reads this, and did I drive THAT?"
+- **🧵 FILE OWNERSHIP (agreed with `CELLO_Coder_1`, no announcing):** `session-node-manager.ts` is
+  THEIRS, `close-session-handler.ts` is MINE. Explicit-path commits do not separate two agents
+  editing one file — that is how `8c58cc0` landed non-compiling. Borrow by asking; I borrowed it for
+  this unit and handed it back.
+- **🏗️ `tsc --noEmit -p <pkg>` DOES NOT BUILD; root `pnpm run typecheck` does (`tsc --build`).** The
+  spine lane launches `dist/`, so the package-scoped form lets you report "typecheck clean" while the
+  binary goes stale and journeys fail for something absent from the source you are reading. **Run
+  `pnpm run build` in cello-client before any spine journey.** Both lanes hit this independently;
+  now in §7 of the procedure.
 - **GREEN journeys:** `j-loopback` (now carries `…` as the `NORMHASH` guard — **do not tidy it to
   ASCII**), `j-refresh`, `j-legibility`, `j-trust`, `j-end` 9/10, `j-spine`'s seal tests.
 - **⚠️ NO PASSING TEST PROVES THRESHOLD-REFUSAL under the threshold we ship.** `j-suspend-tofn`
-  assumes T=3; `dkg-topology` computes `floor(N/2)+1` = **2**. Under T=2 suspending 2-of-3 SIGNS and
+  assumes T=3; `dkg-topology` computes `floor(N/2)+1` = **2**.
+  **THE LINCHPIN, verified 2026-08-24 — do not re-derive it from `dkg-topology`.** All of this holds
+  only because **the client holds a FROST share**; if it did not, the group would be 3 directory
+  shares at T=2, suspending two would leave 1 < 2, and `ok:true` would be **the kill switch failing
+  to fire — a launch blocker.** Same output, opposite verdict.
+  `dkg-topology`'s *"N=1 keeps 2-of-2"* comment reads as proof the client is the second holder. **It
+  is not** — `frost-handler.ts` shows that 2-of-2 is the `@noble/curves` FROST *minimum threshold*,
+  met with a discarded **dummy** identifier. The real evidence is
+  `core/crypto/src/frost/frost-threshold-signer.ts`: `{ min: threshold, max: participants + 1 }`
+  with `// +1 for the client`. **2-of-4, client always one of them.**
+  Consequence: **one un-suspended directory is enough to keep an agent signing.** Production is
+  fine — suspension replicates to every node — but the test's artificial 2-of-3 is not.
+  Under T=2 suspending 2-of-3 SIGNS and
   suspending 1-of-3 SIGNS, so the journey can no longer tell threshold-refusal from
   single-node-refusal — the property it is named for. **Do NOT fix it by flipping the expectation to
   `ok:true`**: that is a green test asserting nothing, which is worse than the red one.
