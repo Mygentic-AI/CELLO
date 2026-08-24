@@ -241,10 +241,19 @@ its own.
 > author holds their own key: they can sign anything and write the row. A signature over your own
 > message, stored in your own database, constrains you not at all.
 >
-> **What answers it is the ANCHOR.** The leaf hash sits under a Merkle root the directory notarized
-> and a third party already holds, so a fabricated row would need a signature that also lands under
-> that root — and it cannot. The signature is checkable **against something the signer does not
-> control**, which is the whole of the property.
+> **What answers it is the ANCHOR** — a signature is proof only when it is checked against something
+> the signer does not control.
+>
+> **⚠️ AND THE WORKED EXAMPLE FAILS ITS OWN TEST, WHICH IS WHY IT IS KEPT.** I wrote that CELLO's
+> transcript signature is anchored because the leaf sits under a notarized root. **Review measured
+> the schema: the root covers CONTENT HASHES ONLY.** `sender_sig`, `sender_pubkey` and `attribution`
+> are under no root — they can be edited with a plain `UPDATE` and nothing detects it — and the bytes
+> the signature signs are not stored beside it, so nobody can reconstruct and check it at all.
+> **What survives:** the signature is a non-repudiable commitment to a content hash that IS under the
+> root, and content cannot be fabricated. **What does not:** "therefore the row is checkable."
+> **So apply the rule to your own answer, not only to the objection.** I used the rule correctly to
+> defeat *self-referential*, then asserted the anchoring existed without measuring it — the right
+> principle and an unchecked fact, which reads exactly like a finished argument.
 >
 > **The check, before claiming any signature proves anything:** name what it is verified AGAINST, and
 > ask who controls that thing. If the answer is *the signer*, the signature is decoration; if it is a

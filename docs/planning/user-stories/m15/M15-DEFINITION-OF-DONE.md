@@ -2913,14 +2913,32 @@ root means. Both repos; version-bump ACs on both sides.
 > existing"*. **It reversed after re-derivation, in its own words: *"The row claims nothing to a third
 > party. It is in MY database. I could have written anything into it."***
 >
-> **⚠️ AND "SELF-REFERENTIAL" IS NOT ANSWERED BY "A THIRD PARTY CAN CHECK IT" — that step is the one
-> both of us initially missed, and I nearly endorsed the original ruling because of it.** I hold my
-> own key, so I can sign anything and write the row; my signature over my own message does not stop
-> me fabricating one. **What defeats the objection is the SEAL.** The row's leaf sits in a Merkle
-> tree whose root the directory notarizes, so a fabricated sent row would have to produce a signature
-> that ALSO lands under a root a third party already holds. **The signature is checkable against an
-> EXTERNAL anchor, not against itself** — which is what makes it non-repudiable rather than
-> self-certifying, and it is the same property the received half has, pointing the other way.
+> **⚠️ AND "SELF-REFERENTIAL" IS NOT ANSWERED BY "A THIRD PARTY CAN CHECK IT".** I hold my own key,
+> so I can sign anything and write the row; my signature over my own message does not stop me
+> fabricating one. The answer has to be an ANCHOR the signer does not control.
+>
+> ### ⚠️ CORRECTION 2026-08-24 — I WROTE THAT THE ANCHOR MAKES IT "CHECKABLE", AND IT DOES NOT. YET.
+> I recorded: *"The signature is checkable against an EXTERNAL anchor, not against itself."*
+> **Review measured the schema and that claim is false today.** Precisely:
+> - **The certified root covers CONTENT HASHES ONLY.** `sender_pubkey`, `sender_sig`, `attribution`
+>   and `direction` are **under no root at all** — a plain `UPDATE transcript SET sender_sig = …`
+>   breaks nothing, because nothing recomputes anything from those columns.
+> - **The signed BYTES are not stored with the signature.** Structure 1 is
+>   `[1, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]`; from a transcript row
+>   `last_seen_seq` is unrecoverable and `timestamp` is the SUBMIT-time clock, not the row's
+>   `created_at`. **So the signature cannot be reconstructed and checked by anyone — including its
+>   owner.**
+> - **What ISreal:** the signature is a non-repudiable commitment by the key-holder to a content
+>   hash that IS under the notarized root, and content cannot be fabricated (that needs a preimage).
+>   It is asymmetric in the safe direction — it lets you incriminate yourself, never falsely blame a
+>   counterparty.
+> **So the honest statement of what shipped is: a durable record of a value we already held,
+> correctly labelled — NOT YET A PROOF.** The bullet is not decoration (it is the prerequisite for
+> `DOD-M15-INCLUSION-1`), but the sentence I wrote asserted a property the schema does not provide,
+> which is the exact defect class this milestone is about, in my own description of the fix for it.
+> **What would make it true:** store `structure1_cbor` on the row, or write the transcript↔seal-leaf
+> join (and its 0-based/1-based off-by-one). **Andre's call whether that lands here or on
+> `INCLUSION-1`.**
 >
 > **The COST argument was also wrong, and on a premise nobody had checked.** It assumed the signature
 > exists only after the relay ack, forcing either a mutation of the append-only transcript or the
