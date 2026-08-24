@@ -6324,7 +6324,32 @@ clears it**, so the DoD's word "live" is not enforced.
   fails, and expire it on the same clock the directory uses before it gives up waiting for an accept.
 - **Enforcer:** journey.
 
-### `DOD-M15-RELAYLEAK-1` — ❌ Relay clients are closed
+### `DOD-M15-RELAYLEAK-1` — 🟡 Relay clients are closed (built, review out)
+> **BOTH PREMISES VERIFIED BEFORE FIXING**, because the last three lines I picked from a list had a
+> stated subject that did not match the code. `gracefulShutdown` references `relayClient` **zero
+> times** across its whole body — it stops session NODES and leaves the client cache untouched. And
+> `#resolveSealTransport`'s DETACHED branch calls `registerSession` with no matching unregister
+> anywhere.
+> **Why the second is worse than "long-lived":** `#detachSessionRelay` closes a client only when
+> `!client.hasSessions()`. A registration that is never removed keeps that predicate false
+> **forever** — so no shutdown, no teardown and no sweep could ever close it. The client was
+> immortal, not merely leaked.
+> **Why it costs something real:** a cached client holds an authenticated libp2p stream and a reader
+> loop, and **the relay counts a reservation per client against a finite pool** — a daemon that
+> restarts repeatedly consumes them faster than they are released, which is the *"agents cannot get a
+> reservation"* failure the relay's own limits note describes, seen from the other side.
+> **The release is in a `finally`, not at each of the three returns** — a call per exit is a
+> hand-kept list, the shape this milestone has been bitten by repeatedly, where the FOURTH exit added
+> later quietly leaks. It also covers the throw path, which is where a leak matters most.
+> **⚠️ THE RISKIEST EDIT WAS A PROGRAMMATIC RE-INDENT of ~120 lines, and I checked it rather than
+> trusting it:** a whitespace-blind diff removes NOTHING beyond the two intended changes, and all 8
+> backticks in the method are markdown inside doc comments — **there are no template literals**, so
+> the re-indent cannot have altered a log message or any operator-facing string.
+> **⚠️ AND I CAUGHT MYSELF SHIPPING A HOLLOW TEST:** the first version asserted a client was NOT
+> closed against an EMPTY cache, which proves nothing about the fix. It now populates the cache the
+> production way and asserts the close happened.
+> **Typecheck 0. Tests written but NOT YET RUN** — the shared runner has been continuously occupied;
+> stated rather than implied.
 > # 🔒 CLAIMED BY **CELLO_Support**, 2026-08-24, BEFORE code. `DISCLOSE-1` closed, so this is my one WIP.
 > **I hold:** `session-node-manager.ts`'s relay-client lifecycle (`#relayClients`,
 > `#detachSessionRelay`, `gracefulShutdown`) and its tests. `CELLO_Coder_1`: this touches
