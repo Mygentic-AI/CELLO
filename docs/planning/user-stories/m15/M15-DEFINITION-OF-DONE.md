@@ -4727,7 +4727,40 @@ Parallel with Tier 4 — different disciplines, no shared files.
 - If it is kept, the justification goes in writing here. "Or justify keeping it" is not a
   do-nothing option.
 
-### 🟡 park deposit rate limiting — BUILT 2026-08-24 (CELLO_Support), review out
+### ✅ park deposit rate limiting — DONE 2026-08-24 (CELLO_Support), REVIEWED, blocking findings fixed
+> **THE GAP I PREDICTED WAS REAL AND WORSE — BOTH HALVES OF THE WIRING WERE UNPINNED.** Deleting the
+> refusal block left all 260 tests green, and so did reverting the handler registration to one
+> parameter — **the expensive one**, because the limiter then checks an undefined peer id, takes the
+> deliberate allow-through branch, and becomes a **total no-op** with the gate reporting green. A
+> unit a one-word edit silently disables is *accompanied* by tests, not protected by them.
+> **Closed by a test that drives a real in-process libp2p peer against a real relay node over the
+> wire. BOTH reverts redden it, RUN rather than reasoned.** It also pins the property that makes this
+> safe to ship at all: a second peer, on its own connection and so its own authenticated identity, is
+> unaffected by the first's flood — a global limiter would let one attacker deny parking to every
+> honest sender.
+> **⚠️ AND MY "CHECKED BEFORE ANY PARSING" CLAIM WAS FALSE**, in the code comment, the commit and
+> this document. `#handleStream` has already pulled the whole length-prefixed frame off the wire and
+> CBOR-decoded it — **up to 4 MiB** — before the deposit handler is entered, so a flooder still gets
+> a full read and decode per refused deposit, and the stream slot to do it in. The check moved above
+> the field extraction and the auth work, and the prose now claims only what is true: **the
+> extraction and the disk write are saved; the frame read is not.**
+> **`retry_after_ms` now goes ON THE WIRE.** The relay computed it, logged it, asserted it in a test
+> — and never told the depositor. That mattered because the client retries a deferred park only on
+> EVENTS (boot, agent start, drain hook, signaling reconnect), so the one condition that self-clears
+> in sixty seconds was waiting on an unrelated reconnect.
+> **An unattributed deposit now announces itself.** It is still allowed through deliberately, but
+> silence there is a control whose failure looks exactly like success — no rate-limit events and no
+> abuse are the same picture.
+> **The limit is injectable** via `createRelayNode`, because the one control on the abuse path the
+> audit named FIRST should not be the only thing an operator cannot change without a node roll.
+> **Verified in my favour, not assumed:** `remotePeerId` is NOT optional in the installed
+> `@libp2p/interface`, and both published transport builds pass it — so the allow-through branch is
+> not the common path. And a rate-limited deposit is **not lost**: `rate_limited` is not a permanent
+> failure, so the content stays queued. This trades a DoS for latency, not data.
+> **Gate: relay 28 files / 261 tests / exit 0; typecheck 0.**
+> **CARRIED:** the operator-facing English on the client still says the message will retry *"when the
+> relay link is back"* — written for an outage, wrong for a healthy relay that is deliberately
+> throttling. Wording fix in `cello-client`, not this repo.
 > **What shipped:** a per-peer fixed-window limiter (30/minute) on the content-park deposit path,
 > checked **before** any parsing or store call — a limiter that runs after validation and a disk
 > write has already spent the work it exists to save. On refusal: `content.park.rate_limited` with
