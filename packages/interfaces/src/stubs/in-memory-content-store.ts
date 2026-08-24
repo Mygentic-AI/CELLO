@@ -13,6 +13,8 @@ import {
   CONTENT_STORE_TTL_MS,
   CONTENT_STORE_MAX_BYTES,
   CONTENT_STORE_MAX_ENTRIES,
+  CONTENT_STORE_MAX_RECIPIENT_BYTES,
+  CONTENT_STORE_MAX_RECIPIENT_ENTRIES,
 } from "../content-store.js";
 
 export interface InMemoryContentStoreOptions {
@@ -20,6 +22,9 @@ export interface InMemoryContentStoreOptions {
   ttlMs?: number;
   maxBytes?: number;
   maxEntries?: number;
+  /** DOD-M15-RELAYABUSE-1: the most bytes / entries ONE recipient's bucket may hold. */
+  maxRecipientBytes?: number;
+  maxRecipientEntries?: number;
 }
 
 function hex(b: Uint8Array): string {
@@ -41,6 +46,8 @@ export class InMemoryContentStore implements ContentStore {
   readonly #ttlMs: number;
   readonly #maxBytes: number;
   readonly #maxEntries: number;
+  readonly #maxRecipientBytes: number;
+  readonly #maxRecipientEntries: number;
   /** recipientPubkeyHex -> (contentHashHex -> entry), insertion-ordered for FIFO eviction. */
   readonly #byRecipient = new Map<string, Map<string, ContentStoreEntry>>();
   #totalBytes = 0;
@@ -51,6 +58,8 @@ export class InMemoryContentStore implements ContentStore {
     this.#ttlMs = opts.ttlMs ?? CONTENT_STORE_TTL_MS;
     this.#maxBytes = opts.maxBytes ?? CONTENT_STORE_MAX_BYTES;
     this.#maxEntries = opts.maxEntries ?? CONTENT_STORE_MAX_ENTRIES;
+    this.#maxRecipientBytes = opts.maxRecipientBytes ?? CONTENT_STORE_MAX_RECIPIENT_BYTES;
+    this.#maxRecipientEntries = opts.maxRecipientEntries ?? CONTENT_STORE_MAX_RECIPIENT_ENTRIES;
   }
 
   async deposit(entry: ContentStoreEntry): Promise<void> {
@@ -80,13 +89,59 @@ export class InMemoryContentStore implements ContentStore {
 
     const incomingBytes = entry.ciphertext.length;
 
-    // Cap eviction: while the store would exceed a cap, evict the oldest entry for
-    // THIS recipient (FIFO within the bucket) so live delivery is never blocked.
+    /**
+     * DOD-M15-RELAYABUSE-1 — **THE SAME BOUNDS AS `FileContentStore`, and the reason they had to be
+     * ported rather than left to the real store.**
+     *
+     * This stub is selected for `CELLO_ENV=local`, which is every local development run and the
+     * ENTIRE spine harness. While it wrote unconditionally, no multi-process test could ever observe
+     * a refusal — so the one behaviour the bound exists to produce was unreachable from the only
+     * lane that runs real processes. An interface with two implementations that disagree about
+     * whether a deposit can be refused is the defect this milestone exists to remove.
+     *
+     * REFUSE FIRST, EVICT SECOND, for the reason the file store records: eviction only ever scans
+     * the DEPOSITING recipient's bucket, so when the pressure lives in OTHER buckets, draining this
+     * one cannot help — and doing it anyway empties a victim's mailbox and still refuses.
+     */
+    let bucketBytes = 0;
+    for (const e of bucket.values()) bucketBytes += e.ciphertext.length;
+    const globalRoomIfDrained = this.#maxBytes - (this.#totalBytes - bucketBytes);
+    const globalEntryRoomIfDrained = this.#maxEntries - (this.#totalEntries - bucket.size);
+
+    if (
+      incomingBytes > globalRoomIfDrained ||
+      incomingBytes > this.#maxRecipientBytes ||
+      globalEntryRoomIfDrained < 1 ||
+      this.#maxRecipientEntries < 1
+    ) {
+      this.#logger.warn("content.store.deposit_refused", {
+        recipientPubkey: rKey,
+        incomingBytes,
+        bucketBytes,
+        totalBytes: this.#totalBytes,
+        totalEntries: this.#totalEntries,
+        impact:
+          "the parked-content store is at a bound this deposit cannot fit inside, so it was REFUSED " +
+          "before anything was evicted — nothing already parked was touched",
+      });
+      if (bucket.size === 0) this.#byRecipient.delete(rKey);
+      throw new Error(
+        incomingBytes > this.#maxRecipientBytes || this.#maxRecipientEntries < 1
+          ? "content_store_recipient_full"
+          : "content_store_full",
+      );
+    }
+
     let evictedCount = 0;
     let evictedBytes = 0;
+    const globalPressure =
+      this.#totalEntries + 1 > this.#maxEntries || this.#totalBytes + incomingBytes > this.#maxBytes;
     while (
       bucket.size > 0 &&
-      (this.#totalEntries + 1 > this.#maxEntries || this.#totalBytes + incomingBytes > this.#maxBytes)
+      (this.#totalEntries + 1 > this.#maxEntries ||
+        this.#totalBytes + incomingBytes > this.#maxBytes ||
+        bucketBytes + incomingBytes > this.#maxRecipientBytes ||
+        bucket.size + 1 > this.#maxRecipientEntries)
     ) {
       const oldestKey = bucket.keys().next().value as string | undefined;
       if (oldestKey === undefined) break;
@@ -96,9 +151,14 @@ export class InMemoryContentStore implements ContentStore {
       this.#totalEntries -= 1;
       evictedCount += 1;
       evictedBytes += oldest.ciphertext.length;
+      bucketBytes -= oldest.ciphertext.length;
     }
     if (evictedCount > 0) {
-      this.#logger.warn("content.store.full", { recipientPubkey: rKey, evictedCount, evictedBytes });
+      if (globalPressure) {
+        this.#logger.warn("content.store.full", { recipientPubkey: rKey, evictedCount, evictedBytes });
+      } else {
+        this.#logger.info("content.store.recipient_rotated", { recipientPubkey: rKey, evictedCount, evictedBytes });
+      }
     }
 
     bucket.set(cKey, copyEntry(entry));
