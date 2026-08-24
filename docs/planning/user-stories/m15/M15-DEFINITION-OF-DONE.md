@@ -3052,7 +3052,7 @@ Extracted from `DOD-M15-DIRAUTH-1`'s second bullet so it is a line rather than a
   so the attacker retains denial-of-service, and step 6 is itself skippable (that is `DIRAUTH-1`).
 - This is the fix the byte/normalised string match was standing in for.
 
-### `DOD-M15-STEP6-REPLAY-1` — 🟡 A directory identity proof cannot be replayed (replay ✅; byte-match fail-open ❌)
+### `DOD-M15-STEP6-REPLAY-1` — ❌ A directory identity proof cannot be replayed (replay bullet ✅; byte-match fail-open OPEN)
 > **THE REPLAY IS CLOSED 2026-08-24 (CELLO_Support).** 17 passed, mutation-proven: disabling the gate
 > reddens exactly the replay, future-dated and unparseable tests. The line stays 🟡 because its
 > SECOND bullet — the byte-match fail-open — is untouched, and its third is `BOOTSTRAP-AUTH-1`.
