@@ -265,7 +265,7 @@ The six known checked-then-ignored instances; three carry such a comment.
   clients perform this verification locally"* and the client's *"deliberately NOT compared at this
   layer"* — each pointing at a check the other does not perform.
 
-### `DOD-M15-TIERTEXT-1` — ❌ The tier descriptions do not promise a gate that does not exist
+### `DOD-M15-TIERTEXT-1` — ✅ The tier descriptions do not promise a gate that does not exist
 > **⚠️ I FLIPPED THIS ✅ AND IT WAS WRONG. Reverted 2026-08-24 on review — three blocking findings,
 > all confirmed by measurement, and two of them are worse than the defect the line opened with.**
 >
@@ -352,6 +352,40 @@ The six known checked-then-ignored instances; three carry such a comment.
 > reachability, the opposite of the defect this line exists for — so it is a note, not a blocker.
 > `DEFAULT_TIER_BOUNDS` re-verified at every tier: BLOCKED **0** (the one tier gating *whether*),
 > then 3 / 5 / 20 / 50. The ruled sentence is accurate.
+>
+> ### ✅ RE-FLIPPED 2026-08-24 (CELLO_Support) — every reverting finding closed, gate read by EXIT CODE
+> The first flip was reverted for three blocking findings. All three are now closed **and each was
+> verified by running something, not by re-reading the fix**, since re-reading is how the second one
+> got past me in the first place:
+> 1. **The text that denied the kill switch** — corrected, and now guarded in BOTH directions. One
+>    test fails if *"auto-accepted when you're away"* returns; another fails if any description
+>    claims *"every tier is auto-accepted"*. The only file in the tree still containing the old
+>    sentence is that test, which asserts its **absence**.
+> 2. **The false "no importer" claim** — corrected in the commit, this entry and the test header.
+>    The cause is recorded as a durable check: `grep` called a file **binary** over one stray NUL
+>    byte and answered "no matches" for a file it never read. **Every empty search in this pass got
+>    a positive control first**, and one of them — *"no test asserts a sealed status"* — would have
+>    been flatly false and would have had me write a duplicate of `msg-016`.
+> 3. **The red build** — the orphaned ledger rows are gone and the gate is green **by exit code**:
+>    root `pnpm run typecheck` **0** with zero errors, `eslint` **0**, `tsc --build
+>    core/adapter-claude-code` **0** (`--build` walks project references, so this is not the
+>    `-p --noEmit` trap that passes while the root fails), and 16 tests across the two files.
+>
+> **⚠️ ROOT TYPECHECK WAS RED WHEN I CAME TO FLIP, AND IT WAS NOT THIS UNIT.** One error in the other
+> lane's `dod-m15-salt-adoption-rule.test.ts` — `placeOwnLeaf` called with 6 of its 8 required
+> arguments, committed and pushed. **Fixed rather than waited on** (their file was not among the two
+> they had dirty, so no shared-worktree race), verified by running the file — all 6 tests pass —
+> because the change alters runtime behaviour rather than just satisfying the compiler: `kind` was
+> `undefined` before and is now `"msg"`.
+>
+> **NOT RE-RUN, stated rather than implied:** the full client suite and full build. The other lane
+> holds the runner slot, and this unit's diff is string literals in one file plus its test — nothing
+> in the tree reads the changed strings, which was checked rather than assumed.
+> **STILL CARRIED:** the ledger arithmetic for this surface. `shippedSurfaces()` cannot enumerate a
+> `.ts` surface, so the count cannot include `cello-mcp.ts` — that is `DOD-M15-TOOLDESC-SCAN-1`,
+> which is deliberately **POST-LAUNCH**. **This line's launch-blocking half — shipped text promising
+> a protection that does not exist — is closed; the durable control that stops the next drift is
+> not, by design.**
 **BLOCKS LAUNCH** (§0z.1): shipped operator-facing text states a protection the system does not
 provide, and the false half is the *reassuring* half. Found 2026-08-23 while Andre was setting a
 contact's tier by hand; the receptionist raised it as "a setting that does nothing" and the measured
