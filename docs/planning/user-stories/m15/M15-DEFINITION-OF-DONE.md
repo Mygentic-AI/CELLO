@@ -2846,7 +2846,25 @@ written down nowhere, and a per-session salt fixes it as a side effect.
   `SHA-256(salt ‖ message)`, which has a length-extension weakness). Recorded as its own line so the
   exposure is on the record independently of the fix that closes it.
 
-### `DOD-M15-SEALWIRE-1` — 🟡 The receipt is bound to the transcript (1, 2, 3, 4, 6, 7, 8 ✅; 5 = one test short)
+### `DOD-M15-SEALWIRE-1` — ✅ The receipt is bound to the transcript (all 8 bullets)
+> **CLOSED 2026-08-24. Both lanes. This was the milestone's remaining gate item.**
+> **Bullet 5's last gate — a test that EXECUTES the path — is met and mutation-proven.** Remove the
+> `authorship` argument from the delivered call site and the witnessed test reddens while the other
+> two stay green. That is the exact bypass review named, where the whole suite previously passed
+> while the feature did nothing.
+> **Bullet 8 is measured across every converted journey**: `j-legibility` observed
+> `verdict: "match"` on a live cross-process seal, and the `agentName` batch (`j-refresh`, `j-sign`,
+> `j-loopback`) is 3/3.
+> **GATE, reported as it happened rather than rounded up: 2877 passed, 7 skipped, and ONE FILE
+> FAILED** — `m9b-gate-1-composition-root`, which shells out to `tsc --build` inside a 2884-test run.
+> It passes **7/7 in isolation** and the project build is clean standalone. **I could not reproduce
+> it and I am not calling it flaky**: the mechanism is a test that runs a full project build under
+> load, which is a real hazard in that test rather than in the product. **Filed as its own item.**
+> **⚠️ WHAT THIS LINE DOES NOT GIVE YOU, stated at the close rather than buried:** the stored
+> signature is **not yet verifiable** — the certified root covers content hashes only, the proof
+> columns sit under no root, and the signed bytes are not stored beside the signature. **"A durable
+> record of a value we already held, correctly labelled — not yet a proof."** Recommendation and
+> reasoning are in bullet 5's block; the decision is Andre's.
 > **THE ALREADY-✅ BULLETS WERE RE-AUDITED before closing (2026-08-24), because a stale ✅ has been
 > this milestone's most reliable source of real findings — including this line's own header, which
 > still said bullet 5 was untouched long after its received half shipped.** Each check ran with a
