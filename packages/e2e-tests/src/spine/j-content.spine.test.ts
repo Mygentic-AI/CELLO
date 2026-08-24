@@ -917,10 +917,27 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(rec.ok, `recover ran:${JSON.stringify(rec)}`).toBe(true);
     expect(rec.recovered, "the straggler is NOT recovered into the sealed session").toBe(0);
 
-    // It unsealed fine but was refused at the sealed-session guard — the distinct, honest reason
-    // (`session_committed`), NOT unseal_failed and NOT a content desync. A late leaf would diverge
-    // from the FROST-notarized root, so the committed transcript refuses it.
+    /**
+     * It unsealed fine, AUTHENTICATED fine, and was then refused at the sealed-session guard — the
+     * distinct, honest reason (`session_committed`), NOT unseal_failed and NOT a content desync. A
+     * late leaf would diverge from the FROST-notarized root, so the committed transcript refuses it.
+     *
+     * ⚠️ THE EVENT IS `annexed`, NOT `ingest_failed`, AND THAT IS A DELIBERATE IMPROVEMENT. This
+     * assertion named `content.recover.ingest_failed` — the vocabulary from before M12-P17 gave the
+     * daemon an annex. Refused content is no longer merely dropped: it is written to the annex, the
+     * one durable store for counterparty content that never passed the inbound screen, so it can be
+     * examined rather than vanishing. The refusal REASON is unchanged and is still the thing this
+     * test cares about.
+     *
+     * Worth stating plainly because the old assertion could never pass again, and a test pinned to a
+     * retired event name reads as a product regression when it is the opposite.
+     */
     expect(daemonB.output, `straggler refused by the sealed-session guard:${diag}`).toMatch(
+      /"event":"content\.recover\.annexed"[^\n]*"reason":"session_committed"/,
+    );
+    // And NOT swallowed by the ordinary ingest-failure path: the straggler is a rejected-but-kept
+    // entry, not a lost one. Pinned so a future change that quietly reverts to dropping it is caught.
+    expect(daemonB.output, `the straggler is KEPT in the annex, not dropped:${diag}`).not.toMatch(
       /"event":"content\.recover\.ingest_failed"[^\n]*"reason":"session_committed"/,
     );
 
