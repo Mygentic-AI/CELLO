@@ -84,14 +84,14 @@ does not move them.
 
 | Size | What a reader would find | Line |
 |---|---|---|
-| **S** | A direct session permanently reveals the operator's IP, with no gate and no remedy — and the shipped docs say nothing. The mitigation (`RELAYONLY-1`) was reopened 2026-08-24 as not working. | `DOD-M15-DISCLOSE-1` |
-| **S** | The relay's connection gater and its reservation-dial hook are **written and never installed**, so an agent's circuit address is dialable by anyone who learns it. The direct path was closed this week; this is the same door, other route. | `DOD-M15-RELAYAUTH-1` (gater bullet only) |
+| **S** ✅ | A direct session permanently reveals the operator's IP, with no gate and no remedy — and the shipped docs said nothing. **All four bullets shipped 2026-08-24 in BOTH copies of `SKILL.md`, and `RELAYONLY-1` closed as the feature half.** | `DOD-M15-DISCLOSE-1` |
+| **M–L** | The relay's reservation-dial hook is not installed, so an agent's circuit address is dialable by anyone who learns it. The direct path was closed this week; this is the same door, other route. | `DOD-M15-RELAYAUTH-1` (gater bullet only) |
 | **S** ✅ | An empty `CELLO_DIRECTORY_PUBKEYS` degrades silently instead of failing startup. Config is correct today; the failure mode that would hide it going wrong is not. | `DOD-M15-RELAYPUBKEYS-1` |
 | **S** ❌ | **← THE UNCLAIMED ONE.** The directory-admin push handler is live, has **no caller**, and its signed body carries no nonce and no timestamp. Deleting it is cheaper and strictly safer than hardening it. | `DOD-M15-RELAYADMIN-1` |
-| **S** | Directory authentication is **skipped entirely and silently** when the URL is not a byte match. Not exposed today — production is a raw IP precisely to match — so the cheap fix is to make the skip LOUD, not to build authenticated bootstrap. | `DOD-M15-STEP6-REPLAY-1` |
+| **S** ✅→ | Directory authentication is skipped when the URL is not a byte match. **The "make the skip LOUD" half is DONE** (`DIRAUTH-1` #5: `directory.auth.skipped` at WARN, once per directory, plus `cello_status` in both directions). **What remains is the byte-match itself**, which is an endpoint-identity change. | `DOD-M15-STEP6-REPLAY-1` |
 | **M** | The session ephemeral is not bound to the agent's identity, so the new encryption defeats a passive recorder and **not an active relay — and we run the relays.** The module's own docstring says so. | `DOD-M15-EPHEMERAL-AUTH-1` |
 | **M** ✅ | The content-park store is unauthenticated by design and unbounded per depositor: 4 MiB frames, 256 MB store, no rate limit. Fillable for every user at once. | `DOD-M15-RELAYPARK-1` |
-| **L** ❌ | **The relay has no rate limiting of any kind** — not on authentication, hash submission, gap-fill, the liveness query or park deposit. There is nothing to find, which is what makes it a minutes-long finding. | `DOD-M15-RELAYABUSE-1` |
+| **L** 🟡 | The relay had **no rate limiting of any kind** — authentication, hash submission, gap-fill, the liveness query, park deposit. **The park deposit path now has a per-peer limiter (both halves, reviewed) and the liveness query is scoped to a named participant.** The other three paths still have none. | `DOD-M15-RELAYABUSE-1` |
 
 > ### 🔀 EVERY ROW ABOVE NOW NAMES A LINE WITH ITS OWN TAG (Andre, 2026-08-24).
 > Four of these were BULLETS inside larger lines, and a bullet cannot be tagged, claimed or counted.
@@ -103,8 +103,27 @@ does not move them.
 > priority nobody can act on and a status nobody can read.
 | **L** | The semantic screener has **never run against real weights** — `installModel` has no caller, no command, and the dependency is not even declared optional. One of the three things the launch intent names as core value. | `DOD-M15-SCREENINSTALL-1` |
 
-**The five S items are mostly "wire up something that already exists" or "write down what is true."**
-They are the quick wins and should be taken first, in a batch, rather than one per unit.
+**The five S items were mostly "wire up something that already exists" or "write down what is true."**
+They are the quick wins and were to be taken first, in a batch, rather than one per unit.
+
+> ### ✅ TABLE RECONCILED WITH THE LINES BELOW IT, 2026-08-24 (CELLO_Support) — four rows were STALE
+> Andre reads this table first, and a finished row that still reads as open sends the next lane to
+> redo it. Corrected against each line's own entry:
+> - **`DISCLOSE-1` said "the shipped docs say nothing".** They do now — all four bullets, in both
+>   copies of `SKILL.md`. The row also said `RELAYONLY-1` "was reopened as not working"; it CLOSED
+>   the same day, after two review passes.
+> - **`STEP6-REPLAY-1` said the cheap fix "is to make the skip LOUD".** That was done under
+>   `DIRAUTH-1`. What is left is the byte-match, which is not cheap and is not a documentation fix.
+> - **`RELAYABUSE-1` said "no rate limiting of any kind".** The park deposit has a reviewed per-peer
+>   limiter on both halves, and the liveness query is scoped. Three paths remain.
+> - **⚠️ `RELAYAUTH-1`'s gater was sized **S** on "written and never installed", and that sizing is
+>   WRONG** — this line's own claim block records the measurement:
+>   `@libp2p/circuit-relay-v2@4.2.11`'s `ServerReservationStoreInit` exposes only `maxReservations`,
+>   `reservationClearInterval`, `applyDefaultLimit` and `ttl`, with **no per-peer ACL hook**, and a
+>   `connectionGater` cannot stand in because CELLO's relay auth runs on `/cello/relay/1.0.0` AFTER a
+>   libp2p connection exists. **Restricting who may reserve needs a mechanism that does not exist
+>   yet.** Left at **S**, it reads as an afternoon's wiring and would be picked up as a quick win by
+>   whoever trusts this table — which is precisely the cost this table was rewritten to stop.
 
 ### What the filter DEMOTES, and this is the point of writing it down
 
@@ -1283,10 +1302,23 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
   caller ended in `.catch(() => {})`. Written as a guard on the SHAPE, which then found five more
   silent writes nobody was looking for.
 
-### `DOD-M15-SPINERED-1` — ❌ The multi-process evidence lane is HALF RED, and nobody knew
-> # 🔓 CLAIM RELEASED 2026-08-24 — **Andre re-ranked; this is no longer my WIP.** It stayed blocked on
-> exclusive use of the test runner and he has since prioritised a set of quick wins ahead of it.
-> **Unclaimed and available.** The pre-run triage below stands and is worth reading before anyone runs it.
+### `DOD-M15-SPINERED-1` — 🟡 The multi-process evidence lane is HALF RED, and nobody knew
+> # 🔒 CLAIMED BY `CELLO_Coder_1`, on Andre's instruction 2026-08-24: *"Don't abandon SPINERED-1. Make
+> # sure that completes."* Not unclaimed, and not released.
+>
+> **State: the lane is no longer half red.** `j-spine` 7/7 · `j-end` 10/10 · `j-content` 10/10 ·
+> `j-tofn` 4/4 · `j-relaysig`, `j-trust`, `j-upgrade`, `j-loopback` green.
+>
+> **What is left is TWO things, and NEITHER is a coding task:**
+> 1. `j-documents` 7 + `j-stale-session` 1 — **needs Andre's design decision.** Salt agreement is a
+>    direct-path protocol; documents are relay-only, so a document session never agrees a salt. Three
+>    options filed. Nothing to implement until he picks one.
+> 2. `j-multiplayer` 4 — cause named and instrumented (`DOCACCEPT-UNBOUNDED-1`); the bound is his call,
+>    and it is now a choice between measured numbers rather than a guess.
+>
+> ~~🔓 CLAIM RELEASED 2026-08-24 — Andre re-ranked; this is no longer my WIP. Unclaimed and available.~~
+> **Struck: that was the OTHER lane releasing it, and it then read as ownerless while Andre had assigned
+> it here.** Kept visible because "unclaimed" on a line somebody owns is how work sits still.
 > # (prior claim, kept for the trail) CELLO_Support, 2026-08-24 — `CELLO_Coder_1` handed it over
 > (*"the vitest slot is yours for the full lane… I am asking you to take it"*), and it is claimed
 > here rather than only in conversation because ownership living in a conversation is exactly how
@@ -1327,35 +1359,54 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > | cause | n | where |
 > |---|---|---|
 > | `MCP error -32001: Request timed out` (all ~70s) | **4** | `j-multiplayer` — one cause, four casualties |
-> | content-delivery waits expiring (`daemon-ackA` 12s, `daemon-dedupB` 15s, `recovered:1`) | **3** | `j-content` |
+> | ~~content-delivery waits expiring (`daemon-ackA` 12s, `daemon-dedupB` 15s, `recovered:1`)~~ **✅ CLOSED — `j-content` is 10/10** | ~~3~~ **0** | `j-content` — and it was never ONE cause: four separate defects, detailed below |
 > | agent/session state at setup (`expected 'stopped' to be 'registered'`, `status must carry a connections list`) | **2** | `j-spine` |
 > | `standing_receiver_unavailable` — the known transient | **1** | `j-spine` |
 > | unclustered (`only the honest entry is accepted`, `straggler refused by the sealed-session guard`) | 2 | `j-multiplayer` |
 >
-> ### 🔎 `j-content` — the RECOVER side is proven healthy; the gap is upstream of it
+> ### ✅ `j-content` IS 10/10 — CLOSED 2026-08-24. And three things written below it were wrong.
 >
-> Three failures, and the log answers the first question without another run. **Auto-recover is not
-> broken:**
-> > `content.recover.auto.completed` … `"recovered":0, "relayCount":1, "failedRelays":0, "refused":0`
-> > `content.park.pull.result` … `"count":0`
+> Measured, full-file run, not per-test: **10 passed / 0 failed**, tamper case included. Four separate
+> defects, none of which was the one this section predicted.
 >
-> **It asked one relay, the relay had nothing, and it reported that truthfully.** No failures, no
-> refusals. So `expect(auto).toMatch(/"recovered":1/)` is failing because **there was nothing parked to
-> recover at that moment**, not because recovery dropped anything. The consumer is fine; the producer
-> — or the ORDERING between them — is where to look.
+> **⛔ CORRECTION 1 — "auto-recover is not broken, the mailbox was empty" was wrong, and the reasoning
+> under it was wrong in a way worth keeping.** This section quoted
+> `"recovered":0, "relayCount":1, "failedRelays":0` and concluded the relay genuinely had nothing, then
+> reasoned from `"trigger":"standing_receiver_ready"` that the park must be landing *after* the sweep.
+> **The actual first sweep reads `"trigger":"signaling_reconnect","recovered":0,"failedRelays":1`** —
+> a different trigger, and `failedRelays: 1` means the sweep **could not reach the relay at all**. It
+> was not an empty mailbox; it was a sweep that never got to look. The park was confirmed deposited
+> before B ever restarted.
 >
-> **⚠️ AND THE TRIGGER NAMES THE LIKELY ORDERING.** Every one of those lines reads
-> `"trigger":"standing_receiver_ready"`. Auto-recover fires when the recipient's receiver becomes
-> ready. If the sender's park lands *after* that instant, the sweep has already run and found an empty
-> mailbox — and nothing in the log re-triggers it. **Stated as the next thing to check, not as the
-> cause:** the same run has `content.recover.drain.triggered` ten times, so something does re-drain,
-> and I have not established whether that path covers this case.
+> **The defect was in the test, and it is a shape worth naming: `waitForLine` returns the FIRST match.**
+> B runs several sweeps coming back up. The test matched the bare event name, latched onto the earliest
+> one — the one that had failed to reach the relay — and asserted `recovered:1` against it, while the
+> later `standing_receiver_ready` sweep did the work correctly. **Auto-recovery was working the entire
+> time.** The wait now selects a sweep that actually recovered, and prints every sweep with a note that
+> a non-zero `failedRelays` means unreachable rather than empty.
 >
-> The other two failures are waits for `session.content.received` and `content.delivery.acked` that
-> expired. **Both event names and both field names still exist in the daemon** — checked, because four
-> of five `j-spine` failures turned out to be exactly that — so these are genuine timing or delivery
-> behaviour, not vocabulary drift. `content.delivery.acked` fired twice in the run, just not for the
-> hash the test waited on.
+> **The general lesson: I read `failedRelays:0` off one sweep and attributed it to the sweep that
+> mattered.** Two sweeps, two different triggers, two different outcomes — and the quoted line was the
+> wrong one.
+>
+> **⛔ CORRECTION 2 — "not vocabulary drift" was wrong for the straggler.** This section said the two
+> expiring waits were "genuine timing or delivery behaviour, not vocabulary drift" because the event
+> names still exist. One of them was **exactly** vocabulary drift: `DOD-MSG-8` matched
+> `content.recover.ingest_failed` with `reason: "session_committed"`, and since M12-P17 gave the daemon
+> an annex, refused content is no longer dropped — it is written to the annex and the line is
+> **`content.recover.annexed`**. Same reason, retired event. Checking that an event name still exists
+> somewhere in the daemon does not establish that it is still the one THIS path emits.
+>
+> **⛔ CORRECTION 3 — the second read was missing, not the first.** `DOD-MSG-4 (auto-recover)` also
+> asserted a single `cello_receive` returning the parked message. B never read the earlier live message
+> before going offline, so that one is still queued and is delivered first. The test was therefore
+> asserting that B had **lost** it. Both reads are pinned now, in order, with the in-band `[[OVER]]`
+> suffix — the ordering the recover test in the same file already documents.
+>
+> **✅ WHAT THIS SECTION GOT RIGHT, and it was the load-bearing half.** The trap warning below —
+> *"a v2 envelope would recompute unsalted, mismatch, and land in a FALSE TAMPER CLAIM"* — is
+> **correct and now proven by mutation**: with everything else right, removing `contentHashAlg` from
+> the dedup deposit reddens the test. The direct frame really does hash salted.
 >
 > #### ✅ UNIT DONE — reviewed, all findings fixed, verdict quoted
 >
@@ -1418,11 +1469,32 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > The auto-recover test cannot be the hash cause either: it **injects** its hash through
 > `enqueue_awaiting_content` rather than waiting for one.
 >
-> **THE FIX SHAPE, for whoever takes it:** park via a **real send** to an offline recipient — the path
-> `DOD-MSG-3 (send park)` already exercises green in the same file — instead of the IPC shortcut. That
-> produces the signed envelope the recover path requires. Hand-building one in the test would mean
-> reproducing `buildParkContentTbs` and the sender's signature, which is a second implementation of a
-> security-critical encoder in a test.
+> **⛔ THE FIX SHAPE PROPOSED HERE WAS PARTLY WRONG, AND THE WRONG HALF IS THE INTERESTING ONE.**
+> It said: park via a **real send** to an offline recipient instead of the IPC shortcut. **A real send
+> cannot express the tamper case at all.** `DOD-MSG-7`'s whole point is an entry whose CLAIMED hash
+> does not describe the content sealed inside, and a real send always produces a matching pair — the
+> case would have become unreachable, and the test would have been quietly deleted or hollowed to suit
+> the fix.
+>
+> **What was right:** hand-building an envelope in the test is not acceptable, for the reason given —
+> it is a second implementation of a security-critical encoder.
+>
+> **What actually shipped:** the deposit IPC now takes plaintext `content` and parks through the
+> daemon's own `sealParkEnvelope`, the sole signer. No encoder is duplicated, and the tamper case
+> survives, because the signature covers `(sessionId, recipient, claimed hash)` and deliberately does
+> **not** bind the content — so a sender can still sign an entry that lies about its own hash. That is
+> a malicious SENDER rather than a malicious relay, and it is exactly what the recover cross-check
+> exists to catch.
+>
+> **Worth recording about the handler itself:** it had **no production caller**. Its only four callers
+> were these tests, which is why it drifted from the shape production emits and kept emitting the one
+> SEC-1 refuses. A test-only affordance sitting in production code, diverging silently.
+>
+> **And the deeper cause under all of it was not the envelope at all.** The dedup deposit carried the
+> bare message text while the daemon had hashed `"<msg> [[OVER]]"` — the turn signal is IN-BAND, part
+> of the content the shim sends. Two different strings. That is why it failed identically whether the
+> envelope declared `sha256` or `hmac-sha256-salt-v1`, **and two algorithms failing the same way is
+> what proved the algorithm was never the cause.** I had read the mismatch as a salt problem first.
 >
 > **⚠️ AND A TRAP ON THAT FIX, from review — do NOT hand-build a v2 envelope to get past
 > `authenticateParkedEntry`.** The recover path resolves the hash algorithm from the **envelope**, not
@@ -1436,6 +1508,7 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > was the correction** — and it is the same trap this line has now sprung three times.
 
 #### 🔎 RUN IN ISOLATION 2026-08-24: 5 failed / 5 passed — and it is NOT a short timeout
+> **↑ SUPERSEDED — the file is 10/10 as of 2026-08-24 (full-file run). Kept for the diagnostic trail.**
 >
 > **The batch run showed 3 failures; alone it shows 5.** So there is genuine cross-test interaction in
 > this file — worth knowing before anyone tunes a timeout to make a number move.
@@ -1444,15 +1517,30 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > |---|---|
 > | `MSG-3` transport deposit · `MSG-3` send-park · `MSG-3/4` recover · `MSG-2` startup-flush · `MSG-4` self-ordering frame | `MSG-7` tamper · `MSG-5` dedup · `MSG-1` ACK ladder · `MSG-4` auto-recover · `MSG-8` straggler |
 >
+> > **⛔ THE "CROSS-TEST INTERACTION" READING DID NOT SURVIVE.** The counts moved between runs because
+> > `MSG-7` was genuinely intermittent, and every other difference was a test asserting the wrong thing
+> > — four independent defects, each reproducible ALONE once the assertion was corrected. There was no
+> > shared-state interaction to find. **A moving failure set is evidence of non-determinism somewhere;
+> > it is not evidence that the tests interfere with each other**, and this section treated the second
+> > as established by the first.
+>
 > **⚠️ "TOO SLOW" IS RULED OUT, MEASURED.** The dedup test waits 15s for `session.content.received`
 > carrying a specific `contentHashHex`. **That hash appears NOWHERE in the run except the failure text
 > itself** — not in a late event, not in any other event. The same is true of the ACK ladder's hash.
-> Both events DID fire in the run, twice each, for other hashes. So the message never arrived; a longer
-> timeout would change nothing.
+> Both events DID fire in the run, twice each, for other hashes. A longer timeout would change nothing.
 >
 > **And it is not being refused either:** zero `session.content.cross_check.failed`, zero
 > `content_hash_*` refusal reasons, and the salt is healthy (8 × `session.salt.agreed`,
-> 8 × `session.salt.announced`). **So content is neither rejected nor late — it is not delivered.**
+> 8 × `session.salt.announced`).
+>
+> > **⛔ CORRECTION — the conclusion drawn from this was wrong.** It read *"So content is neither
+> > rejected nor late — it is not delivered."* **The content WAS delivered, every time.** The event
+> > fired, under a hash the test had computed itself and the daemon never writes. An absent hash means
+> > *nobody produced this value*; it does not mean *no message arrived*. The two look identical in a
+> > grep and they are opposite diagnoses — one sends you to the transport, the other to the hash.
+> >
+> > The tell was in the same paragraph and was read past: *"both events DID fire, twice each, for other
+> > hashes."* That IS the message, under its real hash.
 >
 > That is as far as this log goes: the sender-side lines for those hashes are in a different process's
 > capture, so the produce half needs a run with both daemons' output retained.
@@ -1485,9 +1573,15 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > `DOD-SPINE-5` readiness poll works around on the test side, and the surface already carries
 > `standing_receiver_ready` to hang a truthful answer on.
 >
-> **🔵 THE LINE IS NOT DONE — the triage UNIT is.** Remaining: the salt-announce defect
-> (`j-documents` 7 + `j-stale-session` 1), the four `j-content` deposit-side hash sites, the four
-> `j-multiplayer` timeouts, and `j-end`'s trust-signal misclassification.
+> **🔵 THE LINE IS NOT DONE — the triage UNIT is.** Remaining, updated 2026-08-24:
+> - 🔴 the salt-announce defect (`j-documents` 7 + `j-stale-session` 1) — **blocked on Andre's design
+>   decision**: salt agreement is a DIRECT-path protocol and documents are relay-only, so a document
+>   session never agrees a salt. Three options are filed for him; this is not a coding choice.
+> - 🟡 the four `j-multiplayer` timeouts — cause named (`DOD-M15-DOCACCEPT-UNBOUNDED-1`), bound awaiting
+>   Andre.
+> - ~~the four `j-content` deposit-side hash sites~~ **✅ CLOSED — `j-content` is 10/10.** And the
+>   framing was wrong: they were not four instances of one hash defect, they were four separate ones.
+> - ~~`j-end`'s trust-signal misclassification~~ **✅ CLOSED — `j-end` is 10/10.**
 
 ## ✅ TRIAGE COMPLETE 2026-08-24 — every journey file measured, 49 failures resolve to SIX causes
 
@@ -1499,10 +1593,10 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 | **CLI banner glued into JSON** (`j-refresh`, `j-sign`, `j-tofn-dkg`×2, `j-tofn`, `j-relaysig`) | 6 | ✅ **all green** |
 | **Stale assertions in `j-spine`** — state vocabulary the product removed, plus one local race | 5 | ✅ **all green, fixed here** |
 | **Salt-split / no agreement** (`j-documents` 7, `j-stale-session` 1) | 8 | 🔴 **one live defect** — announce never fires |
-| **Tests compute the UNSALTED hash** (`j-content` 5) | 5 | 🟡 1 fixed, 4 same cause |
+| ~~**Tests compute the UNSALTED hash** (`j-content` 5)~~ **✅ `j-content` 10/10 — and this cause label was wrong** | 5 | ✅ **all green.** Not one cause with five instances: **four separate defects** — an unsigned deposit shape SEC-1 refuses, a deposit of the wrong STRING (`[[OVER]]` is in-band), a retired event name (`ingest_failed` → `annexed`), and a wait latching onto the first of several recover sweeps |
 | **Portal database** (`ECONNREFUSED`) | 2 | ✅ container up |
 | **Named lines already owned** (`j-unilateral`×2, `j-upgrade-bilateral` → `UNILATERAL-NOTARIZE-1`) | 3 | 🅿️ owned elsewhere |
-| **Individually-caused** (`j-end` 1, `j-remove` 1, `j-multiplayer` 4 timeouts) | 6 | 🔎 filed below |
+| **Individually-caused** (~~`j-end` 1~~ **✅ 10/10**, `j-remove` 1, `j-multiplayer` 4 timeouts) | 6 | 🔎 filed below; `j-multiplayer`'s four are `DOCACCEPT-UNBOUNDED-1` |
 
 > ### 🟡 `DOD-M15-DOCACCEPT-UNBOUNDED-1` — ACCEPTING A DOCUMENT HANGS IF ONE HOLDER IS UNREACHABLE
 >
@@ -2317,8 +2411,13 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 > lane), `j-canary` (a `.gitignore` `node_modules/` trailing slash vs iCloud symlinks — never a product
 > failure), `j-refresh` / `j-sign` / `j-loopback` (3/3), `j-legibility`, `j-upgrade`. Known-blocked for
 > a named reason: `j-unilateral` and `j-upgrade-bilateral` on `DOD-M15-UNILATERAL-NOTARIZE-1`.
-> Known-wrong-premise: `j-suspend-tofn` encodes **T=3 when we ship T=2**, so it is a test to correct,
-> not a defect to chase.
+> ~~Known-wrong-premise: `j-suspend-tofn` encodes **T=3 when we ship T=2**, so it is a test to correct,
+> not a defect to chase.~~ **⚠️ RETRACTED — see this line's own `j-suspend-tofn` investigation below,
+> which calls this "wrong on both counts."** The test's header says *"N=3 directories, T=3 = client +
+> any 2"* — **two directory shares, which IS `majority(3)`** — so the arithmetic was never stale.
+> The measured failure is that nodes 1 and 2 were **never asked for a share at all**. Struck rather
+> than deleted because this sentence is how a kill-switch finding got downgraded to a test edit, and
+> it was still being read that way after the retraction was written.
 >
 > **⚠️ THIS IS A SCAFFOLD FOR READING THE NEXT RUN, NOT A CLAIM ABOUT TODAY.** Every "fixed since" above
 > is a report, several of them mine, and the whole point of `SPINERED-1` is that reports about this lane
@@ -2365,7 +2464,7 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 > | `j-refresh` | ✅ |
 > | `j-remove` | 2/3 — the third is `REVOKED-READS-OFFLINE-1`, a real finding that names itself |
 > | `j-persist` | ✅ — fixed by the salting lane; **now also proves the session salt is agreed BEFORE the first leaf is hashed**, which nothing previously tested |
-> | `j-suspend-tofn` | ✗ **not a kill-switch failure** — the test encodes T=3; we ship T=2 |
+> | `j-suspend-tofn` | ✗ **⚠️ THIS CELL WAS WRONG — see the investigation below.** It is NOT "the test encodes T=3": that reading was retracted on the test's own header. Nodes 1 and 2 were **never asked for a share**, and an assignment was produced anyway |
 >
 > **So of the eight I characterised as "the floor is broken" — including the two I reported as the
 > sovereign-node invariant failing — NONE was a product defect.** **SEVEN of the eight are now
@@ -5473,7 +5572,12 @@ Extracted from `DOD-M15-DIRAUTH-1`'s second bullet so it is a line rather than a
 > `DOD-M15-STEP6-REPLAY-1` — a DNS name for a bundled machine skips auth — and that is an
 > endpoint-identity change, not to be attempted during a fleet roll.
 
-### `DOD-M15-STEP6-REPLAY-1` — ❌ A directory identity proof cannot be replayed (replay bullet ✅; byte-match fail-open OPEN)
+### `DOD-M15-STEP6-REPLAY-1` — 🟡 A directory identity proof cannot be replayed (replay bullet ✅; byte-match fail-open OPEN)
+> **TAG CORRECTED 2026-08-24 (CELLO_Support): the heading said ❌ while this entry's own second
+> paragraph said "the line stays 🟡".** A line whose header and body disagree is worse than either
+> answer — the header is what a status sweep counts and the body is what a reader believes, so the
+> line was simultaneously in and out of the amber count. ❌ is also flatly wrong: the replay bullet is
+> closed, mutation-proven, and shipped.
 > **THE REPLAY IS CLOSED 2026-08-24 (CELLO_Support).** 17 passed, mutation-proven: disabling the gate
 > reddens exactly the replay, future-dated and unparseable tests. The line stays 🟡 because its
 > SECOND bullet — the byte-match fail-open — is untouched, and its third is `BOOTSTRAP-AUTH-1`.
