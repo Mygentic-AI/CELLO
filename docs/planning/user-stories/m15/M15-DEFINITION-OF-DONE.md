@@ -4417,3 +4417,59 @@ race, complete with a `wal_checkpoint(TRUNCATE)` fix, after which the test faile
   thing to look at if a publish blocks again, and a green run is not evidence the underlying
   behaviour is sound.
 - **Enforcer:** the next CI failure's own log. No new test until then.
+
+---
+
+### `DOD-M15-SCREENED-GAP-SEALED-1` — 🅿️ POST-LAUNCH BACKLOG. A screened message is lost permanently, and the receipt over the hole says nothing
+**Reported by `Miss_Chelly_H` from live use 2026-08-24, corroborated by two independent hits the same
+day (an 11-digit CI run id stopped a send from each lane). Verified in code before filing.**
+
+**⚠️ THE MATCHER IS NOT THE DEFECT, AND I TOLD THE REPORTER OTHERWISE.** My first response was that
+`pii:phone` false-positives on long digit strings and *"the fix is a matching rule"*. It is not:
+`detect/pii.ts` records the overlap as a DELIBERATE decision, with its reasoning —
+
+> *"Deliberately NOT excluded: bare 11-13 digit runs like a commit number or an epoch timestamp.
+> Those overlap the legitimate phone range (a country-code number is 11 digits), and silently
+> passing them would weaken the guard to fix an annoyance. They still warn, and that is the correct
+> trade — **but it is why the operator escape hatch has to work.**"*
+
+An 11-digit run id is genuinely indistinguishable from a country-code phone number. The detector is
+right. **The file even names the real defect in its own last clause**, and that clause is the finding.
+
+**What an operator actually lives through, in order:**
+
+1. The agent sends a message containing a long digit run. The gateway flags `pii:phone` and holds it
+   — WARN disposition, so it is not sent until the flag is resolved.
+2. **The bridge swallows the refusal.** The operator is told nothing; from the outside the message
+   simply never arrives.
+3. **The agent cannot clear its own flag.** `allow_once` is gated on `autonomous_override`, which is
+   off by default and settable *"only by a human at a terminal"* (`gateway-config-handlers.ts`:
+   *"whether the agent may send a flagged value with no human present"*). An unattended agent is
+   stuck by design.
+4. The session reaches its idle timeout while waiting for that human.
+5. **`sealed` is TERMINAL.** The bypass, when it arrives, meets a session that can no longer accept
+   anything.
+6. **The message is not delayed — it is permanently absent from a transcript that is then notarized
+   as complete, and nothing in the receipt records that there is a hole in it.**
+
+**Why this is worse than an ordinary usability bug, and why it is a TRUST-LAYER defect.** Every other
+failure here degrades a convenience. This one issues a cryptographic attestation over a conversation
+that is missing a message the sender believes they sent — and the certificate's whole value is that
+it describes what was actually said. A gap the receipt cannot express is a receipt that is
+confidently wrong.
+
+**The three faults are separable and only the last is hard:**
+- **The bridge hides the refusal.** It should surface `security.verdict.returned` to the operator.
+  Smallest fix, largest share of the harm.
+- **The escape hatch does not reach an unattended agent.** The file's own sentence — *"it is why the
+  operator escape hatch has to work"* — is currently false for exactly the case that hits it.
+- **A pending screen and an idle timer race, and the timer wins irreversibly.** A session with a held
+  message should not be idle, or the seal should record that it closed over a held one.
+
+**Classification.** POST-LAUNCH under the frozen gate, and **flagged for reclassification** — it is
+the only line in this backlog where the failure produces a *wrong attestation* rather than a missing
+one, which is the property the product exists to sell. It reached a live agent today, on Andre's
+daily-use box, without anyone touching it.
+
+- **Enforcer:** unit — a session holding a screened message must not seal silently; and journey — a
+  flagged send surfaces to the operator rather than disappearing.
