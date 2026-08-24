@@ -463,6 +463,12 @@ Found by the `DOD-M15-SURFACE-1` review. Not a break — it is the reverse of on
 ### 🔎 TWO INDIVIDUALLY-CAUSED FINDINGS, filed not fixed (freeze: nothing new enters the gate)
 
 **`DOD-M15-REVOKED-READS-OFFLINE-1` — a REVOKED agent is reported as merely offline.**
+> **⚠️ THIS IS THE SECOND COPY. The line is classified POST-LAUNCH and its owning entry is in the
+> POST-LAUNCH BACKLOG at the foot of this file.** Both copies are full write-ups and only the other
+> one carries a classification, so a reader who meets this one inside Tier 2 concludes it is in the
+> gate. **It is not.** Kept as a pointer rather than deleted, because it is genuinely a finding of
+> this triage and the trail should show where it came from — but the backlog entry is the authority,
+> and it is the one with the traced discovery chain.
 `j-remove`: *"the directory must refuse a revoked target with `agent_revoked`: expected
 `counterparty_offline` to be `agent_revoked`"*. The directory's revoked gate is correct and correctly
 ordered — but **the client never reaches it.** It runs a discovery lookup first, and
@@ -505,10 +511,28 @@ did. Across the run the session layer classifies frames by kind perfectly well �
 handoff into the document layer's inbound path is what produces nothing.**
 
 **Established:** frames arrive at B, are classified, and yield zero `document.inbound.*`. **Not
-established:** why. `session.document.received` logs `ok: routed.ok` and `reason: routed.reason`, and
-**both fields are ABSENT from every line in the run** — so the router returned neither, which is
-itself the next thread to pull: a routing result that reports no outcome cannot say whether it
-accepted or dropped the frame.
+established:** why.
+
+> **⛔ THE "NEXT THREAD TO PULL" NAMED HERE WAS A DEAD END, and it is fixed at the source (2026-08-24).**
+> This said `session.document.received` logs `ok: routed.ok` and `reason: routed.reason`, that both
+> were absent from every line, and therefore *"the router returned neither… a routing result that
+> reports no outcome cannot say whether it accepted or dropped the frame."*
+>
+> **The router has no outcome to return at that point.** `DocumentFrameRouter.routeSync` has four
+> exits and not one sets either field — its own return type does not even declare them — because the
+> normal path dispatches with `void this.#enqueue(...)`. When it returns, the frame is classified and
+> QUEUED and nothing has yet decided its fate. The two fields existed only in the hook's *declaration*
+> and were assignable because they were optional: **a promise made by a type and kept by nobody.**
+>
+> A JSON logger omits an `undefined` field, so a value that can never be set looked identical to one
+> deliberately set to nothing — and a structural absence read as a routing fault.
+>
+> **Fixed rather than noted:** both declarations are narrowed so reading either field is now a compile
+> error (revert-tested — `error TS2339`), and the log line says what it actually knows,
+> `dispatch: "queued"`, naming `document.frame.refused` as the event that carries the verdict.
+> **The real question is unchanged and still open:** three frames were queued and none produced a
+> `document.inbound.*`. Look for `document.frame.refused` on the same `correlationId` — if it is
+> absent too, the dispatch never ran, which is a different fault from a refusal.
 
 **Not diagnosed further** (§0z.2). The user-visible shape, if it holds: your counterparty restarts,
 and from then on your document changes reach their machine and are silently discarded.
@@ -1768,7 +1792,31 @@ the TCP connection is made and the handshake has begun.
   can have scrubbing in front of it.
 - Terraform; parallelises cleanly with everything.
 
-### `DOD-M15-JSPINE-REST-1` — `j-spine`'s three non-seal assertions
+### `DOD-M15-JSPINE-REST-1` — ✅ CLOSED 2026-08-24. `j-spine` is 7/7; all three are fixed.
+**This entry and `SPINERED-1` contradicted each other, and this is the stale half.** It lists three
+assertions as open and undiagnosed; the triage records the same three as *"stale assertions in
+`j-spine` — state vocabulary the product removed, plus one local race — ✅ all green, fixed here."*
+They are the same three, not two sets.
+
+- *"status must carry a connections list"* — the stub was **deleted on purpose** (`5deef4b`, *"drop
+  the always-empty `connections` stub"*). It was always `[]`, so the assertion held whether or not a
+  connection existed.
+- *"agentA starts registered"* — `registered` was a STORED FLAG removed **because it lied**: every
+  agent on disk was labelled registered at load whether or not it ever was. A loaded-but-unstarted
+  agent is `stopped`.
+- *"negotiator should reach the directory"* — this one WAS a real race, and the note below was right
+  to send the reader to the standing-receiver rule. `cello_start_agent` returning does not mean the
+  receiver exists, so an initiate landing in that window is refused locally and never reaches the
+  negotiator. Fixed with a readiness poll rather than a retry, so it waits on the thing actually
+  being waited for. **The product-side cause is filed as `DOD-M15-START-AGENT-UNAWAITED-1`.**
+
+> **Worth keeping: the entry's closing advice was right and its status was wrong.** It said *"do not
+> assume these are regressions — a stale expectation is at least as likely, and two of the three have
+> that shape."* Exactly two of three were stale expectations. **The reasoning was sound and the row
+> simply never got updated when the work landed** — which is the failure mode the file split was for.
+
+<details><summary>Superseded: the original POST-LAUNCH write-up, kept for the reasoning trail</summary>
+
 **POST-LAUNCH** (§0z.4 — the gate is frozen; not a security hole a customer reaches). Filed as ONE
 line because they are one journey's remaining debt, not three findings, and none is diagnosed.
 
@@ -1786,6 +1834,8 @@ Three remain, all failing BEFORE any seal, all undiagnosed:
   asserting the wrong reason for a legitimately-not-ready daemon.
 - **Do not assume these are regressions.** This lane had never been run; a stale expectation is at
   least as likely, and two of the three have that shape.
+
+</details>
 
 ### `DOD-M15-JCONTENT-DELIVERY-1` — ✅ CLOSED 2026-08-24. `j-content` is 10/10, full-file.
 **All five are fixed, and every hypothesis below was wrong.** Kept rather than deleted because the
