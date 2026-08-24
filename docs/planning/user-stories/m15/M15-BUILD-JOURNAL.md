@@ -42,7 +42,17 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 > (`seal.final_root.verified coverage=both`). Bullet 8's assertion went green on its first live seal.
 > Both repos clean and pushed. Gate on `core/daemon`: **276 files, 2887 tests, 0 failures.**
 
-- **⬅️ NEXT — BULLET 5's HELD-PATH TEST. The one thing outstanding on `SEALWIRE-1`.**
+- **🔴 READ THIS FIRST — THE LAUNCH BAR REPRIORITISES THIS LANE, and I had it wrong for hours.**
+  Counted 2026-08-24 by `CELLO_Support` against the milestone's own marking: **35 lines open, and
+  only THREE were ever marked BLOCKS LAUNCH.** `TIERTEXT-1` is now closed ✅; `RELAYONLY-1` is taken
+  by the other lane; **`SPINERED-1` — the spine lane — is MINE and is the only launch-blocker left on
+  this side.** Everything else in those 35 is forgivable at launch by the milestone's own test.
+  **So bullet 5's held-path test, which I called "next" all evening, is NOT the top of this list.**
+  It is a good test for a column nothing reads yet. `SPINERED-1` is the one that stops us shipping.
+  The full 35-journey run is its evidence, nobody has ever had a complete current picture, and the
+  other lane has the slot for it (revised estimate ~90 minutes, not five hours — the `agentName`
+  batch ran ~65s each and the document journeys are the slow ones).
+- **⬅️ THEN — BULLET 5's HELD-PATH TEST. The one thing outstanding on `SEALWIRE-1`.**
   **Do not re-litigate whether bullet 5 is covered; it is measurably not.** Two mutations, same file,
   opposite results:
   - `recordTranscriptMessage(..., sentAuthorship(sendResult))` → `undefined`: **RED** (1 failed / 2 passed)
