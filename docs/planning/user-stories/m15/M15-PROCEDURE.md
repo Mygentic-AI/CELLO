@@ -600,6 +600,19 @@ ledger in the DoD: one row per claim, its current text, where it appears, and it
 6. **Implement** — minimum change to green; nothing speculative.
 7. **Floor holds** — `pnpm run test` → `lint` → `typecheck` → `build` in every touched repo, run so
    it can FAIL (§7).
+   > **⚠️ TWO THINGS ARE CALLED "typecheck" AND ONLY ONE OF THEM BUILDS.** Both lanes hit this on
+   > 2026-08-24, independently.
+   > - `npx tsc --noEmit -p core/daemon/tsconfig.json` — **checks types, writes NOTHING.**
+   > - `pnpm run typecheck` (root) — starts with `tsc --build` and **DOES emit `dist/`**.
+   >
+   > **Anything that launches the shipped binary runs `dist/`, not your source** — the whole spine
+   > lane does. So a package-scoped `--noEmit` lets you report "typecheck clean" truthfully while the
+   > binary behind the journeys goes stale, and the journeys then fail for a reason that is not in
+   > the code you are reading. `CELLO_Coder_1` lost ~6 minutes per run to exactly this: `dist/` was
+   > 5 minutes older than the edit, so four journeys waited 30s per call and reported *"no verdict
+   > means nothing checked it here"* about a daemon that had checked, logged, and merely lacked a
+   > field. **Run `pnpm run build` in `cello-client` before any spine journey.** Unit tests run from
+   > source and are unaffected, which is what makes this quiet.
 8. **Commit** (constantly — §3), push after every commit.
 9. **Review — ONE read-only `cello-unit-reviewer` on the unit's diff, no model override.** Dispatch
    per §2b. Fix EVERY finding; commit fixes.
