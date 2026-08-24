@@ -40,7 +40,7 @@
  */
 
 import { Encoder, decode } from "cbor-x";
-import { DepositRateLimiter } from "./deposit-rate-limiter.js";
+import { DepositRateLimiter, DEFAULT_DEPOSIT_RATE_LIMIT, type DepositRateLimitConfig } from "./deposit-rate-limiter.js";
 import * as lp from "it-length-prefixed";
 import { randomBytes, createHash } from "node:crypto";
 import { verify } from "@cello-protocol/crypto";
@@ -92,6 +92,16 @@ export interface ContentParkHandlerOptions {
   node: CelloNode;
   store: ContentStore;
   logger: Logger;
+  /**
+   * DOD-M15-RELAYABUSE-1: per-depositor deposit rate limit. Defaults to
+   * `DEFAULT_DEPOSIT_RATE_LIMIT` (30/minute).
+   *
+   * ⚠️ Injectable because the one control on the abuse path the audit named FIRST should not be the
+   * one thing an operator cannot touch without a code change and a 25-30 minute node roll — every
+   * other relay knob is an env var. It also lets a test drive the real handler over four deposits
+   * instead of thirty-one.
+   */
+  rateLimit?: DepositRateLimitConfig;
 }
 
 export class ContentParkHandler {
@@ -99,12 +109,13 @@ export class ContentParkHandler {
   readonly #store: ContentStore;
   readonly #logger: Logger;
   /** DOD-M15-RELAYABUSE-1: per-depositor deposit rate limiting. See `deposit-rate-limiter.ts`. */
-  readonly #rateLimiter = new DepositRateLimiter();
+  readonly #rateLimiter: DepositRateLimiter;
 
   constructor(opts: ContentParkHandlerOptions) {
     this.#node = opts.node;
     this.#store = opts.store;
     this.#logger = opts.logger;
+    this.#rateLimiter = new DepositRateLimiter(opts.rateLimit ?? DEFAULT_DEPOSIT_RATE_LIMIT);
   }
 
   /** Register the content-park protocol handler. Call once after node.start(). */
@@ -235,43 +246,66 @@ export class ContentParkHandler {
   }
 
   async #handleDeposit(stream: Stream, frame: Record<string, unknown>, remotePeerId?: string): Promise<void> {
+    /**
+     * DOD-M15-RELAYABUSE-1 — rate limit before the extraction and the store write.
+     *
+     * ⚠️ **NOT "before any parsing", which is what an earlier version of this comment claimed and
+     * review corrected.** By the time this runs, `#handleStream` has already pulled the whole
+     * length-prefixed frame off the wire and CBOR-decoded it — up to 4 MiB. So a flooder still gets
+     * a full read and decode per refused deposit, and the stream slot to do it in. What this saves
+     * is the field extraction, the hex encode, the auth work and the disk write; it is not a
+     * mitigation for frame-read CPU, and claiming otherwise would tell a reader a protection is in
+     * place that is not.
+     *
+     * ⚠️ Keyed on the Noise-authenticated peer id, which is a real cryptographic identity for the
+     * connection and is **cheap to rotate** — so this defeats the ordinary abusive case and raises
+     * the cost of the determined one. A speed bump, not a gate. The hard bound is the store's.
+     */
+    if (remotePeerId === undefined || remotePeerId.length === 0) {
+      /**
+       * DOD-M15-RELAYABUSE-1 review F3 — **SAY WHEN THE LIMITER IS RUNNING BLIND.** An absent peer id
+       * is allowed through deliberately (a transport detail must not become an availability
+       * failure), but silence here is a control whose failure looks exactly like success: no
+       * `rate_limited` events and no abuse are the same picture. This makes "running blind"
+       * greppable.
+       */
+      this.#logger.warn("content.park.deposit.unattributed", {
+        impact:
+          "this deposit arrived with no authenticated peer id, so the per-depositor rate limit could " +
+          "NOT be applied to it — allowed through deliberately, but the limiter is blind for this " +
+          "stream and the store's bounds are the only protection acting on it",
+      });
+    }
+    const limit = this.#rateLimiter.check(remotePeerId);
+    if (!limit.allowed) {
+      this.#logger.warn("content.park.rate_limited", {
+        remotePeerId: remotePeerId ?? "(none)",
+        attempts: limit.count,
+        retryAfterMs: limit.retryAfterMs,
+        impact:
+          "this peer exceeded the per-peer deposit rate, so the deposit was refused before the " +
+          "field extraction and the disk write — the depositor keeps its copy and may retry after " +
+          "the window",
+      });
+      await this.#respond(stream, {
+        type: "content_park_deposit_ack",
+        content_hash: asBytes(frame["content_hash"]) ?? new Uint8Array(0),
+        ok: false,
+        reason: "rate_limited",
+        // DOD-M15-RELAYABUSE-1 review F2: the relay KNOWS when the window clears, and until now kept
+        // it to itself — logged, asserted in a test, and never put on the wire. The client retries a
+        // deferred park only on EVENTS (boot, agent start, drain hook, signaling reconnect), so the
+        // one condition that self-clears in 60 seconds was waiting on an unrelated reconnect.
+        retry_after_ms: limit.retryAfterMs,
+      });
+      return;
+    }
+
     const recipientPubkey = asBytes(frame["recipient_pubkey"]);
     const contentHash = asBytes(frame["content_hash"]);
     const sessionId = asBytes(frame["session_id"]);
     const ciphertext = asBytes(frame["ciphertext"]);
     const rHex = recipientPubkey ? Buffer.from(recipientPubkey).toString("hex") : "unknown";
-
-    /**
-     * DOD-M15-RELAYABUSE-1 — rate limit BEFORE parsing or storing anything.
-     *
-     * Checked first deliberately: the point of a limiter is to stop spending work on a flood, and a
-     * check that runs after validation, hashing and a disk write has already spent it. The store's
-     * bounds decide how much can be STORED; this decides how fast it can be ATTEMPTED.
-     *
-     * ⚠️ Keyed on the Noise-authenticated peer id, which is a real cryptographic identity for the
-     * connection and is **cheap to rotate** — so this raises the cost of a flood and defeats the
-     * ordinary abusive case, and is honestly a speed bump rather than a gate. The hard bound is the
-     * store's.
-     */
-    const limit = this.#rateLimiter.check(remotePeerId);
-    if (!limit.allowed) {
-      this.#logger.warn("content.park.rate_limited", {
-        remotePeerId: remotePeerId ?? "(none)",
-        recipientPubkey: rHex,
-        attempts: limit.count,
-        retryAfterMs: limit.retryAfterMs,
-        impact:
-          "this peer exceeded the per-peer deposit rate, so the deposit was refused before any " +
-          "validation or disk write — the depositor keeps its copy and may retry after the window",
-      });
-      await this.#respond(stream, {
-        type: "content_park_deposit_ack",
-        content_hash: contentHash ?? new Uint8Array(0),
-        ok: false,
-        reason: "rate_limited",
-      });
-      return;
-    }
 
     if (!recipientPubkey || !contentHash || !ciphertext || !sessionId) {
       await this.#respond(stream, {

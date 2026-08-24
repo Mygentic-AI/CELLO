@@ -84,6 +84,7 @@ import * as transport from "@cello-protocol/transport";
 import type { CelloNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import type { Logger, SessionWal, ContentStore } from "@cello-protocol/interfaces";
+import type { DepositRateLimitConfig } from "./deposit-rate-limiter.js";
 import { ContentParkHandler } from "./content-park.js";
 import { RELAY_LEAF_KINDS, RELAY_LEAF_HASHERS } from "./relay-types.js";
 import type {
@@ -303,6 +304,11 @@ export interface RelayNodeOptions {
    */
   contentStore?: ContentStore;
   /**
+   * DOD-M15-RELAYABUSE-1: per-depositor park-deposit rate limit. Defaults to 30/minute.
+   * Threaded so an operator can tune it and so a test can drive the real handler cheaply.
+   */
+  depositRateLimit?: DepositRateLimitConfig;
+  /**
    * PERSIST-012: Signing key provider for signed relay ACKs.
    * When present, the relay signs every hash_submit_ack with this key and
    * includes relay_id, relay_signature, and timestamp in the ACK frame.
@@ -409,7 +415,12 @@ export class CelloRelayNode {
     this.#store = opts.store ?? new InMemoryRelayStore({ logger: this.#logger });
     this.#sessionWal = opts.sessionWal ?? null;
     this.#contentParkHandler = opts.contentStore
-      ? new ContentParkHandler({ node: this.#node, store: opts.contentStore, logger: this.#logger })
+      ? new ContentParkHandler({
+          node: this.#node,
+          store: opts.contentStore,
+          logger: this.#logger,
+          ...(opts.depositRateLimit ? { rateLimit: opts.depositRateLimit } : {}),
+        })
       : null;
     this.#contentStore = opts.contentStore ?? null;
     this.#ackSigningKeyProvider = opts.ackSigningKeyProvider ?? null;
@@ -2140,6 +2151,8 @@ export class CelloRelayNode {
 export interface CreateRelayNodeOptions {
   listenAddresses?: string[];
   directoryPubkey: Uint8Array;
+  /** DOD-M15-RELAYABUSE-1: per-depositor park-deposit rate limit. Forwarded to the park handler. */
+  depositRateLimit?: DepositRateLimitConfig;
   /** FED-OPTIONB-SETUP-001: consortium directory pubkeys (any-directory). Falls back to [directoryPubkey]. */
   directoryPubkeys?: Uint8Array[];
   /**
@@ -2287,6 +2300,7 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     store: opts.store,
     sessionWal: opts.sessionWal,
     contentStore: opts.contentStore,
+    ...(opts.depositRateLimit ? { depositRateLimit: opts.depositRateLimit } : {}),
     logger: opts.logger,
     ackSigningKeyProvider: opts.ackSigningKeyProvider,
     relayId: opts.relayId,

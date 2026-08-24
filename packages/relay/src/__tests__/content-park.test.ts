@@ -212,3 +212,93 @@ describe("relay content-park protocol (MSG-001)", () => {
     }
   }, 30_000);
 });
+
+describe("DOD-M15-RELAYABUSE-1 — the rate limit is WIRED, driven through the real handler", () => {
+  /**
+   * ⚠️ THIS TEST EXISTS BECAUSE THE UNIT SHIPPED WITHOUT IT AND REVIEW SAID SO PLAINLY.
+   *
+   * The limiter had six unit tests and **not one of them survived the revert test**: they all
+   * construct `DepositRateLimiter` directly and never load `content-park.ts`. Two independent
+   * one-line reverts each left all 260 relay tests green —
+   *
+   *   1. deleting the `if (!limit.allowed)` block, and
+   *   2. reverting `(stream, remotePeerId) => …` back to `(stream) => …` in `start()`.
+   *
+   * The second is the expensive one: `check(undefined)` then takes the deliberate allow-through
+   * branch, the limiter becomes a **total no-op**, and every test still passes. A unit that can be
+   * silently disabled by a one-word edit, with the gate reporting green, is not protected by its
+   * tests — it is accompanied by them.
+   *
+   * This drives a real in-process libp2p peer against a real relay node, so it pins BOTH halves.
+   */
+  it("★★★ a peer past its limit is REFUSED over the wire — and a DIFFERENT peer is not", async () => {
+    const { logger } = captureLogger();
+    const store = new InMemoryContentStore({ logger });
+    const dirKp = generateKeypair();
+    const dirPubkey = await dirKp.getPublicKey();
+    // Two per minute, so the loop is short. This is why the config is injectable.
+    const { node: relayNode, stop } = await createRelayNode({
+      directoryPubkey: dirPubkey,
+      contentStore: store,
+      logger,
+      depositRateLimit: { maxPerWindow: 2, windowMs: 60_000 },
+    });
+    try {
+      const relayAddr = relayNode.listenAddresses()[0]!;
+      const recipientPub = await generateKeypair().getPublicKey();
+      const sessionId = new Uint8Array(randomBytes(16));
+
+      async function deposit(node: Awaited<ReturnType<typeof createNode>>, tag: number): Promise<Record<string, unknown> | null> {
+        const stream = await node.newStream(relayNode.getPeerId(), CONTENT_PARK_PROTOCOL_ID);
+        const read = frameReader(stream);
+        send(stream, {
+          type: "content_park_deposit",
+          recipient_pubkey: recipientPub,
+          content_hash: new Uint8Array(createHash("sha256").update(Buffer.from([tag])).digest()),
+          session_id: sessionId,
+          ciphertext: new Uint8Array(randomBytes(32)),
+        });
+        return await read();
+      }
+
+      const peerA = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+      await peerA.start();
+      await peerA.dial(relayAddr);
+
+      expect((await deposit(peerA, 1))?.["ok"], "first is within the limit").toBe(true);
+      expect((await deposit(peerA, 2))?.["ok"], "second is at the limit").toBe(true);
+
+      const refused = await deposit(peerA, 3);
+      expect(
+        refused?.["ok"],
+        "the third from this peer must be REFUSED. If this is true, either the limiter is not called " +
+          "or the authenticated peer id is not reaching it — the two reverts this test exists to catch.",
+      ).toBe(false);
+      expect(refused?.["reason"], "and the depositor must be told WHY").toBe("rate_limited");
+      expect(
+        Number(refused?.["retry_after_ms"] ?? 0),
+        "and WHEN to come back — the relay knows the number, and a refusal without it leaves the " +
+          "client waiting on an unrelated reconnect for a condition that clears in a minute",
+      ).toBeGreaterThan(0);
+
+      /**
+       * ⚠️ THE PROPERTY THAT MAKES THIS SAFE TO SHIP AT ALL: a second peer, over its own connection
+       * and therefore its own authenticated peer id, is unaffected. A global limiter would let one
+       * attacker deny parking to every honest sender — an abuse control becoming the outage it was
+       * meant to prevent.
+       */
+      const peerB = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+      await peerB.start();
+      await peerB.dial(relayAddr);
+      expect(
+        (await deposit(peerB, 4))?.["ok"],
+        "a different peer must be unaffected by peer A's flood",
+      ).toBe(true);
+
+      await peerA.stop();
+      await peerB.stop();
+    } finally {
+      await stop();
+    }
+  }, 60_000);
+});
