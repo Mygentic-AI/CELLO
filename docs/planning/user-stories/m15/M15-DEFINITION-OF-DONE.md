@@ -3674,9 +3674,82 @@ root means. Both repos; version-bump ACs on both sides.
 > under no root and the signed bytes are not stored beside the signature. *"A durable record of a
 > value we already held, correctly labelled."*
 >
-> **Both limits are the reason this says 🟡 and not ✅.** The tag flips when the unit review's verdict
-> is quoted here — **this bullet has been declared done twice on evidence that could not see its own
-> failure, and a third time on my say-so is not a close.**
+> ### ✅ CLOSED 2026-08-24 — TWO REVIEWS, BOTH BLOCKING, ALL BLOCKING FINDINGS FIXED
+>
+> **REVIEW A — the held-path coverage. Verdict quoted:**
+> > *"**The bullet cannot honestly close.** It has been closed wrongly twice for the same reason, and
+> > the third attempt repeats it one layer out."* … *"the code is right and nothing is holding it
+> > right."*
+>
+> **The blocking finding was MINE, and it was the deduplication.** Two held-path tests existed and I
+> deleted one as redundant. They are not: **one covers the CARRIER** (it calls `placeOwnLeaf` directly
+> with a hand-built proof), **the other covers the CALL SITES** (it drives a real `cello_send`). With
+> both production call sites passing `undefined`, the package stayed **green at 278 files / 2910
+> tests**, because no production call site is in the carrier test's call graph.
+>
+> **I had told Andre I "mutation-tested both before choosing."** I had — against the carrier mutation
+> only, which they *both* catch. I never ran the call-site mutation, the one that separates them, and
+> reported the check as conclusive. Restored; each header now states which half it covers.
+>
+> **Measured after the restore — the two mutations, run separately:**
+>
+> | mutation | held-authorship (call sites) | sent-proof-wired (carrier) |
+> |---|---|---|
+> | both `session-content-handlers.ts` call sites → `undefined` | **RED** | green |
+> | the carry into the held entry → deleted | **RED** | **RED** |
+>
+> **Neither test alone is sufficient. That is the proof the dedup was wrong.**
+>
+> **REVIEW B — the signature guard. Verdict quoted:**
+> > *"**HOLLOW TESTS FOUND** … the three `daemon.ts` call-site fixes — the actual subject of commit
+> > `01a23c1` — **do not** [survive the revert test]: measured green, typecheck exit 0, with the fix
+> > fully reverted."*
+>
+> Fixed by `dod-m15-sealwire-1-callsite-enforcer.test.ts`, verified against that exact mutation: both
+> its assertions redden and it names the sites. **Recorded as what it is — a RATCHET, not a runtime
+> proof.** It is a text scan; it does not execute the away responder, so it proves the *wiring* is
+> still there, not that the *value* is right at runtime. **The runtime test is an AC below.**
+>
+> **Also fixed from Review B:**
+> - **HIGH-1 — my own comment was false and the DoD carried it as measured.** It said *"the document
+>   transport does not go through `sendContent`, so no Structure-1 was signed."* Traced: it **does**
+>   call `sendContent`, and the Structure-1 is signed with **no `leafKind` gate**, so a doc leaf is
+>   signed exactly like a message. A proof exists and is discarded. Harmless today — a released doc
+>   hold writes no transcript row, so there is no consumer — but *"no consumer"* is the true reason and
+>   *"no signature"* was a false one, in the unit whose thesis is that `undefined` must be a claim the
+>   author actually made.
+> - **HIGH-2 — SEALWIRE-1's own four test files were outside the typecheck allowlist**, missed in the
+>   very commit that widened it for two other units and wrote down *"the files most likely to be
+>   missing are your own newest ones."* It hid a real error: `Stream` imported from
+>   `@cello-protocol/transport`, **which does not export it**, used three times as `as unknown as
+>   Stream` — so the acking relay's stream shape was unconstrained in the file this bullet rests on.
+> - **F2** — the held signature was asserted by LENGTH and never by value; a wrong well-formed 64
+>   bytes passed. Now compared exactly. **F3** — a header advertised a gap closed days earlier while
+>   staying silent about the open one. **MEDIUM-3** — the four `m12-p14` caller fixes are now recorded
+>   as *unverified by any compiler* rather than implied fine.
+>
+> **Gate: all 30 seal tests green across six files** (`-authorship` 6, `-sender-leg` 7, `-sent-proof-wired`
+> 5, `-held-authorship` 1, `-root-check` 9, `-callsite-enforcer` 2). The only failures in that run are
+> the other lane's in-flight `RELAYONLY-1` work plus a daemon-lock test broken by its missing
+> `@multiformats/multiaddr` dependency — reported to them, not seal.
+>
+> #### 🅿️ ACs CARRIED OUT OF THIS CLOSE — named, not hidden by the tick
+> 1. **The away-path RUNTIME test.** Drive the away responder with the tail one short so its own leaf
+>    is held, close the gap, read `sender_sig` off the released row. Only that proves the VALUE at
+>    those three sites; the enforcer proves the wiring. **This is the one the reviewer wanted.**
+> 2. **`DOD-M15-HELD-AUTHORSHIP-1`** — a hold released across a daemon restart still loses the proof
+>    (`held_content` has no authorship columns). Announced at runtime, deferred by ruling. **Review A
+>    confirmed this does NOT block bullet 5.**
+> 3. **No test asserts `session.content.released.authorship.lost` ever fires** — and that log is the
+>    entire consideration accepted in exchange for deferring the schema fix. Belongs on
+>    `HELD-AUTHORSHIP-1`, where its enforcer already asks for it.
+> 4. **`"peer_gone"` in `m12-p14`** — ruled **dead test code**, not a live bug: every non-`sealed`
+>    reason is identical at runtime and no production caller emits it. Still a one-word type fix.
+>
+> **What is honestly closed:** the coverage gap that made the defect invisible. Both mutations that
+> previously left the suite green now redden. **What is honestly not:** the runtime value-proof for the
+> away path, and the restart case. Both are written above rather than left for the next reader to
+> discover.
 >
 > **The COST argument was also wrong, and on a premise nobody had checked.** It assumed the signature
 > exists only after the relay ack, forcing either a mutation of the append-only transcript or the
