@@ -1468,7 +1468,35 @@ far end and the near end shows it sent. Documents are `M9`'s headline feature.
 
 **TRACED ONE STEP FURTHER — and HALF MY OWN EVIDENCE IS WITHDRAWN. Read the retraction first.**
 
-> ### ⚠️ RETRACTION, same session, before this was acted on
+> ### ⛔ THE RETRACTION BELOW IS ITSELF WITHDRAWN — verified 2026-08-24. THE ORIGINAL FINDING STANDS.
+>
+> I retracted on the premise that `session.salt.announced` is `debug` and *"would not appear in an
+> info-level capture"*. **There is no info-level capture. The daemon's logger has NO level gate** —
+> `core/daemon/src/bin/cello-daemon.ts:39` writes `debug` to stdout unconditionally, exactly like
+> `info`. So a debug event absent from the capture is absent because it did not fire.
+>
+> **And the anomaly that triggered the retraction is itself the finding.** I argued the capture must be
+> partial because `session.node.created` is `info` and read 0 while sessions plainly existed. Checked:
+> `session.node.created` (`session-node-manager.ts:3779`) and `session.relay.leaf.delivered` (`:3849`)
+> are **`this.#logger.info` in the same class, seventy lines apart.** One appears **76 times** in that
+> run; the other appears **zero**. The capture is proven working. **So no session node was created in
+> the document run** — which is not a gap in the evidence, it is evidence.
+>
+> **That materially strengthens the hypothesis rather than killing it:** the salt announce hangs off
+> `onPeerConnect`, which fires when a session's node attaches a peer. No node created ⇒ no attach ⇒ no
+> announce ⇒ `no_agreement_started`, which is the reason string actually observed. Every measurement
+> now points the same way.
+>
+> **⚠️ STILL SHORT OF PROOF, and the gap is narrow and named:** `session.node.created` is logged at two
+> sites. If document delivery reaches a session node by a third path that logs neither, the zero would
+> mislead — so *"documents create no session node"* is established for those two sites, not for every
+> route into a node. The per-session-id comparison below remains the thing that closes it.
+>
+> **Kept rather than deleted** because the reasoning error is the lesson: I inferred a capture problem
+> from a level I never checked, and used it to discard a correct result. **Verifying the instrument
+> cuts both ways — it can restore a finding as easily as destroy one.**
+>
+> ### ⚠️ RETRACTION, same session, before this was acted on — ITSELF WRONG, see above
 > I wrote that `session.salt.announced × 0` proved the announce *"was never sent"*. **That inference
 > is invalid and I am withdrawing it.** `session.salt.announced` is logged at **`debug`**
 > (`session-node-manager.ts:10729`), so it would not appear in an info-level capture whether it fired
