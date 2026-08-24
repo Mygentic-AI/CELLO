@@ -45,6 +45,7 @@ import {
   type Proc,
   type McpConn,
   expectOwnTreeVerified,
+  awaitSealedRoot,
 } from "./live-harness.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
@@ -400,10 +401,31 @@ describe("J-DOCUMENTS — two real daemons converge on one document (DOD-DOC-E2E
     // BOTH SIDES INDEPENDENTLY RECOMPUTE THE SAME ROOT. Fetched from each daemon's own sealed
     // receipt — never compared against one side's reported value, which is the check the whole
     // tamper-evidence claim rests on.
+    /**
+     * ⚠️ POLLED, NOT FETCHED ONCE — `DOD-M15-CLOSEROOT-1`, surfaced by bullet 8's own better message.
+     *
+     * This asked for the receipt the instant close returned and asserted the root was there. Close is
+     * NON-BLOCKING BY DESIGN — its own guidance calls the blocking version *"exactly how seventeen
+     * sessions were lost"* — so it commits and returns, and the receipt arrives afterwards. The
+     * single fetch was racing the FROST ceremony.
+     *
+     * It surfaced as `expected false to be true` until bullet 8 replaced that bare equality, at which
+     * point the daemon's own answer came through instead:
+     * `{"ok":false,"reason":"seal_in_progress","seal_status":"committed","guidance":"The seal ceremony
+     * for this session is RUNNING..."}` — the system saying plainly that it was mid-ceremony and the
+     * test had asked too early. `awaitSealedRoot` exists for exactly this and prints the last
+     * response on timeout.
+     *
+     * The leaf counts still come from a direct fetch below, AFTER the roots have landed — by then the
+     * receipt is complete, so there is nothing left to race.
+     */
     type Receipt = { ok?: boolean; sealed_root?: string; leaf_count?: number; content_leaf_count?: number };
+    const [rootA, rootB] = await Promise.all([
+      awaitSealedRoot(a.conn, a.sessionId, { label: "A sealed receipt (mixed msg+doc tree)" }),
+      awaitSealedRoot(b.conn, b.sessionId, { label: "B sealed receipt (mixed msg+doc tree)" }),
+    ]);
     const receiptA = (await a.conn.call("cello_sealed_receipt", { cello_session_id: a.sessionId })) as Receipt;
-    const receiptB = (await b.conn.call("cello_sealed_receipt", { cello_session_id: b.sessionId })) as Receipt;
-    expect(receiptA.sealed_root, `A has no sealed root: ${JSON.stringify(receiptA)}`).toBeTruthy();
+    expect(rootA, `A has no sealed root: ${JSON.stringify(receiptA)}`).toMatch(/^[0-9a-f]{64}$/);
     /**
      * ⚠️ THE COMMENT THAT STOOD HERE DESCRIBED A PROPERTY THIS CODE DOES NOT TEST — `SEALWIRE-1`
      * bullet 8. It said *"two independent daemons, each rebuilding from its own leaves, arriving at
@@ -415,7 +437,7 @@ describe("J-DOCUMENTS — two real daemons converge on one document (DOD-DOC-E2E
      * Kept, because it does prove something real and cheap: both sides received the SAME
      * certificate rather than two different ones. That is just not tamper-evidence.
      */
-    expect(receiptB.sealed_root, "the two sides received different certificates").toBe(receiptA.sealed_root);
+    expect(rootB, "the two sides received different certificates").toBe(rootA);
 
     /**
      * AND HERE IS THE REBUILDING THE OLD COMMENT CLAIMED. Each daemon verified the certified root
@@ -757,10 +779,15 @@ describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify
     await closeB;
     expect(closeA.ok, `A's close failed with a rejection in the tree: ${JSON.stringify(closeA)}`).toBe(true);
 
+    // POLLED, not fetched once — `DOD-M15-CLOSEROOT-1`; see the note at the first seal in this file.
+    // Close commits and returns; the receipt lands afterwards, so a single fetch races the ceremony.
     type Receipt = { ok?: boolean; sealed_root?: string; leaf_count?: number };
+    const [rootA, rootB] = await Promise.all([
+      awaitSealedRoot(a.conn, a.sessionId, { label: "A sealed receipt (tree with a rejection)" }),
+      awaitSealedRoot(b.conn, b.sessionId, { label: "B sealed receipt (tree with a rejection)" }),
+    ]);
     const receiptA = (await a.conn.call("cello_sealed_receipt", { cello_session_id: a.sessionId })) as Receipt;
-    const receiptB = (await b.conn.call("cello_sealed_receipt", { cello_session_id: b.sessionId })) as Receipt;
-    expect(receiptA.sealed_root, `A has no sealed root: ${JSON.stringify(receiptA)}`).toBeTruthy();
+    expect(rootA, `A has no sealed root: ${JSON.stringify(receiptA)}`).toMatch(/^[0-9a-f]{64}$/);
     /**
      * ⚠️ AND THIS ONE COULD NOT HAVE SHOWN WHAT IT SAID IT SHOWS — `SEALWIRE-1` bullet 8.
      *
@@ -773,9 +800,9 @@ describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify
      * The equality is kept — same certificate, both sides — and the real check follows it.
      */
     expect(
-      receiptB.sealed_root,
+      rootB,
       "the two sides received different certificates once a rejection was in the tree",
-    ).toBe(receiptA.sealed_root);
+    ).toBe(rootA);
 
     /**
      * THE ASSERTION THIS FILE EXISTS FOR, now that it can be made. Each daemon checked the certified

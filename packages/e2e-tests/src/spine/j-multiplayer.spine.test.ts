@@ -30,6 +30,7 @@ import {
   type McpConn,
   CELLO_CLIENT_ROOT,
   expectOwnTreeVerified,
+  awaitSealedRoot,
 } from "./live-harness.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 
@@ -455,9 +456,19 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
         };
         await closeY;
         expect(closeX.ok, `${label}: close failed`).toBe(true);
+        /**
+         * POLLED, not fetched once — `DOD-M15-CLOSEROOT-1`. Close is non-blocking by design: it
+         * commits and returns, and the receipt lands afterwards, so asking at close raced the FROST
+         * ceremony and surfaced as a bare `expected false to be true`. `awaitSealedRoot` polls and
+         * prints the daemon's last answer on timeout, which for this shape is
+         * `reason: "seal_in_progress"` — the system saying the test asked too early.
+         */
+        const [rxRoot, ryRoot] = await Promise.all([
+          awaitSealedRoot(x.conn, xs, { label: `${label}: ${x.name} sealed receipt` }),
+          awaitSealedRoot(y.conn, ys, { label: `${label}: ${y.name} sealed receipt` }),
+        ]);
         const rx = (await x.conn.call("cello_sealed_receipt", { cello_session_id: xs })) as Receipt;
-        const ry = (await y.conn.call("cello_sealed_receipt", { cello_session_id: ys })) as Receipt;
-        expect(rx.sealed_root, `${label}: ${x.name} has no sealed root`).toBeTruthy();
+        expect(rxRoot, `${label}: ${x.name} has no sealed root`).toMatch(/^[0-9a-f]{64}$/);
         /**
          * ⚠️ *"Side to side, never one side's value against itself — the tamper-evidence claim."*
          * It is not the tamper-evidence claim — `SEALWIRE-1` bullet 8. Both values are read off the
@@ -465,7 +476,7 @@ describe("J-MULTIPLAYER — three real daemons, one document", () => {
          * set. What it does prove, and is kept for, is that both sides received one certificate
          * rather than two.
          */
-        expect(ry.sealed_root, `${label}: the two sides received different certificates`).toBe(rx.sealed_root);
+        expect(ryRoot, `${label}: the two sides received different certificates`).toBe(rxRoot);
         /**
          * The tamper-evidence claim, made per side: each daemon checked the certified root against
          * the leaves IT holds. This matters more here than anywhere else in the suite — one agent is
