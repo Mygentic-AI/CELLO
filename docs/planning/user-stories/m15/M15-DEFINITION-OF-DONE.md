@@ -86,12 +86,21 @@ does not move them.
 |---|---|---|
 | **S** | A direct session permanently reveals the operator's IP, with no gate and no remedy — and the shipped docs say nothing. The mitigation (`RELAYONLY-1`) was reopened 2026-08-24 as not working. | `DOD-M15-DISCLOSE-1` |
 | **S** | The relay's connection gater and its reservation-dial hook are **written and never installed**, so an agent's circuit address is dialable by anyone who learns it. The direct path was closed this week; this is the same door, other route. | `DOD-M15-RELAYAUTH-1` (gater bullet only) |
-| **S** | An empty `CELLO_DIRECTORY_PUBKEYS` degrades silently instead of failing startup. Config is correct today; the failure mode that would hide it going wrong is not. | `DOD-M15-RELAYABUSE-1` (that bullet only) |
-| **S** | The directory-admin push handler is live, has **no caller**, and its signed body carries no nonce and no timestamp. Deleting it is cheaper and strictly safer than hardening it. | `DOD-M15-RELAYABUSE-1` (that bullet only) |
+| **S** ✅ | An empty `CELLO_DIRECTORY_PUBKEYS` degrades silently instead of failing startup. Config is correct today; the failure mode that would hide it going wrong is not. | `DOD-M15-RELAYPUBKEYS-1` |
+| **S** ❌ | **← THE UNCLAIMED ONE.** The directory-admin push handler is live, has **no caller**, and its signed body carries no nonce and no timestamp. Deleting it is cheaper and strictly safer than hardening it. | `DOD-M15-RELAYADMIN-1` |
 | **S** | Directory authentication is **skipped entirely and silently** when the URL is not a byte match. Not exposed today — production is a raw IP precisely to match — so the cheap fix is to make the skip LOUD, not to build authenticated bootstrap. | `DOD-M15-STEP6-REPLAY-1` |
 | **M** | The session ephemeral is not bound to the agent's identity, so the new encryption defeats a passive recorder and **not an active relay — and we run the relays.** The module's own docstring says so. | `DOD-M15-EPHEMERAL-AUTH-1` |
-| **M** | The content-park store is unauthenticated by design and unbounded per depositor: 4 MiB frames, 256 MB store, no rate limit. Fillable for every user at once. | `DOD-M15-RELAYABUSE-1` (that bullet only) |
-| **L** | **The relay has no rate limiting of any kind** — not on authentication, hash submission, gap-fill, the liveness query or park deposit. There is nothing to find, which is what makes it a minutes-long finding. | `DOD-M15-RELAYABUSE-1` (the rest) |
+| **M** ✅ | The content-park store is unauthenticated by design and unbounded per depositor: 4 MiB frames, 256 MB store, no rate limit. Fillable for every user at once. | `DOD-M15-RELAYPARK-1` |
+| **L** ❌ | **The relay has no rate limiting of any kind** — not on authentication, hash submission, gap-fill, the liveness query or park deposit. There is nothing to find, which is what makes it a minutes-long finding. | `DOD-M15-RELAYABUSE-1` |
+
+> ### 🔀 EVERY ROW ABOVE NOW NAMES A LINE WITH ITS OWN TAG (Andre, 2026-08-24).
+> Four of these were BULLETS inside larger lines, and a bullet cannot be tagged, claimed or counted.
+> The cost was concrete: two were **finished and still read as untouched**, and one was **unclaimed and
+> read as taken** — for a week nobody would have picked it up, because its parent was red for an
+> unrelated reason. Split into `RELAYPARK-1`, `RELAYPUBKEYS-1` and `RELAYADMIN-1`.
+>
+> **The rule:** if something is worth ranking, it is worth a line. Ranking a bullet produces a
+> priority nobody can act on and a status nobody can read.
 | **L** | The semantic screener has **never run against real weights** — `installModel` has no caller, no command, and the dependency is not even declared optional. One of the three things the launch intent names as core value. | `DOD-M15-SCREENINSTALL-1` |
 
 **The five S items are mostly "wire up something that already exists" or "write down what is true."**
@@ -4413,6 +4422,13 @@ Parallel with Tier 4 — different disciplines, no shared files.
 > (`content_store_full`) instead of writing past the global cap. It throws rather than returning a
 > flag because the one production caller already turns a throw into `{ok:false, reason}` — a negative
 > ACK the depositor can act on, with no interface change.
+> **AND THE JUSTIFICATION FOR REFUSING WAS VERIFIED, NOT ASSERTED.** "Refusing is safe because the
+> depositor keeps its copy and retries" is exactly the kind of comforting sentence this milestone
+> keeps catching, so it was traced end to end: the relay answers `{ok:false, reason:
+> "content_store_full"}`, `content-park-client.ts` returns that structured rather than throwing,
+> `daemon.ts` logs `content.park.deposit.failed` with the reason — and the daemon's own note confirms
+> the content is not lost: *"a failed park stays queued (drainAwaitingToPark does not evict…)"*. So a
+> refusal costs a retry, not a message.
 > **⚠️ "Per depositor" is NOT what shipped, and the code says so** rather than quietly substituting:
 > a deposit carries no depositor identity to key a quota on, so that half waits on deposit auth.
 > **3 tests; the flood test's revert test RUN** — deleting the refusal reddens exactly it, while the
