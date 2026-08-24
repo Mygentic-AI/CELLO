@@ -1598,12 +1598,22 @@ The other six rebuilt tables have nothing between a forgotten column and silent 
 - **Enforcer:** receipt.
 
 ### `DOD-M15-DIVERGE-DURABLE-1` — ✅ The divergence flag survives a daemon restart
-> **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F4 (`readLock` →
-> null → proceed) [blocking]; F5 (mode silently not applied on overwrite) [blocking]; F6/F7
-> (crash-window states that open and are wrong, no fsync) [blocking]… **HOLLOW TESTS FOUND**
-> [blocking] on four… I am not rubber-stamping this: BACKUP-1 writes a private key and overwrites a
-> database, and it has three findings in exactly those two operations plus an agent-facing surface
-> that cannot be called."* Every finding fixed. Gate: 4111 tests, lint, typecheck, clean build.
+> **CLOSED 2026-08-22, in the four-unit DAEMON-PATH batch review** (`BACKUP-1`, `DOORBELL-1`,
+> `DIVERGE-DURABLE-1`, `IPCVISIBLE-1` reviewed as one pass — Entry 55).
+>
+> ⚠️ **THIS ENTRY USED TO QUOTE A VERDICT WHOSE EVERY NAMED FINDING WAS ABOUT `BACKUP-1`** — the
+> world-readable key at `O_CREAT`, the database overwrite ordering, the `readLock` guard. None of them
+> mention this line. Andre found it by reading the DoD end to end; `grep` could not, because the
+> artifact was present and only its SUBJECT was wrong. Corrected 2026-08-24 to quote **this line's
+> own** finding from that pass:
+>
+> *"the flag was in memory, so a restart turned 'provably cannot seal' into 'healthy'. **The
+> migration meant to carry the new column was DROPPING it**, because that migration rebuilds the
+> table from its own column list. Caught by the gate, not by reading."*
+>
+> Plus a second defect the same pass recorded against it: the divergence flag was written and cleared
+> **without the agent key**, so on the loopback case — two of Andre's agents on one daemon — one side
+> sealing ERASED the other's divergence. **This line's own defect, produced by this line's own clear.**
 >
 > **Both statements were mis-keyed**: `WHERE session_id = ?` without `agent_id`. The PK is composite
 > because two of one operator's agents can hold both ends of the SAME session_id on one daemon —
@@ -2114,6 +2124,11 @@ from the receiving operator's chair, a refused message simply never arrives.
   testing its own setup. The property is asserted where it is enforceable.
 
 ### `DOD-M15-TRANSPORT-TERMINAL-1` — ✅ A transport blip stops killing a healthy conversation
+> **CLOSED 2026-08-22, in the RELAY-PATH batch review** (Entry 55). ✅ **Re-verified 2026-08-24:
+> this verdict IS about this line** — its named finding says so outright (*"the classification that
+> **is** TRANSPORT-TERMINAL-1"*). Checked because four sibling entries were found quoting evidence
+> about a different tag; this one was correctly cited.
+>
 > **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SPEC: DEVIATIONS FOUND** … **SILENT FALLBACKS
 > FOUND** … **ERROR SUBSTITUTION FOUND** … **HOLLOW TESTS FOUND** — T1 through T5. T1 is the serious
 > one: the classification that *is* TRANSPORT-TERMINAL-1 has no test on two of its three branches,
@@ -2141,11 +2156,22 @@ shrinks both.
   leaves the session active and retryable.
 
 ### `DOD-M15-TERMINAL-REASON-1` — ✅ "Sealed" and "gave up" stop being the same word
-> **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SPEC: DEVIATIONS FOUND** … **SILENT FALLBACKS
-> FOUND** … **ERROR SUBSTITUTION FOUND** … **HOLLOW TESTS FOUND** — T1 through T5. T1 is the serious
-> one: the classification that *is* TRANSPORT-TERMINAL-1 has no test on two of its three branches,
-> and the mutation you asked me to hunt for — making a merits refusal non-terminal — leaves the gate
-> green."* Every finding fixed and each of the reviewer's measured-green mutations re-run red.
+> **CLOSED 2026-08-22, in the RELAY-PATH batch review** (Entry 55) that also covered
+> `DOD-M15-TRANSPORT-TERMINAL-1`.
+>
+> ⚠️ **THIS ENTRY USED TO QUOTE A VERDICT WHOSE NAMED FINDING IS ABOUT THE OTHER LINE** — *"the
+> classification that IS TRANSPORT-TERMINAL-1 has no test on two of its three branches"*. True, and
+> about a different tag. Andre found it reading the DoD end to end; `grep` could not, because the
+> artifact was present and only its SUBJECT was wrong. Corrected 2026-08-24 to quote **this line's
+> own** finding from the same pass:
+>
+> *"a rename that made a refused seal **non-terminal on the client** — three consumers branched on
+> the old literal, so a refused conversation would have run on against a chain that had stopped
+> growing. That is the 68-minute defect those sets exist to prevent, reintroduced **by changing a
+> string**."*
+>
+> That is precisely this line's subject — it split `session_sealed` into named causes, and the rename
+> is what the split does. Every finding fixed; the reviewer's measured-green mutations re-run red.
 > Gate: 2265 tests with the database live.
 >
 > **And the rename orphaned three consumers.** `TERMINAL_RELAY_REFUSALS`, `TERMINAL_ISH_REFUSALS`
@@ -2292,12 +2318,16 @@ from minutes long past while `curl` reached all three nodes in 37–184 ms.
   minutes. **Do not fix it by hiding the field when stale** — absent and healthy must not look alike.
 
 ### `DOD-M15-IPCVISIBLE-1` — ✅ A connection closing leaves a record, and an identity switch says why
-> **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F4 (`readLock` →
-> null → proceed) [blocking]; F5 (mode silently not applied on overwrite) [blocking]; F6/F7
-> (crash-window states that open and are wrong, no fsync) [blocking]… **HOLLOW TESTS FOUND**
-> [blocking] on four… I am not rubber-stamping this: BACKUP-1 writes a private key and overwrites a
-> database, and it has three findings in exactly those two operations plus an agent-facing surface
-> that cannot be called."* Every finding fixed. Gate: 4111 tests, lint, typecheck, clean build.
+> **CLOSED 2026-08-22, in the four-unit DAEMON-PATH batch review** (`BACKUP-1`, `DOORBELL-1`,
+> `DIVERGE-DURABLE-1`, `IPCVISIBLE-1` reviewed as one pass — Entry 55).
+>
+> ⚠️ **THIS ENTRY USED TO QUOTE `BACKUP-1`'S FINDINGS**, not its own — see the note on
+> `DOD-M15-DIVERGE-DURABLE-1`. Corrected 2026-08-24 to quote **this line's own** finding:
+>
+> *"connection closes now leave a record naming the attended agent, and a fallback selection is
+> attributable. **I over-corrected and four tests stopped me**: I switched the sole-online fallback
+> off for MCP, which CC-3 added deliberately to fix the post-reconnect papercut. Behaviour unchanged;
+> attribution is the deliverable, which is the sequencing `SELECTION-1` asks for and I had skipped."*
 >
 > **Both shipped log lines failed the revert test** — deleting either left the gate green, so the
 > unit that exists to make things visible was itself invisible. Both tested now. The disconnect line
@@ -2490,12 +2520,17 @@ policy for an expired manifest — it just never chose it.
 
 
 ### `DOD-M15-DOORBELL-1` — ✅ A daemon shutdown does not ring like an incoming message
-> **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F4 (`readLock` →
-> null → proceed) [blocking]; F5 (mode silently not applied on overwrite) [blocking]; F6/F7
-> (crash-window states that open and are wrong, no fsync) [blocking]… **HOLLOW TESTS FOUND**
-> [blocking] on four… I am not rubber-stamping this: BACKUP-1 writes a private key and overwrites a
-> database, and it has three findings in exactly those two operations plus an agent-facing surface
-> that cannot be called."* Every finding fixed. Gate: 4111 tests, lint, typecheck, clean build.
+> **CLOSED 2026-08-22, in the four-unit DAEMON-PATH batch review** (`BACKUP-1`, `DOORBELL-1`,
+> `DIVERGE-DURABLE-1`, `IPCVISIBLE-1` reviewed as one pass — Entry 55).
+>
+> ⚠️ **THIS ENTRY USED TO QUOTE `BACKUP-1`'S FINDINGS**, not its own — see the note on
+> `DOD-M15-DIVERGE-DURABLE-1`. Corrected 2026-08-24 to quote **this line's own** finding:
+>
+> *"a dying daemon rang the same bell as an incoming message, so an agent following its standing
+> contract called the inbox against a dead daemon and reported a protocol fault. Now `wake_action`,
+> defaulting to READ so a future doorbell is never silently ignored. **My comment crediting a skip
+> with the anti-spoof property was wrong** — the assignment order carries it; corrected rather than
+> left standing."*
 >
 > **`daemon_reconnected` was marked `none`** — the one wake-up where there genuinely may be unread
 > mail, because it fires when the daemon has just been DOWN. Marking it "do not read" was a new way
