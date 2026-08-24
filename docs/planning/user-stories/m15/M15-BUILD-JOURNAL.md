@@ -73,8 +73,20 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 >   The other 3 are a **test shortcut**, not a defect: the raw `content_park_deposit` IPC produces no
 >   sender signature and `authenticateParkedEntry` refuses it as *"the ATTACKER shape"*. Fix shape
 >   recorded (park via a real send).
-> - 🔎 **Remaining, each with a named cause:** `j-multiplayer` 4 (request timeouts, uninvestigated) ·
->   `j-end` 1 (trust-signal misclassification).
+> - ✅ **`j-end` 10/10** (was 9/1) — a **stale fixture**, not a defect: it wrote
+>   `agent_profiles.account_id` (superseded) and then verified by counting **that same column**.
+>   *A stale fixture whose self-check is stale the same way cannot detect its own staleness.* Review
+>   proved the fix a correction by reading the live DB, then found **the identical defect 500 lines
+>   down in the same file**. Both linkage assertions now cover **both legs of D-29** — it is a
+>   disjunction (`accountId` OR `phoneStubHash`) and counting accounts alone cannot establish
+>   "distinct operators".
+> - ✅ **`j-spine` now pins the account link in the table AUTHORIZATION reads** — the old assertion
+>   proved registration's own write, not the replicated `agent_account_links` row the same-operator
+>   check and **the kill switch** resolve from. That gap is the failure V59 exists for (0/2/1 linked
+>   across three nodes). Verified discriminating: a bogus account returns 0.
+> - 🔎 **Remaining:** `j-multiplayer` 4 (request timeouts, **uninvestigated** — but **NOT** the salt
+>   cause: same run had 10 × `salt.agreed`, 0 refusals) · `j-content` 3 (fix shape filed) ·
+>   `j-stale-session` 1.
 > - 🅿️ **Filed, not fixed:** `REVOKED-READS-OFFLINE-1` (a revoked agent reads as *offline*, so the
 >   operator chases a counterparty who can never return) · `START-AGENT-UNAWAITED-1` (`cello_start_agent`
 >   returns `ok` before the receiver exists — the operator is told it started and the agent is deaf).
