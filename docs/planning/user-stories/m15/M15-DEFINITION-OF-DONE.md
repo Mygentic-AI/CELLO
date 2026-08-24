@@ -4056,7 +4056,56 @@ The byte-match workaround is holding; the fail-open underneath it is not fixed.
 > (`cello_settings_set` description), `__tests__/dod-m15-relayonly-1.test.ts`.
 > **Correspondingly: `DOD-M15-SEALWIRE-1` and all remaining seal work belong to `CELLO_Coder_1`.**
 > Andre has forbidden me from further seal work; I am not to touch it even to fix something I see.
-> ### ✅ BOTH BLOCKING FINDINGS FIXED, 2026-08-24 — pass 2 out. **The fix is one idea: CIRCUIT-ONLY, not nothing.**
+> ### ✅ PASS 2 RETURNED, ALL FOUR BLOCKING FINDINGS FIXED, 2026-08-24. **Two review passes is the cap; the rest is carried.**
+> Pass 2 found a **new blocking defect introduced by pass 1's own fix**, which is the most useful
+> thing either pass produced.
+> - **H1 — MY FIX FOR THE DISCLOSURE WINDOW WAS DEAD CODE.** I wrote `this.#db !== undefined`; the
+>   field is `DaemonDatabase | null` and is **never `undefined` at any point in its lifetime**, so
+>   the expression was a compile-time-constant `true`, TypeScript had nothing to object to, and the
+>   whole `unknown` branch was unreachable. In the exact window it was written for — shutting down,
+>   `#db` null, receiver still alive — it returned `off` and published the operator's real addresses.
+>   **The DoD recorded that window as closed. It was wide open.** Now `!== null`, and pinned by a
+>   test that asserts the SENTINEL, because the pure-function test passed the boolean in literally
+>   and could never have caught a call-site bug.
+> - **H2 — dcutr and identify defeat the control at runtime.** Filtering what the DIRECTORY is told
+>   does not stop libp2p speaking peer-to-peer. `createNode` now takes `holePunch: { enabled }`, and
+>   every node is built through `#createAgentNode` so a **sixth** call site inherits the posture
+>   rather than leaking. Guard test fails on any raw factory call.
+> - **H3 — `relayOnlyReachable` had ZERO production callers.** No consumer, no ship — while the path
+>   it guards is common: whenever a relay refuses a reservation the fallback receiver has no circuit
+>   address, so relay-only reproduced F1's empty publish exactly. Both publish sites now refuse with
+>   `relay_only_no_reservation`.
+> - **H4 — THE FILTER WAS DEFEATABLE BY THE COUNTERPARTY.** `addr.includes("/p2p-circuit")` is a
+>   substring test on strings **the peer controls** — the directory copies them verbatim and the
+>   FROST signature attests the quorum agreed, **not that the contents are circuits**. So
+>   `/dns4/p2p-circuit.attacker.example/…` was dialled directly, handing over the IP with relay-only
+>   ON while the log reported `suppressed: 0`. Exact-segment match now.
+> - **H6** the dial half still used the boolean (closed DB ⇒ dialled direct); **H8** the log text
+>   contradicted the code and the branch duplicated the filter; **H10** the wording omitted the limit
+>   an operator meets first — that with no reservation this makes them **unreachable**.
+>
+> **TWO REGRESSIONS I CAUSED, both caught by the full package run rather than by the unit's tests.**
+> The ceremony guard refused an empty address list **unconditionally**, breaking a pre-existing
+> accept path — *a privacy control that changes behaviour when it is switched OFF is its own defect.*
+> And `#createAgentNode` was `async`, which added **one extra microtask hop** before the receiver was
+> installed — enough for `createSessionNode` to answer `standing_receiver_unavailable`. **Bisected
+> rather than guessed:** a pure passthrough still failed, which ruled out the settings read and
+> pointed at the rewiring. That install path is genuinely tick-sensitive and it is now written down
+> at the wrapper.
+>
+> **GATE: daemon 280 files / 2918 tests / exit 0; transport 14 files / 162 tests / exit 0; typecheck
+> 0; eslint 0.** 19 tests on the unit, plus 3 on the hole-punch flag, **each with its revert test RUN.**
+>
+> **CARRIED, not fixed — two passes is the cap (§ONE review pass):** **H5** two setters overwrite
+> `#counterpartyAddrs` from an observed `remoteAddr`, so the filter can erase itself at runtime;
+> **H7** `validateSettingValue` still falls through to away-TEXT for any unrecognised key, so the
+> NEXT non-boolean key inherits away semantics silently; **H9** `advertisedAddress` is a dead field
+> carrying the operator's public IP with no consumer, outside the choke point; and **identify's
+> announce filter**, the other half of H2 — without it a peer still learns our listen addresses on
+> the first relayed connection. **That last one is the honest limit on this line: the hole-punch is
+> closed, identify is not.**
+>
+> ### Pass 1 fixes, kept for the record — **the fix is one idea: CIRCUIT-ONLY, not nothing.**
 > A `/p2p-circuit` multiaddr names the **RELAY** and our peer id, and terminates at the relay. So it
 > discloses nothing about the operator, it satisfies both directory guards, and it is what §7's
 > mitigation actually meant. Relay-only now **publishes** only the circuit subset and **dials** only
