@@ -1529,7 +1529,48 @@ comes up: the initiator's first dial, the responder's inbound connection, every 
 revived node."* It also records why it cannot live at session creation: *"`newStream` never dials — it
 only finds an already-open connection."*
 
-> ### ⛔ `SALTANNOUNCE-LATE-1` DOES **NOT** FIX THIS. Measured after rebuilding the artifact.
+### ✅ `DOD-M15-SALTANNOUNCE-LATE-1` — DONE. Reviewed, one HIGH regression of mine found and fixed.
+
+**Verdict quoted:**
+> *"The fix is real and it works. But the refactor that carried it — pulling the inline
+> `onPeerConnect` body out into a named `onCounterpartyAttached` — **silently dropped the one-line peer
+> filter that used to guard it**, and I proved the regression by running the same probe against the
+> parent commit. Every session now treats a *relay* connecting as *the counterparty* connecting."*
+
+**That regression was mine and it was worse than the defect being fixed.** Measured on both trees:
+liveness flipped `unknown` → `alive` for a dead counterparty, and the counterparty's re-dial address
+was overwritten with the **relay's**. The second is the dangerous half — `session.transport.redial.unavailable`
+fires on an **empty** address list, and the list was not empty, it was **wrong**, so the guard that
+names the real state could never fire. The responder has no repair (`acceptSession` never dials the
+counterparty; this path is its only address source). **The operator sees nothing** while every send
+parks. The reviewer's own framing: *"That is not error substitution — it is an error **erasure**."*
+
+**All findings fixed:** the guard restored; the sweep filtered on `status === "open"` (MEDIUM-2);
+the sweep skipped entirely without a counterparty peer id (LOW-3, where `isCounterparty`'s fallback
+would classify the relay). **Caught while writing LOW-3 that a bare `return` there would skip the
+`onPeerDisconnect` registration below** — a worse bug than the one being fixed.
+
+**Test teeth, both directions measured:**
+- Review proved my *"only one in the file that can tell"* test was **also bypassable**: keeping the
+  sweep and its log line but deleting the single call left **all five green**. It now asserts the
+  EFFECTS — the salt is announced, the address is learned — and reddens under that exact one-line
+  bypass. Verified.
+- **The coverage gap that let HIGH-1 through is closed:** 2925 daemon tests stayed green with the
+  guard deleted, because the existing keepalive test pins only the DISCONNECT side. A connect-side
+  test now exists.
+- One assertion of mine was wrong rather than the code — I asserted an exact address where the stored
+  value carries the `/p2p/<peerId>` suffix. **The address was learned.** Fixed to assert the producer's
+  actual shape.
+
+**Gate: 281 files, 2926 tests, 0 failures.** Typecheck (src + tests) and eslint clean.
+
+**⚠️ REVIEW PASS 2 DELIBERATELY NOT SPENT.** The cap allows it; the loop Andre named is
+implement → review → fix → commit → done. The HIGH fix is a one-line guard restoration with a
+dedicated test that is mutation-verified in both directions, so a second pass buys less than it costs
+under the quota. **Recorded as a decision, not an omission** — if this unit is revisited, that is the
+first thing to reconsider.
+
+> ### ⛔ AND IT DOES **NOT** FIX THE DOCUMENT OUTAGE. Measured after rebuilding the artifact.
 >
 > The fix shipped, the spine lane was rebuilt so it runs the new binary, and `j-documents` was re-run:
 >
