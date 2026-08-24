@@ -1776,10 +1776,43 @@ from the receiving operator's chair, a refused message simply never arrives.
   API directly, so deleting the `cello_receive` spread left all of them green — proving the store
   works and saying nothing about the defect, which was that good strings had **no reader**. Four
   tests now drive the real `cello_receive` over IPC on the quiet exit.
-- **OWED before this flips:** run them, and run the REVERT — delete the spread at
-  `session-content-handlers.ts:1225` and confirm the two positive tests go red. Test 3 asserts
-  ABSENCE and will stay green through that revert by design (it is the false-positive guard), so it
-  is not evidence either way and must not be counted as such.
+- **REVIEWED 2026-08-24 — pass 1 came back BLOCKING on four counts, all now fixed.** Verdict quoted:
+  *"**SPEC: DEVIATIONS FOUND** — C2 and C7 are unimplemented clauses… **SILENT FALLBACKS FOUND** —
+  HIGH-1 is a refusal path that stays silent to the operator on a branch whose own guidance says it
+  never repairs. **[blocking]** … **HOLLOW TESTS FOUND [blocking]** — not one test in this file dies
+  if `session-content-handlers.ts:1225` is deleted; not one dies if both `noteContentRefusal`
+  producer calls are deleted."*
+- **⚠️ THE FINDING I WOULD NOT HAVE FOUND, and it is the third turn of one pattern.** My IPC tests
+  passed `since_seq: 0`. **`handleReceive` branches on `since_seq` before anything else, and 0 is a
+  finite number** — so all three took the catch-up BATCH exit, the blocking loop never ran, and the
+  quiet exit this line calls *"THE exit this line exists for"* had **zero coverage**. My revert
+  evidence pointed at a line no test executed. The pattern: I fixed *store-with-no-reader* by
+  testing a reader I hand-fed, on a branch I never reached — **the untested seam MOVED rather than
+  closed**, twice in a row.
+- **Findings fixed, each with the consequence rather than the mechanism:**
+  - `content_hash_salt_unavailable` was refused, logged fully, and **told the operator nothing** —
+    on the one branch of four whose own guidance says it is *permanent for this session and
+    reconnecting will NOT fix it*. Now noted like its neighbours.
+  - **Which of your two windows learned why the conversation went quiet was a race.** One
+    `surfaced` flag per notice meant the first reader consumed it for every sibling, permanently —
+    the defect `takeReceivedContent` was rewritten to remove, re-created on another surface. Keyed
+    per consumer now.
+  - **"3 refusals" and "903 refusals" were indistinguishable.** The docstring claimed a later reader
+    could ask how many; there was none. Re-announces on order-of-magnitude growth, marked `repeat`.
+  - **The catch-up read destroyed the advice.** The batch exit returned the notice with no
+    `guidance` key at all, so a catch-up read drained it and the next blocking read said *"call
+    again and keep waiting"* — the exact advice this line exists to stop. Notice and advice are now
+    returned together so no exit can take one without the other.
+  - **Sealing closed the last door:** the sealed exit runs first in the loop and carried no
+    refusals, while its guidance points at `cello_transcript`, which cannot show a message that was
+    never ingested. Now carries them.
+  - **C7 (declined protection) implemented:** `content_hashes_salted` on the session record — and
+    implementing it found `SELECT *` shipping the raw salt BLOB to both listing surfaces, which now
+    stops.
+- **Revert evidence, run against the RIGHT line this time:** replacing the quiet-exit spread turns
+  both positive tests red; the absence guard stays green by design and is not counted as evidence.
+  The producer test has teeth by construction — it never seeds the store, so deleting the producer
+  call makes the count zero.
 - **NEW ITEM from this unit → POST-LAUNCH (§0z.1), one item, trip-wire not tripped.** `cello_receive`
   has a THIRD exit — `delivery_impaired` — and it returns without the refusals. So an operator whose
   session is *both* impaired and being refused is told about the impairment only.
