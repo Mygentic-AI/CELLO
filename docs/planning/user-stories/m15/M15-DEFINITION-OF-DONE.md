@@ -364,11 +364,15 @@ Found by the `DOD-M15-SURFACE-1` review. Not a break — it is the reverse of on
 |---|---|---|
 | **CLI banner glued into JSON** (`j-refresh`, `j-sign`, `j-tofn-dkg`×2, `j-tofn`, `j-relaysig`) | 6 | ✅ **all green** |
 | **Stale assertions in `j-spine`** — state vocabulary the product removed, plus one local race | 5 | ✅ **all green, fixed here** |
-| **Salt-split / no agreement** (`j-documents` 7, `j-stale-session` 1) | 8 | 🔴 **one live defect** — announce never fires |
+| ~~**Salt-split / no agreement** (`j-documents` 7, `j-stale-session` 1)~~ | 8 | ⬇️ **OUT OF GATE** (documents ruling, Decision #16). Real and unfixed; the salt design decision filed for Andre is retired with it. **Not passing — out of scope.** |
 | ~~**Tests compute the UNSALTED hash** (`j-content` 5)~~ **✅ `j-content` 10/10 — and this cause label was wrong** | 5 | ✅ **all green.** Not one cause with five instances: **four separate defects** — an unsigned deposit shape SEC-1 refuses, a deposit of the wrong STRING (`[[OVER]]` is in-band), a retired event name (`ingest_failed` → `annexed`), and a wait latching onto the first of several recover sweeps |
 | **Portal database** (`ECONNREFUSED`) | 2 | ✅ container up |
 | **Named lines already owned** (`j-unilateral`×2, `j-upgrade-bilateral` → `UNILATERAL-NOTARIZE-1`) | 3 | 🅿️ owned elsewhere |
-| **Individually-caused** (~~`j-end` 1~~ **✅ 10/10**, `j-remove` 1, `j-multiplayer` 4 timeouts) | 6 | 🔎 filed below; `j-multiplayer`'s four are `DOCACCEPT-UNBOUNDED-1` |
+| **Individually-caused** (~~`j-end` 1~~ **✅ 10/10**, `j-remove` 1 → post-launch, ~~`j-multiplayer` 4~~ ⬇️ **out of gate**) | 6 | `j-multiplayer`'s four are all document operations (`DOCACCEPT-UNBOUNDED-1`), so they leave with Decision #16 |
+
+> **⚠️ AFTER DECISION #16, THIS LANE'S REMAINING IN-GATE FAILURE IS `j-suspend-tofn` — THE KILL SWITCH — ALONE.**
+> Every other red row above is now green, out of gate, or already post-launch. **Do not read that as the
+> document journeys passing:** they are unfixed and out of scope, which is a different statement.
 
 > ### ⬇️ OUT OF GATE (Andre 2026-08-24, documents ruling) · was 🟡 `DOD-M15-DOCACCEPT-UNBOUNDED-1` — ACCEPTING A DOCUMENT HANGS IF ONE HOLDER IS UNREACHABLE
 >
