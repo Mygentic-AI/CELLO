@@ -150,7 +150,49 @@ describe("J-SUSPEND-TOFN — quorum-aware suspension (DOD-SUSPEND-1)", () => {
       await sleep(300);
       blocked = (await connA.call("cello_initiate_session", { target_pubkey: pubX })) as { ok?: boolean; reason?: string };
     }
-    expect(blocked.ok, `2 suspended directories must block signing: ${JSON.stringify(blocked)}`).toBe(false);
+    /**
+     * ⚠️ ASSERT THE SETUP TOOK EFFECT BEFORE ASSERTING THE OUTCOME.
+     *
+     * This test asserted only the outcome, so when it failed with `ok:true` the result was
+     * unreadable: it could mean the threshold was bypassed (a security defect), or that nodes 1 and 2
+     * never observed the suspension at all (a plumbing or replication fact). **Those are completely
+     * different findings and the assertion could not tell them apart** — which is why this failure sat
+     * on the line as *"a test encoding the wrong threshold"* instead of being diagnosed.
+     *
+     * The directory says which, in its own log:
+     *   - `frost.ceremony.refused.revoked` — the node SAW the suspension and refused its share.
+     *   - `frost.suspension.uncheckable`  — the node has no local profile for this agent, so it
+     *     signed BLIND. `#isAgentPaused` calls that out as the known replication gap.
+     *   - neither — the client never asked this node, and the question is quorum selection.
+     *
+     * Asserted BEFORE the block, so a setup that did not land reports itself rather than being
+     * reported as a missing block.
+     */
+    const nodeSaw = (n: number): string =>
+      cluster.directories[n]!.output.includes("frost.ceremony.refused.revoked") ? "refused"
+        : cluster.directories[n]!.output.includes("frost.suspension.uncheckable") ? "uncheckable(signed blind)"
+        : "silent(never asked)";
+    const suspendDiag =
+      `node1=${nodeSaw(1)} node2=${nodeSaw(2)}` +
+      `\n--- node1 frost lines ---\n${cluster.directories[1]!.output.split("\n").filter((l) => l.includes("frost.")).slice(-15).join("\n")}` +
+      `\n--- node2 frost lines ---\n${cluster.directories[2]!.output.split("\n").filter((l) => l.includes("frost.")).slice(-15).join("\n")}`;
+
+    for (const n of [1, 2]) {
+      expect(
+        nodeSaw(n),
+        `node ${n} must have OBSERVED the suspension and refused its share. "uncheckable" means it ` +
+          `holds no profile for this agent and signed blind — the replication gap #isAgentPaused ` +
+          `documents, not a threshold failure. "silent" means the client never asked it, which makes ` +
+          `this a quorum-selection question. ${suspendDiag}`,
+      ).toBe("refused");
+    }
+
+    expect(
+      blocked.ok,
+      `2 suspended directories must block signing — and BOTH refused their shares, so this is a ` +
+        `genuine threshold bypass rather than a suspension that never landed: ` +
+        `${JSON.stringify(blocked)}\n${suspendDiag}`,
+    ).toBe(false);
     // EXACT reason — not merely "not agent_suspended" (which accepts ~18 unrelated/transient failures).
     // The client-side FROST signer returns DIRECTORY_BELOW_THRESHOLD; the delegated session-request path
     // collapses a sub-threshold ceremony to a null signature, which the directory's ClientDelegatedSigner
