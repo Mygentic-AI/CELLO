@@ -257,6 +257,32 @@ from this document.
 > libp2p stream to a directory; its redial does not recover it; a restart does. Nothing else about
 > the mechanism is known, because nothing observes that connection between seals.
 
+**Relays rolled onto `relay:e0aae57a…` 2026-08-24 ~02:15 UTC — `DOD-M15-SEALWIRE-1` bullets 3+4, the
+relay half.** Both regions, one at a time per `infra/CLAUDE.md` §2, `-target` on the relay template +
+MIG only. Instances `cello-gcp-relay-use1-7qkx` and `cello-gcp-relay-euw1-v468` replaced `-1593` /
+`-v8lp`. `relay_image_tag` moved off `0d00e3bf…`.
+
+**What it changes:** the relay now ACCEPTS `content_bytes` on a `hash_submit` — but only on a `ctrl`
+leaf, and only when the bytes decode as a SEAL payload naming that session — and FORWARDS it to the
+directory in `seal_submission`. Alone this does nothing observable: it accepts a field the previous
+build ignored and passes it to a directory that, until the directory roll below, does not read it.
+That inertness is deliberate (receiver-first), and it is why the relay went first.
+
+⚠️ **The counterbalance, because this is the one thing the protocol exists to prevent.** A relay must
+never see message content (INV-3). It is safe for a SEAL ctrl leaf only: the payload is `[session_id,
+final_root, close_timestamp, "PENDING"]` and the relay already knows all four — it assigned the
+session, built the tree the root comes from, and stamped the leaf. Content on any other leaf kind is
+refused at the wire, not filtered downstream.
+
+**Capacity probed BEFORE each roll, not after a failure** — `us-east1-b/e2-small` and
+`europe-west1-b/e2-small` both created and deleted a throwaway instance first, per the
+`ZONE_RESOURCE_POOL_EXHAUSTED` playbook below. Both had capacity; no downsize was needed. This is the
+step that turns "we might not get the instance back" into a known answer before the MIG deletes it.
+
+**Health confirmed by the DIRECTORIES' own probe, not by HTTP** — `relay.health.check.passed` per
+`relayId`, both relays back to baseline in a clean 60s window before the next node was touched. A
+plain GET on the relay answers `000` from outside the VPC by design and cannot be used.
+
 **Relays rolled onto `relay:7838bbeb…` 2026-08-19 ~06:15 UTC** — instrumentation only, no behaviour
 change (commit `7838bbeb`). One region at a time per `infra/CLAUDE.md` §2, `-target` on the relay
 template + MIG only. Instances `cello-gcp-relay-use1-7453` and `cello-gcp-relay-euw1-6pjx` replaced

@@ -4,7 +4,7 @@
 environment = "dev"
 
 # Immutable commit-SHA tag built by Cloud Build. Never a moving tag — see infra/cloudbuild/*.yaml.
-directory_image_tag = "0d00e3bf57adf62a008f49e95fa8395137395caf"
+directory_image_tag = "e0aae57a62b4229204ddfff53f94844afa33606c"
 
 # One node = one region = one independent deployment. The map key is the region, which makes two
 # nodes in one region unrepresentable rather than merely discouraged.
@@ -96,7 +96,7 @@ relay_primary_directory = "gcp-use1"
 # DOD-RELAY-KEEPALIVE-1 / DOD-GCP-RELAY-DRIFT-1. Built by Cloud Build 8eaddd07 from the GitHub
 # repository resource at this exact revision — not from a local tree — and verified to resolve
 # @cello-protocol/transport@0.0.44, the version below which this relay refuses to start.
-relay_image_tag = "0d00e3bf57adf62a008f49e95fa8395137395caf"
+relay_image_tag = "e0aae57a62b4229204ddfff53f94844afa33606c"
 
 relay_nodes = {
   us-east1 = {
