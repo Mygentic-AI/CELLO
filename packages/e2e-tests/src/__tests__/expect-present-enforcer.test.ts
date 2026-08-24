@@ -75,11 +75,48 @@ function scanSpineFiles(): Hit[] {
       // `expectMatches(...)` is the fix, not an instance of the problem.
       if (line.includes("expectMatches(")) return;
       const subject = line.slice(line.indexOf("expect(") + "expect(".length, line.indexOf(".toMatch("));
-      // The three visible marks of a subject that can be absent.
+      /**
+       * ⚠️ THE FIRST VERSION OF THIS SCAN WAS AN OVER-FLAGGING MACHINE, and its first run proved it.
+       *
+       * I flagged any `.toMatch` with a cast ANYWHERE in the six lines above it. That caught thirteen
+       * sites, and every one was a false positive: subjects from `waitForLine()` (returns
+       * `Promise<string>`), from `daemon.output` (a string), and from `String(...)` (coerced). The
+       * cast six lines up had nothing to do with the subject.
+       *
+       * That is precisely the failure I argued against for the other lane's layering scan an hour
+       * earlier — *"an assertion that fires on prose is wrong in the direction that matters."* A scan
+       * that cries wolf gets an exemption entry per site and then gets ignored.
+       *
+       * So a cast only counts when it BINDS THE SUBJECT: find the subject's own declaration in this
+       * file and look at THAT line. `?.` and `!` are read off the subject directly, where they are
+       * unambiguous.
+       */
+      const bare = subject.trim();
+      // `String(x)` cannot be undefined at the matcher; `.output` is a string by construction.
+      if (bare.startsWith("String(") || bare.includes(".output")) return;
+
       const optionalChain = subject.includes("?.");
       const nonNullAssert = /[A-Za-z0-9_\]]!\s*[.,)]/.test(subject) || subject.includes("!.");
-      const castNearby = lines.slice(Math.max(0, i - 6), i).some((l) => / as \{/.test(l));
-      if (optionalChain || nonNullAssert || castNearby) {
+
+      /**
+       * A cast counts only if it declares THIS subject's root identifier — AND the declaration does
+       * not already guarantee a defined result.
+       *
+       * The narrowed scan still flagged three sites whose declarations wrap the cast in `String(...)`
+       * or supply a `?? { ... }` default. Both make the result defined by construction, so the cast
+       * is real and the hazard is not. Refined here rather than added to EXEMPT: "the declaration
+       * guarantees a string" is a PROPERTY, and encoding it keeps the exemption list for genuine
+       * judgement calls instead of filling it with sites the scan should have understood.
+       */
+      const root = /^([A-Za-z_$][A-Za-z0-9_$]*)/.exec(bare)?.[1];
+      const decl = root === undefined
+        ? undefined
+        : lines.find((l) => new RegExp(`\\b(?:const|let|var)\\s+${root}\\b`).test(l));
+      const declGuaranteesDefined = decl !== undefined && (decl.includes("String(") || decl.includes("??"));
+      const castBindsSubject =
+        decl !== undefined && /\bas\s*\{/.test(decl) && !declGuaranteesDefined;
+
+      if (optionalChain || nonNullAssert || castBindsSubject) {
         hits.push({ file, line: i + 1, text: line });
       }
     });
