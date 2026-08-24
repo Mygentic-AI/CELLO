@@ -292,6 +292,59 @@ async function awaitContent(
 }
 
 describe("J-MULTIPLAYER — the built artifact keeps its layer boundary", () => {
+  /**
+   * ─── Why this scan strips comments, and why that is the FIX rather than a loosening ────────────
+   *
+   * This assertion asks whether the document layer is COUPLED to the relay. It was answered with
+   * `src.includes(word)` over the built `.js` — and `tsc` preserves comments, so it matched the word
+   * `parked` inside a doc comment in `document-reconcile-scheduler.ts` that explains where an absent
+   * holder's notice comes from. Prose, not a dependency. The journey was red on it.
+   *
+   * **The tempting fix — reword the comment — is the wrong one**, and `CELLO_Coder_1` put it better
+   * than I did: a layering assertion that fires on prose is not merely costly, it is wrong in the
+   * direction that matters. It keeps failing when the prose is good, and it keeps PASSING when the
+   * coupling is real and named something else. Rewording would also teach the next person that
+   * explaining a neighbouring subsystem is a violation, which is a worse outcome than the red.
+   *
+   * ─── What this scanner can and cannot see, stated rather than assumed ──────────────────────────
+   *
+   * ONE pass tracks comment state and string state together. Two passes each guess about the other:
+   * stripping comments first eats the rest of a line after a `//` that lives inside a string
+   * literal, and that exact defect cost real time in `MIGRATION-GUARD-1`.
+   *
+   * **Known limitation, deliberately accepted:** it does not model regex literals, so a regex
+   * containing an unpaired quote could desynchronise the string state and hide code after it. That
+   * is a false NEGATIVE. It is the right way round to be wrong here — a false positive on prose gets
+   * "fixed" by mangling a comment, while a false negative leaves the assertion no weaker than the
+   * `includes()` it replaces, which could not see coupling under a different name either.
+   */
+  function stripJsComments(src: string): string {
+    let out = "";
+    let i = 0;
+    let quote: string | null = null;
+    while (i < src.length) {
+      const c = src[i]!;
+      const next = src[i + 1];
+      if (quote) {
+        if (c === "\\") { out += c + (next ?? ""); i += 2; continue; }
+        if (c === quote) quote = null;
+        out += c; i += 1; continue;
+      }
+      if (c === '"' || c === "'" || c === "`") { quote = c; out += c; i += 1; continue; }
+      if (c === "/" && next === "/") { while (i < src.length && src[i] !== "\n") i += 1; continue; }
+      if (c === "/" && next === "*") {
+        i += 2;
+        while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i += 1;
+        i += 2;
+        // Keep a separator so `a/*x*/b` cannot fuse into one token and dodge a word boundary.
+        out += " ";
+        continue;
+      }
+      out += c; i += 1;
+    }
+    return out;
+  }
+
   it("SYNC-AC17: the document layer's built artifact carries no relay vocabulary", async () => {
     const { readFileSync, readdirSync } = await import("node:fs");
     const distDir = join(CELLO_CLIENT_ROOT, "core/daemon/dist");
@@ -304,9 +357,12 @@ describe("J-MULTIPLAYER — the built artifact keeps its layer boundary", () => 
     );
     expect(layerFiles.length).toBeGreaterThan(0);
     for (const f of layerFiles) {
-      const src = readFileSync(join(distDir, f), "utf8");
+      const src = stripJsComments(readFileSync(join(distDir, f), "utf8"));
       for (const word of ["session_sealed", "relay_session_gone", "parked", "witnessed"]) {
-        expect(src.includes(word), `${f} speaks relay vocabulary: ${word}`).toBe(false);
+        // Word-boundary, not substring: `witnessed` must not fire on `unwitnessedCount`, and a
+        // substring hit tells you a character sequence exists, not that this layer speaks the word.
+        const usesWord = new RegExp(`\\b${word}\\b`).test(src);
+        expect(usesWord, `${f} speaks relay vocabulary: ${word}`).toBe(false);
       }
     }
   });
