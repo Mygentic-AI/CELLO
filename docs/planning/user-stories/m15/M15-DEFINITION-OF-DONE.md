@@ -79,7 +79,43 @@ evidence, and re-scope the lines each one touches.
 
 ---
 
-# Tier 1 — Claims (no dependencies; starts immediately)
+# Tier 1 — Claims — 🅿️ DEFERRED TO THE END OF THE MILESTONE (Andre, 2026-08-24)
+
+> ## 🛑 READ THIS BEFORE FLAGGING ANYTHING IN THIS SECTION AS URGENT.
+>
+> **This whole section is deferred. It is not "starts immediately" any more.** It runs LAST, after the
+> encryption and receipt work, alongside the `AUDIT-ME.md` rewrite.
+>
+> **Andre's reasoning, in his words, so nobody re-litigates it:**
+> *"Why would we want to write docs about the code when we're massively modifying the code? Do it at
+> the end. Super obvious. There are NO READERS but me and AI coders. No one is using it. It is still
+> in stealth."*
+>
+> That is a stronger argument than the one this section was originally written on: documenting code
+> you are actively rewriting is work you do twice, and the exposure from a false sentence is
+> proportional to who reads it — which today is nobody outside this repo.
+>
+> **This deferral OUTRANKS the priority framing and the enforcer below it.** The claim scanner still
+> fails the build on an unlisted claim; that is correct and stays, because it stops the backlog
+> GROWING. It is not a signal that the backlog must be worked now.
+>
+> ### Why this banner exists at the section level rather than inside one line
+> The deferral was previously recorded as a note inside `DOD-M15-LEDGER-1`, under a heading that said
+> *"no dependencies; starts immediately"* and above a build-failing enforcer. **Every agent that read
+> the file surfaced it to Andre as urgent anyway** — repeatedly, because a buried note does not
+> outrank the framing around it. Correcting that framing is the fix; answering the question again is
+> not.
+>
+> **⚠️ ATTRIBUTION CORRECTED.** `DOD-M15-LEDGER-1`'s park previously read *"(Andre, 2026-08-23)"*.
+> **He did not make that call.** He deferred `AUDIT-ME.md` only; the remaining seven surfaces were
+> parked by a lane *"on the same trigger as `AUDITME-1`"* — a lane decision recorded under his name.
+> He has now ruled it, on 2026-08-24, and it stands — but the earlier attribution was wrong and a
+> ruling wearing the wrong name is unauditable.
+>
+> **What ships in the meantime, stated rather than hidden:** seven of nine surfaces are unswept, and
+> at least one shipped file carries a known-false claim — `adapter-claude-code/SKILL.md:170`'s *"the
+> notarized bilateral receipt both sides agree on"*, which contradicts `implies_assent: false`.
+> Deleting that phrase is ungated and can be taken at any time. Andre has been told and left it.
 
 Everything already readable by someone outside — the public repo, the shipped package, the product's
 own output. The unpublished investor and GTM material is **not** in this tier (M15-PROCEDURE §0a.1).
@@ -88,8 +124,10 @@ own output. The unpublished investor and GTM material is **not** in this tier (M
 > **Two of nine surfaces done AND reviewed (→ Entry S2).** Nine findings, five blocking, all fixed.
 > README 19→2, `registry.ts` 37→4. A row now carries the verbatim text it accounts for and the
 > count is derived from it — the reviewer had zeroed a whole surface with an invented row past both
-> old guards. **Remaining seven surfaces PARKED (Andre, 2026-08-23): trigger — after Tier 4, with
-> `AUDITME-1`, as the last Tier 1 work.** Includes `adapter-claude-code/SKILL.md:170`'s *"both sides
+> old guards. **Remaining seven surfaces DEFERRED — see the section banner above.** Ruled by Andre
+> 2026-08-24; runs last, after the encryption and receipt work, with `AUDITME-1`. *(The earlier
+> "(Andre, 2026-08-23)" stamp here was wrong — that was a lane decision recorded under his name. He
+> has since ruled it and it stands.)* Includes `adapter-claude-code/SKILL.md:170`'s *"both sides
 > agree on"*, which contradicts `implies_assent: false` and is an ungated deletion when unparked.
 Build the claims ledger (M15-PROCEDURE §1d) as a section of this document. One row per claim: its
 current text, where it appears, and its disposition — **made true**, **withdrawn**, or **disclosed as
