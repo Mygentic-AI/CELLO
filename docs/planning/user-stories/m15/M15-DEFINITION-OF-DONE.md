@@ -2936,7 +2936,20 @@ root means. Both repos; version-bump ACs on both sides.
 > labelled **verified** — and we did not verify it, we produced it. **Direction decides first**, with
 > the negative asserted rather than commented.
 > **REMAINING (CELLO_Coder_1, holds the file):** carry `witnessed.sender_signature` from the submit
-> site to the sent transcript write.
+> site to the sent transcript write. ✅ **DONE** — plus my five call-site wirings.
+>
+> **⚠️ NEW ITEM (1 of the trip-wire's 3) — A SIXTH SENT WRITER IS UNWIRED, and it is the one that
+> matters most.** `session-node-manager.ts:8669`, the **held-content RELEASE** path. When our own
+> send lands behind a gap, `placeOwnLeaf` returns `placed: false` and **no transcript row is written
+> at the time**; the row is written later, here, on release — with **no authorship**.
+> **The signature EXISTS for it.** The hold happens after the submit, so a held message was signed
+> exactly like an unheld one. So a message that happened to arrive behind a gap ends up
+> **permanently less provable than the identical message that did not**, for a reason with nothing to
+> do with authorship — and the transcript gives the auditor no way to tell that is why.
+> **Not a lie** (the row stores no proof and claims none), which is why this is an item and not a
+> defect. **The fix is to carry the authorship into the held entry** and pass it on release.
+> **NOT taken now:** that file is under review for this same bullet, and editing it mid-review is how
+> the last two rounds of churn started.
 - **The sender's signature is stored with each leaf** (Decision 6(b)). Today the stored record has
   **no sender signature and no sender field** — a transcript row holds the message and a direction,
   and attribution comes entirely from local session state. The record must prove authorship
