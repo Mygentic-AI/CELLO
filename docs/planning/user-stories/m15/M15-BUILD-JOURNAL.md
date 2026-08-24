@@ -37,69 +37,44 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Coder_1 (overwrite in place; CELLO_Support must not edit)
 
-> ### 🟡 `SEALWIRE-1` bullets 1, 2, 6, 7 CLOSED. Bullets 3+4+5+8 remain. Both repos clean, pushed.
-> **Bullet 6 (the salt) is DONE — all six B2b-2 constraints, both review passes spent** (→ Entries
-> 49–52). A session holding an agreed salt now hashes under `hmac-sha256-salt-v1`.
-> **Bullet 7 (delete the dead `seal_attempt` path) is DONE, pass 1 findings fixed** (→ Entry 53);
-> **pass 2 is OUT on the fix diff.** Gate: client 2837, directory 1133, relay 235, interfaces 63.
+> ### 🟢 `SEALWIRE-1`: bullets 1, 2, 3, 4, 6, 7, 8 CLOSED. **Bullet 5 is REOPENED — mine.**
+> Bullets 3+4 are **live in GCP production** and the check has been observed on a real seal
+> (`seal.final_root.verified coverage=both`). Bullet 8's assertion went green on its first live seal.
+> Both repos clean and pushed. Gate on `core/daemon`: **276 files, 2887 tests, 0 failures.**
 
-- **🟡 BULLETS 3+4 — THREE OF FOUR LEGS DONE. What remains is WIRING THE CALL.**
-  1. **Verifier** (`packages/directory/src/seal-final-root.ts`) — built, two review passes, mutants caught.
-  2. **Relay wire acceptance** — `content_bytes` admitted on ctrl leaves only, refused on any other
-     kind at the wire, payload decoded and session-bound. Two passes.
-  3. **Relay store + forward** — stored on the leaf and carried into `SealData`. Two passes.
-  4. **⬅️ NEXT: invoke `verifySealFinalRoots` from the directory's seal path**, and delete the
-     deferral block in the same diff — bullet 3 names that explicitly.
-- **🚨 THE PRECONDITION FOR STEP 4, and it is the thing to get wrong.** The verifier proves the
-  payload matches what `structure1_cbor` says. It does **NOT** prove `structure1_cbor` was signed by a
-  participant — that is `verify(s2.sender_pubkey, structure1_cbor, s2.sender_signature)` plus a
-  participant check, both of which live in the caller. **Wire it only from a path that has already
-  done both**, or a relay can mint a ctrl leaf with a key it holds and every comparison becomes the
-  relay checking itself. Passing the two participant pubkeys in also turns half of that precondition
-  into an enforced check — `verifySealFinalRoots` takes an optional roster.
-- **🟡 BULLET 8 — `j-upgrade` green; the other two are BLOCKED, not unrun.** `j-unilateral` and
-  `j-upgrade-bilateral` are converted and pushed but cannot pass until
-  `DOD-M15-UNILATERAL-NOTARIZE-1` is fixed: the attestation fires, the notarization never does. Do
-  not spend 13 minutes each re-confirming it — that has been done twice.
-- **🟡 BULLET 5 and the rest of BULLET 8 are CELLO_Support's**, agreed 2026-08-23.
-- **THE OLD ENTRY, kept because its precondition is the one above:**
-- **🟡 BULLETS 3+4: THE VERIFIER IS BUILT, TESTED AND FALSIFIED — AND NOT INVOKED.** `seal-final-root.ts`
-  takes the SEAL payload bytes, binds them to the hash the client SIGNED (decoded from
-  `structure1_cbor`, **not** `s2.content_hash` — that was pass 1's HIGH), and compares the client's
-  `final_root` against a root rebuilt from the relay's leaves. **The circular check at
-  `directory-node.ts` is untouched and is still the only root check that runs.** Remaining: the relay
-  must carry `content_bytes`, then the call is wired and the deferral comment deleted.
-- **⚠️ THE PRECONDITION THE VERIFIER CANNOT CHECK.** It proves the payload matches what
-  `structure1_cbor` says; it does NOT prove `structure1_cbor` was signed by a participant. That is
+- **⬅️ NEXT — BULLET 5's HELD-PATH TEST. The one thing outstanding on `SEALWIRE-1`.**
+  **Do not re-litigate whether bullet 5 is covered; it is measurably not.** Two mutations, same file,
+  opposite results:
+  - `recordTranscriptMessage(..., sentAuthorship(sendResult))` → `undefined`: **RED** (1 failed / 2 passed)
+  - `placeOwnLeaf(..., "msg", sentAuthorship(sendResult))` → `undefined`: **GREEN** (3 passed)
+  **Why:** on the DELIVERED path `placeOwnLeaf`'s authorship argument is dead by construction — the
+  row's proof comes from `recordTranscriptMessage` below it. It is load-bearing in exactly one case,
+  when the leaf is **HELD**, and there `recordTranscriptMessage` never runs at all because it sits
+  inside `if (placed.placed)`. **The test to write: a WITNESSED send that is held behind a sequence
+  gap, then released, whose released row carries a signature.** `two-connection-fixture` accepts a
+  replacement `node`; the acking relay pattern is in `dod-m15-sealwire-1-sent-proof-wired.test.ts`.
+- **🟡 `DOD-M15-SALTSPLIT-1` — BUILT AND GREEN, UNIT REVIEW IN FLIGHT.** Not ✅ until the verdict is
+  quoted here. `01a23c1..0d92725`. A peer closing salt adoption used to leave this side salted, and
+  the peer then refused every message forever — the 60s seal timeout `CELLO_Support` traced. Unspent
+  salt is now discarded (row **and** cache); a spent one never is, and `session.salt.split` fires at
+  ERROR. **It PREVENTS the split, it does not REPAIR an already-split session** — say it that way.
+- **⚠️ THE TYPE GUARD ON `placeOwnLeaf` IS A HALF-GUARD, and the held-path test is its other half.**
+  `authorship` is now required (`SentAuthorship | undefined`), which was measured both ways:
+  omission → `Expected 8 arguments, but got 7`; **substitution of `undefined` for the real proof →
+  0 errors.** The type system cannot see substitution. Nothing else can, until that test exists.
+- **🚨 THE PRECONDITION FOR THE SEAL VERIFIER, kept because it is still the thing to get wrong.**
+  `verifySealFinalRoots` proves the payload matches what `structure1_cbor` says. It does **NOT**
+  prove `structure1_cbor` was signed by a participant — that is
   `verify(s2.sender_pubkey, structure1_cbor, s2.sender_signature)` plus a participant check, both in
-  the caller. **Wire it only from a path that has already done both** — a loud block in the module
-  says so, because without them a relay can mint a ctrl leaf with a key it holds and every comparison
-  becomes the relay checking itself.
-- **⚠️ BULLETS 3 AND 4 ARE ONE UNIT — do not scope them separately.** Bullet 4 (the directory's
-  circular root check) cannot be fixed alone: it rebuilds a root from the leaf array the relay
-  supplied, with the same code, and compares it to the root that same relay supplied — so it
-  validates ARITHMETIC, not the relay, and a relay that drops or reorders a leaf and reports the
-  matching root passes every time. Its replacement is bullet 3's client-signed `final_root`, which
-  needs the SEAL payload on the wire. The check itself is KEPT (a mismatch still means real
-  corruption); what changes is that it stops being the integrity guarantee.
-- **🚨 `DOD-M15-SEALFINAL-1` DOES NOT EXIST.** The bullet-4 comment used to defer to it; it appears
-  in no DoD, no journal, and no other file. Corrected to point at bullet 3, on the same line. If you
-  see that identifier anywhere else, it is the same dangling pointer — a reference to nothing reads
-  as *tracked* and stops the reader looking.
-- **THE TWO LESSONS OUT OF BULLET 6, both about how work was CHECKED rather than what it does:**
-  - **Mutate the PRODUCER of a state, not only its consumer.** A fixture discarded its peer-connect
-    handler, so the one production line registering a salt agreement — the line deciding whether
-    salting can *ever* turn on — could be deleted with the whole suite green. Eight mutants all hit
-    the consumer.
-  - **A fix pass is where regressions hide.** Pass 2's HIGH was *created by pass 1's fix*: a
-    session-scoped flag released a claim held by a sibling's in-flight message.
-- **AND OUT OF BULLET 7: a protocol has TWO ends.** I deleted the directory half of a dead exchange
-  and left the relay half — whose only trigger was the reply I had just removed — more orphaned than
-  before. Grep for the frame, then grep for what the frame's REPLY triggers.
-- **The published `@cello-protocol/client@0.0.50` still ships a `seal_attempt` sender** and is
-  npm-deprecated. Nothing installs it (connect pulls crypto/transport/interfaces only), and its send
-  is fire-and-forget, so an ignoring directory is indistinguishable from an acking one. Verified
-  against the registry and the tarball, not the repo — **audit what SHIPS, not what compiles.**
+  the caller. **Only invoke it from a path that has already done both**, or a relay can mint a ctrl
+  leaf with a key it holds and every comparison becomes the relay checking itself. Passing the two
+  participant pubkeys turns half of that precondition into an enforced check.
+- **🅿️ FILED, AWAITING ANDRE — do not start these.** `NOTCARRIED-REFUSE-1`,
+  `SEALROOT-UNILATERAL-1`, `SEALREJECT-MUTE-1`, `SEALROSTER-FEDERATED-1`, `AC009-INTERMITTENT-1`,
+  `SCREENED-GAP-SEALED-1`, `HELD-AUTHORSHIP-1`, `SCREENER-FALSEPOS-1`.
+- **🟡 THE SPINE LANE IS `CELLO_Support`'s ON REQUEST.** They want the full 35 journeys and have
+  revised the estimate from five hours to ~90 minutes (the `agentName` batch ran ~65s each; the
+  document journeys are the slow ones). **Ping them when the vitest slot is free.**
 
 ## RESUME STATE — CELLO_Support (overwrite in place; CELLO_Coder_1 must not edit)
 
