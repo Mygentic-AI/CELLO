@@ -1337,7 +1337,41 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > behaviour, not vocabulary drift. `content.delivery.acked` fired twice in the run, just not for the
 > hash the test waited on.
 >
-> #### 🔎 RUN IN ISOLATION 2026-08-24: 5 failed / 5 passed — and it is NOT a short timeout
+> #### ✅ 2 OF 5 FIXED, AND THE OTHER THREE HAVE A DIFFERENT CAUSE — measured, not assumed
+>
+> **Fixed (both the same defect):** the dedup test and the ACK ladder computed
+> `contentHashHex(...)` — `SHA-256(0x00 ‖ content)`, the **unsalted** hash — then waited for a value a
+> salted session never writes. Both now read the hash off the daemon's own event. **The ACK ladder's
+> fix also repaired a VACUOUS assertion:** it asserts the content was NOT parked, keyed on that hash —
+> with a hash the daemon never uses, it could only ever pass whatever the product did.
+>
+> **⚠️ AND MY "ONE CAUSE, FOUR MORE SITES" WAS WRONG. Correcting it rather than letting it stand.**
+> The dedup test now advances *past* the hash and fails on something else entirely:
+>
+> ```
+> content.recover.ingest_failed   reason: "unsigned_envelope"
+> content.recover.unauthenticated
+> ```
+>
+> **These tests deposit through the raw `content_park_deposit` IPC shortcut, which produces no sender
+> signature.** `authenticateParkedEntry` refuses that — correctly. `park-envelope.ts` calls it *"the
+> ATTACKER shape"* and the refusal is deliberate: production never parks that way, it parks through
+> `#parkContent`, which builds a signed v2/v3 envelope. **So this is a test shortcut invalidated by a
+> security tightening — not a product defect, and nothing to do with hashing.**
+>
+> The auto-recover test cannot be the hash cause either: it **injects** its hash through
+> `enqueue_awaiting_content` rather than waiting for one.
+>
+> **THE FIX SHAPE, for whoever takes it:** park via a **real send** to an offline recipient — the path
+> `DOD-MSG-3 (send park)` already exercises green in the same file — instead of the IPC shortcut. That
+> produces the signed envelope the recover path requires. Hand-building one in the test would mean
+> reproducing `buildParkContentTbs` and the sender's signature, which is a second implementation of a
+> security-critical encoder in a test.
+>
+> **Assuming a confirmed cause carried to everything that looked similar was the error. Measuring each
+> was the correction** — and it is the same trap this line has now sprung three times.
+
+#### 🔎 RUN IN ISOLATION 2026-08-24: 5 failed / 5 passed — and it is NOT a short timeout
 >
 > **The batch run showed 3 failures; alone it shows 5.** So there is genuine cross-test interaction in
 > this file — worth knowing before anyone tunes a timeout to make a number move.
