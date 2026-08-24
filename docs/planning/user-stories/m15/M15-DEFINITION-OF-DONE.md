@@ -1813,6 +1813,22 @@ from the receiving operator's chair, a refused message simply never arrives.
   both positive tests red; the absence guard stays green by design and is not counted as evidence.
   The producer test has teeth by construction — it never seeds the store, so deleting the producer
   call makes the count zero.
+- **NEW ITEM #2 → POST-LAUNCH (§0z.1). Trip-wire at 2 of 3; a third stops this unit.** The clause
+  says *"EVERY inbound content refusal in `ingestReceivedContent`"*. **Three are wired**
+  (`content_hash_alg_unknown`, `content_hash_mismatch`, `content_hash_salt_unavailable`) — the
+  verification refusals this line was written about. `ingestReceivedContent` has **roughly eight**
+  `ok:false` exits in total: `session_orphaned`, `session_committed`, `sender_unresolved`,
+  `session_size_limit_exceeded` (×2), `inbound_screen_blocked`, `transcript_write_failed`.
+  - **NOT claimed to be silent — I checked one and it is not.** `transcript_write_failed` routes
+    through the undeliverable/impaired machinery, and its own comment describes closing exactly this
+    defect there: *"Reporting `ok: true` here is what let a local SQLCipher failure surface, 30
+    seconds later and one subsystem away, as 'no content arrived — keep waiting'."* So the remaining
+    exits need checking **individually**, and the honest statement is that their operator surface is
+    unknown, not absent.
+  - **Post-launch because the unforgiving case is now covered.** The one that is permanent and
+    affects EVERY message from a peer — version skew — is wired. A screening block is a deliberate
+    refusal with its own policy surface, and a size-limit refusal is a local guard, not a silent
+    conversation death.
 - **NEW ITEM from this unit → POST-LAUNCH (§0z.1), one item, trip-wire not tripped.** `cello_receive`
   has a THIRD exit — `delivery_impaired` — and it returns without the refusals. So an operator whose
   session is *both* impaired and being refused is told about the impairment only.
