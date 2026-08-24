@@ -172,8 +172,23 @@ describe("J-SUSPEND-TOFN — quorum-aware suspension (DOD-SUSPEND-1)", () => {
       cluster.directories[n]!.output.includes("frost.ceremony.refused.revoked") ? "refused"
         : cluster.directories[n]!.output.includes("frost.suspension.uncheckable") ? "uncheckable(signed blind)"
         : "silent(never asked)";
+    /**
+     * ⚠️ POSITIVE CONTROL ON THE EVIDENCE ITSELF. "silent" is only meaningful if this node's stdout is
+     * being captured at all — an empty buffer reads identically to a node that was never asked, and
+     * that is precisely the confusion this whole assertion exists to remove. Fail loudly on an empty
+     * capture rather than reporting it as a finding about the product.
+     */
+    for (const n of [1, 2]) {
+      expect(
+        cluster.directories[n]!.output.length,
+        `node ${n}'s stdout capture is EMPTY, so "never asked" would be unfalsifiable — the harness ` +
+          `is not recording this directory, and nothing below can be believed until it does`,
+      ).toBeGreaterThan(0);
+    }
+
     const suspendDiag =
       `node1=${nodeSaw(1)} node2=${nodeSaw(2)}` +
+      ` [captured lines: node1=${cluster.directories[1]!.output.split("\n").length}, node2=${cluster.directories[2]!.output.split("\n").length}]` +
       `\n--- node1 frost lines ---\n${cluster.directories[1]!.output.split("\n").filter((l) => l.includes("frost.")).slice(-15).join("\n")}` +
       `\n--- node2 frost lines ---\n${cluster.directories[2]!.output.split("\n").filter((l) => l.includes("frost.")).slice(-15).join("\n")}`;
 
