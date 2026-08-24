@@ -5437,6 +5437,42 @@ Extracted from `DOD-M15-DIRAUTH-1`'s second bullet so it is a line rather than a
   so the attacker retains denial-of-service, and step 6 is itself skippable (that is `DIRAUTH-1`).
 - This is the fix the byte/normalised string match was standing in for.
 
+> **SCOPED 2026-08-24 (CELLO_Support), NOT IMPLEMENTED — and the scoping says the title is aimed at
+> the wrong half of the problem.** Read as written, this line asks for TLS on 9090. Measuring what
+> the plaintext endpoint actually decides says that would buy far less than it sounds like, because
+> **the client does not learn WHO the directories are from `/bootstrap` at all.**
+>
+> **What an attacker who owns that plaintext endpoint can and cannot do:**
+> 1. **They cannot change the roster.** The node list and every node's Ed25519 pubkey come from
+>    `BUNDLED_CONSORTIUM_MANIFEST` — shipped in the client, threshold-signed, and re-verified at load
+>    against `BUNDLED_CONSORTIUM_ROOT_KEYS`. `/bootstrap` supplies only a **dial coordinate** for a
+>    node whose identity is already fixed.
+> 2. **They cannot impersonate a node.** A poisoned coordinate points the client at a machine that
+>    must then sign `nodeId ‖ agent pubkey ‖ nonce ‖ timestamp` with the manifest's node key. It has
+>    no such key, so the connection is REFUSED — the operator sees a directory that will not connect,
+>    never a directory that lies to them.
+> 3. **They cannot replay their way past it** beyond ±5 minutes, and only with a tuple captured for
+>    *that same agent pubkey* — closed today under `DOD-M15-STEP6-REPLAY-1`.
+> 4. **They CAN deny that one node.** This is the whole residual, and it is bounded: the signed
+>    manifest names every sovereign node, so the client holds N independent candidates to fall back
+>    to. Denying the service means being on-path to all of them.
+>
+> **The verifier is on by default for the shipped deployment** — pointed at a bundled endpoint,
+> `manifest-deps.ts` builds it (`daemon.manifest.bundled`); pointed elsewhere it returns `{}` and now
+> WARNs. So step 6 being "skippable", as bullet 2 has it, is no longer a silent condition.
+>
+> ⚠️ **What I could NOT prove from code, and will not claim:** that a client meeting a poisoned
+> coordinate actually FAILS OVER to another roster node rather than stalling on the refusal. The
+> roster enumeration (`manifestNodesToEndpoints`) and `failoverEndpointResolver` both exist and are
+> wired; I did not run the poisoned-coordinate case live. **That, not TLS, is the test worth
+> writing** — if failover holds, point 4 is bounded to a single node and this line is hardening; if
+> it does not, the availability bullet is real and belongs to the failover path, not to port 9090.
+>
+> **Launch call: not blocking.** No customer is ruined by a plaintext coordinate that cannot forge an
+> identity. The genuinely open item next to it is the **byte-match fail-open** already tracked in
+> `DOD-M15-STEP6-REPLAY-1` — a DNS name for a bundled machine skips auth — and that is an
+> endpoint-identity change, not to be attempted during a fleet roll.
+
 ### `DOD-M15-STEP6-REPLAY-1` — ❌ A directory identity proof cannot be replayed (replay bullet ✅; byte-match fail-open OPEN)
 > **THE REPLAY IS CLOSED 2026-08-24 (CELLO_Support).** 17 passed, mutation-proven: disabling the gate
 > reddens exactly the replay, future-dated and unparseable tests. The line stays 🟡 because its
