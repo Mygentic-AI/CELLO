@@ -198,10 +198,16 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
       `JOIN agent_profiles p ON p.agent_id = l.agent_id ` +
       `WHERE lower(p.k_local_pubkey) IN (lower('${pubkeys["bob"]}'), lower('${pubkeys["alice"]}'))`,
     );
+    /**
+     * `toBe`, not `toContain` — the original used a substring match, which would also accept "12" or
+     * "20". A count assertion that passes on a superset of its own answer is the same class of
+     * weakness as reading the wrong column: it looks like a check and is one only by luck.
+     */
     expect(
       linkage.replace(/\s/g, ""),
-      "Bob and Alice must be DISTINCT operators for this hop, in the table the resolver reads",
-    ).toContain("2");
+      "Bob and Alice must be DISTINCT operators for this hop, in the table the resolver reads — " +
+        `got ${JSON.stringify(linkage)}`,
+    ).toBe("2");
 
     const statement = "Alice led the payments migration and shipped it with no incident.";
     const res = (await conn.call("cello_attestations_issue", {
