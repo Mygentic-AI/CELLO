@@ -427,7 +427,14 @@ describe.skipIf(!ENABLED)("J-GCP-LIVE — DOD-E2E-GCP-1 against the live GCP fle
        * accepted WITHOUT being checked against that daemon's leaves, which is exactly the nothing
        * this assertion exists to stop being mistaken for something.
        */
-      for (const s of sides) {
+      /**
+       * `[a, b]`, NOT `sides` — review pass 2. Correct today because `DIRECTORIES` has two entries
+       * and `const [a, b] = sides` takes both, so the two sets coincide. They stop coinciding the
+       * moment a third region is added, which this project does routinely: the loop would then demand
+       * a `match` verdict from a daemon that was never in the session, producing a false red on the
+       * most expensive run in the suite. The session's participants are `a` and `b`; say so.
+       */
+      for (const s of [a, b]) {
         const out = daemonErr.get(s.agent) ?? "";
         const verdict = new RegExp(
           `"event":"session\\.sealed\\.root\\.checked"[^\\n]*"sessionId":"${sid.toLowerCase()}"[^\\n]*"verdict":"match"`,

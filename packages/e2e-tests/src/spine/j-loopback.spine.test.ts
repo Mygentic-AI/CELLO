@@ -230,8 +230,26 @@ describe("J-LOOPBACK — two agents converse on ONE daemon (DOD-LOOP-1)", () => 
      * for is that a daemon talking to itself still produces two INDEPENDENT parties — and that is a
      * claim about each end's own leaves, which is what this checks.
      */
-    await expectOwnTreeVerified(daemon, sessionIdA, { agentName: "agentA", label: "agentA (loopback, same daemon)" });
-    await expectOwnTreeVerified(daemon, sessionIdB, { agentName: "agentB", label: "agentB (loopback, same daemon)" });
+    const verdictA = await expectOwnTreeVerified(daemon, sessionIdA, { agentName: "agentA", label: "agentA (loopback, same daemon)" });
+    const verdictB = await expectOwnTreeVerified(daemon, sessionIdB, { agentName: "agentB", label: "agentB (loopback, same daemon)" });
+
+    /**
+     * ⚠️ AND THE TWO ENDS MUST HAVE PRODUCED TWO DIFFERENT LINES — review pass 2, the hollow spot in
+     * the fix for H2.
+     *
+     * The two calls above assert that a verdict line CARRYING each name exists. That does not prove
+     * the producer put the RIGHT name on each: swap the two names at the source and both calls still
+     * find a `match` line, each reading the other end's answer — exactly the confusion `agentName`
+     * was added to end, surviving the fix for it.
+     *
+     * `sessionIdA === sessionIdB` here by construction (asserted above), so on this daemon the ONLY
+     * thing separating the two verdicts is the field under test. Comparing the raw lines pins the
+     * discriminator itself rather than its presence.
+     */
+    expect(
+      verdictA,
+      "both ends of this loopback session resolved to the SAME log line — the agentName discriminator is not discriminating, so each assertion above was reading the other end's verdict",
+    ).not.toBe(verdictB);
 
     // ─── DOD-FIRSTMSG-WITNESS-1 AC7 + AC8, asserted on the LIVE daemon log ────────────────────
     //

@@ -1270,7 +1270,7 @@ export async function expectOwnTreeVerified(
   proc: Proc,
   sessionIdHex: string,
   opts: { timeoutMs?: number; label?: string; agentName?: string } = {},
-): Promise<void> {
+): Promise<string> {
   const timeoutMs = opts.timeoutMs ?? 30_000;
   const label = opts.label ?? proc.name;
   const sid = sessionIdHex.toLowerCase();
@@ -1298,10 +1298,36 @@ export async function expectOwnTreeVerified(
     new RegExp(`"event":"session\\.sealed\\.root\\.(checked|mismatch)"${agentClause}[^\\n]*"sessionId":"${sid}"`),
     timeoutMs,
   ).catch((err: unknown) => {
+    /**
+     * ⚠️ SEPARATE "NOBODY CHECKED" FROM "THE BINARY PREDATES THE FIELD" — review pass 2.
+     *
+     * The message here used to say flatly *"no verdict means nothing checked it here."* Pass 2
+     * measured what that would print against the `dist/` that was actually on disk: the daemon HAD
+     * checked, HAD logged, and simply lacked `agentName`, because a source edit in the sibling repo
+     * had never been built. So the sentence blamed the seal for a stale artifact, and named the
+     * subsystem where the wait expired rather than the one that was wrong — the exit-point label
+     * standing in for the cause, in a message written to prevent exactly that.
+     *
+     * A verdict line for this session that carries the WRONG agent name (or none) is a build
+     * problem, and it is discriminable right here: re-scan without the agent clause.
+     */
+    const sessionOnly = new RegExp(`"event":"session\\.sealed\\.root\\.(checked|mismatch)"[^\\n]*"sessionId":"${sid}"`);
+    const strays = proc.lastLines(4000).filter((l) => sessionOnly.test(l));
+    if (opts.agentName && strays.length > 0) {
+      throw new Error(
+        `${label}: this daemon DID report a verdict for session ${sid}, but none of the ${strays.length} ` +
+          `line(s) carries "agentName":"${opts.agentName}". The seal is not the problem — the daemon ` +
+          `binary predates that field. Rebuild cello-client (\`pnpm run build\`) and re-run; note that ` +
+          `a package-scoped \`tsc --noEmit\` typechecks WITHOUT writing dist/, which is how this ` +
+          `happens.\n  ${strays.slice(-2).join("\n  ")}`,
+      );
+    }
     throw new Error(
       `${label}: this daemon never reported checking the certified root against its own tree for ` +
-        `session ${sid}. Bullet 8 asks each side to recognise the conversation the certificate ` +
-        `describes; no verdict means nothing checked it here.\n  cause: ${String(err)}`,
+        `session ${sid} — no \`session.sealed.root.*\` line for it at all. Bullet 8 asks each side to ` +
+        `recognise the conversation the certificate describes, and nothing here did.\n` +
+        `  NOTE: the verdict is only emitted on the BILATERAL (frost) seal path. A journey whose ` +
+        `close escalated to a unilateral seal will land here legitimately.\n  cause: ${String(err)}`,
     );
   });
 
@@ -1336,4 +1362,13 @@ export async function expectOwnTreeVerified(
         `claims to have proven, and treating it as a pass asserts nothing.\n  ${line}`,
     );
   }
+  /**
+   * RETURNED so a caller can pin the DISCRIMINATOR and not merely its presence — review pass 2.
+   *
+   * Asserting that a line carrying `agentName: "agentA"` exists does not prove the producer put the
+   * RIGHT name on it. Swap the two names at the source and both ends still find a `match` line, each
+   * reading the other's answer — precisely the confusion the field was added to end. A caller that
+   * holds both ends can compare the two returned lines and see they are different ones.
+   */
+  return line;
 }
