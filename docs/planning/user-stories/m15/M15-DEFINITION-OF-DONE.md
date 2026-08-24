@@ -2715,14 +2715,29 @@ written down nowhere, and a per-session salt fixes it as a side effect.
 > pre-image that is never transmitted — so it needs the wire change bullet 3 carries. The check
 > itself is KEPT; what changes is that it stops being the integrity guarantee.
 >
-> **🅿️ BULLETS 3+4 NEED A `cello-client` PUBLISH BEFORE THEY DO ANYTHING FOR AN OPERATOR — PARKED,
-> HUMAN-GATED.** The chain is four legs plus a fifth that review pass 1 found missing and nobody had
-> listed: the CLIENT SENDER. It is built now (2026-08-24, `@cello-protocol/daemon`), but a leg that
-> lives only in the repo is not a leg an operator has. Until the version cascade is published and
-> installed, every real seal still reaches the directory with no payload and lands on `not_carried`.
+> ### ✅ THE PUBLISH HAPPENED — 2026-08-24. THIS IS NO LONGER A STOP. Do not re-raise it.
+> Verified against npm rather than read from this file: `a0add31` *"chore: version cascade — the SEAL
+> PAYLOAD now reaches the wire (SEALWIRE-1 bullets 3+4)"*, committed 02:24 CEST, all seven packages
+> bumped, `@cello-protocol/daemon` 0.0.181 → **0.0.182**, published 01:12 UTC and live on `latest`.
+> **The client sender ships. Seals no longer land on `not_carried` for want of a payload.**
 >
-> This is a **stop only Andre can clear** (§🛑): the `latest` promotion is his, never mine. What I
-> can do is prepared and handed over; what runs is his call. Consequences to know before pulling it:
+> **Recorded because a stale stop cost real time:** this note still read as an open human-gated stop
+> hours after it was cleared, and was reported to Andre as outstanding by someone reading this file
+> instead of npm. A parked marker with no closing stamp is indistinguishable from a live blocker.
+> **`DOD-M15-NOTCARRIED-REFUSE-1`'s prerequisite is met** — it was waiting on the deployment fact.
+>
+> **The original note follows, struck rather than deleted, because the reasoning still binds anyone
+> shipping a wire change:**
+>
+> > **~~🅿️ BULLETS 3+4 NEED A `cello-client` PUBLISH BEFORE THEY DO ANYTHING FOR AN OPERATOR —
+> > PARKED, HUMAN-GATED.~~** The chain is four legs plus a fifth that review pass 1 found missing and
+> > nobody had listed: the CLIENT SENDER. It is built now (2026-08-24, `@cello-protocol/daemon`), but
+> > a leg that lives only in the repo is not a leg an operator has. Until the version cascade is
+> > published and installed, every real seal still reaches the directory with no payload and lands on
+> > `not_carried`.
+>
+> This was a **stop only Andre could clear** (§🛑): the `latest` promotion is his, never mine.
+> Consequences, which held then and are worth keeping:
 > - **Directory-side behaviour is unchanged for un-upgraded clients** — receiver-first was followed,
 >   so absence stays tolerated and nothing breaks by shipping the directory first.
 > - **`DOD-M15-NOTCARRIED-REFUSE-1` cannot start until this lands.** Its whole prerequisite is the
