@@ -4152,6 +4152,16 @@ compromised and could weaponize "signature mismatch" as a false accusation.
   `DOD-M15-RELAYFANOUT-1`.
 
 ### `DOD-M15-DIRAUTH-1` — 🟡 Directory authentication cannot be silently skipped
+> # 🔒 THE "LOUD WHEN SKIPPED" PIECE CLAIMED BY **CELLO_Support**, 2026-08-24, BEFORE writing code.
+> **Andre's re-ranking, quick win #5:** *"Make the skipped directory authentication loud. Not the
+> full fix — just stop it disarming in silence."*
+> **The gap, read out of the code rather than assumed:** `signaling-connect.ts` runs step 6 only
+> `if (verifier)`. With none configured the whole identity check is skipped, and the ONLY trace is
+> `verified: !!verifier` — a field inside an **info** line at connect. This entry already records the
+> right principle for it: *"a LOG IS NOT A CONTROL."* Making the skip loud does not make it a control
+> either; it stops the disarm being indistinguishable from the healthy path.
+> **I hold: `signaling-connect.ts`'s step-6 branch and its test only.** Bullet 2 stays with
+> `DOD-M15-BOOTSTRAP-AUTH-1`, unclaimed.
 > **SURFACING HALF DONE + REVIEWED 2026-08-23** (→ Entry 36); **stays 🟡 because bullet 2 is
 > untouched.** Reviewer: *"The line is not closable on this diff… make sure the DoD tag reflects that
 > rather than flipping green."* Extracted as `DOD-M15-BOOTSTRAP-AUTH-1`.
