@@ -140,6 +140,13 @@ describe("J-SUSPEND-TOFN — quorum-aware suspension (DOD-SUSPEND-1)", () => {
 
     // SUSPEND on nodes 1 AND 2 (not node 0). Node 0's initiator gate passes; the ceremony proceeds and
     // nodes 1,2 refuse their shares ⇒ only node 0 can sign ⇒ client+1 = 2 < T=3 ⇒ NO signature.
+    // Window mark — everything below is read from HERE forward, so a ceremony that ran before the
+    // suspension (xtarget's, whose profile is deliberately absent on nodes 1 and 2) cannot be read as
+    // this agent's verdict. Review MEDIUM-3.
+    const marks: Record<number, number> = {
+      1: cluster.directories[1]!.output.split("\n").length,
+      2: cluster.directories[2]!.output.split("\n").length,
+    };
     setPaused(1, agentIdA, true);
     setPaused(2, agentIdA, true);
     // F1 (test-attacker): retry-wrap the block on the SAME transient (standing_receiver_unavailable) as
@@ -168,10 +175,40 @@ describe("J-SUSPEND-TOFN — quorum-aware suspension (DOD-SUSPEND-1)", () => {
      * Asserted BEFORE the block, so a setup that did not land reports itself rather than being
      * reported as a missing block.
      */
+    /**
+     * ⚠️ THE FIRST VERSION OF THIS CLASSIFIER WAS MISSING ITS FOURTH CASE, and the missing one is the
+     * likely one. Review HIGH-1.
+     *
+     * `#isAgentPaused` logs `frost.ceremony.refused.revoked` only when PAUSED, and
+     * `frost.suspension.uncheckable` only when not-paused AND holding no local profile. **A node that
+     * was asked, holds the profile, and reads not-suspended logs NOTHING.** Under the old three-way
+     * classifier that is indistinguishable from "never asked" — and it is exactly what you would see
+     * if the suspension row did not land on nodes 1 and 2, which is the thing this assertion exists
+     * to detect. I read the resulting `silent` as *"neither directory was ever consulted"* and
+     * reported it as a finding. **The evidence never supported that.**
+     *
+     * The real positive control on PARTICIPATION already exists: the directory logs
+     * `frost.debug.frost_stream.sign_request` / `.commit_request` at info on every share request. Ask
+     * that first, and "asked and said nothing" separates cleanly from "never asked".
+     *
+     * ⚠️ SCOPED AND WINDOWED — review MEDIUM-3. `.output.includes()` matched anywhere in the node's
+     * cumulative stdout, with no agent scoping: `xtarget`'s profile is deliberately NOT copied to
+     * nodes 1 and 2, and a ceremony involving it runs BEFORE the suspension — so a stray
+     * `uncheckable` for the wrong agent would have labelled node 1 "signed blind" and sent the reader
+     * to the replication gap. Both the agent and the window are pinned now.
+     */
+    const agentShort = agentIdA.slice(0, 16);
+    const sawIn = (n: number, event: string): boolean =>
+      cluster.directories[n]!.output
+        .split("\n")
+        .slice(marks[n]!)
+        .some((l) => l.includes(event) && l.includes(agentShort));
     const nodeSaw = (n: number): string =>
-      cluster.directories[n]!.output.includes("frost.ceremony.refused.revoked") ? "refused"
-        : cluster.directories[n]!.output.includes("frost.suspension.uncheckable") ? "uncheckable(signed blind)"
-        : "silent(never asked)";
+      sawIn(n, "frost.ceremony.refused.revoked") ? "refused"
+        : sawIn(n, "frost.suspension.uncheckable") ? "uncheckable(signed blind)"
+        : (sawIn(n, "frost.debug.frost_stream.sign_request") || sawIn(n, "frost.debug.frost_stream.commit_request"))
+          ? "asked-but-logged-nothing(read NOT-suspended)"
+          : "never-asked";
     /**
      * ⚠️ POSITIVE CONTROL ON THE EVIDENCE ITSELF. "silent" is only meaningful if this node's stdout is
      * being captured at all — an empty buffer reads identically to a node that was never asked, and
@@ -192,22 +229,35 @@ describe("J-SUSPEND-TOFN — quorum-aware suspension (DOD-SUSPEND-1)", () => {
       `\n--- node1 frost lines ---\n${cluster.directories[1]!.output.split("\n").filter((l) => l.includes("frost.")).slice(-15).join("\n")}` +
       `\n--- node2 frost lines ---\n${cluster.directories[2]!.output.split("\n").filter((l) => l.includes("frost.")).slice(-15).join("\n")}`;
 
-    for (const n of [1, 2]) {
-      expect(
-        nodeSaw(n),
-        `node ${n} must have OBSERVED the suspension and refused its share. "uncheckable" means it ` +
-          `holds no profile for this agent and signed blind — the replication gap #isAgentPaused ` +
-          `documents, not a threshold failure. "silent" means the client never asked it, which makes ` +
-          `this a quorum-selection question. ${suspendDiag}`,
-      ).toBe("refused");
-    }
-
+    /**
+     * ⚠️ THE DoD PROPERTY IS ASSERTED FIRST NOW — review HIGH-2, and this was the worse of the two.
+     *
+     * I put the diagnostic preconditions ahead of `expect(blocked.ok)`, so the run died on the
+     * precondition and **never evaluated the security assertion at all.** The property this test
+     * exists for — *two suspended directories must block signing* — became unmeasured on every run
+     * where the diagnostic was inconclusive, which was every run. The version I replaced at least
+     * reported the bypass itself.
+     *
+     * The diagnostic is `expect.soft` so BOTH are reported from one run: the outcome that matters,
+     * and the classification that explains it.
+     */
     expect(
       blocked.ok,
-      `2 suspended directories must block signing — and BOTH refused their shares, so this is a ` +
-        `genuine threshold bypass rather than a suspension that never landed: ` +
-        `${JSON.stringify(blocked)}\n${suspendDiag}`,
+      `2 suspended directories must block signing: ${JSON.stringify(blocked)}\n${suspendDiag}`,
     ).toBe(false);
+
+    for (const n of [1, 2]) {
+      expect.soft(
+        nodeSaw(n),
+        `node ${n} must have OBSERVED the suspension and refused its share.\n` +
+          `  "uncheckable"                  → holds no profile for this agent and signed blind — the\n` +
+          `                                   replication gap #isAgentPaused documents, not a threshold failure.\n` +
+          `  "asked-but-logged-nothing"     → it WAS asked and read NOT-suspended, so the suspension row\n` +
+          `                                   did not land on this node. A plumbing/replication fact.\n` +
+          `  "never-asked"                  → the client never contacted it: a quorum-selection question.\n` +
+          `${suspendDiag}`,
+      ).toBe("refused");
+    }
     // EXACT reason — not merely "not agent_suspended" (which accepts ~18 unrelated/transient failures).
     // The client-side FROST signer returns DIRECTORY_BELOW_THRESHOLD; the delegated session-request path
     // collapses a sub-threshold ceremony to a null signature, which the directory's ClientDelegatedSigner

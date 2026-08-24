@@ -399,9 +399,10 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
      * hash this test computed appeared NOWHERE in it — not late, not anywhere. The message was
      * delivered the whole time; the wait was for a value that never existed.
      *
-     * A salted variant of the helper exists (`saltedContentHashHex`), but taking it here would mean
-     * fetching the session's salt and mirroring the daemon's algorithm choice in the test — a second
-     * implementation that has to be kept in step with a decision the daemon makes per session.
+     * A salted variant exists in the crypto package (`saltedContentHash`), but the test cannot USE it: the
+     * session salt is a secret held in the daemon's encrypted database and is on no read surface, so
+     * there is nothing for a test to fetch. That — not "a second implementation" — is the real reason;
+     * a test SHOULD be an independent implementation where it can be one.
      *
      * Reading the hash off the daemon's own event removes the question entirely: it is correct
      * whether the session is salted or not, and it stays correct if the algorithm changes again.
