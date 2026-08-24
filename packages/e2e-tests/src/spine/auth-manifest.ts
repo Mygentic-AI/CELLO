@@ -180,7 +180,19 @@ export function makeSignedManifest(nodes: ConsortiumNodeEntry[], opts?: MakeMani
   const base = {
     version: opts?.version ?? 1,
     not_before: opts?.notBefore ?? "2026-01-01T00:00:00Z",
-    expires: opts?.expires ?? "2027-01-01T00:00:00Z",
+    /**
+     * ⚠️ A FIXTURE THAT EXPIRES IS A TEST SUITE WITH A FUSE — the twin of the one fixed in
+     * `cello-client`'s `manifest-test-fixture.ts`, and this file's own header says it is identical
+     * to that one. It defaulted to `2027-01-01`, so on that date every default-fixture manifest in
+     * the LIVE-BINARY spine lane becomes expired — and `j-auth.spine.test.ts` already drives the
+     * expired-manifest refusal path, so the in-window journeys would silently flip INTO that
+     * refusal, on a date, with no code change to explain it.
+     *
+     * Far-future and fixed rather than `Date.now() + 1y`: a rolling default makes the window depend
+     * on the clock, and the tests that care about boundaries pass their own dates. This default only
+     * ever needs to mean "in window".
+     */
+    expires: opts?.expires ?? "2099-01-01T00:00:00Z",
     nodes,
     // Spread-if-present, never `intake_key: undefined`: an explicit undefined would appear in
     // Object.keys and change the signed body, so a manifest built without a key would stop matching

@@ -37,7 +37,10 @@ async function startServer(server: Server): Promise<{ port: number; close: () =>
 const sampleManifest: ConsortiumManifest = {
   version: 7,
   not_before: "2026-06-01T00:00:00Z",
-  expires: "2026-12-01T00:00:00Z",
+  // Was 2026-12-01 — THREE months out when found (2026-08-24), a shorter fuse than the shared
+  // fixture's. On that date this manifest goes expired and the test breaks on a date rather than on
+  // a change. Fixed and far-future; nothing here asserts anything about the window.
+  expires: "2099-01-01T00:00:00Z",
   nodes: [
     { nodeId: "us-east-1", pubkey: "a".repeat(64), region: "us-east-1", provider: "aws", endpoint: "/dns4/dir-us1/tcp/80/ws/p2p/12D3KooWUs1" },
     { nodeId: "eu-central-1", pubkey: "b".repeat(64), region: "eu-central-1", provider: "gcp", endpoint: "/dns4/dir-eu1/tcp/80/ws/p2p/12D3KooWEu1" },
