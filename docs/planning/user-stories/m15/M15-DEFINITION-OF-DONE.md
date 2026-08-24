@@ -1242,6 +1242,26 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 > it makes the guard inert without failing.
 
 ### `DOD-M15-CLOSEROOT-1` — 🟡 Journeys converted (unrun); the assertion clause ✅ MEASURED
+> ### 🔴 THE 60-SECOND SEAL TIMEOUT IS NOT A TIMING PROBLEM. IT IS AN ASYMMETRIC SALT STATE.
+> **Found 2026-08-24 (CELLO_Support) by reading the run log rather than re-running.** `CELLO_Coder_1`
+> raised `j-documents`' rejection case — `awaitSealedRoot` timing out at 60s — and said correctly
+> that it could not tell from that run whether 60s was too short or the seal genuinely fails.
+> **Neither. The seal cannot complete, because content is being REFUSED.**
+> - **Both sides DO close** and both closes are awaited — checked first, because that was the cheap
+>   explanation.
+> - **Session `10eae009…` logs `session.content.cross_check.failed` at ERROR EIGHT TIMES**, reason
+>   `content_hash_salt_unavailable` — *"the sender says it is salted and this side holds no salt."*
+> - **That session NEVER AGREED A SALT.** Measured with a positive control: 8 `session.salt.agreed`
+>   events exist in the run, **all of them in two OTHER sessions** (4 + 4). `10eae009…` has **zero** —
+>   while `agentA` logs `session.content.unsalted` for it and the peer's frames declare salted.
+> **So one side salts and the other never agreed, permanently.** Every message from that peer is
+> refused, that side's tree is missing every leaf, and a seal over two divergent trees cannot
+> complete — which is exactly what a 60s wait for a root that will never arrive looks like.
+> **This is `SEALWIRE-1` bullet 6's territory (the salting lane), not this line's** — recorded here
+> because it answers this line's open lead, and handed to `CELLO_Coder_1`.
+> **⚠️ AND IT IS THE EXACT FAILURE `REFUSED-INBOUND-SILENT-1` WAS WRITTEN FOR** — a state skew that
+> refuses EVERY message from a counterparty while the conversation looks merely quiet. That work now
+> tells the operator; it does not stop the split happening.
 > **✅ SECOND CLAUSE — an assertion on an absent value keeps its diagnostic.** Both review passes
 > spent (→ Entry 64). Pass 2: *"NO SILENT FALLBACKS — and the unit removes one"*, *"REMOVALS
 > PROVEN"*. **Measured, not believed:** the other lane ran the `trustless-cello` root — 1742 passed,
