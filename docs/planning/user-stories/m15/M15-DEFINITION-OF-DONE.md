@@ -1551,11 +1551,39 @@ only finds an already-open connection."*
 > **This is structural, not inferred from log counts** — it does not depend on the capture argument
 > that has now been wrong in both directions.
 >
-> **⚠️ WHAT REMAINS TO CONNECT, and it is one step:** that document delivery actually rides a node from
-> that third path. `openSessionFor` is *"the same path `cello_initiate_session` takes"*, which reaches
-> `createSessionNode` — so the remaining question is whether the document transport's session finds an
-> existing standing-receiver node instead of creating its own. **Everything measured is consistent with
-> it; the link itself is not yet proven.**
+> ### ✅ LINK CLOSED — THE ANNOUNCE IS REGISTERED **AFTER** THE PEER HAS ALREADY ATTACHED
+>
+> `createSessionNode` takes a `reuseStandingReceiver` flag (`:3649`). On that path it does **not**
+> build a node — it **takes the standing receiver's** (`:3682-3699`): `({ node, gater, autoNat, seed }
+> = sr)`, then `#standingReceivers.delete(agentName)`. It *does* then call `#wireSessionLiveness`
+> (`:3805`), so the reused node is wired.
+>
+> **But wiring is not the same as firing.** `onPeerConnect` is a plain
+> `this.#libp2p.addEventListener("peer:connect", …)` (`core/transport/src/node.ts:666-667`). **It does
+> not replay peers that are already connected.**
+>
+> **The full chain, every link in code:**
+> 1. `#tryCreateStandingReceiver` creates the node and starts it listening — **without** the announce
+>    hook, because it never calls `#wireSessionLiveness`.
+> 2. The counterparty connects to that standing receiver. `peer:connect` fires. **No announce handler
+>    is registered yet, so nothing happens.**
+> 3. The session promotes that same node via `reuseStandingReceiver` and *now* registers
+>    `onPeerConnect`.
+> 4. `addEventListener` only fires on FUTURE connects. **The peer is already attached, so the handler
+>    never fires** → no announce → `no_agreement_started` → the sender salts, the receiver holds no
+>    salt, every message is refused.
+>
+> **⚠️ AND THE HOOK'S OWN COMMENT NAMES THE OPPOSITE HAZARD — they fixed too-early and created
+> too-late.** It reads: *"a send placed at `createSessionNode` would be an announcement to a peer that
+> is not attached yet."* True. The answer was to wait for the connect event — which is unreachable once
+> the connection predates the listener. **The window is exactly "the peer got there first", which on a
+> standing receiver is the normal case, not the rare one.**
+>
+> **THE FIX, and the interface already supports it:** after `#wireSessionLiveness` registers the
+> handler, sweep `node.getConnections()` for a counterparty already attached and announce for it.
+> `getConnections()` is on `CelloNode`. That closes both hazards — too-early is still avoided because
+> the sweep runs after promotion, and too-late is covered because an existing connection is no longer
+> invisible.
 
 **⚠️ HYPOTHESIS, MARKED AS ONE — the two facts above are in tension, and that tension is the lead.**
 The document transport opens its session through `openSessionFor`, *"the same path
