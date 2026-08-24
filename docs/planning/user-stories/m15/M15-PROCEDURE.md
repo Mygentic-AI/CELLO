@@ -613,6 +613,12 @@ ledger in the DoD: one row per claim, its current text, where it appears, and it
    > means nothing checked it here"* about a daemon that had checked, logged, and merely lacked a
    > field. **Run `pnpm run build` in `cello-client` before any spine journey.** Unit tests run from
    > source and are unaffected, which is what makes this quiet.
+   >
+   > **And the reason knowing the names is not enough** (`CELLO_Coder_1`, who paid for it): the
+   > package-scoped form is **what you reach for when you want a fast check on one package** — so
+   > **the faster habit is the one that silently stops building.** You do not choose the broken one
+   > by mistake; you choose it because it is the right tool for the check you are doing, and it
+   > quietly stops being the right tool the moment anything downstream runs `dist/`.
 8. **Commit** (constantly — §3), push after every commit.
 9. **Review — ONE read-only `cello-unit-reviewer` on the unit's diff, no model override.** Dispatch
    per §2b. Fix EVERY finding; commit fixes.
