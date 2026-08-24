@@ -109,9 +109,18 @@ into the other side. A `6988436e…` abbreviation is unusable for that.
 ```bash
 pnpm run test
 pnpm run lint
-pnpm run typecheck
-pnpm run build
+pnpm run typecheck   # in THIS repo this IS the build — see below
 ```
+
+> ⚠️ **There is no `pnpm run build` at this repo's root, and nothing is missing.** `typecheck` is
+> `tsc --build`, which compiles and EMITS (the packages set `outDir: dist` and no `noEmit`), so the
+> build already ran as step three. Only `operations-agent` and `seal-notifier` declare their own
+> `build`, and those are the same `tsc --build`.
+>
+> Recorded because the four-step list above sent me looking for a missing script twice, and reporting
+> it as "the documented gate is wrong" is the stronger claim — the risk is that someone closes the
+> gap by adding a root script that duplicates step three. `cello-client` DOES have a separate
+> `build`; the four-step sequence is right there and redundant here.
 
 **Local dev (requires Docker):**
 ```bash
