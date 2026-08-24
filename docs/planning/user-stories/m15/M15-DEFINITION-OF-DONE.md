@@ -2993,7 +2993,20 @@ root means. Both repos; version-bump ACs on both sides.
 > which is the exact defect class this milestone is about, in my own description of the fix for it.
 > **What would make it true:** store `structure1_cbor` on the row, or write the transcript↔seal-leaf
 > join (and its 0-based/1-based off-by-one). **Andre's call whether that lands here or on
-> `INCLUSION-1`.**
+> `INCLUSION-1` — with a recommendation rather than just a question:**
+>
+> **STORE THE BYTES, and defer it to `INCLUSION-1`.**
+> - **Store rather than join**, because the bullet's own sentence is *"the record must prove
+>   authorship INDEPENDENTLY"* — a row that needs a second table to mean anything is not
+>   independent. The join also couples the transcript to the seal-leaf store's numbering (0-based vs
+>   the relay's 1-based), and a cross-table off-by-one is the defect that outlives everyone who
+>   remembers it. Cost is ~100 bytes a row against a column that already stores the message.
+> - **Defer rather than do it here**, because nothing reads these columns yet: `INCLUSION-1` is the
+>   named consumer and is a `not_implemented` stub. **Storing bytes for a reader that does not exist
+>   is how this milestone got its most-repeated defect** — and unlike the signature (which is
+>   discarded at send time if not captured), `structure1_cbor` remains recoverable later for any leaf
+>   with a receipt. **The proof is not lost by waiting; it is only lost by not capturing it, which is
+>   what bullet 5 just fixed.**
 >
 > **The COST argument was also wrong, and on a premise nobody had checked.** It assumed the signature
 > exists only after the relay ack, forcing either a mutation of the append-only transcript or the
