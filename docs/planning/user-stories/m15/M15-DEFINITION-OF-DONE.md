@@ -1189,6 +1189,20 @@ reboot clears, and re-running to recover the failure texts costs another hour.
   1. **Environmental, confirmed:** `cello-portal-postgres` has been **Exited for 11 days** and
      nothing listens on `55432`. Journeys needing the portal cannot pass. Explains the
      `ECONNREFUSED` failures; does NOT explain most of the rest.
+     > **✅ NO LONGER TRUE — MEASURED 2026-08-24, BEFORE THE NEXT FULL RUN.** `cello-portal-postgres`
+     > is **Up 9 hours (healthy)**, `0.0.0.0:55432->5432/tcp`, `pg_isready` → *"accepting
+     > connections"*, and a socket probe of `127.0.0.1:55432` connects. The protocol database on
+     > `5433` is up and accepting too.
+     >
+     > **Corrected here rather than left for the run to discover, because a stale environmental note
+     > poisons the next measurement in BOTH directions.** Left standing, it invites the reader to
+     > pre-attribute a set of failures to a database that is now fine — and, worse, to read the
+     > *disappearance* of those failures as a product improvement nobody made. The 21/36 receipt was
+     > taken while this was genuinely down; **the next run is not comparable to it on these journeys**
+     > and any delta on the portal-dependent ones is this container, not the code.
+     >
+     > It also removes the excuse: the portal-dependent journeys now either pass or fail on their own
+     > merits, and whichever it is, is a real result.
   2. **A lead, not a cause:** six failures are JSON parse errors, one reading
      `Unexpected token 'C', "CELLO — a "... is not valid JSON`. That string is the CLI banner at
      `cello-client/core/cli/src/cli-args.ts:52`. Something that should emit JSON emitted help text
