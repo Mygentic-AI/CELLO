@@ -2316,6 +2316,35 @@ policy for an expired manifest — it just never chose it.
 > **A finding on the way past:** `ManifestDirectoryChallengeVerifier` lives in `manifest-stubs.ts`
 > and is **production** — wired twice by `manifest-deps.ts`. Anyone reading that filename and
 > assuming test-only is wrong about that class. Noted in the file itself.
+>
+> ### REVIEWED — "DO NOT FLIP" with five findings. All addressed 2026-08-24.
+> **The decision survived; the execution did not.** Reviewer: *"The **decision** is right and I would
+> not change any of the three behaviours… What blocks the flip is the execution."*
+> - **THE ONE THAT MATTERS — I built a security signal the adversary could switch off.** The
+>   verifier's report fired BEFORE the signature check, so a rogue directory could send any `nodeId`,
+>   spend the once-per-version budget, and leave every genuine authentication against the lapsed
+>   anchor **silent for that manifest version**. Its absence would then read as safety. It also sat
+>   inside the crypto `catch`, so a throwing logger would have reported that a healthy directory
+>   **forged its identity proof** — error substitution, in code written during a milestone about
+>   error substitution. Both close by moving the report to the success path.
+> - **A FOURTH CONSUMER the line never enumerated**, and it holds the real residual risk:
+>   `getManifestPeerIds` decides which directory endpoints are ACCEPTED, so a lapsed set keeps a
+>   removed node eligible for the seat that coordinates a ceremony. Permit + report, same reason.
+> - **The registration event over-claimed in the case it named.** Review traced it: a removed
+>   validator is dropped at the dial layer or makes the counts disagree, so registration REFUSES with
+>   `dkg_below_threshold`. Dealing a share to a de-authorized node is **not reachable**. The event
+>   now explains that refusal instead of predicting a leak.
+> - **`register-handler` acted on one of three abnormal states** — `unreadable_window` and
+>   `not_yet_valid` reached the DKG silently. Widened.
+> - **THE PREMISE HAD A HOLE, and it was mine to own:** the startup gate compared `new Date(expires)`
+>   with `<=`, and every comparison against NaN is false — so an **undateable** manifest started the
+>   daemon. That falsified "a lapsed manifest only exists in a long-running daemon", because such a
+>   daemon starts *fresh* into it, permanently, while my guidance said not to restart. Fixed via the
+>   shared classifier; mutation-proven.
+> - **Zero coverage, three green suites.** 2869 + 154 + 1742 passing and **not one line of the new
+>   code had executed** — every verifier fixture was in-window and every registration test had no
+>   manifest at all. Six tests added, plus the fixture whose default expiry was four months out.
+
 
 ### `DOD-M15-DOORBELL-1` — ✅ A daemon shutdown does not ring like an incoming message
 > **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F4 (`readLock` →
