@@ -1210,6 +1210,33 @@ reboot clears, and re-running to recover the failure texts costs another hour.
      all six.
   3. **Ruled out:** the binaries are built (8 `core/*/dist` present, daemon dist newer than source),
      so this is not a stale-build artefact.
+> ### 🔎 TRIAGE SCAFFOLD, built 2026-08-24 FROM THE COMMITTED RECEIPT — no re-run, and it is not a result
+>
+> The line asks for a triage before any fixing, and the receipt exists so that costs nothing. Clustering
+> the 49 by error text gives **four causes, not 21 problems**:
+>
+> | cluster | n | what it is | status |
+> |---|---|---|---|
+> | `.toMatch() expects to receive a string, but got undefined` | **5** | `DOD-M15-CLOSEROOT-1`'s second clause — the matcher destroys its own diagnostic on an absent value, so these five printed nothing about what actually failed | **fixed since**: `expectMatches` + enforcer. These five should now report a real cause — **which may be a different failure, not a pass** |
+> | `Unexpected non-whitespace character after JSON` / `Unexpected token 'C'` | **6** | `DOD-M15-CLIJSON-1` — the CLI banner emitted where JSON was expected. Journeys die at their FIRST line, in `register-agent` | open |
+> | `ECONNREFUSED` | **2** | the portal database | **environment, now up** — see the correction above |
+> | timeouts / envelope / MCP | remainder | `daemon-ackA`, `daemon-dedupB`, a trust-signal envelope missing a mandatory field, one MCP request timeout | genuinely unexamined |
+>
+> **The 21 files, with what tonight already changed.** Reported closed since the receipt — by both
+> lanes, and NOT re-verified in one run: `j-tofn-dkg` (green 2/2), `j-persist` (fixed by the salting
+> lane), `j-canary` (a `.gitignore` `node_modules/` trailing slash vs iCloud symlinks — never a product
+> failure), `j-refresh` / `j-sign` / `j-loopback` (3/3), `j-legibility`, `j-upgrade`. Known-blocked for
+> a named reason: `j-unilateral` and `j-upgrade-bilateral` on `DOD-M15-UNILATERAL-NOTARIZE-1`.
+> Known-wrong-premise: `j-suspend-tofn` encodes **T=3 when we ship T=2**, so it is a test to correct,
+> not a defect to chase.
+>
+> **⚠️ THIS IS A SCAFFOLD FOR READING THE NEXT RUN, NOT A CLAIM ABOUT TODAY.** Every "fixed since" above
+> is a report, several of them mine, and the whole point of `SPINERED-1` is that reports about this lane
+> have been wrong before — that is how it came to be marked BLOCKS LAUNCH. **The fresh run replaces
+> this table; it does not confirm it.** And two traps are already visible in it: a `CLOSEROOT-1` file
+> going from "no diagnostic" to "a real error" is **progress that looks like a new failure**, and the
+> portal-dependent files changing at all is **the container, not the code.**
+>
 - **Do NOT open 21 lines from this.** First unit is a triage: cluster the 49 by cause, establish
   how many are environment vs product, and only then decide what needs fixing. The lane has been
   unrun for long enough that some failures will be stale expectations rather than regressions.
