@@ -1423,13 +1423,29 @@ work it never did.
 document, and one side's changes never arrive. Neither sees an error — the update is refused at the
 far end and the near end shows it sent. Documents are `M9`'s headline feature.
 
-**TRACED ONE STEP FURTHER, and the producer is identified. The announce never FIRES.**
+**TRACED ONE STEP FURTHER — and HALF MY OWN EVIDENCE IS WITHDRAWN. Read the retraction first.**
+
+> ### ⚠️ RETRACTION, same session, before this was acted on
+> I wrote that `session.salt.announced × 0` proved the announce *"was never sent"*. **That inference
+> is invalid and I am withdrawing it.** `session.salt.announced` is logged at **`debug`**
+> (`session-node-manager.ts:10729`), so it would not appear in an info-level capture whether it fired
+> or not. **Counting a debug event in an info capture and reading zero as absence is exactly the
+> "how far did the test actually get" error this line has already been bitten by twice.**
+>
+> Worse, the capture is demonstrably partial for **info** events too: `session.node.created` is
+> `logger.info` and also reads **0** in the same run — while that run contains 76
+> `session.relay.leaf.delivered` and 56 `session.tree.appended`. Sessions plainly existed. **So
+> `session.salt.agreed × 0` is not solid either**, and I had leaned on it.
+>
+> **Found by running the one-query check I had written down as the decisive next step** — which
+> returned `node.created: 0` and immediately falsified the method rather than the hypothesis.
+
+**WHAT SURVIVES, and it is enough to keep the finding — just not the proof I claimed:**
 
 ```
-session.salt.announced  × 0     ← not "answered late" — never sent
-session.salt.agreed     × 0
-session.salt.*          × 0     (no salt event of any kind in the run)
-"reason":"no_agreement_started" × 1
+"reason":"no_agreement_started"           × 1   ← decisive on its own
+"reason":"content_hash_salt_unavailable"  × 4
+session.content.cross_check.failed        on session bfde644c…
 ```
 
 `no_agreement_started` is returned from exactly one place, and only when `#markSaltPending` was never
@@ -1451,11 +1467,25 @@ fire again — while the salt is per-SESSION. **A per-session secret announced b
 is a gap wherever a second session rides an existing connection.** I have not established that this is
 what happened here; it is the one mechanism consistent with `announced: 0`.
 
-**THE DECISIVE CHECK, one query:** in a document run, count `session.node.created` against
-`session.salt.announced`. Equal means the hook fires per session and the cause is elsewhere. Fewer
-announces than session nodes means the announce is missing exactly where a session reuses a
-connection — and the fix belongs at session creation with the dial-ordering problem that comment
-describes, not at the peer-connect hook.
+**⚠️ THE "ONE QUERY" I ORIGINALLY WROTE HERE DOES NOT WORK, and running it is what exposed the
+retraction above.** Counting `session.node.created` against `session.salt.announced` compares an
+**info** event with a **debug** one, in a capture that is missing both. It cannot answer anything.
+
+**THE CHECK THAT DOES WORK — run the document journey with the daemons at DEBUG and their stdout
+retained**, then compare, per session id:
+1. `session.node.created` — did this session get a node at all?
+2. `session.salt.announced` — did the announce fire for THAT session id?
+3. `session.salt.agreed` / `#saltForHashing`'s reason — how did it end?
+
+Announce present but no agreement ⇒ the frame is lost or unanswered, and the peer-connect hook is
+fine. **Node created with no announce for that session id ⇒ the hypothesis holds**: a per-session
+secret announced by a per-connection hook, missing wherever a second session rides an open
+connection — and the fix belongs at session creation, against the dial-ordering problem that hook's
+comment describes.
+
+**Until that runs, the only established facts are the three reason strings above.** Everything about
+*where* the announce goes missing is a hypothesis, and the evidence that seemed to confirm it has
+been withdrawn.
 
 ### ✅ `j-spine` IS GREEN — 7/7, from 4/7. Five failures fixed; four were stale vocabulary.
 >
