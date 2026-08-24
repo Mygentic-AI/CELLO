@@ -592,7 +592,40 @@ answer was worse and different.
   to soften it — §2f, and the same rule that governed the swept surfaces.
 
 ### `DOD-M15-DISCLOSE-1` — 🟡 Shipped documentation discloses what the architecture cannot remove
-> # 🔒 BULLET 1 CLAIMED BY **CELLO_Support**, 2026-08-24, BEFORE writing a word of it.
+> ### ✅ BULLET 1 DONE 2026-08-24 (CELLO_Support) — written, REVIEWED, and corrected twice on review.
+> **In both shipped copies** — the connect tarball's `SKILL.md` and the plugin's, which are different
+> documents, and the plugin is the route most operators install by. A disclosure in one reaches the
+> smaller audience.
+> **THE HALF I WAS MOST WORRIED ABOUT SURVIVED, and the evidence is better than argument:** review
+> enumerated every relay frame, every daemon→relay send and everything the relay writes to disk, and
+> found no path where message content reaches it readable. **The relay package contains no cipher
+> primitive at all** — zero hits for decrypt/aes/chacha/x25519/hkdf across its source — so there is
+> nothing in it that *could* read a payload. That settles `enforcedBy: "structural"`: no branch to
+> skip because there is no code to run.
+> **⚠️ AND MY OWN DISCLOSURE OVERCLAIMED TWICE, BOTH IN THE REASSURING DIRECTION** — the exact defect
+> this milestone exists to remove, committed inside the document written to disclose it.
+> 1. *"One relay carries almost all… over time it can correlate"* was weaker than the truth on three
+>    counts. It is **all**, not almost all. It does **not infer over time** — the directory hands it
+>    both participants' identity pubkeys per session, and you authenticate with your long-term key on
+>    one connection carrying every session. And **one relay is selected for everyone with no
+>    rotation** in either selection path. The old wording invited *"short-term use is fine, and it's
+>    an inference."* Neither is true.
+> 2. *"It governs sessions opened from now on"* is true of the ADDRESS FILTERING and false of the
+>    rest: the hole-punch and advertisement changes are fixed when the agent's network node is built,
+>    so **an already-running agent can still be upgraded to a direct connection until it restarts.**
+>    Verified in the code rather than taken from the review.
+> **Also now stated:** the relay learns message length; a message parked while the recipient was
+> offline leaves an **unsalted** content hash, so the relay can confirm a guess at a short or
+> predictable message; and relay-only does not protect you from a counterparty who **runs the relay**.
+> **The MCP tool description carried the same restart wording** and was corrected in the same commit —
+> it is the third copy of this claim.
+> **The claim scanner caught the new text immediately** (3 new vocabulary hits per surface, over
+> baseline). Adjudicated into the ledger with verbatim excerpts, an enforcer and evidence — never by
+> raising the baseline, which the scanner says plainly is the one response that is never right.
+> **Gate: adapter 21 files / 182 tests / 0; typecheck 0; eslint 0.**
+> **Bullets 2-4 remain open and unclaimed.**
+>
+> ### (claim, kept for the trail) CELLO_Support, 2026-08-24
 > **Andre's re-ranking, quick win #1:** *"Say that a direct conversation reveals your IP.
 > Documentation. It's true, there's no remedy, and the setting that would have been the remedy was
 > reopened this morning as not working."*
@@ -4241,7 +4274,31 @@ compromised and could weaponize "signature mismatch" as a false accusation.
   `DOD-M15-RELAYFANOUT-1`.
 
 ### `DOD-M15-DIRAUTH-1` — 🟡 Directory authentication cannot be silently skipped
-> # 🔒 THE "LOUD WHEN SKIPPED" PIECE CLAIMED BY **CELLO_Support**, 2026-08-24, BEFORE writing code.
+> ### ✅ TWO QUICK WINS DONE 2026-08-24 (CELLO_Support) — Andre's re-ranking, items #5 and #3.
+> **#5 — a skipped identity check is no longer indistinguishable from an enforced one.** Step 6 runs
+> only `if (verifier)`; with none, this daemon takes the directory's word for which directory it is,
+> and the ONLY trace was `verified: false` — one field inside the **info** line a SUCCESSFUL connect
+> also emits. `directory.auth.skipped` now fires at WARN naming what was not checked and the setting
+> that refuses at startup. **Deliberately not presented as the fix, and the code says so:** this
+> entry's own conclusion is that a log is not a control, and a WARN is still a log. It buys the
+> absence a name and a level of its own.
+> **#3 — an empty directory-key set silently disabled the manifest poll.** The guard was right and
+> stays right (a poll verifying against no keys verifies against nothing), but when it fired,
+> *nothing happened*: the daemon started, looked healthy, and never adopted a manifest again — the
+> failure you find months later when a rotated directory key was never picked up. It now REFUSES at
+> startup with the key count and threshold in the error.
+> **The distinction that makes the refusal safe rather than a blanket throw:** *no scheduler* is a
+> legitimate configuration (the M6 back-compat path runs that way, and failing there would brick a
+> supported setup); *scheduler wired with no keys* is a misconfiguration — somebody asked for
+> verification and supplied nothing to verify with. **Only the second refuses**, and both halves are
+> pinned by tests.
+> **An existing test encoded the OLD silent-disable behaviour** and was changed deliberately, with
+> the reason written into the test — silently rewriting a test to match new code is how a contract
+> gets lost.
+> **Gate: daemon 280 files / 2920 tests / exit 0; typecheck 0.**
+> **Bullet 2 (`DOD-M15-BOOTSTRAP-AUTH-1`) is untouched, so this line stays 🟡.**
+>
+> ### (claim, kept for the trail) CELLO_Support, 2026-08-24
 > **Andre's re-ranking, quick win #5:** *"Make the skipped directory authentication loud. Not the
 > full fix — just stop it disarming in silence."*
 > **The gap, read out of the code rather than assumed:** `signaling-connect.ts` runs step 6 only
