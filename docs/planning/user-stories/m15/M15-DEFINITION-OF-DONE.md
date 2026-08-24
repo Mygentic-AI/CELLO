@@ -991,11 +991,26 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 > the failure did not name). The rule is simply that a pre-fix red file proves nothing about its
 > subject, and each has to be re-run before anyone reasons from it.
 >
-> **So the honest headline is not "half the lane is broken."** It is: **five journeys die on one CLI
+> **So the accurate headline is not "half the lane is broken."** It is: **five journeys die on one CLI
 > defect, seven on a stopped container, five look like one cascade, and five share a seal-shaped
 > shape that may be version skew.** What remains genuinely unexplained is a much smaller number than
 > 49, and the next unit should re-run AFTER starting the portal database and fixing `CLIJSON-1` —
 > re-running before those two is spending an hour to re-measure known causes.
+> **`j-canary` — a NINTH, and I had written it off as my own mess (fixed 2026-08-24).** It asserts
+> `git status --porcelain` is empty in both repos. I recorded its failure as "my tree was dirty" and
+> moved on. **It was not my tree.** On ANY clean checkout of `cello-client`, a dozen
+> `core/*/node_modules` entries read as untracked, so the canary could never pass on a dev machine —
+> it was failing for a reason with nothing to do with what it tests.
+> **The cause was a trailing slash.** `.gitignore` had `node_modules/`, which matches DIRECTORIES
+> only, while the iCloud workaround recorded in that same file makes each package's `node_modules` a
+> **symlink** to `node_modules.nosync` — and a symlink is not a directory, so the pattern matched
+> none of them. Dropping the slash matches both; `git check-ignore` now confirms it and the tree
+> reports clean.
+> **Fixed at the source, not by loosening `gitClean`.** `node_modules` must not be tracked whether it
+> is a directory or a symlink, and relaxing the assertion would have hidden the next thing that
+> genuinely dirties the tree. **Same lesson as the eight above:** "it failed because of something I
+> did" is as unexamined an attribution as "the floor is broken", and it is the more comfortable one,
+> which is why it went unchecked longer.
 - **Enforcer:** `test:spine` green, or every remaining failure carrying a written verdict of
   environment / stale-expectation / real-defect, with the real ones lined up.
 
