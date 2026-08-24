@@ -4672,9 +4672,19 @@ Parallel with Tier 4 — different disciplines, no shared files.
 > start for any reason, and a broken binary would pass; and `local` is exempt, which is not
 > hypothetical since the spine harness runs a single directory. **Revert test RUN** (remove the
 > guard, rebuild, re-run): reddens exactly the first case and leaves the other two green.
-> **STILL CARRIED:** `InMemoryContentStore` is unbounded, so **no spine test can ever see a
-> refusal**; and `< 2` is a floor — a 2-of-3 set still passes, and cross-checking against
-> `CELLO_DIRECTORY_ENDPOINTS` would close it.
+> **✅ BOTH REMAINING CARRIES NOW CLOSED — the unit has no open items.**
+> - **`InMemoryContentStore` carries the same bounds and the same ordering.** It is selected for
+>   `CELLO_ENV=local`, which is every local run and the ENTIRE spine harness, so while it wrote
+>   unconditionally the one behaviour the bound exists to produce was unreachable from the only lane
+>   that runs real processes — and an interface whose two implementations disagree about whether a
+>   deposit can be refused is the defect this milestone exists to remove.
+> - **The 2-of-3 gap is closed, with no new configuration.** `< 2` was a floor: a relay told about
+>   exactly ONE of its two peers passed it and was still broken for every session the third node
+>   brokered. `CELLO_DIRECTORY_ENDPOINTS` comes from the same terraform loop over the directory nodes
+>   and already states real membership, so any pubkey named there and missing from the accepted set
+>   is a directory this relay would silently reject. It now refuses and names which ones disagree.
+> **Gate: relay + interfaces 31 files / 318 tests / exit 0; typecheck 0.** Four startup cases, the
+> revert test RUN on the first.
 >
 > ### ✅ TWO ITEMS DONE 2026-08-24 (CELLO_Support) — now `RELAYPARK-1` and `RELAYPUBKEYS-1`.
 > **THE PARK STORE IS NOW ACTUALLY BOUNDED.** The store documented its own hole: eviction only scans
