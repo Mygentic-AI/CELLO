@@ -177,6 +177,27 @@ catch.
 loop, a teardown, a CI gate, a lint rule. Not to ordinary tests, which have a subject that fails on
 its own.
 
+> ### 🎯 THE EXEMPLAR CHECK — when a clause names its cases, the test uses THOSE values
+>
+> **Not a principle; a thing to do before you write the value.** Both lanes hit it on 2026-08-24,
+> hours apart, and neither was carelessness:
+> - `CELLO_Coder_1` tested a presence check whose clause names `""`, `0` and `false` — and picked
+>   **`42`**, the one non-string that cannot reach the broken branch. Their own diagnosis, and it is
+>   the useful part: *"`42` is what comes to mind when you want a number, and the values the clause is
+>   about are what comes to mind when you want falsy. Two different mental searches, and the test was
+>   written from the wrong one."*
+> - `CELLO_Support` wanted "a sequence number meaning nothing after the start" and reached for
+>   **`since_seq: 0`** — never asking what `typeof 0 === "number"` does to the branch ABOVE it. Every
+>   IPC test then took a different exit than the one it was named for, and the line they claimed to
+>   cover could be deleted with the whole file staying green.
+>
+> **The failure is choosing the exemplar from your INTENT instead of from the PREDICATE.** You know
+> what you mean, you reach for a value that means it, and you never read the condition back to ask
+> which branch that value actually lands in.
+>
+> **The check:** name the branch your value takes before you run it, then confirm it took that branch.
+> If the clause enumerates cases, use its values verbatim — do not substitute a representative.
+
 **A false CAUGHT is worse than a false GREEN, and this is why the rule exists.** A false green leaves
 the suspicion alive — the thing still looks unproven, and someone eventually re-checks. A false
 caught **retires** the suspicion: the case is recorded as covered and nobody looks again. The second
