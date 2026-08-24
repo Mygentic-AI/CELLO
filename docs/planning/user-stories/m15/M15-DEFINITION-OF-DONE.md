@@ -1384,6 +1384,39 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > security violation, regardless of whether tests pass."* **Either the kill switch can be routed
 > around, or the test's plumbing is wrong. Both are worth an hour; only one is forgivable at launch.**
 >
+> #### 🔎 INVESTIGATION 2026-08-24 — the test's plumbing is VERIFIED CORRECT, and the evidence runs out
+>
+> **Every producer checks out. The "wrong plumbing" explanation is dead:**
+> - `copyAgentProfileBetweenNodes` copies an explicit column list that **includes `agent_id`** — its
+>   own comment says *"the suspension JOIN needs only agent_id + k_local_pubkey"*.
+> - `setPaused` inserts into `agent_suspensions (agent_id, paused, …)` keyed on that same id.
+> - `isAgentSuspended` is `SELECT 1 FROM agent_suspensions s JOIN agent_profiles p ON p.agent_id =
+>   s.agent_id WHERE p.k_local_pubkey = $1 AND s.paused = true`, and returns on `rows.length` — the
+>   comment notes that deliberately, *"a security gate must not default fail-OPEN"*.
+> - `#isAgentPaused` reads the store **live**, not from a boot cache, and **fails closed** on error.
+>
+> **The threshold is majority: for a 3-node consortium the client needs 2 directories** (`Math.floor(declared / 2) + 1`).
+> With two suspended, one remains — **below threshold — and a signature formed anyway.**
+>
+> **⚠️ THE ARCHITECTURE POINT THAT REFRAMES THE WHOLE QUESTION: the session ceremony is DELEGATED TO
+> THE CLIENT.** `ClientDelegatedSigner` sends a `ceremony_request` over the agent's own signaling
+> stream and waits for the client to return a signature; the directory does not assemble it. **So the
+> threshold is enforced client-side**, and a directory's suspension refusal only bites if the client
+> actually needs that node's share. Whether the client asked nodes 1 and 2 at all is the open question.
+>
+> **🛑 WHERE THE EVIDENCE RUNS OUT, AND I AM NOT GUESSING PAST IT.** The decisive artifact is the
+> directory-side log: `frost.ceremony.refused.revoked` (the node refused) or
+> `frost.suspension.uncheckable` (the node signed blind). **The committed receipt contains ZERO
+> `frost.*` events of any kind** — not zero refusals, zero events, so the receipt simply does not
+> capture directory FROST logging. **That is a fact about the evidence, not about the product**, and it
+> would be very easy to report as *"the nodes did not refuse"*, which the receipt cannot support.
+>
+> **NEXT STEP, precisely:** re-run `j-suspend-tofn` with the three directory processes' output captured
+> and grep for those two events. If nodes 1 and 2 logged `refused.revoked` and a signature still
+> formed, that is a **threshold defect** and a launch blocker. If they logged `uncheckable`, it is the
+> **known replication gap** already documented in `#isAgentPaused`. If neither appears, the client
+> never asked them, and the question moves to the client's quorum selection.
+>
 > ## 🔒 CLAIMED 2026-08-24 by `CELLO_Coder_1` — do not start work on this line
 > **Files held:** `packages/e2e-tests/src/spine/*` and the journey files under it. Nothing in
 > `core/daemon` unless a triage cause lands there, and I will amend this block before touching one.
