@@ -2747,6 +2747,12 @@ harvest-now threat the line names — and NOT an active on-path relay.
 - `SEALWIRE-1` must sign the ephemeral public with the agent's Ed25519 identity and verify the peer's
   BEFORE deriving. It also removes `KEYAGREE`'s bit-255 refusal as the sole tamper detector — a
   signature catches the flip instead.
+- ✅ **THE DOCSTRING BULLET IS DONE — verified 2026-08-24, and it is exact.**
+  `session-key-agreement.ts` carries a headed section *"WHAT THIS DOES NOT DEFEND AGAINST, stated
+  plainly"*: defeats a **PASSIVE** recorder (*"which is what a relay storing traffic is"*), and *"NOT
+  sufficient against an ACTIVE on-path relay, which can substitute both ephemerals"*, closing with
+  *"a reader could otherwise conclude MITM is covered. It is not, yet."* **No claim to withdraw.**
+  So what remains on this line is the BINDING itself, not the disclosure.
 - The module docstring states the limit in the meantime, so a reader cannot conclude MITM is covered.
 
 ### `DOD-M15-EPHEMERAL-REVIVAL-1` — ❌ A revived session RE-KEYS
