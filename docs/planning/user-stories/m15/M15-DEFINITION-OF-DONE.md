@@ -2290,7 +2290,22 @@ was silently dropped.
 > restart. Report-only defers it.
 > **Carried:** `DOD-M15-EXPIRY-CONSUMER-POLICY-1`, `DOD-M15-BUNDLED-2030-1`.
 
-### `DOD-M15-EXPIRY-CONSUMER-POLICY-1` — ❌ One policy for an expired anchor, across all consumers
+### `DOD-M15-EXPIRY-CONSUMER-POLICY-1` — ✅ One policy for an expired anchor, across all consumers
+> **CLOSED 2026-08-24 (CELLO_Support). BOTH review passes spent.** Pass 2's five items landed and
+> each was verified by MUTATION rather than by re-reading, as it asked. Gate: **3032 passed / 287
+> files**, plus 24 bootstrap, 3 registration, 58 transport.
+> **The decision was right from the start and never changed** — reviewer, pass 2: *"the decision
+> underneath it is right… What blocks the flip is the execution."* All four consumers permit; the
+> three that were silent now report; `signal-submission` still refuses, because it reads the portal
+> INTAKE KEY and a rotated key means a message the portal can neither open nor attribute.
+> **What it cost to get the execution right is the part worth keeping:** pass 1 found I had built a
+> security signal an adversary could switch off, and pass 2 found that my FIX for pass 1's other
+> finding shipped with its own false claim and no test. Two rounds, both mine, both the same class.
+> **Mutations that prove it, run by hand:** revert the membership filter → the no-peer-ids test
+> reddens; neuter `classifyManifestValidity(…)` to `null` → the registration test reddens (the source
+> assertions it replaced passed that neutering); put the dedup key back before the report → the
+> flaky-sink test reddens; restore the old `new Date(expires) <=` → the undateable-manifest test
+> reddens.
 Split from `DOD-M15-MANIFEST-EXPIRY-LIVE-1` (review F6). The daemon already has a per-consumer
 policy for an expired manifest — it just never chose it.
 - `signal-submission.ts` REFUSES a trust-signal submission on the held manifest's expiry.
