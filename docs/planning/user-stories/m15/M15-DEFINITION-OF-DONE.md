@@ -5405,6 +5405,24 @@ compromised and could weaponize "signature mismatch" as a false accusation.
 > `verified: !!verifier` every connect. The right reason is that a LOG IS NOT A CONTROL.
 > **Carried:** `DOD-M15-BOOTSTRAP-AUTH-1`, `DOD-M15-STEP6-REPLAY-1`.
 
+### `DOD-M15-RELAYADMIN-KEYSET-1` — ❌ The relay's admin stream trusts ONE directory, not the consortium
+**Found 2026-08-24 (CELLO_Support) while verifying `DISCLOSE-1` bullet 3. Recorded, NOT chased —
+outside that unit, and I am not opening it on a guess.**
+- The relay verifies a **session assignment** against the any-directory set:
+  `this.#directoryPubkeys.find((pk) => verify(pk, tbs, assignment.directory_signature))`. Any
+  sovereign directory can broker a session. That is `FED-OPTIONB-SETUP-001` working as designed.
+- But the **directory→relay admin stream** (`/cello/directory-relay/1.0.0`, which carries
+  `record_assignment`, `discard_session`, `confirm_seal`, `reject_seal`) verifies against
+  `this.#directoryPubkey` — **the single primary key only.**
+- **The question, which needs someone who owns the relay's federation story:** if a session is
+  brokered by directory node 1 or 2, can that node drive the relay's session lifecycle at all, or is
+  node 0 a precondition for it? If the latter, one directory is load-bearing for every session the
+  other two broker — the redundancy invariant inverted, in the same shape `RELAYPUBKEYS-1` just made
+  fatal at startup for the assignment path.
+- **What I did NOT establish:** whether the admin stream is only ever dialled by the primary by
+  design (in which case this is correct and should say so), or whether a non-primary broker silently
+  cannot complete. Answering that is the unit; guessing is how a working design gets "fixed".
+
 ### `DOD-M15-BOOTSTRAP-AUTH-1` — ❌ The bootstrap coordinate arrives over an authenticated channel
 Extracted from `DOD-M15-DIRAUTH-1`'s second bullet so it is a line rather than a footnote.
 - The directory's `/bootstrap` coordinate comes from a **plaintext HTTP endpoint on port 9090**.
