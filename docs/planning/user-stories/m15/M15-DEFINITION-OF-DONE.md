@@ -945,9 +945,26 @@ Split from `DOD-M15-RELAYADMIN-1` once its deletion premise was disproved and th
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 - **Rate limiting per peer and per pubkey** on authentication, hash submission, gap-fill, the
   liveness query, and content-park deposit. There is **none of any kind** today.
-- **Re-enable the per-session idle timer in the production binary** — the feature exists and the
-  binary never passes it, so only a 24-hour sweep runs — and restore duration and byte caps on
-  relayed connections, which are deliberately disabled.
+- ~~**Re-enable the per-session idle timer in the production binary.**~~ **⚠️ MEASURED 2026-08-24
+  (CELLO_Support) AND THIS BULLET IS DANGEROUS AS WRITTEN — do not do what it says.** The premise is
+  correct: `sessionIdleTimeoutMs` appears **nowhere** in `bin/relay.ts`, so the per-session timer is
+  never armed. **What the bullet does not say is what arming it would DO.** When that timer fires it
+  is **terminal**: `#cleanupSessionTracking(...)` plus `#store.destroySession(...)` — the session
+  stops being served as active, so it can no longer be recorded, confirmed or sealed through that
+  relay. A CELLO conversation is legitimately idle for hours (a counterparty offline, two agents
+  talking occasionally), so **enabling this with any short value destroys live conversations and the
+  receipts they were earning.**
+  **And the bounding it is supposed to provide ALREADY RUNS.** `bin/relay.ts:718` calls
+  `startIdleSweep(1 h, 24 h)`, whose sweep performs the *same* terminal teardown via
+  `sweepIdleSessions` + `#cleanupSessionTracking`. So this is not a missing control — it is a
+  **second, shorter deadline for the same destruction**, and the only thing enabling it changes is
+  how soon a quiet session dies.
+  **What is actually open here is a NUMBER, not a wiring job**, and the DoD's own rule for exactly
+  this shape applies (`DOD-M15-IDLE-CONNS-1`): *"Do not guess the caps… a cap set without measurement
+  breaks reachability — the one property this milestone must not trade away."* Measure how long real
+  sessions sit idle before deciding the 24 h sweep is wrong.
+- **Restore duration and byte caps on relayed connections**, which are deliberately disabled. (The
+  half of the original bullet that stands unchanged.)
 - ~~Bound the content-park store per depositor.~~ → **`DOD-M15-RELAYPARK-1` ✅**
 - ~~Delete the directory-admin push handler.~~ → **`DOD-M15-RELAYADMIN-1` ❌ — unclaimed quick win.**
 - ~~An empty `CELLO_DIRECTORY_PUBKEYS` fails startup loudly.~~ → **`DOD-M15-RELAYPUBKEYS-1` ✅.** The
