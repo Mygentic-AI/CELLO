@@ -142,6 +142,18 @@ function agentState(listResult: unknown, name: string): string | undefined {
   return agents.find((a) => a.name === name)?.state;
 }
 
+/**
+ * Whether a named agent is SELECTED on the connection that produced this list.
+ *
+ * Separate from `state` on purpose — the daemon dropped `current` from the state enum precisely so
+ * selection and readiness could not be confused, and reading it needs its own accessor rather than a
+ * second meaning layered onto `agentState`.
+ */
+function agentSelected(listResult: unknown, name: string): boolean | undefined {
+  const agents = (listResult as { agents?: Array<{ name: string; selected?: boolean }> }).agents ?? [];
+  return agents.find((a) => a.name === name)?.selected;
+}
+
 /** A fresh CELLO_DIR with a provisioned agent identity and its own harness-owned daemon. */
 async function startAgent(
   label: string,
@@ -248,17 +260,51 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     // race the flush (the same race SPINE-1's corroboration fixed).
     await daemon.waitForLine(/"event":"daemon\.ipc\.connected"[^}]*"clientType":"mcp"/, 5_000);
 
-    // DOD-SPINE-3: three-state model, observed in sequence. login does NOT auto-start
-    // agents, so a freshly-loaded agent is "registered".
-    expect(agentState(await conn1.call("cello_agents"), "agentA"), "agentA starts registered").toBe(
-      "registered",
+    /**
+     * DOD-SPINE-3: three-state model, observed in sequence. `login` does NOT auto-start agents, so a
+     * freshly-loaded agent is **`stopped`**.
+     *
+     * ⚠️ THIS ASSERTED `"registered"`, WHICH THE STATE MACHINE CANNOT RETURN — and the failure was
+     * being read as "the multi-process floor is red".
+     *
+     * `resolveAgentState` emits exactly `load_failed | unregistered | paused | stopped | connecting |
+     * online | unattended`. `"registered"` was a STORED FLAG that was deliberately removed, and
+     * `agent-state.ts` says why: *"Deliberately NOT a stored 'registered' flag … every agent on disk
+     * was labelled 'registered' at load whether or not it ever was."* It was removed **because it
+     * lied**; the derived model calls a loaded-but-not-started agent `stopped`, which is the same
+     * fact stated truthfully.
+     *
+     * So this journey was asserting the vocabulary of the defect that was fixed. The product change
+     * was deliberate and correct; the journey was never updated with it.
+     *
+     * **Why it mattered out of proportion:** `DOD-SPINE-1..7` in this same file — register two agents
+     * with a real DKG, receive a FROST-signed assignment, send and receive through the relay, and
+     * complete a bilateral seal with a byte-identical root — all PASS. None of that is reachable with
+     * a daemon that failed to start. The milestone nevertheless recorded this lane's floor as broken
+     * on the strength of this line.
+     */
+    expect(agentState(await conn1.call("cello_agents"), "agentA"), "agentA starts stopped — loaded, not yet started").toBe(
+      "stopped",
     );
 
-    // registered → online (cello_start_agent; daemon-wide set).
+    // stopped → online (cello_start_agent; daemon-wide set).
     const started = (await conn1.call("cello_start_agent", { name: "agentA" })) as { ok?: boolean };
     expect(started.ok, `cello_start_agent failed: ${JSON.stringify(started)}`).toBe(true);
-    expect(agentState(await conn1.call("cello_agents"), "agentA"), "agentA online after start").toBe(
-      "online",
+    /**
+     * ⚠️ ALSO STALE, AND IT IS THE SAME RENAME ONE STEP LATER. This asserted `"online"`.
+     *
+     * `resolveAgentState`'s last line is `return i.attendance > 0 ? "online" : "unattended"`. Starting
+     * an agent does not make anyone ATTEND it — `cello_start_agent` brings the agent up and connects
+     * its signaling; attendance arrives when a connection actually takes the agent, which is the
+     * `cello_use_agent` two steps below.
+     *
+     * So `unattended` is the truthful state here, and it is a distinction worth keeping: *"running,
+     * reachable, and nobody is listening"* is a different thing to tell an operator than *"online"*.
+     * The assertions after this one are already consistent with that model — once conn1 takes the
+     * agent, conn1 sees `current` and conn2 sees `online`, because by then attendance is 1.
+     */
+    expect(agentState(await conn1.call("cello_agents"), "agentA"), "agentA unattended after start — up, but nobody has taken it yet").toBe(
+      "unattended",
     );
 
     // online → current, but ONLY on conn1 (DOD-SPINE-2 independence).
@@ -267,9 +313,29 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
 
     const list1 = await conn1.call("cello_agents");
     const list2 = await conn2.call("cello_agents");
-    // conn1 sees agentA as current; conn2 — same daemon, same agent — sees it only online.
-    expect(agentState(list1, "agentA"), "conn1: agentA is current").toBe("current");
-    expect(agentState(list2, "agentA"), "conn2 must be unaffected by conn1's switch").toBe("online");
+
+    /**
+     * ⚠️ THIS ASSERTED `state === "current"`, AND `current` WAS DELIBERATELY REMOVED FROM THE ENUM.
+     *
+     * `getAgentsForConnection` says why, in the code: *"`state` reports READINESS only; selection is
+     * a SEPARATE `selected` flag. **Never fold selection into `state`** — a selected agent is not at a
+     * different level of readiness than a second healthy online agent. (This is why `current` was
+     * dropped from the enum.)"*
+     *
+     * The old assertion could not distinguish "conn1 selected it" from "conn1 sees it as healthier",
+     * because the enum conflated the two. **The new one is strictly stronger:** both connections must
+     * agree on READINESS (`online` — attendance is now 1 because conn1 attends it), and they must
+     * DISAGREE on selection. That is `DOD-SPINE-2`'s independence property stated directly instead of
+     * inferred from a state name.
+     */
+    expect(agentState(list1, "agentA"), "conn1: readiness is online — selection is not a readiness level").toBe("online");
+    expect(agentState(list2, "agentA"), "conn2 must agree on readiness — same daemon, same agent").toBe("online");
+    expect(agentSelected(list1, "agentA"), "conn1 selected agentA, so conn1 must see selected=true").toBe(true);
+    expect(
+      agentSelected(list2, "agentA"),
+      "conn2 must be UNAFFECTED by conn1's switch — this is the independence DOD-SPINE-2 is for, and " +
+        "it is the half the old `current` assertion could not actually check",
+    ).toBe(false);
 
     // agent.current.switched fired for the switching connection (toAgent: agentA).
     // waitForLine, not a one-shot read — same stdout/IPC flush-race avoidance as above.
