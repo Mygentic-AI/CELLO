@@ -1203,9 +1203,42 @@ export async function connectMcp(celloDir: string, label: string): Promise<McpCo
   return {
     client,
     call: async (name, args = {}) => {
-      const res = (await client.callTool({ name, arguments: args })) as {
-        content?: Array<{ type: string; text?: string }>;
-      };
+      /**
+       * ⚠️ NAME THE CALL THAT HUNG — `DOD-M15-SPINERED-1`, the `j-multiplayer` timeouts.
+       *
+       * The MCP SDK's own timeout throws `MCP error -32001: Request timed out` and **nothing else**:
+       * no tool name, no arguments, no elapsed time. Five failures in one run all read identically,
+       * so the only way to learn WHICH call went unanswered was to re-run with ad-hoc logging — and
+       * the failing set reshuffles between runs, so the next run may not even hang on the same test.
+       * An error that cannot identify itself is unusable on an intermittent fault.
+       *
+       * This is why it matters here specifically: the timeout means a tool call was **never answered
+       * at all** — not refused, not errored. Without the name, "something in this journey never
+       * replied" is the whole finding.
+       *
+       * Re-thrown, not swallowed: the original error is the `cause`, so nothing about the SDK's own
+       * message is lost.
+       */
+      const startedAt = Date.now();
+      let res: { content?: Array<{ type: string; text?: string }> };
+      try {
+        res = (await client.callTool({ name, arguments: args })) as {
+          content?: Array<{ type: string; text?: string }>;
+        };
+      } catch (err: unknown) {
+        const elapsed = Date.now() - startedAt;
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `MCP tool "${name}" failed after ${elapsed}ms (${label}): ${msg}\n` +
+            `  args: ${JSON.stringify(args)}\n` +
+            (/timed out/i.test(msg)
+              ? `  NOTE: a timeout here means the daemon NEVER ANSWERED this call — not that it ` +
+                `refused. Look for the handler for "${name}" returning without writing a reply, or ` +
+                `awaiting something that never settles.`
+              : ""),
+          { cause: err },
+        );
+      }
       // cello-mcp wraps results as content:[{type:"text", text: JSON.stringify(value)}].
       const text = res.content?.find((c) => c.type === "text")?.text;
       if (text === undefined) return res;
