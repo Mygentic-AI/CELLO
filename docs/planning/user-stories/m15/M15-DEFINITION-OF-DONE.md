@@ -1263,6 +1263,27 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 > refuses EVERY message from a counterparty while the conversation looks merely quiet. That work now
 > tells the operator; it does not stop the split happening.
 >
+> ### ✅ RESOLVED UPSTREAM — `DOD-M15-SALTSPLIT-1` (`CELLO_Coder_1`), and the cause was a LYING COMMENT
+> **My open question is answered from code, not another run: the agreement NEVER STARTED.**
+> `no_agreement_started` is returned from one place and only when `#saltPending` AND `#saltLastOutcome`
+> are both empty — so the frame was never sent. It **provably cannot** mean started-then-failed:
+> every failure mode records a last-outcome mapping to a *different* reason string. **That is what
+> the outcome map is for**, and it is why this was decidable by reading.
+> **And the reason the split is PERMANENT was a comment asserting a property nothing implemented** —
+> the terminal branch claimed *"Both sides then hold no salt and both KNOW it"*, while
+> `#saltForHashing` returns a held salt on its FIRST line, before it looks at adoption at all, and
+> `sessions.content_salt` had a writer and **no clearer**. So a side that had agreed a salt kept
+> hashing under it after being told the peer could never hold one. **This milestone's defect class,
+> in the mechanism that produced my finding.**
+> **⚠️ WHAT THE FIX DOES NOT DO, in their words and worth keeping:** it PREVENTS the split when the
+> losing side has not spent its salt, and makes it DIAGNOSABLE when it has. **It does not REPAIR the
+> session I found** — that peer had already sent eight messages under its salt, and erasing a spent
+> salt would leave a transcript no single rule can verify. **That session stays dead.**
+> **PREDICTION TO VERIFY ON THE NEXT LANE RUN, stated before the run so it cannot be fitted after:**
+> `j-documents`' rejection case should now either pass, or fail with a DIFFERENT signature — not a
+> 60s `awaitSealedRoot` timeout. **If it still times out the same way, the salt split was not the
+> cause and this entry is wrong.**
+>
 > ---
 >
 > #### ✅ ANSWERED 2026-08-24 (`CELLO_Coder_1`), from the code rather than another run → `DOD-M15-SALTSPLIT-1`
@@ -1313,6 +1334,35 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 > Two places deciding the same thing, one unreachable. Called unconditionally now — the method owns
 > the decision, and that same mutation reddens with *"a spent salt must NEVER be discarded"*.
 > **Gate: 276 files, 2887 tests, 0 failures.**
+>
+> #### ⚠️ AC CARRIED FROM MY OWN INVARIANT CHECK — the split is loud in the log on the ONE side that has no other signal
+>
+> **Invariant 2 says failures are loud in the LOG *and* in the agent response, never one instead of
+> the other. This unit currently does the log half only, and the asymmetry is the opposite of what I
+> first assumed.** Traced rather than guessed:
+> - **The side holding NO salt refuses inbound content** (`content_hash_salt_unavailable`) and **is
+>   already told** — `REFUSED-INBOUND-SILENT-1` wired that branch, and its guidance even names the
+>   permanent case: *"close the session and start a new one."* That operator is covered.
+> - **The side holding the SALT is the blind one.** Its outbound messages are refused at the peer, so
+>   they never appear there; and the peer's own unsalted messages still verify locally, so they keep
+>   arriving. **From that operator's chair the counterparty is present and talking, but has stopped
+>   responding to anything they actually said.** Nothing in a `cello_send` response says otherwise —
+>   the send succeeds locally and at the relay, because the refusal happens on the far machine.
+> - **`session.salt.split` fires on exactly that side.** So the diagnosis and the repair
+>   (*"start a new session"*) exist, in a log that operator has no reason to open, and the one
+>   agent-facing surface they do see reports success.
+>
+> **The AC:** the split must reach the agent, not only the log — most cheaply by carrying it on the
+> send response the way `REFUSED-INBOUND-SILENT-1` carries unshown refusals on the reply, so the
+> affordance travels with the action rather than sitting beside it.
+>
+> **Deliberately NOT built in this diff.** The unit review is in flight on a fixed commit range, and
+> adding a second agent-facing surface underneath a running reviewer produces a verdict about code
+> that no longer exists. Two passes is the cap, so the change lands as its own unit against this AC.
+> **What I cannot prove from code alone:** whether the salted side's inbound path accepts the peer's
+> unsalted content in every case or only when the declared algorithm matches — I read the refusal
+> branch, not every producer of the declared `alg`. If it refuses too, both operators are told and
+> this AC shrinks to guidance wording rather than a missing signal.
 > **✅ SECOND CLAUSE — an assertion on an absent value keeps its diagnostic.** Both review passes
 > spent (→ Entry 64). Pass 2: *"NO SILENT FALLBACKS — and the unit removes one"*, *"REMOVALS
 > PROVEN"*. **Measured, not believed:** the other lane ran the `trustless-cello` root — 1742 passed,
