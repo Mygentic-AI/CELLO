@@ -1113,7 +1113,28 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 > file says so, because a test string that looks odd is exactly what someone cleans up, and cleaning
 > it makes the guard inert without failing.
 
-### `DOD-M15-CLOSEROOT-1` — ❌ Five seal journeys still expect a receipt that close no longer returns
+### `DOD-M15-CLOSEROOT-1` — 🟡 Journeys converted (unrun); the assertion clause ✅ MEASURED
+> **✅ SECOND CLAUSE — an assertion on an absent value keeps its diagnostic.** Both review passes
+> spent (→ Entry 64). Pass 2: *"NO SILENT FALLBACKS — and the unit removes one"*, *"REMOVALS
+> PROVEN"*. **Measured, not believed:** the other lane ran the `trustless-cello` root — 1742 passed,
+> 0 failed — which covers `expect-present` and its enforcer.
+>
+> Eleven at-risk sites, not the five I first counted or the eight the first review counted. **The
+> count is now computed from the tree by an enforcer**, so a twelfth fails on the commit that adds
+> it. One site (`j-suspend-tofn:172`) is exempt with a written reason and taken by the other lane.
+>
+> ⚠️ **THE ROOT GREEN COVERS LESS THAN IT LOOKS.** 39 files and 609 tests were SKIPPED — the spine
+> lane is excluded from every environment. So this says the in-process suite is clean; it says
+> nothing about the journeys, which is where two of the night's findings came from.
+>
+> **🟡 THE JOURNEY HALF IS CONVERTED AND UNRUN.** The five named below are converted, plus a sixth
+> (`j-documents`/`j-multiplayer`, surfaced by `SEALWIRE-1` bullet 8's better message) and a seventh
+> pair in `j-gcp-live` — where the CLI's `close-session` maps onto the same non-blocking verb, so it
+> asserted the pre-M12 contract too, with no custom message to lose. The other lane is running the
+> full spine lane now, against a current binary for the first time. **It does not close until that
+> reports.**
+
+#### Original finding — five seal journeys expect a receipt that close no longer returns
 **BLOCKS LAUNCH** (§0z.1) — but as **TEST DEBT, not a product defect.** The product is correct and
 the tests are stale.
 
