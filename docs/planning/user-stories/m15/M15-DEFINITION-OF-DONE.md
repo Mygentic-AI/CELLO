@@ -1484,6 +1484,45 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 | **Named lines already owned** (`j-unilateral`×2, `j-upgrade-bilateral` → `UNILATERAL-NOTARIZE-1`) | 3 | 🅿️ owned elsewhere |
 | **Individually-caused** (`j-end` 1, `j-remove` 1, `j-multiplayer` 4 timeouts) | 6 | 🔎 filed below |
 
+> ### 🔴 `DOD-M15-DOCACCEPT-UNBOUNDED-1` — ACCEPTING A DOCUMENT HANGS IF ONE HOLDER IS UNREACHABLE
+>
+> **Found by instrumenting the harness to name the hanging call — it answered on the first run.** The
+> MCP SDK's timeout says only `MCP error -32001: Request timed out`: no tool, no arguments, no elapsed
+> time. With the name attached, every timeout in `j-multiplayer` is the **same call**, while the
+> failing TEST SET keeps reshuffling (5/2, then 4/3, then 3/4):
+>
+> ```
+> MCP tool "cello_doc_accept" failed after 60000ms
+> MCP tool "cello_doc_accept" failed after 60001ms
+> MCP tool "cello_doc_accept" failed after 60002ms
+> ```
+>
+> **The chain, every link read:**
+> `cello_doc_accept` (`document-handlers.ts:589`) → `authorConsent` (`:814`) → `fanOutAmendment`
+> (`:759`) → **`for (const holder of args.holders)` with `await deps.transportFor(...).sendBytes(...)`
+> inside the loop** (`:769-771`) → `acquireSession` (`document-delivery-transport.ts:255`) →
+> `deps.openSession(...)` — *"the same path `cello_initiate_session` takes"*.
+>
+> **There is no timeout anywhere in that chain.** The fan-out is **sequential** and each hop opens a
+> session to that holder. **One holder who cannot be reached blocks the entire accept**, and the
+> operator's client gives up at 60 s having been told nothing.
+>
+> **⚠️ AND THE PRODUCT'S OWN TEST NAMES THE INVARIANT THIS BREAKS.** One of the failing tests is
+> literally *"NUDGE + SURFACE: **an absent holder blocks nobody**"*. An absent holder blocks everybody.
+>
+> **THE FIX IS SMALL, BECAUSE THE "NOT NOTIFIED" PATH ALREADY EXISTS.** `fanOutAmendment` already
+> handles a holder it could not reach — `told[holder] = false` plus a named
+> `document.amendment.holder_unnotified` warn, added precisely so *"a lost membership change"* is not
+> just a boolean inside an `ok: true`. **A timeout on the per-holder send would feed that existing
+> path** rather than needing a new one. Bounding it is the minimum change that makes the code do what
+> its own log line already claims.
+>
+> **🅿️ FILED, NOT BUILT — the freeze.** It is a behaviour change on a delivery path, and *how long* to
+> wait per holder is a product judgement (and whether to fan out in parallel at all). **Recorded with
+> the full chain so the decision needs no re-derivation.** User-visible: you accept an invitation to a
+> shared document and it hangs for a minute, because someone else in the document happens to be
+> offline.
+>
 > #### 🔎 AND THE FAILING SET **CHANGES BETWEEN RUNS** — so no product cause can be attributed yet
 > Run in isolation 2026-08-24: **5 failed / 2 passed**, against **4 failed / 3 passed** in the batch.
 > **`GOVERN + JOIN` failed in the batch and PASSES alone; `END: closes are ENTRIES` passed in the batch
