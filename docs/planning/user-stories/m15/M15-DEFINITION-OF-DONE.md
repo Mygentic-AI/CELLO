@@ -2452,7 +2452,7 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 > | 1 | **`register-agent` prints prose after its JSON** — dies at the journey's FIRST line | **8** | **CAUSE ESTABLISHED**, reproduced, FIXED. → `DOD-M15-CLIJSON-1` |
 > | 2 | **Cascade inside `j-multiplayer`** — 5 × `MCP -32001 Request timed out` at ~70s each, all AFTER an earlier real failure in the same file (*"agentA has no sealed root"*) | 1 file, 5 tests | **Likely ONE cause, not five.** Re-run the file alone after cluster 3 before treating any as real |
 > | 3 | **The seal path hands back `undefined` where a value is expected** — five `.toMatch() received undefined`, in unilateral seal, the ABSENT gate, auto-acknowledge close, bilateral seal, and loopback | 5 | **LEAD ONLY.** All five are seal/notarization. `SEALWIRE-1` is mid-flight in the other lane and the spine runs the BUILT binaries, so version skew is as plausible as a regression. **Raised with `CELLO_Coder_1` rather than diagnosed from this side** |
-> | 4 | **The portal database has been down 11 days** — `j-end`'s 7 failures are all portal HOPs | ~2 | **ENVIRONMENTAL, confirmed.** Not a product defect. Start the container and re-run before counting these |
+> | 4 | **The portal database has been down 11 days** — `j-end`'s 7 failures are all portal HOPs | ~2 | **ENVIRONMENTAL, confirmed** at the time. Container is up since; **`j-end` is now 10/10** — but note the last failure to clear was NOT environmental, it was a stale fixture writing a superseded column |
 > | 5 | Singletons — `same_operator` envelope field, the 2-of-3 quorum registration, the built-artifact layer boundary, and others | ~8 | Unexamined |
 >
 > ### ⚠️ RE-SCAN, and it moves the number the wrong way for my earlier reporting
@@ -2480,10 +2480,23 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 > | `j-suspend-tofn` | ✗ **⚠️ THIS CELL WAS WRONG — see the investigation below.** It is NOT "the test encodes T=3": that reading was retracted on the test's own header. Nodes 1 and 2 were **never asked for a share**, and an assignment was produced anyway |
 >
 > **So of the eight I characterised as "the floor is broken" — including the two I reported as the
-> sovereign-node invariant failing — NONE was a product defect.** **SEVEN of the eight are now
-> GREEN**, and the eighth (`j-suspend-tofn`) needs its premise reworked for T=2 rather than fixed.
-> Those properties are now positively PROVEN rather than merely un-disproven, which is a stronger
-> position than the lane was in before any of this started.
+> sovereign-node invariant failing — SEVEN were not product defects, and SEVEN are now GREEN.** Those
+> properties are positively PROVEN rather than merely un-disproven, which is a stronger position than
+> the lane was in before any of this started.
+>
+> > **⛔ THE EIGHTH SENTENCE HERE WAS WRONG AND IT IS THE ONE THAT MATTERED.** It read: *"NONE was a
+> > product defect… the eighth (`j-suspend-tofn`) needs its premise reworked for T=2 rather than
+> > fixed."* **`j-suspend-tofn` IS a product finding, not a test edit.** Its header says *"N=3
+> > directories, T=3 = client + any 2"* — two directory shares, which IS `majority(3)` — so the
+> > arithmetic was never stale and there is no premise to rework. The measured failure is that
+> > **nodes 1 and 2 were never asked for a share at all** (`node1=never-asked node2=never-asked`, 48
+> > captured stdout lines each) and a `session_assignment` was produced anyway.
+> >
+> > **This is the THIRD place the same downgrade had to be struck**, which is why it is corrected here
+> > rather than only in the investigation below. A blanket "none was a product defect" is how a
+> > kill-switch finding keeps being read as bookkeeping — and the kill switch is named in the launch
+> > bar. **A summary sentence that generalises over the one item that breaks the generalisation is the
+> > defect this milestone keeps finding in its own record.**
 >
 > **The re-runs ARE trustworthy**, because they happened after the fix: `j-refresh` ✅, `j-remove`
 > (real finding — `DOD-M15-REVOKED-READS-OFFLINE-1`), `j-relaysig` (real finding — a renamed command
