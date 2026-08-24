@@ -777,14 +777,53 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(((await connB.call("cello_start_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
     expect(((await connB.call("cello_use_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
 
-    // The agent-online hook auto-recovers — no explicit recover IPC. Prove it fired and delivered.
-    const auto = await daemonB.waitForLine(/"event":"content\.recover\.auto\.completed"/, 25_000);
-    expect(auto).toMatch(/"recovered":1/);
+    /**
+     * The agent-online hook auto-recovers — no explicit recover IPC. Prove it fired and delivered.
+     *
+     * ⚠️ WAIT FOR THE SWEEP THAT RECOVERED, NOT THE FIRST SWEEP. `waitForLine` returns the FIRST
+     * match, and B runs more than one auto-recover sweep as it comes back up. The first is triggered
+     * by `signaling_reconnect` and was measured landing BEFORE the relay was dialable:
+     * `"trigger":"signaling_reconnect","recovered":0,"failedRelays":1`. Matching the bare event name
+     * therefore latched onto a sweep that had failed to reach the relay at all, and asserted
+     * `recovered:1` against it — reporting auto-recovery as broken when the later
+     * `standing_receiver_ready` sweep does the work.
+     *
+     * The AC is "B drains its mailbox with no explicit recover call", not "the first sweep drains
+     * it", so requiring a recovering sweep is the faithful reading. It cannot go hollow: if NO sweep
+     * ever recovers, this times out red, and the `cello_receive` at the end is the independent proof
+     * that the message actually arrived.
+     */
+    // Nothing is bound from the matched line on purpose: the REGEX is the assertion. Capturing it to
+    // re-assert `"recovered":[1-9]` afterwards would be an expectation standing next to a value that
+    // cannot contradict it — the shape this file already corrected once for `"level":"persisted"`.
+    try {
+      await daemonB.waitForLine(/"event":"content\.recover\.auto\.completed"[^\n]*"recovered":[1-9]/, 25_000);
+    } catch (err: unknown) {
+      const sweeps = daemonB.output.split("\n").filter((l) => l.includes("content.recover.auto.completed"));
+      throw new Error(
+        `no auto-recover sweep ever recovered anything. Every sweep B ran:\n${
+          sweeps.join("\n") || "  (none — B ran no auto-recover sweep at all, which is a different failure)"
+        }\n  A failedRelays count above zero means the sweep could not reach the relay, not that the mailbox was empty.`,
+        { cause: err },
+      );
+    }
     expect(daemonB.output, "auto-recovered content traverses the inbound funnel").toMatch(/"event":"session\.content\.received"/);
 
-    const recv = (await connB.call("cello_receive", { cello_session_id: sessionId })) as { ok?: boolean; content?: string | null };
-    expect(recv.ok).toBe(true);
-    expect(recv.content, "B reads the parked message WITHOUT any explicit content_park_recover").toBe(PARKED);
+    /**
+     * B reads TWO messages, in this order, and the first one is not the parked one.
+     *
+     * B went offline without ever reading "online-first", so that message is still queued when B
+     * comes back; the recovered message is appended after it. The recover test above pins the exact
+     * same ordering and explains it — "the live message B never read is delivered first — not lost".
+     * This test asserted a single read and expected the parked message, so it was really asserting
+     * that B had LOST the earlier one.
+     *
+     * Both expectations carry the ` [[OVER]]` suffix because the turn signal is in-band — it is part
+     * of the content the shim sent, so it is part of what comes back.
+     */
+    const read = async () => ((await connB.call("cello_receive", { cello_session_id: sessionId })) as { ok?: boolean; content?: string | null }).content;
+    expect(await read(), "the live message B never read is still delivered first — not dropped by the recovery").toBe("online-first [[OVER]]");
+    expect(await read(), "B reads the parked message WITHOUT any explicit content_park_recover").toBe(`${PARKED} [[OVER]]`);
   }, 120_000);
 
   it("DOD-MSG-8 (irreducible loss is honest) — a post-seal straggler is rejected (session_committed); B's certificate frontier is honest and the straggler never inflates it nor re-enters the transcript", async () => {
