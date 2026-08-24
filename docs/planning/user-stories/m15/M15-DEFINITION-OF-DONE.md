@@ -6384,8 +6384,56 @@ clears it**, so the DoD's word "live" is not enforced.
 > **⚠️ AND I CAUGHT MYSELF SHIPPING A HOLLOW TEST:** the first version asserted a client was NOT
 > closed against an EMPTY cache, which proves nothing about the fix. It now populates the cache the
 > production way and asserts the close happened.
-> **Typecheck 0. Tests written but NOT YET RUN** — the shared runner has been continuously occupied;
-> stated rather than implied.
+>
+> ─── **REVIEW CAME BACK BLOCKING, AND IT WAS RIGHT: I CAUGHT THE HOLLOW TEST AND THEN SHIPPED
+> ANOTHER ONE.** ────────────────────────────────────────────────────────────────────────────────
+>
+> The production code was proven sound (the re-indent verified byte-clean, no control-flow change).
+> **Neither test reached the code it was written for.** Review ran them and captured the return:
+> `{"ok":false,"reason":"no_persisted_relay_endpoint"}`, `builderCalled: 0`. One test was **red as
+> committed**; the other was **green with the fix reverted**, because it asserted
+> `hasSessions() === false` and that was true only because `registerSession` had never run.
+>
+> **What I had missed:** the detached branch needs THREE conditions and I supplied none. No live
+> `#activeNodes` entry (an entry short-circuits to the LIVE branch), a persisted `relay_peer_id` /
+> `relay_addrs` on the row, and a standing receiver for the agent. The setup now builds all three
+> through production entry points, and builds the REAL scenario: a session whose node is gone via
+> `destroySessionNode(…, "interrupted")` while its relay endpoint survives on the row — the
+> restarted-daemon case the detached path exists for.
+>
+> **Every test now asserts the branch was ENTERED before asserting anything about it**, and the
+> release test asserts the registration HAPPENED before asserting it is gone. That ordering is the
+> whole lesson: "no session is registered" is trivially true of a path that never registered one.
+>
+> **The test file was also outside `tsconfig.test.json`, and that hid a real type error:**
+> `submitSealLeaf` called with 4 arguments against a 3-argument signature, so the `Uint8Array` landed
+> in `correlationId`. Direct evidence I was writing against a method shape that does not exist —
+> the same reason the preconditions were missed. Fixed; file added to the allowlist.
+>
+> **REVERT PROOFS RUN, one mutation at a time:** removing the `gracefulShutdown` close loop reddens
+> only the shutdown test; removing `releaseDetached()` from the `finally` reddens only the release
+> test, on the registration still being present. Each leaves the other green.
+>
+> **Two more defects fixed, both found by review, both real:**
+> - **A revival failure leaked the same thing through a different door.** When `reviveSessionNode`'s
+>   status write fails, the teardown deleted the map key and stopped the node but never detached the
+>   relay — and `#reconnectRevivedSessionRelay` had already registered the session on the cached
+>   client. That registration stood with **no owner**, holding `hasSessions()` true for the life of
+>   the process.
+> - **A second seal caller closed the client the first was still awaiting.** Two `submitSealLeaf`
+>   calls can be in flight for one session (the method's own comment says so). Both released; the
+>   second unregistered the only session and closed the client mid-`submitLeaf`, settling it with
+>   `relay_client_closed` — sending the operator to `cello_status` and their relay for a client
+>   **this daemon closed on itself.** The release signal is now "this call ADDED the registration",
+>   not "this branch ran"; the flag is renamed `detached` → `releaseOnDone` so its name stops
+>   outliving its meaning.
+>
+> **And the new preconditions earned themselves immediately:** the fake relay client did not
+> implement the new `hasSession`, so the resolver threw a `TypeError`, nothing was registered, and
+> the only thing that noticed was the precondition assertion. The `.catch(() => undefined)` that
+> swallowed it is gone.
+>
+> **Typecheck 0 (source and the test config).** Final confirming run pending the shared runner.
 > # 🔒 CLAIMED BY **CELLO_Support**, 2026-08-24, BEFORE code. `DISCLOSE-1` closed, so this is my one WIP.
 > **I hold:** `session-node-manager.ts`'s relay-client lifecycle (`#relayClients`,
 > `#detachSessionRelay`, `gracefulShutdown`) and its tests. `CELLO_Coder_1`: this touches
