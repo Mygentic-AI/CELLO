@@ -1958,16 +1958,37 @@ The guidance does not merely under-inform — it instructs an action that cannot
   5-directory spine cluster. *(Two earlier reworks were derived and both were wrong — trail in the
   journal.)*
 
-> ### 🔴 ⚠️ THIS LINE'S POST-LAUNCH CLASSIFICATION RESTS ON A CLAIM THE DoD CONTRADICTS ELSEWHERE.
-> This entry says the kill switch is fine in production because *"suspension replicates to every
-> node, so all three refuse."* **`DOD-M15-SPINERED-1`'s `j-suspend-tofn` investigation says the
-> opposite and quotes `directory-node.ts` for it:** a node without the local `agent_profiles` row
-> resolves to not-suspended and **"SIGNS BLIND"**, and the comment calls single-node honoring *"the
-> production gap."*
-> **Neither entry measured the replication.** One query settles it: suspend an agent on one node,
-> read `agent_suspensions` on the other two. Row present ⇒ this line is right and stays post-launch.
-> Row absent ⇒ the kill switch is routable-around, and `.claude/CLAUDE.md` names a kill switch as a
-> launch requirement. **Flagged, not reclassified — that is Andre's call (§0z.4).**
+> ### ✅ THE CONTRADICTION IS RESOLVED — from code, 2026-08-24. **BOTH ENTRIES WERE PARTLY WRONG.**
+>
+> The flag asked for one query: suspend on one node, read `agent_suspensions` on the other two. **That
+> query would have returned ROW PRESENT — and it would have confirmed the wrong entry.** Answering it
+> from the replication layer instead:
+>
+> **1. The replication premise HOLDS.** `pg-ae-store.ts` states its scope outright — *"Six tables
+> round-trip: Tier-A `agent_profiles`, `agent_revocations`, `user_accounts` and `seal_notarizations`;
+> Tier-B `agent_suspensions` and `agent_presence`."* Both halves of the honour-check JOIN replicate:
+> the suspension row (Tier-B, with a merge in `suspension-merge.ts` the engine calls *"the kill-switch
+> convergence core"*) and the profile row it joins to (Tier-A). So a node holding neither is a
+> convergence failure, not the steady state.
+>
+> **2. Which makes `directory-node.ts`'s comment STALE, not wrong-then.** It reads *"**Until** the
+> flag+profile are REPLICATED to every node (PRESENCE-1 / cello_pub, Tier C), single-node honoring
+> means a genuinely-paused agent can still reach threshold."* That "until" has since happened, and
+> the comment still describes the world before it — so a reader arrives at a production gap the
+> replication closed. *(Rewrite, do not delete — `DOD-M15-CLAIM-COMMENTS-1`.)*
+>
+> **3. AND THE CONCLUSION THIS ENTRY DREW FROM IT STILL DOES NOT FOLLOW, which is the part that
+> matters.** *"Suspension replicates, therefore all three refuse, therefore the switch works"* assumes
+> the three are ASKED. **The measured failure was never a honouring failure at all:**
+> `node1=never-asked node2=never-asked`, with 48 captured stdout lines from each proving both were up
+> and logging. **A node that is never consulted can neither honour a suspension nor refuse one.**
+> Replicating the flag perfectly changes nothing on that path.
+>
+> **So the open question is not the one either entry was arguing.** It is not *"does the suspension
+> reach every node"* — it does. It is **why a session assignment forms without asking a majority of
+> the consortium**, which is the client-delegated ceremony (`ClientDelegatedSigner`), and that is the
+> design question already filed for Andre. **Still not reclassified** — the classification follows
+> from his answer to that, not from the replication fact (§0z.4).
 
 ### `DOD-M15-TOOLDESC-SCAN-1` — The claim scanner can see MCP tool descriptions
 **POST-LAUNCH** (§0z.1): the launch risk is whether the shipped descriptions are HONEST, and
