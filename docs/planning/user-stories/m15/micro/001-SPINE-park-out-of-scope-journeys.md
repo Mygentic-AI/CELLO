@@ -1,5 +1,5 @@
 ---
-name: MICRO-001 — Park the out-of-scope cross-machine journeys
+name: 001-SPINE — Park the out-of-scope cross-machine journeys
 type: micro-work-order
 date: 2026-08-24
 status: open
@@ -9,7 +9,7 @@ description: >
   only work that is still inside the gate. Skip with a named reason. Do not fix them.
 ---
 
-# **<ins>MICRO</ins>** WORK ORDER 001 — Park the out-of-scope journeys
+# **<ins>MICRO</ins>** WORK ORDER 001-SPINE — Park the out-of-scope journeys
 
 > ## THE RULES OF A MICRO WORK ORDER
 >

@@ -1,5 +1,5 @@
 ---
-name: MICRO-002 — No relay service without a directory-issued assignment
+name: 002-RELAY — No relay service without a directory-issued assignment
 type: micro-work-order
 date: 2026-08-24
 status: open
@@ -9,7 +9,7 @@ description: >
   so a circuit address is not dialable by whoever learns it. Source line: DOD-M15-RELAYAUTH-1.
 ---
 
-# **<ins>MICRO</ins>** WORK ORDER 002 — The relay requires an assignment
+# **<ins>MICRO</ins>** WORK ORDER 002-RELAY — The relay requires an assignment
 
 > ## THE RULES OF A MICRO WORK ORDER
 >
@@ -83,7 +83,7 @@ say so and move on. Do not redo it, and do not assume the report is right either
 5. `pnpm run test`, `pnpm run lint`, `pnpm run typecheck` pass.
 6. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below.
 
-**Not in scope:** rate limiting (MICRO-003), the admin frame types (MICRO-004), any change to the
+**Not in scope:** rate limiting (003-RELAY), the admin frame types (004-RELAY), any change to the
 directory, any change to what the client sends beyond what is needed to present the assignment.
 
 ---

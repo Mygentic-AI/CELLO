@@ -1,5 +1,5 @@
 ---
-name: MICRO-005 — The checked-then-ignored sweep, RELAY PACKAGE ONLY
+name: 005-RELAY — The checked-then-ignored sweep, RELAY PACKAGE ONLY
 type: micro-work-order
 date: 2026-08-24
 status: open
@@ -9,7 +9,7 @@ description: >
   next one. Scoped to the relay deliberately. Source: DOD-M15-SWEEP-1.
 ---
 
-# **<ins>MICRO</ins>** WORK ORDER 005 — Checked-then-ignored sweep (relay only)
+# **<ins>MICRO</ins>** WORK ORDER 005-RELAY — Checked-then-ignored sweep (relay only)
 
 > ## THE RULES OF A MICRO WORK ORDER
 >

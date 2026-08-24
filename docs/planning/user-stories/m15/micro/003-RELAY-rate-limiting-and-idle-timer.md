@@ -1,5 +1,5 @@
 ---
-name: MICRO-003 — Relay rate limiting, and the idle timer that is off in production
+name: 003-RELAY — Relay rate limiting, and the idle timer that is off in production
 type: micro-work-order
 date: 2026-08-24
 status: open
@@ -9,7 +9,7 @@ description: >
   remaining paths, and switch the timer and the relayed-connection caps on. Source: DOD-M15-RELAYABUSE-1.
 ---
 
-# **<ins>MICRO</ins>** WORK ORDER 003 — Relay rate limiting and the idle timer
+# **<ins>MICRO</ins>** WORK ORDER 003-RELAY — Relay rate limiting and the idle timer
 
 > ## THE RULES OF A MICRO WORK ORDER
 >
@@ -78,7 +78,7 @@ Restore both.
 6. `pnpm run test`, `pnpm run lint`, `pnpm run typecheck` pass.
 7. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below.
 
-**Not in scope:** requiring an assignment (MICRO-002), the admin frame types (MICRO-004),
+**Not in scope:** requiring an assignment (002-RELAY), the admin frame types (004-RELAY),
 infrastructure-level flood protection, anything in the directory or the client.
 
 ---

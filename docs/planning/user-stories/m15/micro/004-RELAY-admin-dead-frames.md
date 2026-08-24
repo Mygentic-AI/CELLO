@@ -1,5 +1,5 @@
 ---
-name: MICRO-004 — Three admin frame types with no sender
+name: 004-RELAY — Three admin frame types with no sender
 type: micro-work-order
 date: 2026-08-24
 status: open
@@ -9,7 +9,7 @@ description: >
   DOD-M15-RELAYADMIN-DEAD-FRAMES-1.
 ---
 
-# **<ins>MICRO</ins>** WORK ORDER 004 — Three admin frame types with no sender
+# **<ins>MICRO</ins>** WORK ORDER 004-RELAY — Three admin frame types with no sender
 
 > ## THE RULES OF A MICRO WORK ORDER
 >
@@ -77,7 +77,7 @@ It is load-bearing. Do not touch it.
 6. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below.
 
 **Not in scope:** replay protection on the admin stream (ruled out of the gate), the admin stream's
-directory key set, anything in MICRO-002 or MICRO-003.
+directory key set, anything in 002-RELAY or 003-RELAY.
 
 ---
 
