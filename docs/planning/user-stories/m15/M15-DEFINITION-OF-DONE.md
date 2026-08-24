@@ -1727,7 +1727,8 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > bookkeeping instead of the code. **The count is now stated as partial rather than implied complete.**
 
 **Files now measured green that the receipt lists red:** `j-spine` 7/7, `j-tofn` 4/4, `j-relaysig` 1/1,
-`j-upgrade`, `j-loopback`, `j-trust` 1/1, plus `j-end` 9/10 and `j-remove` 2/3.
+`j-upgrade`, `j-loopback`, `j-trust` 1/1, **`j-end` 10/10**, **`j-content` 10/10**, and `j-remove` 2/3.
+*(`j-end` was 9/10 when this line was written; the tenth is fixed — see the corrected entry below.)*
 
 ### 🔎 TWO INDIVIDUALLY-CAUSED FINDINGS, filed not fixed (freeze: nothing new enters the gate)
 
@@ -1742,8 +1743,20 @@ bring it online, then retry."* — and goes to chase a counterparty who can neve
 error substitution of the exact shape `DOD-M15-ERRSTRING-1` fixed twelve lines below it in the same
 file. **Fix is a wire question** (discovery must be able to say revoked), which is why it is filed.
 
-**`j-end`** — *"Bob's genuine third-party endorsement must NOT be flagged as same-operator"*: a trust
-signal misclassified. One test, own cause, not investigated.
+**~~`j-end`~~ ✅ FIXED — and "a trust signal misclassified" was the wrong reading.**
+The test was *"Bob's genuine third-party endorsement must NOT be flagged as same-operator"*, and it
+was filed here as an uninvestigated product misclassification. **The product was right; the fixture
+was incomplete.** The same-operator check (D-29) is a **disjunction** — it fires on an account match
+**OR** a phone-stub match — and the fixture seeded neither linkage table for Bob, so the endorsement
+could not be evaluated against the thing that distinguishes a third party from the same operator.
+The fixture now upserts `agent_account_links` (V59, keyed on the stable `agent_id`), and both
+assertions check the linkage across **account and phone stub** rather than one of the two.
+**`j-end` is 10/10.**
+
+**Worth keeping:** "not investigated" was accurate when written, but the note framed it as a
+suspected product defect. A single failing assertion about a security classification is exactly the
+kind of thing that should not sit in a DoD wearing a product-defect label until someone has looked —
+a reader deciding what to work on would have picked it up as a trust bug.
 
 ### 🔎 `j-stale-session` — FRAMES ARRIVE AND NONE ARE INGESTED, after the peer's daemon restarts
 
