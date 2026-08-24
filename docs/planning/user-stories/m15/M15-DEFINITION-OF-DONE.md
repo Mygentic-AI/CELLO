@@ -4381,14 +4381,44 @@ compromised and could weaponize "signature mismatch" as a false accusation.
 
 ### `DOD-M15-DIRAUTH-1` — 🟡 Directory authentication cannot be silently skipped
 > ### ✅ TWO QUICK WINS DONE 2026-08-24 (CELLO_Support) — Andre's re-ranking, items #5 and #3.
-> **#5 — a skipped identity check is no longer indistinguishable from an enforced one.** Step 6 runs
+> **#5 — a skipped identity check is no longer indistinguishable from an enforced one** — and review
+> found my first version had two defects of its own, both fixed. It fired **per connect**: the
+> signaling stream turns over every ~70s and reconnects forever, so ~48/hour/agent on a logger with
+> no level filtering, ~3,400 lines a day for three agents — **and loudest on the benign case**, since
+> local dev and the e2e harness have no verifier by design and a previous unit deliberately made that
+> path calm. *A signal that fires on the normal case is not a signal.* Now once per directory peer.
+> It also printed `directoryNodeId` — the string the REMOTE sent about itself, unchecked — inside a
+> line whose whole subject is that nobody checked which directory this is, presenting the peer's own
+> answer as the answer. Now `claimedNodeId` with `dialedPeerId` beside it, and the test asserts they
+> are distinct fields.
+> Step 6 runs
 > only `if (verifier)`; with none, this daemon takes the directory's word for which directory it is,
 > and the ONLY trace was `verified: false` — one field inside the **info** line a SUCCESSFUL connect
 > also emits. `directory.auth.skipped` now fires at WARN naming what was not checked and the setting
 > that refuses at startup. **Deliberately not presented as the fix, and the code says so:** this
 > entry's own conclusion is that a log is not a control, and a WARN is still a log. It buys the
 > absence a name and a level of its own.
-> **#3 — an empty directory-key set silently disabled the manifest poll.** The guard was right and
+> ### ⚠️ CORRECTION AFTER REVIEW — **I RECORDED #3 AS DELIVERED AND IT WAS NOT.**
+> **I built it against the wrong subject in the wrong repo.** Andre's #3 — and the DoD bullet it
+> comes from, which is filed under `DOD-M15-RELAYABUSE-1`, not here — names **`CELLO_DIRECTORY_PUBKEYS`
+> in the RELAY**. I hardened `manifestRootKeys` in the client daemon instead. Review traced every
+> production construction and proved my guard **cannot fire**: `buildManifestDeps` has three exits and
+> none produces scheduler + provider + empty keys, and two further guards sit in front of it. So it
+> is safe *because it is unreachable*, and the failure story I wrote for it — *"the daemon started,
+> looked healthy, and never adopted a manifest again"* — **describes a state no daemon can be started
+> in.** That is the same overclaim pattern as the commit immediately before it, one unit later.
+> **The guard stays** — it costs nothing and is correct as defence-in-depth for an in-process
+> embedder — but it is NOT quick win #3 and the test proving it is a green test for an unreachable
+> branch.
+> **THE REAL ONE IS NOW DONE** (`relay.ts`): with a single configured pubkey the relay accepts
+> assignments from ONE directory and rejects every session brokered by the other sovereign nodes. It
+> fails closed, so nothing is forged — but the operator sees **CELLO being flaky**, not a config gap:
+> one session works, the next fails depending on which directory brokered it, and retrying appears to
+> fix it. It also makes one directory a precondition for the relay, inverting the redundancy
+> invariant. Now **fatal in dev/staging/production**, with the variable named in the reason; `local`
+> exempt so loopback development and the e2e harness are untouched.
+>
+> **#3 (as built here, kept for the trail) — an empty directory-key set silently disabled the manifest poll.** The guard was right and
 > stays right (a poll verifying against no keys verifies against nothing), but when it fired,
 > *nothing happened*: the daemon started, looked healthy, and never adopted a manifest again — the
 > failure you find months later when a rotated directory key was never picked up. It now REFUSES at
