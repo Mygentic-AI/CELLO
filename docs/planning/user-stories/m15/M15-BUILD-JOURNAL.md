@@ -160,156 +160,61 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 > ### 🧊 GATE FROZEN (§0z.4). Findings go to POST-LAUNCH BACKLOG unless they are a security hole a
 > ### customer reaches. **BLOCKS is Andre's to grant, not yours.** Unclear no longer blocks.
-> ### Priority: `SEALWIRE-1` — bullets **5 (done)** and **8 (blocked on Coder_1's bullet 2)** are
-> ### mine; 3+4 are theirs. Otherwise: clear red spine journeys.
 
-- **⚡ COMMIT AND PUSH AFTER EVERY CHANGE.** Power has already failed once. Pushes get rejected when
-  the other lane pushes concurrently — `git pull --rebase` then push, and **verify the commit is on
-  `origin/main` afterwards** rather than trusting the rebase.
+### WHERE I AM (2026-08-24, late)
+
+**WIP: `DOD-M15-BOOTSTRAP-AUTH-1`'s test unit — built, green, revert-proven, PASS-1 REVIEW OUT.**
+Nothing else is claimed. Do not start a second unit until that verdict lands.
+
+**Closed today:** `RELAYLEAK-1` ✅ (two passes), `RELAYADMIN-1` ✅ (kept, justified),
+`DISCLOSE-1` ✅, `RELAYONLY-1` ✅, `TIERTEXT-1` ✅, `STEP6-REPLAY-1`'s replay bullet.
+
+### 🔴 THE THREE THINGS THAT WILL BITE THE NEXT SESSION
+
+1. **NEVER LEAVE A MUTATION ON DISK ACROSS A TURN BOUNDARY.** A revert-test mutation of mine reached
+   `main` — the other lane committed `session-node-manager.ts` for unrelated work while it was
+   mutated, and `gracefulShutdown`'s close loop shipped as `void key; void client;` for several
+   commits. **Apply → run → restore inside ONE command.** If the shared vitest runner is busy, do
+   not mutate at all; wait for the slot. I was blocked mid-mutation four times that night.
+2. **VERIFY A PREMISE PER-ITEM, NOT PER-CONTAINER.** `RELAYADMIN-1` cost me two corrections in one
+   hour: the line said "no caller", I proved the ADAPTER was constructed and connected and
+   generalised to all four of its frame types — three of them have no sender. Check each frame, each
+   call site, each column. The container being live says nothing about its members.
+3. **THE DoD IS THE SCOREBOARD AND IT IS NOW SPLIT THREE WAYS.** Closed lines →
+   `M15-DEFINITION-OF-DONE-ARCHIVE.md` (one-line pointer left behind). Investigation trails →
+   this journal, under *"DoD trails, moved 2026-08-24"*. **An open line keeps what it is, why it
+   blocks, its clauses, its enforcer and any live decision — never how we found out.** The DoD went
+   7,600 → ~2,500 lines. Keep it that way.
+
+### OPEN, AND THE SHAPE OF EACH
+
+- **The three relay-admin lines are ONE wire surface** — `RELAYADMIN-DEAD-FRAMES-1` (delete
+  `confirm_seal`/`reject_seal`, which have no sender), `RELAYADMIN-KEYSET-1` (widen
+  `discard_session`'s verify to the consortium set), `RELAYADMIN-REPLAY-1` (add freshness to the
+  three unsigned-for-freshness bodies). **Ship together or it is three fleet rolls.**
+- **`BOOTSTRAP-ADDR-1`** — a rogue address under a real peer id is returned and dialled; Noise
+  refuses it, so denial not impersonation, but the resolver is never told a dial failed.
+- **⚠️ A KILL-SWITCH CONTRADICTION IS FLAGGED AND UNRESOLVED.** `SUSPEND-UNTESTED-1` says suspension
+  replicates to every node; `SPINERED-1` quotes `directory-node.ts` saying a node without the local
+  profile row SIGNS BLIND. Neither measured it. **One query settles it:** suspend on one node, read
+  `agent_suspensions` on the other two. Reclassifying is Andre's.
+- **Do NOT "re-enable the per-session idle timer"** as `RELAYABUSE-1` once said. It is TERMINAL —
+  it destroys the store entry — and the 24 h sweep already does that reclamation. Enabling it short
+  kills live conversations.
+
+### STANDING MECHANICS
+
+- **⚡ COMMIT AND PUSH AFTER EVERY CHANGE.** Power has failed once. On a rejected push,
+  `git pull --rebase`, push, then **verify it is on `origin/main`** rather than trusting the rebase.
 - **🔌 THE SPINE LANE BINDS FIXED PORTS — ONE RUNNER ONLY.** A second run dies `EADDRINUSE :::65471`
-  and reports as *skipped with a hook timeout*, which reads as flaky and is not. Coder_1 handed me
-  the slot; ask before taking it. Start Docker + `docker compose up -d` + `docker start
-  cello-portal-postgres` first or results are noise.
-- **🚨 THE CORRECTION THAT GOVERNS EVERYTHING ELSE — and it has now RESOLVED.** *"A test that
-  asserts X is red"* only means *"X is broken"* **if the test reached X.** EIGHT journeys died inside
-  `register-agent` on `CLIJSON-1` before reaching their assertions, and **I reported the
-  sovereign-node quorum invariant as failing when it was never tested.**
-  **✅ ALL EIGHT RE-RUN. NOT ONE WAS A PRODUCT DEFECT.** `j-tofn-dkg` 2/2 (**kill a directory →
-  registration still succeeds**), `j-tofn` 4/4 (**sovereign isolation** + **forged manifest
-  REFUSED**), `j-sign` ✅ (FROST T-of-N across ≥2 directories), `j-relaysig` ✅, `j-refresh` ✅,
-  `j-remove` 2/3, **`j-persist` ✅** (fixed by the salting lane). The one still red is
-  `j-suspend-tofn`, a test encoding **T=3 when we ship T=2**.
-  **A NINTH belongs on this list: `j-canary`, which I wrote off as my own dirty tree.** It was not.
-  `.gitignore` had `node_modules/` — a trailing slash matches DIRECTORIES only — while the iCloud
-  workaround makes every one a **symlink**, so a dozen entries read as untracked on any clean
-  checkout and the canary could never pass on a dev machine. Fixed at the source. **"It failed
-  because of something I did" is exactly as unexamined as "the floor is broken", and it is the more
-  comfortable one, which is why it survived longest.**
-  **Seven properties are now POSITIVELY PROVEN rather than un-disproven** — a stronger position than
-  before any of this. The lesson stands regardless: check how far a test got before believing it.
-- **DONE tonight:** `CHAINDEBT-1`, `CHAINROUNDTRIP-1`, `MIGRATION-GUARD-1`, `SPINE-LANE-1`,
-  `CLIJSON-1`, `NORMHASH-1` ✅. `SEALWIRE-1` bullet 5 (received half; sent half ruled
-  not-worth-its-cost). `REFUSED-INBOUND-SILENT-1` + `UNWITNESSED-1(b)` implemented.
-  `RELAYAUTH-1` liveness scoping implemented.
-- **🎯 ANDRE REPRICED EVERYTHING (2026-08-24, via `Miss_Chelly`): CLOSE `SEALWIRE-1`, nothing else.**
-  Bullets 5 and 8 are the whole remaining gate item; the rest of the milestone is queued behind them.
-  **Do not take a new line. Record findings in the backlog and keep going.**
-  - **Bullet 5 — CODE COMPLETE both lanes**, unrun (Coder_1 holds the slot for bullet 8's journeys).
-    Mine: `SubmitResult.sender_signature`, the attribution precedence, 5 call-site wirings, 3 tests.
-    Theirs: `sendContent` returns `SentAuthorship`, pubkey taken from inside `structure1_cbor`.
-  - **Bullet 8 — written, being run by Coder_1** on 4 converted journeys (~40 min), not the full lane.
-- **🖊️ THE ARGUMENT THAT DECIDED BULLET 5, because it was nearly decided the other way.** The sent
-  half was ruled OUT as *self-referential* — *"a key I control signed something, which the row
-  already claims by existing."* **I nearly agreed.** *"A third party can check it"* does NOT answer
-  that: I hold my own key, so I can sign anything and write the row.
-  **What answers it is the ANCHOR** — the leaf sits under a directory-notarized root a third party
-  already holds, so a fabricated row needs a signature that also lands under that root.
-  **`a signature is only non-repudiable against something the signer does not control`** (now §7 of
-  the procedure). Neither lane had it until the disagreement forced it out.
-  **And a bug was about to ship INSIDE the fix:** once a sent row carries a signature, the obvious
-  label is `verified_signature` — false, because we PRODUCED it rather than checking anyone's key.
-  Direction decides first now, with the negative asserted rather than commented.
-- **✅ CLOSED SINCE: `REFUSED-INBOUND-SILENT-1`, `SAMEOP-1`, `HASHCORRELATE-1`.**
-  `EXPIRY-CONSUMER-POLICY-1`: all five pass-1 findings fixed, pass 2 running (cap spent after it).
-- **📊 GATE COUNT IS 30, NOT 44 — measured 2026-08-24, and the 44 is a counting artefact.** Split at
-  the `# POST-LAUNCH BACKLOG` divider: **tier body 25 ❌ + 5 🟡 = 30 open**, 40 ✅, 3 🅿️; **below the
-  divider 14 ❌ + 10 🅿️**. The bulk move of existing lines DID happen — 44 counts both sides of the
-  line as if they were all still in the gate. Only two tier lines still carry POST-LAUNCH text and
-  neither is a clean lift (`SEALWIRE-1` is mixed and the other lane's; `RELAYONLY-1` is scoped, not
-  marked). `Miss_Chelly` re-measured independently and agreed.
-- **🔒 THE LESSON I WOULD CARRY OUT OF THIS MILESTONE IF I COULD ONLY KEEP ONE: I built a security
-  signal the adversary could switch off.** The lapsed-manifest report fired BEFORE the signature
-  check, so a rogue directory — *the exact party the check exists to catch* — could send any
-  `nodeId`, spend the once-per-version budget, and leave every genuine authentication silent for that
-  manifest version. **Its absence would then read as safety.** Two general rules fall out:
-  - **A report that dedups must be spendable only by something you have already VERIFIED.** Dedup
-    budget is a resource; ask who can consume it before you add the key.
-  - **Report on the SUCCESS path.** Everything wrong with it — false text, unauthenticated field,
-    burnable budget — came from reporting a conclusion before reaching it.
-  It also sat inside the crypto `catch`, so a throwing logger reported that a healthy directory
-  **forged its identity proof**: error substitution, written by me, during a milestone about error
-  substitution.
-- **🧨 THE ONE PATTERN BEHIND ALMOST EVERY MISTAKE TONIGHT — read this before anything else.**
-  **I kept checking the thing in front of me and never the thing one step out.**
-  - the store had no reader → I tested the store
-  - so I added IPC tests → they passed `since_seq: 0`, a finite number, so they took a DIFFERENT exit
-    and the line they claimed to cover could be deleted with the file staying green
-  - the salted-status field went on the session record → `selectSessions` is a WHITELIST, so it never
-    reached the operator at all
-  - I claimed `HASHCORRELATE-1` had no test → **four already existed**, one named after it; I had
-    checked the file, not the repo
-  - I told `CELLO_Coder_1` to stop a publish because "my red test is in the tag" → **it was green in
-    CI**; I reasoned from a local red without checking
-  - I derived a `j-suspend-tofn` rework → it required suspending the initiator's node, which the
-    file's own header says it never does
-  **Each time the check passed and the claim was false.** The question that catches it is never "does
-  this work?" — it is **"who reads this / what else covers this / which branch does my value take?"**
-- **🎯 THE EXEMPLAR CHECK (now §7 of the procedure).** When a clause names its cases, use THOSE
-  values. `CELLO_Coder_1` tested a falsy-presence clause with `42`; I tested a "nothing after the
-  start" branch with `0`. **Exemplar chosen from INTENT rather than from the PREDICATE**, both times.
-- **🏗️ THE `dist` TRAP BIT THREE TIMES, in three different disguises:** Coder_1's journeys ran a
-  5-minute-old binary; `GOVERN + JOIN` failed `A has no sealed root` and **passed after a rebuild
-  with no code change**; and my transport edit surfaced as a *typecheck error* because the daemon
-  resolves `@cello-protocol/transport` from `dist`. **`pnpm run build` before any spine journey.**
-- **⚠️ `j-suspend-tofn` — the rework needs N=5, NOT N=3.** Under T=2 with 3 directories,
-  threshold-refusal **cannot be isolated at all**: client + 1 = T, so every directory must refuse and
-  one is always the initiator's — whose suspension trips the single-node gate instead. N=5 (T=3):
-  **4 suspended → blocks, 3 → signs, node 0 untouched in both.**
-- **🔁 IN FLIGHT — `REFUSED-INBOUND-SILENT-1`, reviewed once (blocking), every finding fixed, 12–13
-  tests green, tag NOT yet flipped.** Pending: the full `core/daemon` suite (running, 0 failures so
-  far) and review pass 2 — **pass 1 of the 2-pass cap is spent.**
-  **⚠️ ONE PATTERN COST ME THREE ROUNDS HERE, and it will cost the next person too: I kept building
-  a value and not checking WHO READS IT.**
-  1. Store had no reader → I tested the store.
-  2. So I added IPC tests — which passed `since_seq: 0`, and **`handleReceive` branches on
-     `since_seq` first, so 0 (a finite number) took the batch exit** and never ran the quiet exit
-     they were named for. Deleting the line I claimed they covered left them all green.
-  3. Then I put the salted-status field on the session record — and **`selectSessions` is a
-     WHITELIST**, so it never reached `cello_list_sessions` at all.
-  **Each time the test passed and the operator saw nothing.** The question that finds it is not "does
-  this work?" but "who reads this, and did I drive THAT?"
-- **🧵 FILE OWNERSHIP (agreed with `CELLO_Coder_1`, no announcing):** `session-node-manager.ts` is
-  THEIRS, `close-session-handler.ts` is MINE. Explicit-path commits do not separate two agents
-  editing one file — that is how `8c58cc0` landed non-compiling. Borrow by asking; I borrowed it for
-  this unit and handed it back.
-- **🏗️ `tsc --noEmit -p <pkg>` DOES NOT BUILD; root `pnpm run typecheck` does (`tsc --build`).** The
-  spine lane launches `dist/`, so the package-scoped form lets you report "typecheck clean" while the
-  binary goes stale and journeys fail for something absent from the source you are reading. **Run
-  `pnpm run build` in cello-client before any spine journey.** Both lanes hit this independently;
-  now in §7 of the procedure.
-- **GREEN journeys:** `j-loopback` (now carries `…` as the `NORMHASH` guard — **do not tidy it to
-  ASCII**), `j-refresh`, `j-legibility`, `j-trust`, `j-end` 9/10, `j-spine`'s seal tests.
-- **⚠️ NO PASSING TEST PROVES THRESHOLD-REFUSAL under the threshold we ship.** `j-suspend-tofn`
-  assumes T=3; `dkg-topology` computes `floor(N/2)+1` = **2**.
-  **THE LINCHPIN, verified 2026-08-24 — do not re-derive it from `dkg-topology`.** All of this holds
-  only because **the client holds a FROST share**; if it did not, the group would be 3 directory
-  shares at T=2, suspending two would leave 1 < 2, and `ok:true` would be **the kill switch failing
-  to fire — a launch blocker.** Same output, opposite verdict.
-  `dkg-topology`'s *"N=1 keeps 2-of-2"* comment reads as proof the client is the second holder. **It
-  is not** — `frost-handler.ts` shows that 2-of-2 is the `@noble/curves` FROST *minimum threshold*,
-  met with a discarded **dummy** identifier. The real evidence is
-  `core/crypto/src/frost/frost-threshold-signer.ts`: `{ min: threshold, max: participants + 1 }`
-  with `// +1 for the client`. **2-of-4, client always one of them.**
-  Consequence: **one un-suspended directory is enough to keep an agent signing.** Production is
-  fine — suspension replicates to every node — but the test's artificial 2-of-3 is not.
-  Under T=2 suspending 2-of-3 SIGNS and
-  suspending 1-of-3 SIGNS, so the journey can no longer tell threshold-refusal from
-  single-node-refusal — the property it is named for. **Do NOT fix it by flipping the expectation to
-  `ok:true`**: that is a green test asserting nothing, which is worse than the red one.
-- **FOUR CONFIRMED DEFECTS, all POST-LAUNCH by the freeze and NOT by severity:**
-  1. `SAMEOP-FALSEPOS-1` — a **stranger's** endorsement is flagged self-dealing. Fails OPEN on trust
-     while looking closed. Fixture exonerated by its own passing assertion; display + mint paths
-     ruled out.
-  2. `RELAYSEQ-UNSIGNED-1` — dedup decides append-or-not on a relay position **nobody signs**.
-     Suppression is safe; DUPLICATION is not, and it strands the two trees silently.
-  3. `REVOKED-READS-OFFLINE-1` — a retired agent reads as *"not currently online, ask them to bring
-     it online"*. The revoked check exists and is **shadowed** by discovery.
-  4. `RELAYAUTH-1`'s oracle — **the existing test ASSERTED the leak.** A test defending a
-     vulnerability is worse than none: tightening it looks like a regression.
-- **THE RULE EARNED REPEATEDLY:** a checker whose negative path was never exercised is
-  indistinguishable from one that cannot fail. §0z.3. It caught me on my own dedup test (inert until
-  I broke the code), and I nearly shipped a bullet-8 assertion that would have reddened every
-  journey with *"the certificate does NOT cover this party's own tree"* — alarming, and false.
+  and reports as *skipped with a hook timeout*, which reads as flaky and is not. Start Docker +
+  `docker compose up -d` + `docker start cello-portal-postgres` first or results are noise.
+- **🚨 "A test that asserts X is red" only means "X is broken" IF THE TEST REACHED X.** Eight
+  journeys died inside `register-agent` on `CLIJSON-1` before reaching their assertions and I
+  reported the loudest possible alarm about a property that was fine. Check how far it got.
+- **A REVERT TEST IS A PROPERTY OF A TREE, NOT OF A GUARD.** Re-run mutations against the tree you
+  are actually shipping; quoting an earlier run's reds after changing the code is archaeology.
+
 
 ## Entry 0 — Milestone setup (2026-08-21)
 
