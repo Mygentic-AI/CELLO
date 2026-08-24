@@ -117,7 +117,15 @@ export interface ContentStore {
    * deferred to a follow-up — see m7/COORDINATION.md (CELLO-M7-MSG-001 review round 2).
    *
    * ⚠️ PARTIALLY ADDRESSED by `DOD-M15-RELAYABUSE-1`, named here so this comment is not read as
-   * wholly open. The store now enforces a per-RECIPIENT byte cap, and it REFUSES — throwing
+   * wholly open — **and the bounds below belong to `FileContentStore`, NOT to this interface.**
+   * `InMemoryContentStore` (selected for `CELLO_ENV=local`, which is every local dev run and the
+   * whole spine harness) is UNBOUNDED and still writes unconditionally. Saying "the store enforces"
+   * on the interface would assert a property one of its two implementations does not have, which is
+   * the defect class this milestone exists to remove. The consequence worth knowing: **no spine test
+   * can ever see a `content_store_full` refusal**, because the harness never runs the store that
+   * produces one.
+   *
+   * In `FileContentStore`: a per-RECIPIENT byte and entry cap, and a REFUSAL — throwing
    * `content_store_full`, which the park handler turns into a negative ACK — rather than writing
    * past its global cap, which it previously did. **A per-DEPOSITOR quota is still not shipped — but
    * NOT because it is impossible, which is what an earlier version of this comment claimed.** The
