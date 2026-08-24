@@ -6858,3 +6858,99 @@ restore from git, never from a path in `/tmp` whose provenance you did not estab
 3. **Commit before mutating, and never restore from a `/tmp` path you did not create this session.**
 4. **Explicit-path commits do not make a shared file safe.** Two lanes in one worktree need file
    ownership, not path hygiene.
+
+---
+
+## Entry 63 — I converted four of ten, called it done, and the field I added never reached the binary
+
+`DOD-M15-SEALWIRE-1` bullet 8, both review passes. **The bullet does NOT close here** — see the last
+section for why, and it is not a formality.
+
+### What bullet 8 actually asked for
+
+Ten journeys asserted `A.sealed_root === B.sealed_root`. Both sides read the same bytes off the same
+certificate, so every one of them stays green **whatever leaf set the directory certified**. The
+bullet's own words: *"every one stays green if the directory certifies a root over a completely
+different leaf set."*
+
+The harness carried a note from the other lane saying the real claim *"is NOT yet checkable here"*,
+and its reasoning was right: comparing `local_tree_root` to `sealed_root` compares two values that
+are not supposed to be equal, because the certified root includes the transient SEAL ctrl leaf and
+the durable tree does not. An assertion built on that equality had already failed a green journey
+saying *"the certificate does NOT cover this party's own tree"* — alarming, and false.
+
+**Bullet 2 had since landed**, and it does the comparison inside the daemon that holds the tree. So
+the journey asserts the daemon's own three-valued verdict, per side, and `cannot_judge` is not a pass.
+
+### Pass 1: I converted four of ten and said nothing about the other five
+
+> **SPEC: DEVIATIONS FOUND** — five of the ten tests bullet 8 names are neither replaced nor
+> annotated [blocking]; the `j-content` comment describes a test that does not exist.
+
+The count is what made it unarguable. And the second half was worse, because it was invention rather
+than omission: my `j-content` comment claimed the daemon *"was KILLED and restarted mid-session and
+its content came back through the park."* **None of that is in that test.** No kill, no restart, and
+the straggler is parked AFTER the seal, which is the whole point of DOD-MSG-8. The fabrication was in
+the failure LABELS too, so a red run would have sent the reader chasing a restart path that was never
+exercised.
+
+Two more of mine in the same pass:
+
+- **The thing I called unconvertible was a missing log field.** `session.sealed.root.checked` carried
+  `sessionId` and no `agentName`, and loopback puts both ends of one session on one daemon — two
+  verdicts under one key, first match wins, one end's answer read as the other's.
+- **My reason for skipping the live-GCP journey was not the reason.** I wrote that converting it
+  meant *"plumbing log capture into the LIVE-GCP journey."* That plumbing was thirty lines above the
+  assertion and already regex-tested. The cost was two lines. **A comment that misstates the cost of
+  a thing is how the thing stays undone.**
+
+### Pass 2 read the artifact instead of the source
+
+> **SPEC: FAITHFUL** — all ten converted, none declined, count verified independently.
+> **NO SILENT FALLBACKS** — no new defaulting, swallowing, or degraded path in this diff.
+> **ERROR SUBSTITUTION FOUND** [blocking] — the helper's timeout message asserts "no verdict means
+> nothing checked it here" and will say that against the current `dist/`, where the daemon checked,
+> logged, and simply lacks the new field. It names where the wait expired, not what went wrong.
+> **HOLLOW TESTS FOUND** [blocking, one item] — the `agentName` discriminator's presence is asserted;
+> its correctness is not. Swap the two names at the producer and `j-loopback` stays green while each
+> assertion reads the other end.
+> **REMOVALS PROVEN** — n/a.
+
+**`core/daemon/dist/seal-coordinator.js` was written at 01:46. My source edit landed at 01:51.** The
+spine harness launches `dist/`. Three journeys would have waited 30 seconds per call — about six
+minutes — and gone red blaming the seal, for a field that existed in the source and not in the
+binary.
+
+The mechanism matters more than the mistake: a package-scoped `tsc --noEmit -p core/daemon/tsconfig.json`
+typechecks **without writing `dist/`**, and that is what I had been running all session. The repo's
+root `typecheck` starts with `tsc --build` and does emit. Both are called "typecheck"; only one
+builds.
+
+And the hollow spot was in my own fix for H2: asserting a line carrying each name exists does not
+prove the producer put the *right* name on it. The helper returns the matched line now, and
+`j-loopback` — where both session ids are identical by construction — asserts the two ends resolved
+to **different** lines. That pins the discriminator rather than its presence.
+
+### Why the bullet stays 🟡
+
+**Nothing here has been run.** The spine lane binds fixed ports and belongs to the other lane; every
+claim in this entry is static plus one artifact read. The milestone rule is explicit — *"no milestone
+closes until a live multi-process smoke test passes; Vitest green ≠ done"* — and this is a change
+made entirely of journeys.
+
+Two things only a run can settle, both named by pass 2:
+
+- **`j-legibility` and `j-refresh` may legitimately land `cannot_judge`.** `j-legibility` has B
+  receive a tail it never answers, so B authors no leaf for it; `j-refresh` seals three times across
+  two epoch rollovers. Both are the asymmetric shapes `cannot_judge` exists for. If either does, the
+  journey fails on a healthy system and the fix is to scope the assertion, not the daemon.
+- **`j-gcp-live` is behind `CELLO_GCP_E2E=1`.** Its conversion is written, not exercised.
+
+### Rules earned
+
+1. **Count what the spec counts.** "Ten" is checkable. I converted four, and nothing in the diff or
+   the DoD said so — the gap survived because I described the work instead of counting it.
+2. **A comment describing a test is a claim about that test.** Mine described a different one, and it
+   printed in the failure labels, where a wrong claim costs the most.
+3. **`--noEmit` typechecks; it does not build.** If the thing under test is a spawned binary, the
+   artifact is the subject and the source is not.
