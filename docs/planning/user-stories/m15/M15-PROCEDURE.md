@@ -228,6 +228,32 @@ its own.
 > missing signal must not be read as a green light. **This one asks who is holding the switch.** It is
 > possible to get the first right and this one wrong, and both lanes did exactly that.
 
+> ### ✍️ A SIGNATURE IS ONLY NON-REPUDIABLE AGAINST SOMETHING THE SIGNER DOES NOT CONTROL
+>
+> **Forced out by a disagreement between the two lanes on 2026-08-24, and neither had it until then.**
+>
+> `SEALWIRE-1` bullet 5 stores the sender's signature with each transcript leaf. The sent half was
+> ruled out as *self-referential* — *"a third party checking my signature against my key learns only
+> that a key I control signed something, which the row already claims by existing."* The counter
+> offered was *"but a third party can CHECK it."*
+>
+> **That counter does not answer the objection, and it is the answer most people reach for.** The
+> author holds their own key: they can sign anything and write the row. A signature over your own
+> message, stored in your own database, constrains you not at all.
+>
+> **What answers it is the ANCHOR.** The leaf hash sits under a Merkle root the directory notarized
+> and a third party already holds, so a fabricated row would need a signature that also lands under
+> that root — and it cannot. The signature is checkable **against something the signer does not
+> control**, which is the whole of the property.
+>
+> **The check, before claiming any signature proves anything:** name what it is verified AGAINST, and
+> ask who controls that thing. If the answer is *the signer*, the signature is decoration; if it is a
+> third party or a published commitment, it is proof. **"It is signed" and "it is checkable" are both
+> true of decoration.**
+>
+> Same family as *who controls the absence* above: both ask who holds the thing the guarantee rests
+> on, rather than whether the guarantee is stated.
+
 **A false CAUGHT is worse than a false GREEN, and this is why the rule exists.** A false green leaves
 the suspicion alive — the thing still looks unproven, and someone eventually re-checks. A false
 caught **retires** the suspicion: the case is recorded as covered and nobody looks again. The second
