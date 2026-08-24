@@ -480,6 +480,33 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     const accountCount = psqlSpineN(0, `SELECT count(*) FROM user_accounts WHERE account_id = '${sharedAccount}'`);
     expect(accountCount, "exactly one user_accounts row backs the shared account_id").toBe("1");
 
+    /**
+     * ⚠️ AND THE SAME FACT IN THE TABLE AUTHORIZATION ACTUALLY READS — the assertion above is about
+     * REGISTRATION'S OWN WRITE, which is legitimate but is not the row anything decides from.
+     *
+     * `CELLO-REPL-001` moved the reader off `agent_profiles.account_id` to the replicated
+     * **`agent_account_links`**, joined on the stable `agent_id` — pubkeys rotate, and that is the row
+     * the same-operator check and **the kill switch** are resolved from. Asserting only the profile
+     * column proves the registration path wrote something; it says nothing about whether the fact the
+     * product uses exists.
+     *
+     * **That gap is exactly the failure V59 was written for: 0/2/1 agents linked across three nodes
+     * (2026-08-07)** — registration looked fine on every node and authorization disagreed with all of
+     * them. And it is the same shape `j-end` was just fixed for: a journey checking the column the
+     * fixture writes rather than the one the resolver reads.
+     */
+    const linkCount = psqlSpineN(
+      0,
+      `SELECT count(*) FROM agent_account_links l JOIN agent_profiles p ON p.agent_id = l.agent_id ` +
+      `WHERE l.account_id = '${sharedAccount}' AND lower(p.k_local_pubkey) IN (lower('${pubA}'), lower('${pubB}'))`,
+    );
+    expect(
+      linkCount,
+      "BOTH agents must be LINKED to that account in agent_account_links — the table authorization " +
+        "and the kill switch resolve from. Registration writing agent_profiles.account_id is not the " +
+        `same fact, and V59 exists because those two once disagreed. Got ${JSON.stringify(linkCount)}`,
+    ).toBe("2");
+
     // ── Per-agent persistence: PERSIST-002 (DOD-STORE-1) moved all per-agent material from flat files
     // into the daemon's SQLCipher store (the `agents` table). Assert each registered agent has its row
     // with a K_local seed AND a persisted FROST signing share — DOD-INV-2: that share is the agent's
