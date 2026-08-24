@@ -5277,6 +5277,19 @@ bare CamelCase identifier, and read `transformations`. Two sends, no code. Delib
 here — it costs a live session with the other lane mid-work, and nothing downstream is blocked on the
 answer.
 
+**⚠️ ONE FREE DATA POINT ARRIVED WITHOUT RUNNING THAT EXPERIMENT, and it narrows the hypothesis.** A
+later message in the same session carried **eight CamelCase identifiers** (`ownAdoption`, `ownSalt`,
+`onPeerSaltFrame`, `#hashedWithoutSalt`, `#hashedWithSalt`, `#saltAdoptionClosed`, `frontier_unreadable`,
+`hmac-salt-v1`) and **no emoji at all** — and came back `"modified": false`, with no transformation of
+any kind. So **CamelCase alone does not trip it**, which removes the simplest explanation and leaves
+two live candidates: an entropy threshold that only long tokens like `SentAuthorship` cross, or a rule
+keyed on something else in that message entirely. **The `U+FE0F` hypothesis for the stripping case is
+untouched by this** — it remains unconfirmed, and this observation neither supports nor refutes it,
+because the message that produced it contained no emoji to strip.
+
+Recorded because it was free. It does **not** replace the two-send experiment, and reporting a
+narrowed hypothesis as a diagnosis is the failure this file keeps naming.
+
 **Andre's call, and it is a product decision rather than a bug fix:** whether the screener should
 exempt code-shaped content, lower its confidence on entropy-only matches, or keep firing and simply
 be quieter about it. **Recorded rather than actioned** — an outward-facing behaviour change to what
