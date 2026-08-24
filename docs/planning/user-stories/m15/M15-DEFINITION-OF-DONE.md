@@ -1667,11 +1667,8 @@ clears it**, so the DoD's word "live" is not enforced.
   fails, and expire it on the same clock the directory uses before it gives up waiting for an accept.
 - **Enforcer:** journey.
 
-### `DOD-M15-RELAYLEAK-1` — 🟡 Relay clients are closed (built; reviewed, all findings fixed; final run pending)
-> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
-Graceful shutdown never closes relay clients, and the seal-only detached-transport path registers a
-session that is never unregistered, so a cached relay client is never closed for the process
-lifetime. Client-side, small, standalone.
+### `DOD-M15-RELAYLEAK-1` — ✅ Relay clients are closed
+> **Closed 2026-08-24 (CELLO_Support).** Two review passes, both blocking, every finding fixed; 3 tests, 3 revert proofs RUN against the shipped tree. Full entry — including the mutation that reached `main` and how — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYLEAK-1`.
 
 ### `DOD-M15-SWEEP-ABORT-1` — ❌ A shutdown stops the network work it started
 Split from `DOD-M15-STALEROSTER-1` (review F10). The background roster sweep spends up to ~16 s on
@@ -1779,7 +1776,41 @@ Three remain, all failing BEFORE any seal, all undiagnosed:
 - **Do not assume these are regressions.** This lane had never been run; a stale expectation is at
   least as likely, and two of the three have that shape.
 
-### `DOD-M15-JCONTENT-DELIVERY-1` — five message-delivery assertions in `j-content`
+### `DOD-M15-JCONTENT-DELIVERY-1` — ✅ CLOSED 2026-08-24. `j-content` is 10/10, full-file.
+**All five are fixed, and every hypothesis below was wrong.** Kept rather than deleted because the
+way it was wrong is the reusable part: this entry reasoned its way to a single confident cause and
+flagged it for reclassification, and there were **four unrelated defects**, none of them the one named.
+
+**What they actually were:**
+1. **The deposits were the unsigned shape SEC-1 refuses.** Three tests parked content by handing the
+   deposit IPC a bare seal with no park envelope, so `authenticateParkedEntry` threw every entry out
+   at the door. The assertions underneath — tamper detection, dedup, the post-seal guard — were never
+   reached. They now park through the daemon's own signer.
+2. **The dedup deposit carried a different STRING.** `signal: "over"` is in-band, so the daemon hashed
+   `"<msg> [[OVER]]"` while the test deposited the bare message. Two different strings, therefore two
+   different hashes, under any algorithm.
+3. **A retired event name.** The straggler test matched `content.recover.ingest_failed`; since the
+   annex landed, refused content is kept rather than dropped and the line is `content.recover.annexed`.
+4. **A wait latching onto the wrong sweep.** `waitForLine` returns the FIRST match, and B runs several
+   recover sweeps; the first fires on `signaling_reconnect` and could not reach the relay
+   (`failedRelays: 1`). Auto-recovery was working the whole time.
+
+> **⛔ THE FLAG BELOW WAS WRONG, AND SO WAS THE THING IT WAS RETRACTING.** The entry first flagged
+> these as possibly breaking *"two agents connect and communicate"*, then retracted that on the
+> grounds that all five key on a self-computed unsalted hash. **Neither held.** The hash mattered in
+> exactly one of the five, and even there the algorithm was not the cause — the CONTENT was. The test
+> for that is in the entry's own words and was available at the time: it failed identically whether
+> the envelope declared `sha256` or `hmac-sha256-salt-v1`, **and two algorithms failing the same way
+> means neither is responsible.**
+>
+> **The general lesson, which is why this stays on the page:** the entry noticed that five of ten
+> tests pass while using the same fixture and correctly said *"something distinguishes them."* That
+> observation was right and was then set aside in favour of the single-cause story. **When a
+> same-fixture split is visible and unexplained, it is evidence AGAINST one cause, not a detail to
+> resolve later.**
+
+<details><summary>Superseded: the original POST-LAUNCH write-up, kept for the reasoning trail</summary>
+
 **POST-LAUNCH under the frozen gate (§0z.4)** — not a security hole a customer reaches. **BUT SEE
 THE FLAG BELOW: if these are real rather than stale, they touch the advertised core value and are
 Andre's to reclassify.** I am not diagnosing them; the freeze says record and move.
@@ -1826,6 +1857,8 @@ The five, verbatim, all about message delivery rather than sealing:
 - **Still not diagnosed, deliberately.** Ruling a hypothesis out is not diagnosing; the next step is
   a producer/consumer trace of who should emit `content.delivery.acked` on that path and what
   precondition it waits on. That is a unit, and the freeze says record and move.
+
+</details>
 
 ### `DOD-M15-SAMEOP-FALSEPOS-1` — ✅ RESOLVED: NOT a defect. The journey updates a superseded column.
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-SAMEOP-FALSEPOS-1`.

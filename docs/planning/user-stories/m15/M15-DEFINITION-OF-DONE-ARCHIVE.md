@@ -3836,3 +3836,48 @@ rather than a warning.
 > `agent_profiles.account_id` — and assert linkage against the table the resolver reads. **Related
 > and still open: `DOD-M15-SAMEOP-1`** names this exact reader-moved-to-replicated-table problem, so
 > this journey is evidence FOR that line rather than a separate finding.
+
+
+---
+
+### `DOD-M15-RELAYLEAK-1` — ✅ Relay clients are closed
+> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
+Graceful shutdown never closes relay clients, and the seal-only detached-transport path registers a
+session that is never unregistered, so a cached relay client is never closed for the process
+lifetime. Client-side, small, standalone.
+
+> ### ✅ CLOSED 2026-08-24 — pass 2 verdict: **SPEC: FAITHFUL**. Three revert proofs run on the shipped tree.
+> **Pass 2 killed my stated reason for the MEDIUM-5 fix and gave me the real one**, which is the most
+> useful thing either pass produced. I justified the claim guard by a concurrency race — two seal
+> callers, the second closing the client the first is awaiting. **That race is unreachable:**
+> `#resolveSealTransport` and everything above the first `await` are synchronous, and a second caller
+> hits `#responderSealSubmitted` and returns `responder_seal_already_submitted` before reaching
+> `submitLeaf`. The guard is still right, for a reason I had not written down: `registerSession`
+> replaces `onLeafDeliver` with `onLeafDeliver ?? (() => {})` and — unlike `assignment` and
+> `recorded` — does **not** carry the existing handler forward, and this path passes none. So a
+> detached seal over a live registration **swaps that session's inbound leaf delivery for a no-op**:
+> the counterparty's messages arrive at the relay client and are dropped, and the operator sees a
+> session that has simply gone quiet. **A comment naming an unreachable reason invites the next reader
+> to delete the guard as clutter** — corrected in place.
+>
+> **Also fixed from pass 2:** the passenger branch declined to release in silence (now
+> `session.seal.transport.registration_shared`, because the states that reach it are all orphans);
+> the revive teardown matched its entry by KEY, and two revivals can both reach the map set, so it
+> now matches by node identity; and the fake was cast with `as unknown as`, which erased every
+> structural check and is exactly how a fake with no `submitLeaf` reached runtime — now `Pick`-typed
+> with one narrow cast at the injection point.
+>
+> **🔴 AND A REVERT-TEST MUTATION OF MINE REACHED `main`.** While `session-node-manager.ts` was
+> mutated for a proof, the other lane committed that file as part of unrelated work and swept the
+> mutation in. For several commits `gracefulShutdown`'s close loop read `void key; void client;` —
+> **this line's own defect, live in the tree that fixes it.** Found because my test went red for the
+> wrong reason. **Both lanes commit by explicit path, which is correct and did nothing here:**
+> explicit paths do not separate two agents editing one file. **The rule: never leave a mutation on
+> disk across a turn boundary — apply, run, restore in one uninterrupted step, and if the shared
+> runner is busy, do not mutate at all until the slot is free.** I was blocked mid-mutation four
+> times that night; every one was a window for this.
+>
+> **Revert proofs, run one at a time on the shipped tree:** remove the shutdown close loop → only the
+> shutdown test reddens; remove `releaseDetached()` from the `finally` → only the release test;
+> drop the claim guard → only the passenger test. **CARRIED:** MEDIUM-4's revive-teardown detach has
+> no test, and the shutdown test has no `submitCount` precondition.
