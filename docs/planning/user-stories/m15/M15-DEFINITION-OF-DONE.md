@@ -1439,6 +1439,16 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 | **Portal database** (`ECONNREFUSED`) | 2 | ✅ container up |
 | **Named lines already owned** (`j-unilateral`×2, `j-upgrade-bilateral` → `UNILATERAL-NOTARIZE-1`) | 3 | 🅿️ owned elsewhere |
 | **Individually-caused** (`j-end` 1, `j-remove` 1, `j-multiplayer` 4 timeouts) | 6 | 🔎 filed below |
+
+> #### 🔎 `j-multiplayer`'s FOUR TIMEOUTS ARE **NOT** THE SALT CAUSE — checked before assuming
+> All four are `MCP error -32001: Request timed out` at ~70s, on document operations: *GOVERN + JOIN*,
+> *REMOVE while OFFLINE*, *NUDGE + SURFACE*, *REMOVE surfaces to the removed holder*. The obvious move
+> is to fold them into the document salt outage, since `j-multiplayer` is also a document journey.
+> **The same run refutes it:** `session.salt.agreed` × **10** and `content_hash_salt_unavailable` × **0**.
+> Salts agreed and nothing was refused. **Whatever stalls those four, it is not the salt.**
+>
+> Recorded because folding them in would have been free, plausible, and wrong — the third time on this
+> line that a confirmed cause invited an unchecked extension. Uninvestigated beyond this.
 | **Green all along** (`j-upgrade`, `j-loopback`, `j-persist`, `j-canary`, `j-legibility`, `j-trust`, `j-tofn`…) | — | ✅ |
 | **`j-suspend-tofn` — the kill switch** | 1 | 🔴 **highest-stakes in the lane** (below) |
 
