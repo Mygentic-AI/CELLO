@@ -1028,6 +1028,20 @@ outside that unit, and I am not opening it on a guess.**
   cannot complete. Answering that is the unit; guessing is how a working design gets "fixed".
 
 ### `DOD-M15-BOOTSTRAP-AUTH-1` — ❌ The bootstrap coordinate arrives over an authenticated channel
+> # 🔒 CLAIMED BY **CELLO_Support**, 2026-08-24, BEFORE code. `RELAYADMIN-1` closed, so this is my one WIP.
+> **The unit is the TEST, not TLS.** My own scoping below says the authenticity half is already
+> structural and the residual is denial of one node, bounded by the signed roster — and then names
+> exactly one thing I could not prove: **that a client meeting a poisoned coordinate FAILS OVER to
+> another roster node rather than stalling on the refusal.** Everything in the "not blocking" call
+> rests on that, and it is currently an argument.
+> **I hold:** `core/daemon/src/__tests__/` for the new test, and read-only tracing of
+> `consortium-bootstrap.ts` / `directory-bootstrap.ts` / `signaling-connect.ts`. **No production file
+> is claimed** — if the test shows failover does NOT hold, the fix is a separate unit and I will
+> claim the file then rather than widening this one.
+> **The two outcomes, both useful, written before the run so neither can be fitted afterwards:**
+> failover holds ⇒ point 4 is bounded to a single node, this line is hardening, and it closes along
+> with `DIRAUTH-1`'s deliberately-held 🟡. Failover does NOT hold ⇒ the availability bullet is real,
+> and it belongs to the failover path, not to port 9090.
 Extracted from `DOD-M15-DIRAUTH-1`'s second bullet so it is a line rather than a footnote.
 - The directory's `/bootstrap` coordinate comes from a **plaintext HTTP endpoint on port 9090**.
 - Step 6 converts a poisoned redirect into a refused connection — it does not prevent the redirect,
