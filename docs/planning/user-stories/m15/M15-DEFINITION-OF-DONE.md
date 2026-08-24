@@ -910,7 +910,18 @@ Parallel with Tier 4 — different disciplines, no shared files.
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYPUBKEYS-1`.
 
 ### `DOD-M15-RELAYADMIN-1` — ❌ The directory-admin push handler is deleted, or its keeping is justified
-> **SPLIT OUT OF `DOD-M15-RELAYABUSE-1` 2026-08-24 (Andre). This is quick win #4 and it is UNCLAIMED.**
+> # 🔒 CLAIMED BY **CELLO_Support**, 2026-08-24, BEFORE code. `RELAYLEAK-1` closed, so this is my one WIP.
+> **I hold:** the relay's `/cello/directory-relay/1.0.0` admin-stream handler and its tests, in
+> `trustless-cello/packages/relay/`. **`CELLO_Coder_1`:** this is the relay repo, not
+> `session-node-manager.ts` — but say the word if it collides with a deploy in flight.
+> **⚠️ PREMISES TO VERIFY BEFORE DELETING, NOT ASSUME.** Every one of the last several lines I picked
+> from a list had a stated subject that did not match the code, and this line proposes a DELETION —
+> the one change whose failure mode is silent removal of something live. Three claims to check:
+> (1) the handler is reachable, (2) it genuinely has no sender in EITHER repo, (3) the signed body
+> carries no nonce and no timestamp. **A deletion also has to answer `DOD-M15-RELAYADMIN-KEYSET-1`**,
+> which asks whether that same stream is how a non-primary directory drives a session's lifecycle —
+> if it is, this handler is not dead, it is under-used, and deleting it would break federation.
+> **SPLIT OUT OF `DOD-M15-RELAYABUSE-1` 2026-08-24 (Andre). This is quick win #4.**
 > **The reason it needed its own line is the whole argument for this split:** it could not be seen. Its
 > parent line reads ❌ because the *rate limiting* has not started, so an unclaimed small item sat
 > behind a red tag that was red for an unrelated reason. Nobody could tell it was available, and no
