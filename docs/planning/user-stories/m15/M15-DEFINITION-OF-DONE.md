@@ -1597,6 +1597,79 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 >
 > With the four from the earlier set (discard call, adoption re-check, `session.salt.split`, in-flight
 > guard) that is **seven guards, seven reds, zero survivors** on this unit.
+>
+> #### 🔴 CORRECTION — "SEVEN REDS, ZERO SURVIVORS" WAS FALSE BY THE TIME I WROTE IT
+>
+> **Pass 2 re-ran those mutations against the FINAL tree and three of them came back green.** They
+> were genuinely red when I ran them — against the pass-1 code — and **the suspend redesign silently
+> made them pass again.** I reported the old numbers as if they described the shipped tree.
+>
+> That is the lesson, and it generalises past this unit: **a revert test is a property of a tree, not
+> of a guard.** Re-run them against the tree you are actually shipping, or the number you quote is
+> archaeology. Both of us had this backwards — the dispatch I wrote for pass 2 listed those same
+> mutations as "already run and RED".
+>
+> #### 🔴 REVIEW PASS 2 — BLOCKING ON ALL FIVE LENSES. Verdict quoted.
+>
+> > *"I ran the unit's code rather than reasoned about it. Five confirmed defects, three of them
+> > reproduced end-to-end, plus three proven test survivors."*
+> > … *"Note the direction of the regression: the pass-1 immediate-erase design could not produce
+> > this. When the discard was refused there, the session simply kept hashing salted — one rule
+> > throughout, loud via `session.salt.split`. Suspension is what lets us go unsalted while the bytes
+> > survive. **This is pass 1's pattern repeating: the fix is worse than the defect on one path.**"*
+>
+> **F2 (HIGH) — mine, and the second time in this unit that my fix reintroduced its own defect.** The
+> deferred erase was ordered before the `#hashedWithoutSalt` increment because that counter closes
+> adoption. **It is one of four contributors** — leaves, held rows and awaiting-ack close it too, and
+> the most ordinary event in the protocol closes it: *the peer sends its next message.* Reproduced
+> through the real inbound path: suspend → peer's message lands as leaf 0 → we hash `sha256` with the
+> bytes still on disk → one teardown-and-revive later, **no process restart**, `hmac` again.
+> **Fixed by making the two atomic:** if the salt cannot be erased we do not go unsalted — we keep
+> hashing under it, one rule for the whole session, and raise `session.salt.split`. A dead session
+> beats a transcript no single rule can verify.
+>
+> **F1 (HIGH)** — `#resumeSalt` deleted the mark unconditionally, so a session that had already hashed
+> unsalted could resume salted: `m1` under `sha256`, `m2` under `hmac`, one process, no restart —
+> while `session.salt.resumed` asserted *"the transcript is uniform"*. **The code never checked the
+> thing its own log line claimed**, which is this milestone's signature defect committed inside the
+> fix for it. Now refuses on `#unsaltedAnnounced` and releases the salt.
+>
+> **F3 (MEDIUM-HIGH)** — `contentSalted` on the agent surface read *possession*, so every suspended
+> session reported **protected** while hashing `sha256` on every message. That surface's own comment
+> says *"a security property must not be inferable from a gap"*; it was **affirmatively false, not
+> gapped**. New `isContentSaltActive` uses the same predicate `#saltForHashing` does.
+> `getSessionContentSalt` is unchanged, because the verifier needs possession: a message parked before
+> suspension was hashed under that salt.
+>
+> **F4** — two log lines told the operator to *"see `session.salt.split` on the next line"* for a case
+> where the logger sat inside `if (adoption.closed)` and never fired. Moved out; the condition was
+> always `stillHoldsSalt`, only its placement disagreed. **F5** — the suspension mark survived a
+> successful erase, so a later agreed salt would be logged, surfaced as protected, and silently never
+> used.
+>
+> **Survivors, re-measured after the fixes: two now RED** (the in-flight arm of `#suspendSalt`; the
+> discard's adoption re-check). **The third genuinely survives and is labelled in the code rather than
+> claimed** — deleting `#discardUnspentSalt`'s own in-flight guard leaves the suite green, because
+> `#suspendSalt` refuses first and both callers require the mark. Kept because it sits at an
+> irreversible write; the earlier fix for this shape (make the guard the decision-maker) is not
+> available here, since `#suspendSalt` must refuse early. **Not claimed as coverage.**
+>
+> **Gate after the fixes: 278 files, 2906 tests, 0 failures; root typecheck 0; eslint 0.**
+>
+> #### 🅿️ PASS 2 LEFTOVERS → ACs (the two-pass cap is spent; these do NOT get a pass 3)
+> - **F6** — `#hashedWithSalt` is cleared on teardown while a parked salted message still depends on
+>   it; the revived session reads an empty frontier and can then erase the salt the parked message was
+>   hashed under. Grounding "spent" in the durable park/awaiting-ack record is the real fix.
+> - **F7** — the HIGH-1 producer fix turns one previously-terminal cell (`salt=S · half absent ·
+>   adopt=already_hashing · frame=contribution`) into `freeze salt_state_divergent`, which destroys
+>   the session and refuses revival. `half absent` is not exotic — teardown drops it. **Untested.**
+> - **F9** — the `hasClosed` branch announces `peer_closed_first` whenever our adoption is open, but
+>   the caller may then refuse the suspension for `inFlight > 0`: HIGH-1's exact lie, one round trip
+>   wide, at the other branch.
+> - **F10 / F11 (pre-existing)** — `UNSALTED_GUIDANCE[PEER_CLOSED_ADOPTION]` asserts `already_hashing`
+>   for a peer that sent `frontier_unreadable`; and a transient salt READ failure splits the transcript
+>   by the same mechanism, independent of this unit.
+> - **LOW-6** — orphaned doc blocks; one was fixed in passing during F4's move, the rest stand.
 > **✅ SECOND CLAUSE — an assertion on an absent value keeps its diagnostic.** Both review passes
 > spent (→ Entry 64). Pass 2: *"NO SILENT FALLBACKS — and the unit removes one"*, *"REMOVALS
 > PROVEN"*. **Measured, not believed:** the other lane ran the `trustless-cello` root — 1742 passed,
