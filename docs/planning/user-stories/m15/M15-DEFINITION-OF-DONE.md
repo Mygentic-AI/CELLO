@@ -1809,6 +1809,19 @@ from the receiving operator's chair, a refused message simply never arrives.
   - **C7 (declined protection) implemented:** `content_hashes_salted` on the session record — and
     implementing it found `SELECT *` shipping the raw salt BLOB to both listing surfaces, which now
     stops.
+- **⚠️ CORRECTION — a commit message in this unit overstates what a fix did.** *"The list test asked
+  for the default filter"* says the `cello_list_sessions` test failed and `filter: "all"` fixed it.
+  **That test is GREEN in CI at the tree BEFORE that change** — `✓ dod-m15-refused-inbound-silent-1
+  (13 tests)`. It failed only in one local full-suite run, and **I edited the file while that run was
+  in flight**, which is the most likely reading and is a hypothesis, not a finding. The
+  `filter: "all"` change stands because the default (`open`) genuinely excludes a zero-message
+  session and being explicit is correct either way — **but it did not repair a real failure**, and I
+  reported it as though it had.
+- **The same reasoning error, one layer up: I told `CELLO_Coder_1` to stop a publish because "my red
+  test is in the tag".** The tag run reported `Failed Tests 1` and it was **not mine** — it was
+  `AC-009 (binary): SIGTERM marks active sessions interrupted`. **I reasoned from a local red to a CI
+  red without checking**, on the same day I twice recorded that a test failing does not mean the
+  thing it names is broken. Stopping the publish was still right; the reason I gave was wrong.
 - **Revert evidence, run against the RIGHT line this time:** replacing the quiet-exit spread turns
   both positive tests red; the absence guard stays green by design and is not counted as evidence.
   The producer test has teeth by construction — it never seeds the store, so deleting the producer
