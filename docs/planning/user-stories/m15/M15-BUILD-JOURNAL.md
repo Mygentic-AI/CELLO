@@ -7289,3 +7289,87 @@ guessing is what this milestone keeps punishing. It is a lead, not a diagnosis.
 2. **A green assertion is not a green lane, and the summary must say which.** The temptation after a
    first successful observation is to report the milestone as passing. Seventeen tests were red in
    the same run.
+
+---
+
+## Entry 67 — a comment promised both sides would drop their salt, and one of them kept it
+
+**`DOD-M15-SALTSPLIT-1`.** Reached from `CELLO_Support`'s `CLOSEROOT-1` lead — a 60-second seal
+timeout that turned out not to be a timing problem — and it ended somewhere neither of us was aiming.
+
+### What a user would have lived through
+
+Two agents are connected. One sends a message. The other refuses it, and every message after it, for
+the life of the session. **From the sending side it looks sent. From the receiving side it looks
+quiet.** Nobody is shown an error. The session then cannot be sealed, because the two transcripts no
+longer agree on a single leaf — which is what surfaced as a seal waiting sixty seconds for a root
+that was never going to arrive.
+
+### The producer, the consumer, and the sentence in between
+
+The salt agreement has a terminal branch: a peer that can never adopt a salt says so, and both sides
+are supposed to end up unsalted. Both the pure function and the branch that executes it state that
+outcome **in a comment**:
+
+> *"Both sides then hold no salt and both KNOW it."*
+> *"neither side will use a content salt for this session, and both now know it."*
+
+Neither sentence was true. `#saltForHashing` returns a held salt on its **first line**, before it
+consults adoption at all, and `sessions.content_salt` had exactly one writer and **no clearer**. The
+pure function tests `hasClosed` *before* `state.ownSalt`, so holding a salt did not even change the
+verdict. So the side that had agreed a salt kept hashing under it after being told the peer could
+never hold one — and the peer refused every one of those messages.
+
+**This is the standing rule in this repo arriving on schedule: a comment asserting a safety property
+the code lacks is how a defect survives review.** Two readers had been past this branch. Both read
+the sentence.
+
+### The fix, and the line it is split on
+
+The counterbalance had to be named first, because discarding a salt is destructive. It is safe under
+exactly one condition — nothing has been hashed under it yet — and that is not a guess about timing.
+It is the same frontier question `#saltAdoptionClosed` already answers.
+
+- **Unspent:** discard it, **row and cache both**. Cache matters on its own: `#saltForHashing` reads
+  the cache first and never consults the row, so a row-only clear hashes salted in this process and
+  unsalted in the next. That is the same split transcript, arriving at a daemon restart instead of at
+  a frame.
+- **Spent:** never discard — erasing it leaves a transcript no single rule can verify — and say so at
+  ERROR under `session.salt.split`, with the only real repair (a new session) as guidance.
+
+### ⚠️ The tag would over-read this, so the DoD says what it does NOT do
+
+It **prevents** the split where the losing side has not yet spent its salt, and makes it
+**diagnosable** where it has. It does **not repair** the session in the run that started this: that
+peer had already sent eight messages under its salt, so nothing may erase it. **Preventing and
+repairing are different claims and only the first is delivered.**
+
+### The revert test caught one of mine, in the commit that described it as deliberate
+
+Deleting the discard call → red. Deleting the split ERROR → red. Deleting the adoption re-check
+**inside** `#discardUnspentSalt` → **green**. A survivor, and I had defended it one commit earlier as
+defence-in-depth.
+
+The cause was the **caller**, not the check. The call sat inside the `else` of
+`if (adoption.closed)`, so the method's own check could never see a spent salt — two places deciding
+the same thing, one of them unreachable. Calling it unconditionally lets the method own the decision,
+and that same mutation now reddens with *"a spent salt must NEVER be discarded"*.
+
+### And I laundered a field through a cast, in the week I built the enforcer against it
+
+The spent test read the event's `impact` through `as { impact?: string }` and got `''` — the fields
+live under `ctx`. The cast asserted a shape the object never had, `?? ""` turned the miss into a
+**pattern** failure, and the message sent the reader to look at the log line's wording for a defect
+in the test's own accessor. **That is precisely the laundering the spine lane's `.toMatch` enforcer
+exists to catch**, committed by the person who wrote the enforcer. It reads through the typed
+`CapturedEvent` now, so a wrong field name is a compile error.
+
+### Carried
+
+1. **A comment is where a broken property hides, not where it lives.** Both sentences here were
+   accurate descriptions of an intent nobody had implemented. Verify the claim; rewrite a wrong
+   comment, never delete it.
+2. **A guard the caller made unreachable is not defence-in-depth.** If deleting it changes nothing,
+   the redundancy is the bug — one of the two places is wrong about where the decision lives.
+3. **Say what a fix does not do, in the same breath as what it does.** "Prevents" and "repairs" read
+   the same to someone scanning a tag.
