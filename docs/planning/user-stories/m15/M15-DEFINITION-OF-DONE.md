@@ -227,7 +227,27 @@ The six known checked-then-ignored instances; three carry such a comment.
   clients perform this verification locally"* and the client's *"deliberately NOT compared at this
   layer"* — each pointing at a check the other does not perform.
 
-### `DOD-M15-TIERTEXT-1` — ❌ The tier descriptions do not promise a gate that does not exist
+### `DOD-M15-TIERTEXT-1` — ✅ The tier descriptions do not promise a gate that does not exist
+> **CLOSED 2026-08-24 (CELLO_Support), on Andre's Option B ruling.** All three descriptions carry the
+> ruled text verbatim; `grep "auto-accepted when you're away"` → **0**. 5 tests, gate 3032 green.
+> **THE ENFORCER COULD NOT HAVE WORKED, and that is the finding.** It demands the audit be
+> adjudicated into `helpers/claims-ledger.ts` *"so the work is a shrinking count, not a paragraph
+> saying it was done"* — and **that file had NO IMPORTER.** 900 lines of adjudications read by
+> nothing, so the count was never computed or compared. Adding rows would have been a paragraph
+> saying it was done, wearing the costume of evidence. **The same value-with-no-reader defect this
+> milestone keeps producing, sitting inside the mechanism meant to enforce against it.** Six rows
+> added AND the consumer that makes them count — scoped to this one surface, because sweeping the
+> other eight is `LEDGER-1`, which is 🅿️ parked.
+> **The scope clause found a third false claim** the line never named: `cello_contacts` promised
+> exemption from *"anti-spam caps"*, and **no tier is exempt** — `INV-TIER-BOUND` exists specifically
+> to kill the implementation that description promised.
+> **Two claims were checked and LEFT ALONE**, which matters as much: `0=blocked (refused,
+> indistinguishable from a full inbox)` is exact, and `cello_config_set`'s *"only STRICTER from
+> here"* is true in context — I nearly filed it as false from a fragment before reading the sentence
+> that resolves it.
+> **The replacement text is pinned too**, not just the absence of the old: `isAutoAccept` has no
+> production caller, verified by a scan proven non-vacuous. If anyone wires it up, the test reddens
+> at the same moment the description becomes false.
 **BLOCKS LAUNCH** (§0z.1): shipped operator-facing text states a protection the system does not
 provide, and the false half is the *reassuring* half. Found 2026-08-23 while Andre was setting a
 contact's tier by hand; the receptionist raised it as "a setting that does nothing" and the measured
