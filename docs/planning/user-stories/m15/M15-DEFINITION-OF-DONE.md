@@ -1328,6 +1328,28 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > behaviour, not vocabulary drift. `content.delivery.acked` fired twice in the run, just not for the
 > hash the test waited on.
 >
+> #### 🔎 RUN IN ISOLATION 2026-08-24: 5 failed / 5 passed — and it is NOT a short timeout
+>
+> **The batch run showed 3 failures; alone it shows 5.** So there is genuine cross-test interaction in
+> this file — worth knowing before anyone tunes a timeout to make a number move.
+>
+> | passing | failing |
+> |---|---|
+> | `MSG-3` transport deposit · `MSG-3` send-park · `MSG-3/4` recover · `MSG-2` startup-flush · `MSG-4` self-ordering frame | `MSG-7` tamper · `MSG-5` dedup · `MSG-1` ACK ladder · `MSG-4` auto-recover · `MSG-8` straggler |
+>
+> **⚠️ "TOO SLOW" IS RULED OUT, MEASURED.** The dedup test waits 15s for `session.content.received`
+> carrying a specific `contentHashHex`. **That hash appears NOWHERE in the run except the failure text
+> itself** — not in a late event, not in any other event. The same is true of the ACK ladder's hash.
+> Both events DID fire in the run, twice each, for other hashes. So the message never arrived; a longer
+> timeout would change nothing.
+>
+> **And it is not being refused either:** zero `session.content.cross_check.failed`, zero
+> `content_hash_*` refusal reasons, and the salt is healthy (8 × `session.salt.agreed`,
+> 8 × `session.salt.announced`). **So content is neither rejected nor late — it is not delivered.**
+>
+> That is as far as this log goes: the sender-side lines for those hashes are in a different process's
+> capture, so the produce half needs a run with both daemons' output retained.
+>
 ### ✅ `j-spine` IS GREEN — 7/7, from 4/7. Five failures fixed; four were stale vocabulary.
 >
 > **Every one was the journey asserting something the product deliberately removed, and each removal
