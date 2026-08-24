@@ -9166,3 +9166,65 @@ header states the rule I broke:** an open line keeps what it is, why it blocks, 
 enforcer and any live flag; *"what it does not keep: how we found out."* Corrected: the DoD carries
 one-to-six-line verdicts, the reasoning is here, and the file finished at **2,442 lines — below where
 it started**, so the corrections cost net negative length.
+
+---
+
+## Entry 30 — 2026-08-24: `j-content` deposit unit, review verdict + the FOUR LEFTOVERS as ACs
+
+**Verdict lines, quoted:** **SPEC: DEVIATIONS FOUND** (clause 4, un-journaled, [blocking]) ·
+**SILENT FALLBACKS FOUND** · **ERRORS NAME THEIR CAUSE** · **HOLLOW TESTS FOUND** (one [blocking]) ·
+**REMOVALS PROVEN**.
+
+On the question I most wanted attacked — is the widened deposit handler a security regression? —
+quoted: *"the widened handler is not a security regression. Its real defect is that it is **less
+bound** than production, not that it is more powerful than its caller."*
+
+### FIXED AND PUSHED (5 of 9)
+
+| # | Finding | Fix |
+|---|---|---|
+| HIGH-2 [blocking] | `contentHashAlg` parsed INSIDE the `content` branch, so `ciphertext` + `contentHashAlg` discarded it silently → far end recomputes unsalted → `content_hash_mismatch`, **a tamper verdict on an honest message**. The defect the parameter exists to prevent, one branch over. | Parsed before the branch; refused with `ciphertext` (a raw deposit has nowhere to record the name). |
+| TEST-4 [blocking] | MSG-8's `.not.toMatch(ingest_failed + session_committed)` is **structurally unreachable** — `annexed` is the `else if` arm of the chain whose `else` emits `ingest_failed`, so the pair cannot occur and the assertion could never fail. | Replaced with a `post_seal_annex` readback: the straggler must be present and readable there, and absent from `messages`. Also proves the annex stores decrypted content, not the raw envelope — which nothing in the live suite checked. |
+| HIGH-1 | The handler **signed for a `(sessionId, recipientPubkey)` it never checked.** Both production producers derive both from a session record. A wrong argument produced a valid SIGNED entry the far end can only read as a forgery (`bad_signature` / `signer_not_counterparty`) — an attack verdict for a local mistake — and a refused entry is never confirm-deleted, so it re-pulls forever. | Resolves the session record for the signing agent; refuses `session_recipient_mismatch` unless the recipient matches the recorded counterparty. `getSessionRecord` is status-agnostic, so the committed-session straggler still works. |
+| MEDIUM-4 | Hex params `as string` → `Buffer.from(x,"hex")`, which **truncates at the first invalid pair** rather than throwing. A typo'd `content` was signed at its truncated length and surfaced as `content_hash_mismatch` — tamper, for a typo. | `hexOrNull` on all four, refusing and naming the field. |
+| LOW-5 | `load_failed` agents counted as signing candidates; they hold no key provider, so one healthy + one failed reported `ambiguous_sender` naming a candidate that cannot sign. | Filtered before selection. |
+
+### ⚠️ FOUR LEFTOVERS — CARRIED AS ACs, because a reviewer's findings die with the session
+
+**Not fixed, and the reason is stated per item rather than implied.** The shared vitest slot was held
+by the other lane, so anything needing a run to verify was not going to be changed blind.
+
+**AC-1 (MEDIUM-3, production, pre-existing) — `content_park_recover` bypasses the drain guard.**
+It calls `recoverParkedFromRelay` DIRECTLY, skipping the `draining` guard `autoRecoverForAgent`
+installs. That guard's own header says dedup alone is not enough: *"two drains that pull the same
+parked entry can both pass that check and both append — a duplicate leaf, the frontier divergence the
+recovery path exists to avoid."* **One of the two drain entrypoints does not take it.**
+*Stated as the debugging protocol requires:* the condition is structural and quoted; it is **not**
+claimed as the cause of the known MSG-7 intermittency. Evidence that would settle it: in a failing
+run, a `content.recover.auto.completed` for `agentB` with `recovered:1` timestamped BEFORE the
+explicit recover's response, or two overlapping pulls for the same recipient.
+**Corollary worth keeping:** serialising them does NOT make the test deterministic — an auto sweep
+that legitimately drains first leaves `pulled: 0`.
+
+**AC-2 (TEST-3) — `pulled === N` is not a property the code guarantees.** The explicit recover
+competes with agentB's auto sweeps for the same mailbox, and the auto sweep confirm-deletes what it
+ingests, so `pulled` is whatever is left when the explicit call happens to arrive. Assert the OUTCOME
+(events, readback, annex row) and drop `pulled` to a `>= 1` sanity check.
+
+**AC-3 (TEST-5) — the auto-recover regex has two small holes.** `"recovered":[1-9]` accepts
+`recovered: 2`, so a duplicate append — the exact hazard AC-1 raises — would PASS; and nothing
+asserts there is no third message, which is where a duplicate would show. **One line closes both:** a
+third `expect(await read()).toBeNull()`.
+
+**AC-4 (TEST-1, scoping) — `j-content` does not pin park AUTHENTICATION anywhere.** Delete
+`authenticateParkedEntry` from the recover path entirely — keep the hash cross-check, drop SEC-1 —
+and **all six MSG-7 assertions still pass.** Not a hole: `sec-1-park-authentication.test.ts` carries
+16 cases through the real functions. **Recorded because the unit's narrative is "the tests now reach
+the security properties", and the property they reach is the hash CROSS-CHECK, not authentication.**
+Do not let that sentence stand unqualified.
+
+### One verification still owed
+The full-file `j-content` run against these production changes. Verified statically instead: all
+three signed deposits pass `senderAgentName: "agentA"` with a `sessionId` from a real
+`initiate_session` to `pubB`, so the new binding is satisfied by construction; the one random-session
+deposit takes the raw branch, which skips the check by design. **That is reasoning, not a run.**
