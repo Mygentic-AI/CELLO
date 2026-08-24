@@ -1611,6 +1611,31 @@ file. **Fix is a wire question** (discovery must be able to say revoked), which 
 **`j-end`** — *"Bob's genuine third-party endorsement must NOT be flagged as same-operator"*: a trust
 signal misclassified. One test, own cause, not investigated.
 
+### 🔎 `j-stale-session` — FRAMES ARRIVE AND NONE ARE INGESTED, after the peer's daemon restarts
+
+Its single failure reads *"B never converged at all within five minutes"*, and **the test's own
+diagnostic already contains the answer** — it prints it and nobody read it:
+
+```
+STALE-SESSION A: sent=4 parked=2 reconcileInitiated=3 sweepFailed=1
+           || B(after restart): framesReceived=3 inbound=0
+```
+
+**B received three document frames and ingested none.** That is a clean producer/consumer split, and
+it is not the salt cause: a refused frame never reaches `session.document.received` at all, and these
+did. Across the run the session layer classifies frames by kind perfectly well —
+`reconcile` × 10, `proposal` × 6, `proposal_ack` × 4, `amendment` × 2 — so **routing works; the
+handoff into the document layer's inbound path is what produces nothing.**
+
+**Established:** frames arrive at B, are classified, and yield zero `document.inbound.*`. **Not
+established:** why. `session.document.received` logs `ok: routed.ok` and `reason: routed.reason`, and
+**both fields are ABSENT from every line in the run** — so the router returned neither, which is
+itself the next thread to pull: a routing result that reports no outcome cannot say whether it
+accepted or dropped the frame.
+
+**Not diagnosed further** (§0z.2). The user-visible shape, if it holds: your counterparty restarts,
+and from then on your document changes reach their machine and are silently discarded.
+
 ### 🔴 `j-documents` — 7 of 12 RED, AND IT IS THE SALT SPLIT, STILL LIVE
 
 Measured 2026-08-24, first run of these journeys in this milestone. The seven failures read as seven
