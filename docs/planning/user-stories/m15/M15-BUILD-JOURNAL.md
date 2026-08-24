@@ -72,6 +72,15 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 - **🅿️ FILED, AWAITING ANDRE — do not start these.** `NOTCARRIED-REFUSE-1`,
   `SEALROOT-UNILATERAL-1`, `SEALREJECT-MUTE-1`, `SEALROSTER-FEDERATED-1`, `AC009-INTERMITTENT-1`,
   `SCREENED-GAP-SEALED-1`, `HELD-AUTHORSHIP-1`, `SCREENER-FALSEPOS-1`.
+- **🚨 NONE OF TONIGHT'S DAEMON WORK IS PUBLISHED, and the live agents do not have it.** Measured
+  2026-08-24: `@cello-protocol/daemon` is `0.0.182` on **both** `latest` and `beta`, the local
+  `package.json` still says `0.0.182`, and there are **27 commits touching `core/daemon/src` since
+  the last `v*` tag**. So the Hermes box, the demo agent, and any operator install are running a
+  daemon without the SIGTERM shutdown fix, the authorship wiring, the required-parameter guard, or
+  the salt-split fix. **Nothing is broken by this** — it is alpha and the fixes are additive — but a
+  live test against those boxes is testing OLD code, and reading a green from one proves nothing
+  about tonight. **PARKED: the `latest` promotion is Andre's, and `/cello-publish` must be loaded
+  for the publish itself.** Do not bump a version from memory.
 - **🟡 THE SPINE LANE IS `CELLO_Support`'s ON REQUEST.** They want the full 35 journeys and have
   revised the estimate from five hours to ~90 minutes (the `agentName` batch ran ~65s each; the
   document journeys are the slow ones). **Ping them when the vitest slot is free.**
