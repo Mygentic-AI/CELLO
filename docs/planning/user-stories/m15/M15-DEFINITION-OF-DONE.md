@@ -4558,6 +4558,46 @@ Parallel with Tier 4 — different disciplines, no shared files.
 > **This is the one an AI coder finds in minutes** — not by spotting a weak limiter, but because
 > asking *"what stops abuse here"* returns nothing, anywhere, on any path.
 
+> ### ✅ REVIEWED 2026-08-24 — AND THE REVIEW FOUND MY FIX MADE THE ATTACK WORSE. All blocking findings fixed.
+> **The blocking finding was mine, and it was an attack rather than an inefficiency.** I evicted
+> first and refused second. Eviction only ever scans the DEPOSITING recipient's bucket —
+> deliberately, so a flood at one recipient never deletes another's mail — so a store filled by OTHER
+> recipients meant the loop drained this recipient to **EMPTY**, could not possibly make room, and
+> then refused. **Unauthenticated, repeatable, near-zero cost:** fill the store globally, then send
+> ONE 1-byte deposit addressed to a victim and their whole undelivered mailbox is unlinked while the
+> attacker's junk is untouched. The previous code at least stored the incoming message — **emptying
+> the bucket and keeping nothing was damage I introduced.** It now works out whether eviction COULD
+> make room and refuses without touching a byte when it could not.
+> **Three more, all the same shape — I bounded bytes per recipient and left everything else global:**
+> - **The entry budget was still global.** 10,000 entries of ~200 bytes is **2 MB**, far inside the
+>   16 MiB byte cap, and consumed the ENTIRE global entry budget — denying the park service to
+>   everyone for two megabytes of traffic. Per-recipient entry cap added.
+> - **Empty buckets leaked.** Every deposit creates its bucket before any bound is checked and
+>   nothing removed an empty one, so a refused flood cost the attacker **no disk at all** and grew
+>   the heap per invented recipient key until restart — **a disk DoS traded for a heap one.**
+> - ⚠️ **And I nearly shipped a data-loss bug fixing that:** dropping the empty bucket on the SUCCESS
+>   path too looks symmetrical and detaches the very map the write below sets into, leaving the file
+>   on disk and the entry invisible until a restart rebuilt the index. Caught by reading the write path.
+> **A FALSE IMPOSSIBILITY I WROTE INTO THIS DOCUMENT, corrected:** I said a deposit "carries no
+> depositor identity to key a quota on." **False** — the transport hands the handler a
+> Noise-authenticated `remotePeerId`, which the park handler discards. The true objection is
+> narrower: a peer id is not a CELLO agent identity and is cheap to rotate, so a per-peer quota
+> raises cost without being a hard bound. It matters because this line still asks for per-peer rate
+> limiting, and "impossible" would have read as already ruled out.
+> **The eviction signal is SPLIT, not renamed** — `content.store.full` keeps its original meaning
+> (global pressure) so any alert keyed on it still fires; ordinary FIFO inside a recipient's own
+> quota is a new INFO event instead of drowning it.
+> **Test teeth, both gaps found by review:** the flood test asserted only that *some* deposits were
+> refused — satisfied by an implementation that accepts one and refuses the rest — and now sums what
+> is on disk and asserts the store stayed bounded. The per-recipient test asserted only an upper
+> bound — satisfied by a deposit that always throws — and now asserts the bucket is non-empty and
+> that the NEWEST message survived, which is exactly what the bad ordering destroyed.
+> **Gate: relay + interfaces 30 files / 314 tests / exit 0; typecheck 0.**
+> **CARRIED, named rather than skipped:** the relay startup refusal has **no test** (spawn-based; the
+> pattern exists in `gcp-entrypoint.test.ts`); `InMemoryContentStore` is unbounded, so **no spine test
+> can ever see a refusal**; and `< 2` is a floor — a 2-of-3 set still passes, and cross-checking
+> against `CELLO_DIRECTORY_ENDPOINTS` would close it.
+>
 > ### ✅ TWO ITEMS DONE 2026-08-24 (CELLO_Support) — now `RELAYPARK-1` and `RELAYPUBKEYS-1`.
 > **THE PARK STORE IS NOW ACTUALLY BOUNDED.** The store documented its own hole: eviction only scans
 > the depositing recipient's bucket, so when the store was full of OTHER recipients' entries it
