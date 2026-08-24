@@ -2452,7 +2452,7 @@ Relay-audit Decision 5(b), with the PQ hook built in from the start.
   Keep the MOMENT, drop the DERIVATION: one round trip, two independent values.
 - The parked-content seal (X25519 + HKDF + AES-256-GCM) is the working in-tree pattern to extend.
 
-### `DOD-M15-HASHCORRELATE-1` — ❌ A message hash does not identify the message across sessions
+### `DOD-M15-HASHCORRELATE-1` — ✅ A message hash does not identify the message across sessions
 > **UNFLIPPED 2026-08-24, same session, on review. I flipped it on a claim that is FALSE.**
 > Verdict quoted: *"**DO NOT FLIP** … the entry justifying the flip is factually wrong in the
 > sentence that carries it, and two of the four tests it points to are decoration."*
@@ -2465,6 +2465,31 @@ Relay-audit Decision 5(b), with the PQ hook built in from the start.
 > repo — and I made the repo-level claim.
 > **The same failure as everything else tonight, one turn further out:** I checked whether the file
 > in front of me covered the property and never asked whether the repo did.
+>
+> **CLOSED after meeting all three of the reviewer's stated conditions.**
+>
+> **Closing the exposure is a CHAIN OF FOUR LINKS, and three were already covered before I started:**
+> 1. a FRESH contribution is minted per session — **this was the untested one**
+> 2. two fresh contributions → two different salts — `dod-m15-session-salt.test.ts:62`
+> 3. different salts → different hashes — `…:147` and `dod-m15-content-hash-alg-wired.test.ts:569`
+> 4. the daemon really hashes salted when it holds a salt — `dod-m15-send-consults-the-salt.test.ts:62`
+>
+> **Link 1 is a daemon concern no crypto test can see** — they are handed salts as parameters.
+> `#saltContributionFor` caches our own half on `(agentName, sessionId)`. **Drop `sessionId` from
+> that key and every session between the same two agents shares one salt forever**, the exposure
+> returns in full for that pair, and every one of those tests stays green: the salt they are handed
+> is still a perfectly good salt. It is simply the same one.
+>
+> **The new test feeds both sessions an IDENTICAL peer contribution, and that is the whole design.**
+> With the peer's half held constant, the only thing that can make the two salts differ is our own
+> half being freshly minted. **Vary both halves and it passes for the wrong reason** — the peer would
+> be doing the work, and a daemon that reused its own contribution forever would sail through. It is
+> also the real adversary: a peer that reuses a fixed contribution is how you would attack this.
+>
+> **Mutation-proven:** dropping `sessionId` from that cache key reddens exactly the two new tests and
+> leaves **35 others green**, including the entire crypto salt suite. **Two of my four original tests
+> were deleted** — each justified itself with a guard a stronger neighbour eight lines away already
+> provided.
 >
 > **What was missing, and it is a bypass rather than a gap.** The existing tests prove the salted
 > form differs from the unsalted one and that it is HMAC rather than `SHA-256(salt ‖ content)`. Both
