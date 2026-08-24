@@ -4781,7 +4781,41 @@ Parallel with Tier 4 — different disciplines, no shared files.
 - If it is kept, the justification goes in writing here. "Or justify keeping it" is not a
   do-nothing option.
 
-### ✅ park deposit rate limiting — DONE 2026-08-24 (CELLO_Support), REVIEWED, blocking findings fixed
+### 🟡 park rate limiting — CLIENT HALF built 2026-08-24 (CELLO_Support), review out
+> **The relay half is closed below. This is the client's side of the same wire, and it closed two
+> gaps the relay half created.**
+> **1. A THROTTLING RELAY IS NOT AN OUTAGE, and the operator-facing sentence said it was.** *"Queued,
+> and will be re-sent automatically when the relay link is back"* was written when a refused park
+> could only mean the link was down. Rate limiting made the opposite cause reachable — the relay
+> answered promptly and said no **on purpose** — so the sentence sends the operator to inspect a link
+> that is fine (**a wrong diagnosis is worse than none: it says where NOT to look**) and promises a
+> trigger that never fires, because a deferred park is retried only on EVENTS and no link-restored
+> event is coming. Four causes now have their own words, keyed on codes: rate-limited says the relay
+> is healthy and the limit clears itself in about a minute **and still says do not re-send**, because
+> re-sending is what the limit exists to slow; a full RECIPIENT mailbox points at the counterparty and
+> says another relay would refuse it too; a full STORE points at the relay operator. The original
+> wording survives for a real outage, pinned by its own test.
+> **⚠️ Why the wrong sentence survived: it was an inline ternary inside `sendContent`**, so reaching
+> any branch meant standing up a two-connection fixture and driving a real send. Nothing cheap could
+> test it, so nothing did. Now a pure function — **a guidance string is a decision about what a person
+> does next and deserves to be assertable on its own.**
+> **2. `retry_after_ms` HAD NO READER.** The relay computed exactly when the throttle clears, logged
+> it, asserted it in a relay test — and the client dropped it off the ack. That is this milestone's
+> most-repeated defect, and I had just shipped a fresh instance of it. The client now carries it and
+> the daemon schedules ONE drain at that delay: unref'd so it can never hold the process open,
+> best-effort because the event triggers remain the guarantee, and **deliberately not rescheduling on
+> failure — a timer that retries itself on failure is a self-inflicted flood, which is what the
+> limiter exists to stop.** The value is validated before it becomes a timer argument (the relay is
+> another party's software): zero, negative, NaN and strings are dropped, and **zero especially**,
+> because it would re-park instantly into the limit that just refused.
+> **Gate: daemon 281 files / 2931 tests / exit 0; typecheck 0.**
+> **⚠️ SUSPECTED RISK, recorded BEFORE the verdict so it is not a post-hoc excuse:** the timer calls
+> `flushAwaitingContent()`, which drains **ALL** awaiting sessions, not only the refused one. If a
+> burst of N messages is refused, that is N timers each draining everything — **a self-inflicted
+> thundering herd against the very limiter that refused them.** Put to the reviewer as the blocking
+> question. If it amplifies, I have shipped a flood inside the fix for a flood.
+
+### ✅ park deposit rate limiting — RELAY HALF DONE 2026-08-24 (CELLO_Support), REVIEWED, blocking findings fixed
 > **THE GAP I PREDICTED WAS REAL AND WORSE — BOTH HALVES OF THE WIRING WERE UNPINNED.** Deleting the
 > refusal block left all 260 tests green, and so did reverting the handler registration to one
 > parameter — **the expensive one**, because the limiter then checks an undefined peer id, takes the
