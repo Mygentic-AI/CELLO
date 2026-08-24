@@ -1818,6 +1818,41 @@ comment describes.
 *where* the announce goes missing is a hypothesis, and the evidence that seemed to confirm it has
 been withdrawn.
 
+### ✅ `j-end` IS GREEN — 10/10. A closed line already held the answer, and review found its twin.
+
+**The failure was a STALE FIXTURE, not a defect** — `DOD-M15-SAMEOP-FALSEPOS-1` had already resolved
+that the same-operator flag was right. `CELLO-REPL-001` moved the resolver to `agent_account_links`
+joined on the stable `agent_id`; the journey wrote `agent_profiles.account_id`, **the superseded
+column**, so it handed one agent an account nothing reads — and then verified by counting distinct
+accounts **in that same column**. *A stale fixture whose self-check is stale the same way cannot
+detect its own staleness.*
+
+**Review verdict, quoted — and it read the live database rather than the diff:**
+> *"**You corrected it. You did not weaken it.** I did not take this from the diff — I read the state
+> your last run left in `cello_spine` … Bob is distinct from Alice on **both** legs of D-29, in the
+> tables the predicate actually reads. The hop passes because the product now sees a stranger, not
+> because the assertion moved somewhere permissive."*
+
+**And it found the blocking one I asked for:**
+> *"the same defect this unit fixed is still live 500 lines down, in the same file … character-for-character
+> the defect you just fixed … **The precondition is what has no teeth, not the hop.**"*
+
+**All findings fixed:** HOP 9's precondition moved onto the resolver's table (H1); **both** linkage
+assertions now cover **both legs of D-29** — it is a disjunction, `accountId` OR `phoneStubHash`, and
+counting accounts alone cannot establish "distinct operators" (M3, mine on both hops); the
+`agent_profiles` comment now gives all three reasons the UPDATE stays (M2); the upsert is labelled
+**fixture-only** against V59's *"NO UPDATE and NO DELETE… a binding that can be rewritten is a binding
+an attacker can rewrite"* (L4); and `psqlSpine`'s *"read-only"* doc is corrected, since four call sites
+write through it (L5).
+
+**Q5 answered cleanly:** `j-end` is the only spine journey that seeds operator identity, so **no other
+journey is silently testing the co-owned path while claiming the stranger path.**
+
+**🅿️ ONE ADJACENT ITEM, filed:** `j-spine` proves *"two agents, one account"* from
+`agent_profiles.account_id`. Legitimate — it asserts registration's own write — but it says nothing
+about the replicated link that **authorization and the kill switch** read, which is the failure V59
+exists for (0/2/1 linked across three nodes, 2026-08-07).
+
 ### ✅ `j-spine` IS GREEN — 7/7, from 4/7. Five failures fixed; four were stale vocabulary.
 >
 > **Every one was the journey asserting something the product deliberately removed, and each removal
