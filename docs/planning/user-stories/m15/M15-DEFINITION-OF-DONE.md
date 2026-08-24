@@ -2181,6 +2181,33 @@ policy for an expired manifest — it just never chose it.
   may even be the right answer — but it is undefended, undocumented, and invisible to the operator.
 - Decide it deliberately, per consumer, and write down why.
 
+> **⚠️ THIS LINE'S OWN PREMISE IS PARTLY WRONG — checked 2026-08-24 before starting the work.**
+> *"Invisible to the operator"* is **not true of the STATE.** `cello_status` already carries manifest
+> validity, on two surfaces, via `describeManifestValidity(classifyManifestValidity(...))` — and
+> deliberately so: *"contributes NOTHING while the manifest is comfortably in window. A field present
+> on every status read for the years a manifest is valid is furniture, not a warning."*
+> **What IS invisible is the EVENT** — that a specific high-stakes operation went ahead on a lapsed
+> manifest. An operator can see *"my manifest expired"*; nothing tells them *"and a FROST share was
+> dealt against it anyway."* That is the real gap and it is smaller than the line implies.
+>
+> **The per-consumer stakes are also not interchangeable, which is the reason the policies differ and
+> why "make them consistent" would be the wrong fix.** Read out of the code rather than assumed:
+> - `signal-submission` uses the manifest's **portal intake key**. A rotated key means a message the
+>   portal *cannot open and cannot attribute* — its own comment calls it unattributable poison, with
+>   no error anywhere. **Refusing is right, and it is specific to the intake key, not to expiry.**
+> - `register-handler` uses the manifest's **validator roster**. A stale roster risks dealing a FROST
+>   share to a node that has since been removed.
+> - the challenge verifier uses the manifest's **node pubkeys** to authenticate a directory.
+>
+> **And a refusal here is not free, which the line does not say.** Startup already fails closed on an
+> expired manifest, so a lapsed manifest only exists inside a LONG-RUNNING daemon — and
+> `signal-submission`'s own guidance warns that the obvious remedy is the one move that must not be
+> made: *"a restart without a REPLACEMENT does not reload anything — the daemon refuses to come back
+> and every agent goes offline."* **So "refuse everything on expiry" risks bricking a running
+> operator to close a window that needs a roster change to be exploitable at all.**
+> **`classifyManifestValidity` already exists and is the shared policy object** — the two permitting
+> consumers simply never call it, which is what makes the split accidental rather than chosen.
+
 ### `DOD-M15-DOORBELL-1` — ✅ A daemon shutdown does not ring like an incoming message
 > **CLOSED 2026-08-22.** Reviewer verdict quoted: *"**SILENT FALLBACKS FOUND** — F4 (`readLock` →
 > null → proceed) [blocking]; F5 (mode silently not applied on overwrite) [blocking]; F6/F7
