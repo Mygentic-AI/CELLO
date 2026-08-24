@@ -4361,8 +4361,49 @@ root domain the client can reproduce.
 
 Parallel with Tier 4 — different disciplines, no shared files.
 
-### `DOD-M15-RELAYABUSE-1` — ❌ The relay has abuse controls
-> ### ✅ TWO ITEMS DONE 2026-08-24 (CELLO_Support): the park-store bound, and the fatal directory set.
+### `DOD-M15-RELAYPARK-1` — ✅ The parked-message store refuses instead of writing past its cap
+> **SPLIT OUT OF `DOD-M15-RELAYABUSE-1` 2026-08-24 (Andre).** It was a bullet inside a large line, so
+> finishing it changed no tag and nobody could tell it was done — or, before that, that it was free
+> to claim. Three of Andre's five quick wins were bullets in this position.
+
+### `DOD-M15-RELAYPUBKEYS-1` — ✅ An incomplete directory key set stops the relay instead of degrading it
+> **SPLIT OUT OF `DOD-M15-RELAYABUSE-1` 2026-08-24 (Andre).** Same reason as above. This was quick
+> win #3 and it was delivered, marked done, found to have been **built against the wrong subject**,
+> and rebuilt correctly — a sequence that was invisible at line level because the line never moved.
+
+### `DOD-M15-RELAYADMIN-1` — ❌ The directory-admin push handler is deleted, or its keeping is justified
+> **SPLIT OUT OF `DOD-M15-RELAYABUSE-1` 2026-08-24 (Andre). This is quick win #4 and it is UNCLAIMED.**
+> **The reason it needed its own line is the whole argument for this split:** it could not be seen. Its
+> parent line reads ❌ because the *rate limiting* has not started, so an unclaimed small item sat
+> behind a red tag that was red for an unrelated reason. Nobody could tell it was available, and no
+> count I can produce would have surfaced it.
+- It is **live, has no caller**, and its signed body carries **no nonce and no timestamp** — so no
+  replay protection at all.
+- **Adding replay protection hardens a path nothing uses. Deleting is cheaper and strictly safer.**
+- A fully written handler with no sender is also exactly what `SEALWIRE-1` bullet 7 named: *"abandoned
+  work to anyone auditing a public repo"* — which is Andre's discoverability filter, so this ranks
+  above its size.
+- If it is kept, the justification goes in writing here. "Or justify keeping it" is not a
+  do-nothing option.
+
+### `DOD-M15-RELAYABUSE-1` — ❌ The relay has rate limiting, and its idle timer is on in production
+> ### 🔀 NARROWED 2026-08-24 (Andre): three bullets became their own lines — `RELAYPARK-1`,
+> ### `RELAYPUBKEYS-1`, `RELAYADMIN-1`. What remains here is the LARGE half only.
+> **Why:** two of the three were already finished and one was an unclaimed quick win, and all three
+> were invisible because this line's tag tracked the rate limiting. **A bullet cannot be tagged,
+> claimed, or counted** — so a completed quick win reads as untouched and an available one reads as
+> taken.
+>
+> **What is left, and it is genuinely large:** rate limiting per peer and per pubkey on FIVE paths —
+> authentication, hash submission, gap-fill, the liveness query, content-park deposit — where there
+> is **none of any kind** today. Plus re-enabling the per-session idle timer the production binary
+> never passes, and restoring the duration and byte caps on relayed connections that are deliberately
+> disabled.
+>
+> **This is the one an AI coder finds in minutes** — not by spotting a weak limiter, but because
+> asking *"what stops abuse here"* returns nothing, anywhere, on any path.
+
+> ### ✅ TWO ITEMS DONE 2026-08-24 (CELLO_Support) — now `RELAYPARK-1` and `RELAYPUBKEYS-1`.
 > **THE PARK STORE IS NOW ACTUALLY BOUNDED.** The store documented its own hole: eviction only scans
 > the depositing recipient's bucket, so when the store was full of OTHER recipients' entries it
 > drained that bucket and **then wrote anyway**. Exploitable with no privilege, because a park
@@ -4386,6 +4427,18 @@ Parallel with Tier 4 — different disciplines, no shared files.
 > fails depending on who brokered it, and retrying appears to fix it. It also made one directory a
 > precondition for the relay, inverting the redundancy invariant. `local` is exempt so loopback
 > development and the e2e harness are untouched.
+> **THE "WILL IT BRICK THE FLEET?" QUESTION, ANSWERED FROM THE DEPLOYED CONFIG rather than assumed** —
+> a startup refusal is the one change whose failure mode is every relay refusing to boot, so it is
+> not something to take on trust. `infra/terraform/node-relay.tf:46` builds the value as
+> `join(",", [for region, node in var.directory_nodes : var.directory_node_pubkeys[node.node_id]])`
+> — **every** directory node's pubkey, not a hand-maintained list. With the three deployed nodes that
+> is three keys, which matches the `count=3` reading the DoD already records. The guard cannot fire
+> on the current fleet.
+> **⚠️ What it WOULD refuse, stated rather than discovered:** a non-`local` deployment with a single
+> directory node. That is not a supported topology — the sovereign-node invariant is `T =
+> majority(N)` with N≥3, and a one-directory consortium has no redundancy to threshold — but anyone
+> standing up a single-node staging environment will meet this refusal, and the message names the
+> variable to set.
 > **Gate: relay 26 files / 250 tests / exit 0; typecheck 0 in both repos.**
 >
 > ### (claim, kept for the trail) CELLO_Support, 2026-08-24
@@ -4403,16 +4456,12 @@ Parallel with Tier 4 — different disciplines, no shared files.
 > a global cap that REFUSES instead of writing past itself.
 - **Rate limiting per peer and per pubkey** on authentication, hash submission, gap-fill, the
   liveness query, and content-park deposit. There is **none of any kind** today.
-- **Bound the content-park store per depositor.** Deposit is unauthenticated by explicit design
-  (safe, because a sender signature sits inside the seal), but with 4 MiB frames, no rate limit and
-  a 256 MB store it is trivially fillable for every user at once.
 - **Re-enable the per-session idle timer in the production binary** — the feature exists and the
   binary never passes it, so only a 24-hour sweep runs — and restore duration and byte caps on
   relayed connections, which are deliberately disabled.
-- **Delete the directory-admin push handler, or justify keeping it in the code.** It is live, has no
-  caller, and its signed body carries no nonce and no timestamp — no replay protection. Adding
-  replay protection hardens a path nothing uses; **deleting it is cheaper and strictly safer.**
-- **An empty `CELLO_DIRECTORY_PUBKEYS` fails startup loudly instead of degrading silently.** The
+- ~~Bound the content-park store per depositor.~~ → **`DOD-M15-RELAYPARK-1` ✅**
+- ~~Delete the directory-admin push handler.~~ → **`DOD-M15-RELAYADMIN-1` ❌ — unclaimed quick win.**
+- ~~An empty `CELLO_DIRECTORY_PUBKEYS` fails startup loudly.~~ → **`DOD-M15-RELAYPUBKEYS-1` ✅.** The
   deployed config is correct today — both relays log `count=3, anyDirectory=True`
   (`DOD-M15-SPIKE-1(b)`, Entry 1) — so this is not a live fault. What is unfixed is the failure mode
   that would hide it becoming wrong: with one key the relay silently accepts assignments from one
