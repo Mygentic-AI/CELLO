@@ -3838,7 +3838,55 @@ The byte-match workaround is holding; the fail-open underneath it is not fixed.
 - Resolve the bootstrap coordinate over an authenticated channel; it currently comes from a plaintext
   HTTP endpoint on port 9090.
 
-### `DOD-M15-RELAYONLY-1` — ❌ Relay-only routing is an operator setting
+### `DOD-M15-RELAYONLY-1` — ❌ Relay-only routing is an operator setting (BUILT, REVIEW FOUND IT BREAKS THE NETWORK)
+> ### ⚠️ BUILT 2026-08-24 (CELLO_Support) AND **NOT DONE** — review returned TWO BLOCKING findings.
+> **The setting as shipped does not make the operator private. It takes them OFF THE NETWORK.** Not
+> flipped, not claimed; recorded here so the commits (`0508d5e`, `3b07a92`) cannot be mistaken for a
+> working control. **It is inert until switched on** — the default is off — so nothing is live.
+>
+> **F1 (BLOCKING) — empty addrs are a MALFORMED FRAME to the directory, not a private one.** I
+> suppressed by publishing `addrs: []`. The directory refuses exactly that, on both sides:
+> `directory-node.ts:2473` rejects a `session_request` whose `initiator_session_addrs.length === 0`
+> with `session_request_missing_peer_id`, and `:2488` accepts a `session_offer_accept` only
+> `if (… counterparty_session_addrs.length > 0)` — **with no `else`**, so a relay-only responder's
+> accept is silently dropped and the offer waiter never resolves.
+> **What the operator lives through:** they switch the privacy control on; their next initiate fails
+> with *"Ensure the counterparty is registered and online"* — the counterparty is fine — and every
+> session anyone opens *with* them dies too, telling the other side their agent is offline. Nothing
+> anywhere says "relay-only". **That is ERROR SUBSTITUTION reachable by flipping a switch**, and it
+> is the reviewer brief's own worked example reproduced exactly.
+>
+> **F2 (BLOCKING) — the dial gate refuses the relay route it claims to force everything onto.**
+> `shouldDialCounterparty` returns false for EVERY address, but `connectToCounterparty` exists
+> specifically to dial a `/p2p-circuit` address through its relay, and that circuit addr rides the
+> FROST-signed assignment. Dialing a circuit addr discloses nothing — **it terminates at the relay.**
+>
+> **THE CORRECT SHAPE, and it is one idea, not two:** publish and dial the **circuit-only subset**
+> (`addrs.filter(a => a.includes("/p2p-circuit"))`) rather than nothing. A circuit multiaddr names the
+> RELAY's address and our peer id; it discloses nothing about the operator, it satisfies both
+> directory guards, and it is what §7's mitigation actually means. A genuinely empty set (no
+> reservation yet) becomes a **loud local refusal** — `relay_only_no_reservation` — never an empty
+> publish and never a silent accept.
+>
+> **AND MY OWN TEST HEADER ASSERTED THE PROPERTY THE CODE LACKS**, which is this repo's signature
+> failure mode: *"the peer id is KEPT… stripping it would break relay routing."* Keeping the peer id
+> does **not** give the counterparty a circuit address, because in this codebase the circuit address
+> travels in the very field I emptied.
+>
+> **Also found, not blocking:** F4 the re-dial path (`:8444`) bypasses the control entirely, so the
+> setting silently governs only sessions opened after it; F5 the fix will leak via **dcutr** unless
+> relay-only also disables the hole-punch the standing receiver initiates, and suppresses identify's
+> listen-addr advertisement; F6 my `cello_settings_set` wording says a counterparty *never* learns the
+> address — false for one who kept it from an earlier session, and it does not revoke a prior
+> disclosure; F7 a closed DB makes `getSetting` return null so the control reads OFF **toward
+> disclosure** (needs tri-state: unknown ⇒ refuse to publish); F8 the choke point can now THROW for a
+> retired agent, on a ceremony path with no catch; F9 a dead `advertisedAddress` field carries the
+> operator's public IP with no consumer, outside the choke point.
+>
+> **Test teeth, verbatim:** the settings-validation tests **survive the revert test** and pin a real
+> trap. **The dial half does not** — revert the gate and all 10 stay green. The responder path and
+> the directory's guard are untested, and no test would have caught F1 because none asks what the
+> directory does with the frame.
 The feature half of the IP disclosure. A direct session reveals the operator's IP permanently, and
 [[2026-06-11_1030_daemon-transport-architecture]] §7 already offers relay routing as the mitigation —
 as a footnote. Promote it to a real setting, so the disclosure in `DOD-M15-DISCLOSE-1` is actionable
