@@ -1350,6 +1350,41 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > That is as far as this log goes: the sender-side lines for those hashes are in a different process's
 > capture, so the produce half needs a run with both daemons' output retained.
 >
+### 🔴 `j-documents` — 7 of 12 RED, AND IT IS THE SALT SPLIT, STILL LIVE
+
+Measured 2026-08-24, first run of these journeys in this milestone. The seven failures read as seven
+different things — *"the peer was never told about the kill"*, *"A was never told B's decision"*,
+*"B's copy with no conversation open never converged"*, *"A's update never settled"* — and they are
+**one cause**:
+
+```
+session.content.cross_check.failed        on session bfde644c…
+"reason":"content_hash_salt_unavailable"  × 4
+session.salt.agreed                       × 0
+```
+
+**The receiving side holds no salt, the sender's frames declare salted, and every document update
+between them is refused.** That is `DOD-M15-SALTSPLIT-1`'s exact failure mode — the asymmetric salt
+state — reached here by the branch where **no agreement ever completed at all** (`agreed` is zero for
+the entire run, not merely for the failing session).
+
+**⚠️ WHAT THIS DOES AND DOES NOT SAY ABOUT `SALTSPLIT-1`.** That line prevents the split where one
+side holds an *unspent* salt and the peer says it can never adopt one, and makes a spent split loud.
+**It does not make an agreement complete.** These sessions never got that far, so nothing in that unit
+applies — the fix is upstream of it, in why the agreement does not run for this path. **Reported as a
+distinct defect rather than folded into a closed line**, because folding it in would make a tag cover
+work it never did.
+
+**The user-visible shape, which is why it outranks the rest of this lane:** two people co-editing a
+document, and one side's changes never arrive. Neither sees an error — the update is refused at the
+far end and the near end shows it sent. Documents are `M9`'s headline feature.
+
+**Not diagnosed further, deliberately** (§0z.2 trip-wire): the next step is why the salt agreement
+does not complete on the document path when it completes elsewhere — `j-content` shows
+8 × `session.salt.agreed` in its own run, so the agreement works when it runs. Whether the document
+transport opens its session by a route that skips the announce is the question, and I have **not**
+established it.
+
 ### ✅ `j-spine` IS GREEN — 7/7, from 4/7. Five failures fixed; four were stale vocabulary.
 >
 > **Every one was the journey asserting something the product deliberately removed, and each removal
