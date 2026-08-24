@@ -916,57 +916,8 @@ Parallel with Tier 4 — different disciplines, no shared files.
 ### `DOD-M15-RELAYPUBKEYS-1` — ✅ An incomplete directory key set stops the relay instead of degrading it
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYPUBKEYS-1`.
 
-### `DOD-M15-RELAYADMIN-1` — 🟡 The directory-admin push handler is KEPT; its replay window is recorded
-> ### 🔴 THE PREMISE WAS FALSE, AND THE LINE INSTRUCTED A DELETION THAT WOULD HAVE BROKEN EVERY SESSION.
-> **Measured 2026-08-24 (CELLO_Support) before touching anything, because this line proposed a
-> DELETION and that is the one change whose failure mode is silent removal of something live.**
->
-> **"It is live, has no caller" — the second half is wrong.** Its caller is the **production
-> directory binary**: `NetworkRelayAdapter` is constructed at `bin/directory.ts:814`, passed to the
-> node as `relay: networkRelay` (`:1195`), and connected with `await networkRelay.connect(...)`
-> (`:1363`). It sends exactly the four frames this line names — `record_assignment`,
-> `discard_session`, `confirm_seal`, `reject_seal` — which **are the relay-side session lifecycle**.
-> Deleting the handler would leave every brokered session unrecorded at the relay, unable to be
-> discarded, confirmed or refused. **Not abandoned work. Load-bearing work with one caller.**
->
-> **How the "no caller" reading survived:** the only greps that find a sender find it in
-> `packages/directory/`, and this line lives in the relay's section next to relay bullets. It reads
-> as a relay-local orphan and it is one half of a cross-package protocol.
->
-> **✅ DISPOSITION — KEPT, and this is the written justification the line demands.** The bar said
-> *"deleted, or its keeping is justified"*, and keeping is now the only correct answer: it is the
-> directory's sole channel for driving a session's relay-side lifecycle.
->
-> ### ⚠️ WHAT IS STILL TRUE, AND MATTERS MORE NOW THAT THE PATH IS LIVE
-> **Three of the four frames sign no freshness.** `record_assignment` signs
-> `CBOR([session_id, participant_a, participant_b, session_timestamp])`. The other three sign only
-> `{ type, session_id }` — **no nonce, no timestamp**. And the handler authenticates the **BODY
-> SIGNATURE, not the dialer**: it verifies `directory_signature` against `#directoryPubkey` and never
-> looks at the remote peer id.
-> **So a captured `discard_session`, `confirm_seal` or `reject_seal` frame is replayable forever,
-> from any peer, against the session it names.** The relay is publicly dialable
-> (`DOD-M15-DDOS-1`), so the attacker needs only the bytes, not the position.
-> **Bounded honestly:** obtaining those bytes requires having been on a Noise-encrypted
-> directory↔relay stream, i.e. prior compromise — the same bound `DOD-M15-STEP6-REPLAY-1` records
-> for step 6, and that line still chose to close its window rather than argue the bound away.
-> **What the operator would live through:** a conversation whose relay-side record is discarded out
-> from under it, or a seal refused, with the relay's own logs showing a correctly-signed directory
-> instruction.
->
-> **NOT taken in this unit, and the reason is the size, not the appetite:** adding a nonce or
-> timestamp to those three bodies is a **bilateral wire change across both repos** — the directory
-> signs it and the relay must verify it — and it must ship receiver-first or every admin frame from
-> an un-upgraded directory is refused. That is not quick win #4; it is a wire unit.
-> **→ carried as `DOD-M15-RELAYADMIN-REPLAY-1`.**
-- **⚠️ QUICK WIN #4 DOES NOT EXIST AS DESCRIBED.** The cheap, safe action here was to check the
-  premise and correct the record before someone deleted live code on it. That is done; what remains
-  is a wire change, and it is sized as one.
-- **Related, and it should be answered by the same person:** `DOD-M15-RELAYADMIN-KEYSET-1` asks
-  whether this stream verifies against only the PRIMARY directory key. **It does** —
-  `relay-node.ts:271-273` says so outright: *"the relay accepts an assignment signed by ANY of these…
-  The directory-ADMIN frame path still authenticates against the single `directoryPubkey` only."*
-  So a session brokered by directory 1 or 2 cannot be driven through this stream by the node that
-  brokered it. That is the redundancy invariant inverted, and it is now evidenced rather than asked.
+### `DOD-M15-RELAYADMIN-1` — ✅ The directory-admin push handler is KEPT, and the keeping is justified
+> **Closed 2026-08-24 (CELLO_Support). The line's premise was FALSE and it instructed a deletion that would have broken every session** — the handler's caller is the production directory binary. Kept, with the written justification the bar demands. No diff, so no unit review (the `SPIKE-1` precedent); every claim is a quoted file:line. Replay window carried as `DOD-M15-RELAYADMIN-REPLAY-1`. Full entry → [[M15-DEFINITION-OF-DONE-ARCHIVE]].
 
 ### `DOD-M15-RELAYADMIN-REPLAY-1` — ❌ A directory admin frame cannot be replayed
 Split from `DOD-M15-RELAYADMIN-1` once its deletion premise was disproved and the handler was kept.
