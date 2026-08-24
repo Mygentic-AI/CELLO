@@ -4080,3 +4080,47 @@ before launch.
 - **Enforcer:** cross-node — a seal adjudicated by a node that did not assign the session must still
   refuse a ctrl leaf signed by a non-participant. The current single-node test harness cannot fail
   this case, which is why it was invisible.
+
+---
+
+### `DOD-M15-AC009-INTERMITTENT-1` — 🅿️ POST-LAUNCH BACKLOG. A publish-gating test fails about a third of the time in CI and never locally
+**Found 2026-08-24 by it blocking the `v0.0.257` cascade. Measured across six consecutive CI runs of
+the same suite, not inferred from one.**
+
+`AC-009 (binary): SIGTERM marks active sessions interrupted` is one test of 4,485 and it gates every
+publish, because the Build job gates `publish-tag`. Observed on the same day, same suite:
+
+| run | commit | AC-009 |
+|---|---|---|
+| main | `1ff0aea` | pass |
+| main | `2e76321` | pass |
+| main | `a0add31` (version strings ONLY) | **FAIL** |
+| tag `v0.0.257` | `3ff650a` | **FAIL** |
+| main | `8e85740` | pass |
+| main | `32677198160` … `32677449951` | pass, pass |
+
+**`a0add31`'s entire diff is seven version strings in seven `package.json` files**, so the failure is
+not caused by the change under test. Both lanes ran the full `core/daemon` suite locally at a
+superset of that tree and AC-009 **passed** both times.
+
+**Why this is worse than an ordinary flaky test.** It is unreliable in *both* directions: it can
+block a good publish (it did), and on a different roll it can pass a build with a genuinely broken
+shutdown. A gate that is right two thirds of the time is not a gate; it is a toll.
+
+**⚠️ IT IS NOW INSTRUMENTED, AND THAT WAS THE ACTUAL BLOCKER.** Neither lane could diagnose it because
+both sides of the evidence were silent:
+- The daemon's shutdown UPDATE logged **only on a thrown error**, so `changes` — which separates "the
+  UPDATE ran and matched nothing" from "the shutdown never ran" — was on the result object and
+  unread. Now logged as `rowsMarkedInterrupted`.
+- The test accepted `code === null` (killed by the default action of a signal) as a **clean exit**,
+  and discarded `signal` entirely. So "the handler never ran" and "the handler ran and reported
+  success" arrived as the same silent resolve. `null` now rejects and names the signal.
+
+**Do not chase it further until it fails again with those two facts in hand.** The next failure says
+which world it is; guessing before then is what produced the previous diagnosis — a WAL snapshot
+race, complete with a `wal_checkpoint(TRUNCATE)` fix, after which the test failed anyway.
+
+- **POST-LAUNCH** because it is our evidence lane, not a customer's experience — but it is the FIRST
+  thing to look at if a publish blocks again, and a green run is not evidence the underlying
+  behaviour is sound.
+- **Enforcer:** the next CI failure's own log. No new test until then.
