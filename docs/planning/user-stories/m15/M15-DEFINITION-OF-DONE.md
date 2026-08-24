@@ -591,7 +591,17 @@ answer was worse and different.
   If that evidence cannot be produced for a description, the honest fix is to DELETE the claim, not
   to soften it — §2f, and the same rule that governed the swept surfaces.
 
-### `DOD-M15-DISCLOSE-1` — ❌ Shipped documentation discloses what the architecture cannot remove
+### `DOD-M15-DISCLOSE-1` — 🟡 Shipped documentation discloses what the architecture cannot remove
+> # 🔒 BULLET 1 CLAIMED BY **CELLO_Support**, 2026-08-24, BEFORE writing a word of it.
+> **Andre's re-ranking, quick win #1:** *"Say that a direct conversation reveals your IP.
+> Documentation. It's true, there's no remedy, and the setting that would have been the remedy was
+> reopened this morning as not working."*
+> **I hold: bullet 1 only** — the IP-disclosure paragraph, in the docs that actually SHIP. The other
+> three bullets (relay metadata, the single-node relay assignment, the long-lived per-agent handle)
+> are unclaimed.
+> **Related to what I just closed:** `RELAYONLY-1` ✅ is this line's *feature* half. The wording must
+> not imply relay-only removes the disclosure — it narrows who can learn the address, and only for
+> sessions opened after it is switched on.
 - **A direct session permanently reveals the operator's IP address to the counterparty.** No gate,
   port change or ephemeral identity removes it; anyone who has talked to you directly can flood you
   afterwards with no protocol remedy. The shipped client documentation currently says nothing.
@@ -1212,7 +1222,10 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
   silent writes nobody was looking for.
 
 ### `DOD-M15-SPINERED-1` — ❌ The multi-process evidence lane is HALF RED, and nobody knew
-> # 🔒 CLAIMED BY **CELLO_Support**, 2026-08-24, BEFORE starting — `CELLO_Coder_1` handed it over
+> # 🔓 CLAIM RELEASED 2026-08-24 — **Andre re-ranked; this is no longer my WIP.** It stayed blocked on
+> exclusive use of the test runner and he has since prioritised a set of quick wins ahead of it.
+> **Unclaimed and available.** The pre-run triage below stands and is worth reading before anyone runs it.
+> # (prior claim, kept for the trail) CELLO_Support, 2026-08-24 — `CELLO_Coder_1` handed it over
 > (*"the vitest slot is yours for the full lane… I am asking you to take it"*), and it is claimed
 > here rather than only in conversation because ownership living in a conversation is exactly how
 > both lanes independently fixed the seal line.
