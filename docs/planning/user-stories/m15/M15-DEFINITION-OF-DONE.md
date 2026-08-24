@@ -4137,7 +4137,37 @@ The byte-match workaround is holding; the fail-open underneath it is not fixed.
 - Resolve the bootstrap coordinate over an authenticated channel; it currently comes from a plaintext
   HTTP endpoint on port 9090.
 
-### `DOD-M15-RELAYONLY-1` — 🟡 Relay-only routing is an operator setting
+### `DOD-M15-RELAYONLY-1` — ✅ Relay-only routing is an operator setting
+> ### ✅ CLOSED 2026-08-24 (CELLO_Support). Two review passes, four blocking findings, all fixed.
+> **What an operator gets:** `cello_settings_set transport.relay_only true`, and this agent then
+> publishes only its relay-circuit address, dials only the counterparty's, **and turns off NAT
+> hole-punching and the identify announce**. A counterparty who does not already hold this node's
+> address has no direct route to it — including one who ignores the flag, because there is nothing
+> direct to dial and nothing direct advertised.
+>
+> **GATE, all by exit code:** daemon **280 files / 2918 tests / 0**; transport **14 files / 163 / 0**;
+> adapter **21 files / 182 / 0**; typecheck **0**; eslint **0**. 19 unit tests plus 4 on the
+> transport flag, **each blocking behaviour proven by a revert test that was RUN.**
+>
+> **THE LINE'S OWN TRAP WAS AVOIDED AND THEN HIT TWICE ANYWAY, ONE LAYER DOWN EACH TIME.** It warned:
+> gate the dial, not the label, or you ship a placebo. I gated the dial — and shipped a placebo
+> twice regardless. **Pass 1: publishing nothing is not private, it is MALFORMED** — the directory
+> refuses an empty address list, so the operator switched on a privacy control and was told their
+> counterparty was offline. **Pass 2: filtering what the DIRECTORY is told does not stop libp2p
+> telling them directly** — dcutr hole-punches the circuit into a direct connection, and identify
+> hands over the listen set on the first relayed connection. *Each fix was correct about the layer it
+> could see.*
+>
+> **CARRIED, with reasons, since two passes is the cap:** **H5** two setters overwrite
+> `#counterpartyAddrs` from an observed `remoteAddr`, so the dial filter can erase itself at runtime;
+> **H7** `validateSettingValue` still falls through to away-TEXT for any unrecognised key, so the
+> next non-boolean setting inherits away semantics silently; **H9** `advertisedAddress` is a dead
+> field carrying the operator's public IP with no consumer, outside the choke point.
+>
+> **NOT PROVEN LIVE, and stated because it is the honest limit:** no two-process test watches a
+> relay-only agent fail to be reached directly. The controls are asserted at their seams — service
+> registration, announce configuration, published addresses, dialled addresses — not against a live
+> peer. **That belongs to the spine lane, not to a unit test.**
 > # 🔒 OWNED BY **CELLO_Support**, CLAIMED 2026-08-24. **CELLO_Coder_1: DO NOT TOUCH THIS LINE.**
 > **Andre, 2026-08-24: *"from now on this is yours. You own it. It's yours to complete. It's yours to
 > review."*** Both lanes independently produced fixes for the seal line because ownership was assumed
