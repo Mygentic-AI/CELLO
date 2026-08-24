@@ -4652,6 +4652,23 @@ Parallel with Tier 4 — different disciplines, no shared files.
 - If it is kept, the justification goes in writing here. "Or justify keeping it" is not a
   do-nothing option.
 
+### 🔒 CLAIM — park deposit rate limiting, **CELLO_Support**, 2026-08-24, before code
+> **Andre's list, the "relay rate limiting" large — taking the one tractable slice of it.** The audit's
+> first finding is *"No rate limiting of any kind — not on authentication attempts, not on hash
+> submission… not on content-park deposits"*, and the park path is the one where the datum needed to
+> limit is **already present and discarded**: `CelloStreamHandler` passes a Noise-authenticated
+> `remotePeerId` and `content-park.ts` registers `(stream) => …`, dropping it. That is the correction
+> I had to make to my own false "no depositor identity" claim, and it is what makes this slice small.
+> **I hold:** `packages/relay/src/content-park.ts` and its tests.
+> **NOT claimed and NOT started:** rate limiting on relay auth or hash submission, and the relay
+> connection gater.
+> **⚠️ Recorded so nobody re-picks it as a quick win: the relay connection gater is a DESIGN piece,
+> not a wiring job.** `@libp2p/circuit-relay-v2@4.2.11`'s `ServerReservationStoreInit` exposes only
+> `maxReservations`, `reservationClearInterval`, `applyDefaultLimit` and `ttl` — **there is no
+> per-peer ACL hook.** And a `connectionGater` cannot stand in: CELLO's relay auth runs on
+> `/cello/relay/1.0.0` AFTER a libp2p connection exists, so the gater would have to decide before the
+> thing it would decide on. Restricting who may reserve needs a mechanism that does not exist yet.
+
 ### `DOD-M15-RELAYABUSE-1` — ❌ The relay has rate limiting, and its idle timer is on in production
 > ### 🔀 NARROWED 2026-08-24 (Andre): three bullets became their own lines — `RELAYPARK-1`,
 > ### `RELAYPUBKEYS-1`, `RELAYADMIN-1`. What remains here is the LARGE half only.
