@@ -212,7 +212,26 @@ describe("J-SPINE — live binary spine (DOD-SPINE-1..7 against the real binarie
     expect(status.daemon, `daemon should be running${diag}`).toBe("running");
     expect(status.directory_signaling, `directory_signaling should be 'connected'${diag}`).toBe("connected");
     expect(status.agents?.length ?? 0, `status should list >=1 agent${diag}`).toBeGreaterThanOrEqual(1);
-    expect(Array.isArray(status.connections), `status must carry a connections list${diag}`).toBe(true);
+    /**
+     * ⚠️ THE `connections` ASSERTION IS DELETED, AND IT PROVED NOTHING WHEN IT PASSED.
+     *
+     * `status.connections` was removed from the daemon-wide surface by commit `5deef4b` —
+     * *"drop the always-empty `connections` stub from the status surface"*. It was a **stub that was
+     * always `[]`**, so `Array.isArray(...)` was true whether or not a single connection existed. The
+     * assertion could only ever prove the STUB was present.
+     *
+     * That is the same shape as the three agent-state assertions above it: the journey encoding a
+     * vocabulary the product deliberately removed, and the removal being the correct call. The
+     * daemon-wide status excludes per-connection concepts on purpose — the neighbouring comment in
+     * `daemon.ts` makes the same point about `selected`: *"this is the daemon-wide surface; selection
+     * is a per-connection concept."*
+     *
+     * Nothing replaces it here because nothing is lost: the property SPINE-1 is for — the daemon is
+     * up, signaling is connected, an agent is loaded, and the DIRECTORY corroborates it — is asserted
+     * on the three lines above, and the IPC connection is proven by `status` parsing at all. The
+     * per-connection view has its own coverage in `DOD-SPINE-2/3`, which asserts two connections
+     * disagreeing about selection.
+     */
 
     // Required startup log events (DOD-SPINE-1).
     expect(daemon.output, `daemon.started must be logged${diag}`).toMatch(/"event":"daemon\.started"/);
