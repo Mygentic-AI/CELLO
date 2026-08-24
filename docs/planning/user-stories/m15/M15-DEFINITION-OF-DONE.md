@@ -3398,8 +3398,26 @@ written down nowhere, and a per-session salt fixes it as a side effect.
   `SHA-256(salt ‖ message)`, which has a length-extension weakness). Recorded as its own line so the
   exposure is on the record independently of the fix that closes it.
 
-### `DOD-M15-SEALWIRE-1` — ❌ The receipt is bound to the transcript (bullet 5 REOPENED)
-> ### ⚠️ I CLOSED THIS AND IT WAS NOT DONE. REOPENED 2026-08-24 on `CELLO_Coder_1`'s measurement.
+### `DOD-M15-SEALWIRE-1` — ✅ The receipt is bound to the transcript
+> ### ✅ BULLET 5 CLOSED FOR REAL, 2026-08-24 (CELLO_Support) — the held path EXECUTES and the mutation REDDENS.
+> The reopening was correct and the fix is the test that never existed. **The carrier is now driven
+> end to end:** hold a SENT leaf at slot 1 ahead of the frontier (asserting it really was held and
+> the transcript is still empty), then close the gap by ingesting a received message at slot 0 —
+> which is what runs `#releaseHeld`, **the only path that writes a held SENT row** — and read a
+> 64-byte signature and the pubkey back off the released row. Its pair asserts the truthful negative:
+> a hold carrying no proof stores none, so the first test is reading a proof that **travelled**
+> rather than one the release path invented.
+>
+> **THE REVERT TEST, RUN — this is the whole reason the bullet was reopened.** Delete
+> `...(authorship ? { authorship } : {})` from the hold in `placeOwnLeaf`:
+> **the held-path test goes RED and the other four stay GREEN.** The identical mutation previously
+> passed on 3 tests. Code restored, verified back to 5/5, and the manager's diff is empty.
+>
+> **Gate: the WHOLE daemon package — 278 files, 2906 tests, exit 0. Typecheck 0, eslint 0.** The
+> committed change is test-only; no production line moved.
+>
+> ### ⚠️ THE ORIGINAL PREMATURE CLOSE, kept because the reasoning is the lesson.
+> **REOPENED 2026-08-24 on `CELLO_Coder_1`'s measurement.**
 > **My witnessed test covers the DELIVERED writer, not the sixth one — and the two mutations say so
 > in the same file:**
 > - remove authorship from `recordTranscriptMessage(...)` → **RED (1 failed / 2 passed)** ✅
