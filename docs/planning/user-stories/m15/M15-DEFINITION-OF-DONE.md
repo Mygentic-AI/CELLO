@@ -1041,7 +1041,19 @@ reboot clears, and re-running to recover the failure texts costs another hour.
 
 ### `DOD-M15-CLOSEROOT-1` — ❌ Five seal journeys still expect a receipt that close no longer returns
 **BLOCKS LAUNCH** (§0z.1) — but as **TEST DEBT, not a product defect.** The product is correct and
-the tests are stale. **This line previously said the opposite in the strongest possible terms, and
+the tests are stale.
+
+> **A SIXTH, surfaced 2026-08-24 by `SEALWIRE-1` bullet 8 — and it is worth recording HOW.** In
+> `j-documents`, bullet 8 replaced a bare `expected false to be true` with the daemon's own verdict.
+> The test still fails, but it now reads:
+> `A has no sealed root: {"ok":false,"reason":"seal_in_progress","seal_status":"committed",…}`
+> **That is this line's exact shape** — close commits and returns, the receipt is fetched afterwards,
+> and the journey asks at close. `awaitSealedRoot()` in `live-harness.ts` polls the receipt and
+> prints the last response on timeout; it exists for precisely this.
+> **The point is the diagnostic, not the count.** `expected false to be true` named nothing and could
+> have been anything; one assertion carrying the daemon's answer instead of re-deriving it turned an
+> unexplained red into a filed instance of a known cause, with no new investigation. That is the
+> argument for bullet 8 generally, measured rather than asserted. **This line previously said the opposite in the strongest possible terms, and
 that was WRONG. See the retraction below; it is the more useful half of this entry.**
 
 > ### 🚨 RETRACTED — I opened this as a blocking PRODUCT defect and told Andre it was the most
