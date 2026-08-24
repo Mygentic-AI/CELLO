@@ -5,20 +5,23 @@
  * These tests cover the relay-side handler for inbound directory admin frames.
  *
  * Protocol: /cello/directory-relay/1.0.0
- * Direction: directory → relay (record_assignment, discard_session, confirm_seal, reject_seal)
+ * Direction: directory → relay (discard_session)
  *            relay → directory (seal_submission)
  *
  * Auth: relay verifies each frame is signed by the known directory Ed25519 pubkey.
  *       Signature domain: "CELLO-DIR-RELAY-v1"
  *       TBS: canonical CBOR of the frame body (excluding directory_signature field)
  *
- * AC-001: record_assignment → assignment_ok; relay accepts hash_submit from participants
+ * DOD-M15-RELAYADMIN-DEAD-FRAMES-1 (2026-08-24): record_assignment, confirm_seal and reject_seal
+ * were REMOVED from this wire protocol (no deployed directory has sent them since Option B and
+ * the seal-broker cutover shipped). Their AC-001/AC-004/AC-005/SI-NEW wire tests are removed with
+ * them. AC-006/SI-001 (generic auth failure) now use discard_session as the vehicle instead of
+ * record_assignment, since the assertion is about the auth check, not about the retired frame.
+ *
  * AC-002: discard_session → discard_ok; subsequent hash_submit returns session_not_found
- * AC-004: confirm_seal → confirm_ok; session destroyed
- * AC-005: reject_seal → reject_ok; session sealed_rejected
  * AC-006: frame with invalid signature → auth_invalid; no state mutation
  * SI-001: frame signed by unknown key → auth_invalid; no state mutation
- * SI-002: hash_submit before record_assignment → session_not_found (same as post-seal)
+ * SI-002: hash_submit to an unregistered session → session_not_found (same as post-seal)
  */
 
 import {
@@ -112,65 +115,11 @@ async function makeAssignment(
   return { session_id: sessionId, participant_a: pubA, participant_b: pubB, session_timestamp, directory_signature };
 }
 
-/**
- * Build and sign a record_assignment frame for the /cello/directory-relay/1.0.0 protocol.
- *
- * Two signatures:
- *   - assignment_signature: standard relay assignment TBS (CBOR [session_id, pubA, pubB, timestamp])
- *     used by recordAssignment() to verify the relay session assignment
- *   - directory_signature: frame body auth sig (CBOR of all fields except directory_signature)
- *     used by the relay's #handleDirectoryRelayStream to authenticate the directory
- */
-async function makeRecordAssignmentFrame(
-  sessionId: Uint8Array,
-  pubA: Uint8Array,
-  pubB: Uint8Array,
-  sessionTimestamp: number,
-  dirKp: ReturnType<typeof generateKeypair>
-): Promise<Uint8Array> {
-  const tsEncoded = sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp;
-
-  // assignment_signature: CBOR([session_id, pubA, pubB, timestamp]) — same as relay's recordAssignment TBS
-  const assignmentTbs = CBOR_ENC.encode([sessionId, pubA, pubB, tsEncoded]) as Uint8Array;
-  const assignment_signature = await dirKp.sign(assignmentTbs);
-
-  // Frame body (without directory_signature) for frame auth
-  const body: Record<string, unknown> = {
-    type: "record_assignment",
-    session_id: sessionId,
-    participant_a: pubA,
-    participant_b: pubB,
-    session_timestamp: tsEncoded,
-    assignment_signature,
-  };
-  const directory_signature = await signFrameBody(dirKp, body);
-  return CBOR_ENC.encode({ ...body, directory_signature }) as Uint8Array;
-}
-
 async function makeDiscardSessionFrame(
   sessionId: Uint8Array,
   dirKp: ReturnType<typeof generateKeypair>
 ): Promise<Uint8Array> {
   const body: Record<string, unknown> = { type: "discard_session", session_id: sessionId };
-  const directory_signature = await signFrameBody(dirKp, body);
-  return CBOR_ENC.encode({ ...body, directory_signature }) as Uint8Array;
-}
-
-async function makeConfirmSealFrame(
-  sessionId: Uint8Array,
-  dirKp: ReturnType<typeof generateKeypair>
-): Promise<Uint8Array> {
-  const body: Record<string, unknown> = { type: "confirm_seal", session_id: sessionId };
-  const directory_signature = await signFrameBody(dirKp, body);
-  return CBOR_ENC.encode({ ...body, directory_signature }) as Uint8Array;
-}
-
-async function makeRejectSealFrame(
-  sessionId: Uint8Array,
-  reason: string,
-  dirKp: ReturnType<typeof generateKeypair>
-): Promise<Uint8Array> {
-  const body: Record<string, unknown> = { type: "reject_seal", session_id: sessionId, reason };
   const directory_signature = await signFrameBody(dirKp, body);
   return CBOR_ENC.encode({ ...body, directory_signature }) as Uint8Array;
 }
@@ -263,81 +212,9 @@ async function makeFixture(): Promise<Fixture> {
   };
 }
 
-// ─── AC-001: record_assignment → assignment_ok; relay accepts subsequent hash_submit ─────────────
-
-describe("AC-001: record_assignment over network → assignment_ok, relay accepts hash_submit", () => {
-  let scope = createTestScope();
-  beforeEach(() => { scope = createTestScope(); });
-  afterEach(() => scope.run(async () => {}));
-
-  it("directory sends record_assignment, relay responds assignment_ok, clients can submit hashes", async () => {
-    const fix = await makeFixture();
-    scope.addCleanup(fix.relayStop);
-
-    // Directory-side node
-    const dirKp = generateKeypair();
-    const dirNode = await createNode({ keyProvider: dirKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-    await dirNode.start();
-    scope.addCleanup(async () => { await dirNode.stop(); });
-
-    // Client nodes
-    const clientKpA = generateKeypair();
-    const clientKpB = generateKeypair();
-    const pubA = await clientKpA.getPublicKey();
-    const pubB = await clientKpB.getPublicKey();
-
-    const sessionId = new Uint8Array(randomBytes(16));
-    const sessionTimestamp = Date.now();
-
-    // Send record_assignment over /cello/directory-relay/1.0.0
-    const { stream: dirStream, reader: dirReader } = await openDirRelayStream(
-      dirNode, fix.relayPeerId, fix.relayAddrs
-    );
-    scope.addCleanup(async () => { dirStream.close().catch(() => {}); });
-
-    const frame = await makeRecordAssignmentFrame(sessionId, pubA, pubB, sessionTimestamp, fix.dirKp);
-    sendFrame(dirStream, frame);
-
-    const response = await dirReader.readDecoded();
-    expect(response["type"]).toBe("assignment_ok");
-
-    // Now clients should be able to submit hashes
-    const clientNodeA = await createNode({ keyProvider: clientKpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-    const clientNodeB = await createNode({ keyProvider: clientKpB, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-    await clientNodeA.start();
-    await clientNodeB.start();
-    scope.addCleanup(async () => { await clientNodeA.stop(); });
-    scope.addCleanup(async () => { await clientNodeB.stop(); });
-
-    await clientNodeA.dial(fix.relayAddr);
-    await clientNodeB.dial(fix.relayAddr);
-
-    const streamA = await clientNodeA.newStream(fix.relayPeerId, RELAY_PROTOCOL_ID);
-    const readerA = new StreamReader(streamA);
-    const streamB = await clientNodeB.newStream(fix.relayPeerId, RELAY_PROTOCOL_ID);
-    const readerB = new StreamReader(streamB);
-    await performRelayAuth(readerA, streamA, clientKpA);
-    await performRelayAuth(readerB, streamB, clientKpB);
-
-    // A submits a hash
-    const contentHash = new Uint8Array(randomBytes(32));
-    const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, contentHash, clientKpA, 0);
-    sendFrame(streamA, CBOR_ENC.encode({
-      type: "hash_submit",
-      session_id: sessionId,
-      leaf_kind: 0x00,
-      structure1_cbor,
-      sender_signature,
-    }));
-
-    const ack = await readerA.readDecoded();
-    expect(ack["type"]).toBe("hash_submit_ack");
-    expect(ack["sequence_number"]).toBe(1);
-
-    streamA.close().catch(() => {});
-    streamB.close().catch(() => {});
-  }, 20_000);
-});
+// AC-001 (record_assignment over the directory-relay wire) removed with the frame it tested —
+// DOD-M15-RELAYADMIN-DEAD-FRAMES-1. record_assignment now arrives only via the client-presented
+// path (client_record_assignment, covered by FED-OPTIONB-SETUP-001 below).
 
 // ─── AC-002: discard_session → discard_ok; subsequent hash_submit → session_not_found ───────────
 
@@ -404,116 +281,10 @@ describe("AC-002: discard_session → discard_ok; hash_submit returns session_no
   }, 20_000);
 });
 
-// ─── AC-004: confirm_seal → confirm_ok; session destroyed ────────────────────
-
-describe("AC-004: confirm_seal → confirm_ok; hash_submit returns session_not_found", () => {
-  let scope = createTestScope();
-  beforeEach(() => { scope = createTestScope(); });
-  afterEach(() => scope.run(async () => {}));
-
-  it("relay confirms seal; session destroyed", async () => {
-    const fix = await makeFixture();
-    scope.addCleanup(fix.relayStop);
-
-    const clientKpA = generateKeypair();
-    const clientKpB = generateKeypair();
-    const pubA = await clientKpA.getPublicKey();
-    const pubB = await clientKpB.getPublicKey();
-
-    const sessionId = new Uint8Array(randomBytes(16));
-    const assignment = await makeAssignment(sessionId, pubA, pubB, fix.dirKp);
-    fix.relay.recordAssignment(assignment);
-
-    // Manually put session into sealing state
-    fix.relay.submitForSeal(sessionId);
-
-    const dirNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-    await dirNode.start();
-    scope.addCleanup(async () => { await dirNode.stop(); });
-
-    const { stream: dirStream, reader: dirReader } = await openDirRelayStream(
-      dirNode, fix.relayPeerId, fix.relayAddrs
-    );
-    scope.addCleanup(async () => { dirStream.close().catch(() => {}); });
-
-    const frame = await makeConfirmSealFrame(sessionId, fix.dirKp);
-    sendFrame(dirStream, frame);
-
-    const response = await dirReader.readDecoded();
-    expect(response["type"]).toBe("confirm_ok");
-
-    // Verify session was destroyed: submitForSeal should now return not_found
-    const sealResult = fix.relay.submitForSeal(sessionId);
-    expect(sealResult.ok).toBe(false);
-    if (!sealResult.ok) {
-      expect(sealResult.reason).toBe("session_not_found");
-    }
-  }, 20_000);
-});
-
-// ─── AC-005: reject_seal → reject_ok; session sealed_rejected ────────────────
-
-describe("AC-005: reject_seal → reject_ok; hash_submit returns seal_refused", () => {
-  let scope = createTestScope();
-  beforeEach(() => { scope = createTestScope(); });
-  afterEach(() => scope.run(async () => {}));
-
-  it("relay rejects seal; session marked seal_rejected", async () => {
-    const fix = await makeFixture();
-    scope.addCleanup(fix.relayStop);
-
-    const clientKpA = generateKeypair();
-    const clientKpB = generateKeypair();
-    const pubA = await clientKpA.getPublicKey();
-    const pubB = await clientKpB.getPublicKey();
-
-    const sessionId = new Uint8Array(randomBytes(16));
-    const assignment = await makeAssignment(sessionId, pubA, pubB, fix.dirKp);
-    fix.relay.recordAssignment(assignment);
-
-    const dirNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-    await dirNode.start();
-    scope.addCleanup(async () => { await dirNode.stop(); });
-
-    const { stream: dirStream, reader: dirReader } = await openDirRelayStream(
-      dirNode, fix.relayPeerId, fix.relayAddrs
-    );
-    scope.addCleanup(async () => { dirStream.close().catch(() => {}); });
-
-    const frame = await makeRejectSealFrame(sessionId, "merkle_root_mismatch", fix.dirKp);
-    sendFrame(dirStream, frame);
-
-    const response = await dirReader.readDecoded();
-    expect(response["type"]).toBe("reject_ok");
-
-    // Verify session is seal_rejected: hash_submit names the REFUSAL (DOD-M15-TERMINAL-REASON-1),
-    // where it used to answer "session_sealed" — a word that meant the opposite of what happened.
-    const clientNodeA = await createNode({ keyProvider: clientKpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-    await clientNodeA.start();
-    scope.addCleanup(async () => { await clientNodeA.stop(); });
-    await clientNodeA.dial(fix.relayAddr);
-
-    const streamA = await clientNodeA.newStream(fix.relayPeerId, RELAY_PROTOCOL_ID);
-    const readerA = new StreamReader(streamA);
-    await performRelayAuth(readerA, streamA, clientKpA);
-
-    const contentHash = new Uint8Array(randomBytes(32));
-    const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, contentHash, clientKpA, 0);
-    sendFrame(streamA, CBOR_ENC.encode({
-      type: "hash_submit",
-      session_id: sessionId,
-      leaf_kind: 0x00,
-      structure1_cbor,
-      sender_signature,
-    }));
-
-    const err = await readerA.readDecoded();
-    expect(err["type"]).toBe("hash_submit_error");
-    expect(err["reason"]).toBe("seal_refused");
-
-    streamA.close().catch(() => {});
-  }, 20_000);
-});
+// AC-004 (confirm_seal) and AC-005 (reject_seal) removed with the frame types they tested —
+// DOD-M15-RELAYADMIN-DEAD-FRAMES-1. The in-process confirmSeal()/rejectSeal() methods remain
+// load-bearing for the relay's own bilateral seal-broker flow and are exercised by the seal-flow
+// suites (m12-seal-broker-selection.test.ts and friends), not by this wire protocol anymore.
 
 // ─── AC-006 / SI-001: frame with invalid/wrong signature → auth_invalid ──────
 
@@ -521,6 +292,11 @@ describe("AC-006 / SI-001: invalid directory signature → auth_invalid, no stat
   let scope = createTestScope();
   beforeEach(() => { scope = createTestScope(); });
   afterEach(() => scope.run(async () => {}));
+
+  // DOD-M15-RELAYADMIN-DEAD-FRAMES-1: these two tests exercise the GENERIC directory_signature
+  // check, which runs before any frameType dispatch — so any live frame type proves it. They used
+  // record_assignment as the vehicle before that frame type was retired; discard_session (the one
+  // remaining live directory-dialed frame) replaces it here without weakening the assertion.
 
   it("frame signed by unknown key → auth_invalid", async () => {
     const fix = await makeFixture();
@@ -532,7 +308,10 @@ describe("AC-006 / SI-001: invalid directory signature → auth_invalid, no stat
     const clientKpB = generateKeypair();
     const pubA = await clientKpA.getPublicKey();
     const pubB = await clientKpB.getPublicKey();
-    const sessionTimestamp = Date.now();
+
+    // Register the session in-process so a successful (non-auth_invalid) discard would be observable.
+    const assignment = await makeAssignment(sessionId, pubA, pubB, fix.dirKp);
+    fix.relay.recordAssignment(assignment);
 
     const dirNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await dirNode.start();
@@ -544,13 +323,13 @@ describe("AC-006 / SI-001: invalid directory signature → auth_invalid, no stat
     scope.addCleanup(async () => { dirStream.close().catch(() => {}); });
 
     // Sign with the wrong key (unknown key, not the configured directory pubkey)
-    const frame = await makeRecordAssignmentFrame(sessionId, pubA, pubB, sessionTimestamp, unknownKp);
+    const frame = await makeDiscardSessionFrame(sessionId, unknownKp);
     sendFrame(dirStream, frame);
 
     const response = await dirReader.readDecoded();
     expect(response["type"]).toBe("auth_invalid");
 
-    // Verify: session was NOT registered (hash_submit should fail with session_not_found)
+    // Verify: the session was NOT discarded (hash_submit should still succeed)
     const clientNodeA = await createNode({ keyProvider: clientKpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await clientNodeA.start();
     scope.addCleanup(async () => { await clientNodeA.stop(); });
@@ -570,9 +349,8 @@ describe("AC-006 / SI-001: invalid directory signature → auth_invalid, no stat
       sender_signature,
     }));
 
-    const err = await readerA.readDecoded();
-    expect(err["type"]).toBe("hash_submit_error");
-    expect(err["reason"]).toBe("session_not_found");
+    const ack = await readerA.readDecoded();
+    expect(ack["type"]).toBe("hash_submit_ack");
 
     streamA.close().catch(() => {});
   }, 20_000);
@@ -582,11 +360,6 @@ describe("AC-006 / SI-001: invalid directory signature → auth_invalid, no stat
     scope.addCleanup(fix.relayStop);
 
     const sessionId = new Uint8Array(randomBytes(16));
-    const clientKpA = generateKeypair();
-    const clientKpB = generateKeypair();
-    const pubA = await clientKpA.getPublicKey();
-    const pubB = await clientKpB.getPublicKey();
-    const sessionTimestamp = Date.now();
 
     const dirNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await dirNode.start();
@@ -598,13 +371,7 @@ describe("AC-006 / SI-001: invalid directory signature → auth_invalid, no stat
     scope.addCleanup(async () => { dirStream.close().catch(() => {}); });
 
     // Build valid frame then corrupt signature
-    const body: Record<string, unknown> = {
-      type: "record_assignment",
-      session_id: sessionId,
-      participant_a: pubA,
-      participant_b: pubB,
-      session_timestamp: sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
-    };
+    const body: Record<string, unknown> = { type: "discard_session", session_id: sessionId };
     const goodSig = await signFrameBody(fix.dirKp, body);
     // Corrupt: flip first byte
     const badSig = new Uint8Array(goodSig);
@@ -618,78 +385,8 @@ describe("AC-006 / SI-001: invalid directory signature → auth_invalid, no stat
   }, 20_000);
 });
 
-// ─── SI-NEW: record_assignment without assignment_signature → auth_invalid ────
-
-describe("SI-NEW: record_assignment missing assignment_signature → auth_invalid, no state mutation", () => {
-  let scope = createTestScope();
-  beforeEach(() => { scope = createTestScope(); });
-  afterEach(() => scope.run(async () => {}));
-
-  it("record_assignment without assignment_signature field → auth_invalid", async () => {
-    const fix = await makeFixture();
-    scope.addCleanup(fix.relayStop);
-
-    const sessionId = new Uint8Array(randomBytes(16));
-    const clientKpA = generateKeypair();
-    const clientKpB = generateKeypair();
-    const pubA = await clientKpA.getPublicKey();
-    const pubB = await clientKpB.getPublicKey();
-    const sessionTimestamp = Date.now();
-    const tsEncoded = sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp;
-
-    const dirNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-    await dirNode.start();
-    scope.addCleanup(async () => { await dirNode.stop(); });
-
-    const { stream: dirStream, reader: dirReader } = await openDirRelayStream(
-      dirNode, fix.relayPeerId, fix.relayAddrs
-    );
-    scope.addCleanup(async () => { dirStream.close().catch(() => {}); });
-
-    // Build frame body without assignment_signature, sign only directory_signature
-    const body: Record<string, unknown> = {
-      type: "record_assignment",
-      session_id: sessionId,
-      participant_a: pubA,
-      participant_b: pubB,
-      session_timestamp: tsEncoded,
-      // assignment_signature intentionally omitted
-    };
-    const directory_signature = await signFrameBody(fix.dirKp, body);
-    const frame = CBOR_ENC.encode({ ...body, directory_signature }) as Uint8Array;
-
-    sendFrame(dirStream, frame);
-
-    const response = await dirReader.readDecoded();
-    expect(response["type"]).toBe("auth_invalid");
-
-    // Verify: session was NOT registered
-    const clientNodeA = await createNode({ keyProvider: clientKpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-    await clientNodeA.start();
-    scope.addCleanup(async () => { await clientNodeA.stop(); });
-    await clientNodeA.dial(fix.relayAddr);
-
-    const streamA = await clientNodeA.newStream(fix.relayPeerId, RELAY_PROTOCOL_ID);
-    const readerA = new StreamReader(streamA);
-    await performRelayAuth(readerA, streamA, clientKpA);
-
-    const contentHash = new Uint8Array(randomBytes(32));
-    const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, contentHash, clientKpA, 0);
-    sendFrame(streamA, CBOR_ENC.encode({
-      type: "hash_submit",
-      session_id: sessionId,
-      leaf_kind: 0x00,
-      structure1_cbor,
-      sender_signature,
-    }));
-
-    const err = await readerA.readDecoded();
-    expect(err["type"]).toBe("hash_submit_error");
-    expect(err["reason"]).toBe("session_not_found");
-
-    streamA.close().catch(() => {});
-  }, 20_000);
-});
+// SI-NEW (record_assignment missing assignment_signature) removed with record_assignment itself —
+// DOD-M15-RELAYADMIN-DEAD-FRAMES-1. That sub-check lived entirely inside the deleted handler.
 
 // ─── SI-002: hash_submit before record_assignment → session_not_found ────────
 

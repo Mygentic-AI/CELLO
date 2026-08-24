@@ -8,10 +8,17 @@
  *   - in-process calls: recordAssignment, submitForSeal, confirmSeal, rejectSeal
  *
  * CELLO-NODE-004: Also implements /cello/directory-relay/1.0.0 (inbound directory admin frames):
- *   - record_assignment: register session from directory
  *   - discard_session: remove provisional session
- *   - confirm_seal: destroy session after directory verifies
- *   - reject_seal: mark session seal_rejected after directory rejects
+ *
+ * DOD-M15-RELAYADMIN-DEAD-FRAMES-1 (2026-08-24): record_assignment, confirm_seal and reject_seal
+ * were REMOVED from this wire protocol — no deployed directory has sent them since Option B
+ * (client-presented assignments) and the internal seal-broker cutover shipped. The in-process
+ * methods of the same names (below) are NOT removed: recordAssignment() is still called from the
+ * client-presented path (#processClientRecordAssignment) and confirmSeal()/rejectSeal() from the
+ * relay's own bilateral seal-broker flow (#maybeProcessSeal). Only the
+ * DIRECTORY-DIALED WIRE FRAMES are gone. An authenticated frame naming one of the three retired
+ * types now falls through to the "unknown frame type" abort below, same as any other
+ * unrecognised type.
  *
  * Auth signature over: SHA-256("CELLO-RELAY-AUTH-v1" || nonce || pubkey)
  *   per RFC 8032 (Ed25519) and FIPS 180-4 (SHA-256)
@@ -42,23 +49,12 @@
  *     stream.close(); return
  *
  *   // Process the authenticated frame
- *   if frameType === "record_assignment":
- *     // Re-verify the standard relay assignment TBS (same as in-process recordAssignment)
- *     result = this.recordAssignment({ session_id, participant_a, participant_b, session_timestamp, directory_signature })
- *     if result.ok: stream.send(encode({ type: "assignment_ok" }))
- *     else: stream.send(encode({ type: "auth_invalid" }))  // signature invalid per recordAssignment
- *
  *   if frameType === "discard_session":
  *     this.discardSession(session_id)
  *     stream.send(encode({ type: "discard_ok" }))
  *
- *   if frameType === "confirm_seal":
- *     this.confirmSeal(session_id)
- *     stream.send(encode({ type: "confirm_ok" }))
- *
- *   if frameType === "reject_seal":
- *     this.rejectSeal(session_id, reason)
- *     stream.send(encode({ type: "reject_ok" }))
+ *   // record_assignment / confirm_seal / reject_seal: RETIRED (DOD-M15-RELAYADMIN-DEAD-FRAMES-1).
+ *   // Falls through to the unknown-frame-type abort, same as any other unrecognised type.
  *
  *   stream.close()
  *
@@ -503,69 +499,18 @@ export class CelloRelayNode {
       protocolLog("RELAY", `Directory admin authenticated (pubkey ${truncHex(Buffer.from(this.#directoryPubkey).toString("hex"))})`);
 
       // Authenticated — process the frame
-      if (frameType === "record_assignment") {
-        const session_id = req["session_id"] as Uint8Array;
-        const participant_a = req["participant_a"] as Uint8Array;
-        const participant_b = req["participant_b"] as Uint8Array;
-        const session_timestamp_raw = req["session_timestamp"] as number | bigint;
-        const session_timestamp = typeof session_timestamp_raw === "bigint"
-          ? Number(session_timestamp_raw)
-          : session_timestamp_raw;
-
-        // recordAssignment verifies the standard relay assignment TBS
-        // (CBOR of [session_id, participant_a, participant_b, session_timestamp])
-        // assignment_signature signs CBOR([session_id, participant_a, participant_b, session_timestamp])
-        // — the relay's internal TBS for recordAssignment. Required field; reject if absent.
-        const assignment_signature = req["assignment_signature"] as Uint8Array | undefined;
-        if (!assignment_signature || !(assignment_signature instanceof Uint8Array) || assignment_signature.length !== 64) {
-          stream.send(lp.encode.single(CBOR_ENC.encode({ type: "auth_invalid" })));
-          await stream.close();
-          return;
-        }
-
-        const result = this.recordAssignment({
-          session_id: session_id instanceof Uint8Array ? session_id : new Uint8Array(session_id as unknown as ArrayBuffer),
-          participant_a: participant_a instanceof Uint8Array ? participant_a : new Uint8Array(participant_a as unknown as ArrayBuffer),
-          participant_b: participant_b instanceof Uint8Array ? participant_b : new Uint8Array(participant_b as unknown as ArrayBuffer),
-          session_timestamp,
-          directory_signature: assignment_signature,
-        });
-
-        if (result.ok) {
-          stream.send(lp.encode.single(CBOR_ENC.encode({ type: "assignment_ok" })));
-        } else {
-          // directory_signature_invalid from recordAssignment means the assignment TBS
-          // signature is wrong — this is an auth issue
-          stream.send(lp.encode.single(CBOR_ENC.encode({ type: "auth_invalid" })));
-        }
-        await stream.close();
-        return;
-      }
-
+      //
+      // record_assignment, confirm_seal and reject_seal were REMOVED here
+      // (DOD-M15-RELAYADMIN-DEAD-FRAMES-1, 2026-08-24): no deployed directory has sent them since
+      // Option B (client-presented assignments) and the seal-broker cutover shipped. A frame
+      // naming one of the three now falls through to the "unknown frame type" abort below — a
+      // hard fail, not silent acceptance. The in-process recordAssignment()/confirmSeal()/
+      // rejectSeal() methods below are unaffected; they still serve the client-presented path and
+      // the relay's own bilateral seal-broker flow.
       if (frameType === "discard_session") {
         const session_id = req["session_id"] as Uint8Array;
         this.discardSession(session_id instanceof Uint8Array ? session_id : new Uint8Array(session_id as unknown as ArrayBuffer));
         stream.send(lp.encode.single(CBOR_ENC.encode({ type: "discard_ok" })));
-        await stream.close();
-        return;
-      }
-
-      if (frameType === "confirm_seal") {
-        const session_id = req["session_id"] as Uint8Array;
-        this.confirmSeal(session_id instanceof Uint8Array ? session_id : new Uint8Array(session_id as unknown as ArrayBuffer));
-        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "confirm_ok" })));
-        await stream.close();
-        return;
-      }
-
-      if (frameType === "reject_seal") {
-        const session_id = req["session_id"] as Uint8Array;
-        const reason = (req["reason"] as string) ?? "unknown";
-        this.rejectSeal(
-          session_id instanceof Uint8Array ? session_id : new Uint8Array(session_id as unknown as ArrayBuffer),
-          reason
-        );
-        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "reject_ok" })));
         await stream.close();
         return;
       }
