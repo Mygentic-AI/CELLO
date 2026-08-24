@@ -1529,6 +1529,34 @@ comes up: the initiator's first dial, the responder's inbound connection, every 
 revived node."* It also records why it cannot live at session creation: *"`newStream` never dials — it
 only finds an already-open connection."*
 
+> ### 🎯 ROOT CAUSE FOUND IN THE CODE — one node-creating path never wires the announce
+>
+> **The announce is wired in exactly one place**: `#wireSessionLiveness` (`session-node-manager.ts:4019`)
+> holds the only `node.onPeerConnect(...)` in the file (`:4033`). So a session node whose creator does
+> not call it **can never announce a salt, on any connect, ever.**
+>
+> **Three functions create a session node and log `session.node.created`:**
+>
+> | creator | logs `session.node.created` | calls `#wireSessionLiveness` |
+> |---|---|---|
+> | `createSessionNode` (`:3779`) | ✅ | ✅ `:3805` |
+> | `acceptSession` (`:4397`) | ✅ | ✅ `:4468` |
+> | **`#tryCreateStandingReceiver` (`:12286`)** | ✅ | ❌ **not a caller** |
+>
+> `#wireSessionLiveness`'s only three callers are `createSessionNode`, `acceptSession` and
+> `reviveSessionNode`. **`#tryCreateStandingReceiver` is not one of them.** A node created by the
+> standing-receiver path is therefore born without the hook that announces the salt — which is exactly
+> `no_agreement_started`, the reason string measured in the failing run.
+>
+> **This is structural, not inferred from log counts** — it does not depend on the capture argument
+> that has now been wrong in both directions.
+>
+> **⚠️ WHAT REMAINS TO CONNECT, and it is one step:** that document delivery actually rides a node from
+> that third path. `openSessionFor` is *"the same path `cello_initiate_session` takes"*, which reaches
+> `createSessionNode` — so the remaining question is whether the document transport's session finds an
+> existing standing-receiver node instead of creating its own. **Everything measured is consistent with
+> it; the link itself is not yet proven.**
+
 **⚠️ HYPOTHESIS, MARKED AS ONE — the two facts above are in tension, and that tension is the lead.**
 The document transport opens its session through `openSessionFor`, *"the same path
 `cello_initiate_session` takes"* — so the session is opened normally. If the peers are **already
