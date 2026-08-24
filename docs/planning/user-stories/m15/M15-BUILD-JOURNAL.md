@@ -53,9 +53,33 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 > - ✅ **Stale `j-spine` assertions** (5) — fixed here; `j-spine` is **7/7 from 4/7**. Four were state
 >   vocabulary the product deliberately removed (`registered`, `online`-after-start, `current`,
 >   `status.connections`); the fifth was a local race reported as a directory fault.
-> - 🔴 **Salt split / announce never fires** (8: `j-documents` 7, `j-stale-session` 1) — **the one live
->   defect.** `session.salt.announced` is ZERO. Producer identified; hypothesis + one-query check in the
->   DoD. **This is the next unit.**
+> - 🔴 **`j-documents` 7 + `j-stale-session` 1 — A DESIGN DECISION, NOT A BUG, AND IT IS ANDRE'S.**
+>   Measured after rebuilding the artifact: **document delivery is RELAY-ONLY** — 142 `session.relay.*`
+>   and **ZERO** `session.node.*` — while the salt agreement is announced over the **DIRECT**
+>   connection (`#sendSaltFrame` returns early with no active node). **No node ⇒ no announce ⇒ no
+>   agreement, ever.** Three options with different blast radii; only *"exempt documents from salting
+>   and stop the refusal path treating an unsalted document as an error"* is not a protocol change.
+>   **Recorded with the evidence, not chosen.** User-visible: two people co-edit, one side's updates
+>   are silently refused, no error on either screen.
+> - ✅ **`DOD-M15-SALTANNOUNCE-LATE-1` — DONE, and it does NOT fix the above.** Built on the belief that
+>   documents reach `#wireSessionLiveness`; **they never do** — my sweep fired zero times and there were
+>   no `session.liveness` events at all. It closes a real gap on the standing-receiver promotion path
+>   and is mutation-proven. **Review found a HIGH regression I introduced**: extracting the handler
+>   dropped `if (!isCounterparty(peerId)) return;`, so every relay connect became a counterparty
+>   connect — liveness flipped `alive` on a dead peer and the re-dial address was overwritten with the
+>   RELAY's, defeating `redial.unavailable` (which fires on an EMPTY list, and the list was merely
+>   WRONG). **2925 tests stayed green with that guard deleted**; a connect-side test now exists.
+> - ✅ **`j-content` 2 of 5** — the unsalted-hash defect; one fix also repaired a **vacuous** assertion.
+>   The other 3 are a **test shortcut**, not a defect: the raw `content_park_deposit` IPC produces no
+>   sender signature and `authenticateParkedEntry` refuses it as *"the ATTACKER shape"*. Fix shape
+>   recorded (park via a real send).
+> - 🔎 **Remaining, each with a named cause:** `j-multiplayer` 4 (request timeouts, uninvestigated) ·
+>   `j-end` 1 (trust-signal misclassification).
+> - 🅿️ **Filed, not fixed:** `REVOKED-READS-OFFLINE-1` (a revoked agent reads as *offline*, so the
+>   operator chases a counterparty who can never return) · `START-AGENT-UNAWAITED-1` (`cello_start_agent`
+>   returns `ok` before the receiver exists — the operator is told it started and the agent is deaf).
+> - 🔴 **Measured, NOT ruled on:** a session assignment is produced **without asking two of three
+>   directories**, so **the kill switch only bites on the node brokering the session.**
 > - 🟡 **Tests compute the UNSALTED content hash** (`j-content` 5) — 1 fixed, 4 same cause.
 > - ✅ portal container (2) · 🅿️ `UNILATERAL-NOTARIZE-1` (3) · 🔎 individually-caused (6).
 >
