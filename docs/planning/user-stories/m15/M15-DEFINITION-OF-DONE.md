@@ -1145,6 +1145,48 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
   silent writes nobody was looking for.
 
 ### `DOD-M15-SPINERED-1` — ❌ The multi-process evidence lane is HALF RED, and nobody knew
+> ### PRE-RUN TRIAGE, 2026-08-24 (CELLO_Support) — read off the COMMITTED log, no runner used
+> The line's first unit is a triage, not 21 tickets. Done against
+> `receipts/2026-08-23_spine-lane-full-run.log` — which is exactly why that log was committed, and it
+> cost nothing to read where re-running costs an hour. **Two clusters account for ~11 of the 49
+> failures, and they are not the same kind of thing at all.**
+>
+> **CLUSTER A — 6 failures, ALREADY FIXED, and it was never a product defect.** `J-REFRESH`,
+> `J-TOFN-DKG` ×2, `J-TOFN`, `J-SIGN` all die on *"Unexpected non-whitespace character after JSON at
+> position 156"*, and `J-RELAYSIG` on *"Unexpected token 'C', `"CELLO — a "`"*. That last string is
+> the CLI's own **help banner** (`cli-args.ts`: *"CELLO — a peer-to-peer identity & trust layer…"*).
+> The harness's `cello()` returned **`stdout + stderr` glued together** whenever the CLI exited
+> non-zero, and 54 call sites across 22 spine files do `JSON.parse(cello(...).stdout.trim())`. So a
+> failing command handed them valid JSON followed by error prose. **This is ERROR SUBSTITUTION at
+> the one choke point every spine journey runs through:** whatever the CLI actually said — the
+> reason the command failed — was replaced by a parse error about position 156, so **none of those
+> six names its own cause.** That is why the lane looked mysterious rather than merely broken. The
+> fix is in (`stdout` is stdout, `stderr` is its own field, and a failing command names itself with
+> argv/status/stderr), so **the next run reports these six for the first time. Expect six NEW
+> failure texts, not six fixes** — they were never diagnosed, only unmasked.
+>
+> **CLUSTER B — 5 failures, and this one is real: `sealed_root` is `undefined`.** `J-UNILATERAL` ×2,
+> `J-UPGRADE`, `J-SPINE` ×2, `J-LOOPBACK` fail as *".toMatch() expects to receive a string, but got
+> undefined"*, and the assertion underneath is `expect(rootA).toMatch(/^[0-9a-f]{64}$/)`. **A seal
+> that produced no root.** I checked and rejected the tempting explanation first: these do NOT assert
+> on `.stderr`, so the harness defect above does not account for them.
+>
+> **FALSIFIABLE PREDICTION, recorded BEFORE the run so it cannot be fitted afterwards.** Cluster B is
+> the same family as `DOD-M15-SALTSPLIT-1` — one side salting, the other refusing every message, so
+> divergent trees and a seal that can never complete. **That fix landed after this receipt was
+> taken.** So: cluster B should **shrink, or fail with a different signature**. If all five still fail
+> as `sealed_root: undefined`, the salt split was NOT their cause and the family is wider than we
+> think. Either answer is worth the run.
+>
+> **⚠️ AND THE BASELINE IS NOT COMPARABLE ON THE PORTAL JOURNEYS** (CELLO_Coder_1, measured):
+> observation 1 of this line recorded `cello-portal-postgres` as Exited for 11 days and that is
+> **stale** — it is now `Up (healthy)` and accepting connections. **Any delta on portal-dependent
+> journeys is that container, not the code**, and must not be read as a product improvement.
+>
+> **The discipline this lane needs, from its own text:** `J-TOFN-DKG`'s two failures were read as the
+> sovereign-node quorum invariant breaking. They were not — both died in `register-agent` at their
+> first line and **never reached the quorum assertion.** *"A test that asserts X is red" only means
+> "X is broken" if the test reached X.* Check how far each failure got before believing what it says.
 **BLOCKS LAUNCH** (§0z.1). Found by running `DOD-M15-SPINE-LANE-1`'s own lane for the first time,
 2026-08-23 — one 56-minute run, receipt in Entry S12. **Not diagnosed. Deliberately.** The
 trip-wire (§0z.2) says record and stop; a wrong root cause here is expensive because the blast
