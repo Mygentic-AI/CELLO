@@ -264,6 +264,33 @@ logger.info("relay.startup.consortium-directories", {
  * federated deployment. The bar is the same one the two blocks above use: fatal in dev, staging and
  * production; quiet where a consortium does not exist.
  */
+/**
+ * ⚠️ THE STRONGER CHECK, added on review: `< 2` is a floor, not the bar. A relay told about exactly
+ * ONE of its two peers passes a length test and is still broken for every session the third node
+ * brokers — the "still broken, just less so" case.
+ *
+ * No new configuration is needed to close it. `CELLO_DIRECTORY_ENDPOINTS` is built from the SAME
+ * terraform loop over `directory_nodes` and carries every directory's pubkey, so it already states
+ * the consortium's real membership. Any pubkey named there and missing from `dirPubkeys` is a
+ * directory whose assignments this relay would reject.
+ *
+ * Guarded on the variable being set, because it is optional.
+ */
+const missingFromPubkeys = Object.keys(dirEndpointsByPubkey).filter(
+  (pkHex) => !dirPubkeys.some((existing) => Buffer.from(existing).toString("hex") === pkHex),
+);
+if (celloEnv !== "local" && missingFromPubkeys.length > 0) {
+  logRelayServiceStartFailed(logger, {
+    reason:
+      `CELLO_DIRECTORY_ENDPOINTS names ${String(missingFromPubkeys.length)} directory pubkey(s) absent from ` +
+      `CELLO_DIRECTORY_PUBKEYS (${missingFromPubkeys.map((k) => k.slice(0, 16)).join(", ")}…) — this relay would ` +
+      `reject every session those directories broker, which reaches operators as intermittent session ` +
+      `failures rather than as a configuration gap. List every consortium directory in CELLO_DIRECTORY_PUBKEYS.`,
+    region: awsRegion,
+  });
+  process.exit(1);
+}
+
 if (celloEnv !== "local" && dirPubkeys.length < 2) {
   logRelayServiceStartFailed(logger, {
     reason:

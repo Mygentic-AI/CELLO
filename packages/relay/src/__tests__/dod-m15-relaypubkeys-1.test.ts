@@ -40,6 +40,7 @@ const RELAY_BIN = join(import.meta.dirname, "..", "..", "dist", "bin", "relay.js
 
 const PUBKEY_A = "a".repeat(64);
 const PUBKEY_B = "b".repeat(64);
+const PUBKEY_C = "c".repeat(64);
 
 interface Run { output: string; code: number }
 
@@ -112,6 +113,30 @@ describe("DOD-M15-RELAYPUBKEYS-1 — the relay refuses to start with an incomple
       "with a second directory pubkey the consortium guard must NOT be the thing that stopped it — " +
         "if this message is still here, the guard is refusing a configuration it should accept",
     ).not.toContain("CELLO_DIRECTORY_PUBKEYS lists");
+  }, 40_000);
+
+  it("★★★ a 2-of-3 SET is caught too — the length floor alone would have passed it", () => {
+    /**
+     * ⚠️ THE GAP THE LENGTH TEST LEAVES, and review named it: a relay told about exactly ONE of its
+     * two peers passes `length >= 2` and is still broken for every session the THIRD node brokers.
+     * "Still broken, just less so" is not a bar worth shipping.
+     *
+     * No new configuration closes it. `CELLO_DIRECTORY_ENDPOINTS` comes from the same terraform loop
+     * over the directory nodes and already states the consortium's real membership, so a pubkey named
+     * there and missing from the accepted set is a directory this relay would silently reject.
+     */
+    const run = runRelay({
+      CELLO_ENV: "dev",
+      WAL_DIR: walDir,
+      CELLO_DIRECTORY_PUBKEY: PUBKEY_A,
+      CELLO_DIRECTORY_PUBKEYS: PUBKEY_B,
+      CELLO_DIRECTORY_ENDPOINTS: PUBKEY_C + "=/dns4/dir3.example/tcp/443/p2p/12D3KooWThird",
+    });
+
+    expect(run.code, "a relay that would reject a known consortium member must not start").toBe(1);
+    expect(run.output, "and it must say which side of the config disagrees").toContain(
+      "CELLO_DIRECTORY_ENDPOINTS names",
+    );
   }, 40_000);
 
   it("★★ CELLO_ENV=local is EXEMPT — single-node development must not be broken by this", () => {
