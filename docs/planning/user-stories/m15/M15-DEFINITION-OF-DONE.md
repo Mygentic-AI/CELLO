@@ -4362,7 +4362,33 @@ root domain the client can reproduce.
 Parallel with Tier 4 — different disciplines, no shared files.
 
 ### `DOD-M15-RELAYABUSE-1` — ❌ The relay has abuse controls
-> # 🔒 THE PARK-STORE BOUND CLAIMED BY **CELLO_Support**, 2026-08-24, BEFORE writing code.
+> ### ✅ TWO ITEMS DONE 2026-08-24 (CELLO_Support): the park-store bound, and the fatal directory set.
+> **THE PARK STORE IS NOW ACTUALLY BOUNDED.** The store documented its own hole: eviction only scans
+> the depositing recipient's bucket, so when the store was full of OTHER recipients' entries it
+> drained that bucket and **then wrote anyway**. Exploitable with no privilege, because a park
+> deposit is unauthenticated by design — the attacker picks the recipient key, spreads across
+> invented recipients so no bucket ever triggers eviction, and the store grows until the disk does,
+> taking the relay down for everyone. Now a per-RECIPIENT byte cap, and a **REFUSAL**
+> (`content_store_full`) instead of writing past the global cap. It throws rather than returning a
+> flag because the one production caller already turns a throw into `{ok:false, reason}` — a negative
+> ACK the depositor can act on, with no interface change.
+> **⚠️ "Per depositor" is NOT what shipped, and the code says so** rather than quietly substituting:
+> a deposit carries no depositor identity to key a quota on, so that half waits on deposit auth.
+> **3 tests; the flood test's revert test RUN** — deleting the refusal reddens exactly it, while the
+> pre-existing eviction tests stay green, because they only ever exercised ONE recipient. That is
+> precisely why this shipped.
+>
+> **AND THE REAL QUICK WIN #3, which I had built against the wrong subject:** `relay.ts` now REFUSES
+> to start in dev/staging/production when `CELLO_DIRECTORY_PUBKEYS` leaves it with fewer than two
+> directory pubkeys. With one, the relay accepts assignments from ONE directory and rejects every
+> session brokered by the other sovereign nodes — failing closed, so nothing is forged, but surfacing
+> to operators as **CELLO being flaky** rather than as a config gap: one session works, the next
+> fails depending on who brokered it, and retrying appears to fix it. It also made one directory a
+> precondition for the relay, inverting the redundancy invariant. `local` is exempt so loopback
+> development and the e2e harness are untouched.
+> **Gate: relay 26 files / 250 tests / exit 0; typecheck 0 in both repos.**
+>
+> ### (claim, kept for the trail) CELLO_Support, 2026-08-24
 > **Andre's re-ranking, medium #2:** *"bounding the parked-message store per depositor."*
 > **I hold: `packages/relay/src/adapters/file-content-store.ts` and its test only.** Rate limiting
 > (the large) is NOT claimed and stays open.
