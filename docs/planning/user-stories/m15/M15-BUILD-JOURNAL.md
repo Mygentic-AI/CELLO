@@ -9158,3 +9158,106 @@ portal database is running (it was 7 failures; **6 were the stopped container**)
   from `envelope.same_operator`.
 - **So the producer is upstream of the daemon** — whatever mints the envelope, or the journey's own
   seeding. That is where to look, and it is NOT the display path.
+
+---
+
+## Entry 29 — 2026-08-24, `CELLO_Coder_1`: five DoD claims corrected after reading the file end to end
+
+Andre asked for a full read of the reduced DoD with anything inaccurate corrected. Five things were,
+and each is a reasoning error rather than a typo — which is why they are here rather than only in the
+scoreboard. The DoD keeps the verdicts; this keeps how we found out.
+
+### 1. `j-content` — one confident cause, four unrelated defects
+
+`DOD-M15-JCONTENT-DELIVERY-1` listed five failures, flagged them as possibly breaking *"two agents
+connect and communicate"*, then retracted that on the grounds that all five key on a hash the journey
+computes itself. **Neither half held.** The file is 10/10 and the causes were:
+
+1. **The deposits were the unsigned shape SEC-1 refuses.** Three tests parked by handing the deposit
+   IPC a bare `sealToRecipient` with no park envelope, so `authenticateParkedEntry` threw every entry
+   out at the door. The assertions underneath — tamper detection, dedup, the post-seal straggler guard
+   — were never reached. **A green run would have meant nothing either.** They now park through the
+   daemon's own `sealParkEnvelope`, the sole signer, so no encoder is duplicated in a test.
+2. **The dedup deposit carried a different STRING.** `signal: "over"` is in-band: the shim appends the
+   turn signal to the content, so the daemon hashed `"<msg> [[OVER]]"` while the test deposited the
+   bare message.
+3. **A retired event name.** The straggler test matched `content.recover.ingest_failed`; since the
+   annex landed, refused content is kept rather than dropped and the line is `content.recover.annexed`.
+   The refusal REASON (`session_committed`) never changed.
+4. **A wait latching onto the wrong sweep.** `waitForLine` returns the FIRST match and B runs several
+   recover sweeps; the first fires on `signaling_reconnect` with `failedRelays: 1` — it could not
+   reach the relay at all. Auto-recovery was working the whole time.
+
+**The algorithm was never the cause, and the proof was available at the time.** Depositing the bare
+message failed identically whether the envelope declared `sha256` or `hmac-sha256-salt-v1`, and **two
+algorithms failing the same way means neither is responsible.** The `contentHashAlg` passthrough is
+still load-bearing — mutation-tested, dropping it reddens the dedup test — but it was the second
+defect, not the first.
+
+**The lesson worth carrying:** the entry itself noticed that five of ten tests passed on the same
+fixture and wrote *"something distinguishes them."* That was correct and was then set aside for the
+single-cause story. **A visible, unexplained same-fixture split is evidence AGAINST one cause.**
+
+### 2. The kill switch — the query that was meant to settle it would have confirmed the wrong entry
+
+Two entries gave opposite answers and a flag asked for one query: suspend on one node, read
+`agent_suspensions` on the other two. **That returns ROW PRESENT.** Answered from the replication
+layer instead — `pg-ae-store.ts`: *"Six tables round-trip: Tier-A `agent_profiles`,
+`agent_revocations`, `user_accounts` and `seal_notarizations`; Tier-B `agent_suspensions` and
+`agent_presence`."* Both halves of the honour-check JOIN replicate, and `suspension-merge.ts` is
+called *"the kill-switch convergence core"*.
+
+So `directory-node.ts`'s *"**until** the flag+profile are REPLICATED to every node… that is the
+production gap"* is **stale**, not wrong-when-written.
+
+**But the conclusion still does not follow, and that is the finding.** *"Suspension replicates,
+therefore all three refuse"* assumes the three are ASKED. The measured failure was never a honouring
+failure: `node1=never-asked node2=never-asked`, with 48 captured stdout lines from each proving both
+were up and logging. **A node nobody consults can neither honour a suspension nor refuse one.**
+
+The open question is therefore not *"does the flag reach every node"* — it does. It is **why a session
+assignment forms without asking a majority of the consortium**, which is `ClientDelegatedSigner`, and
+that is already filed for Andre.
+
+### 3. `j-stale-session` — the named next thread was structurally a dead end
+
+The entry recorded that `session.document.received` logs `ok: routed.ok` / `reason: routed.reason`,
+that both were absent from every line, and concluded *"the router returned neither."*
+
+`DocumentFrameRouter.routeSync` has four exits and none sets either field; its own return type
+(`FrameClassification`) does not declare them. It cannot — the normal path is
+`void this.#enqueue(...)`, so when it returns the frame is classified and QUEUED and nothing has
+decided its fate. **The fields existed only in the hook's two declarations and were assignable because
+they were optional: a promise made by a type and kept by nobody.**
+
+A JSON logger omits an `undefined` field, so a value that can never be set is indistinguishable from
+one set to nothing. Fixed rather than noted: both declarations narrowed (reading either is now
+`error TS2339`, revert-tested), the log line says `dispatch: "queued"`, and it names
+`document.frame.refused` as the event carrying the verdict. **The real question is untouched:** three
+frames queued, none ingested.
+
+### 4. `j-spine` — a line listing as open the assertions another line records as fixed
+
+`DOD-M15-JSPINE-REST-1` listed three assertions as open and undiagnosed; the triage records the same
+three as fixed and green. Same three, not two sets. Two were stale expectations — a `connections`
+stub deleted on purpose because it was always `[]`, and a `registered` flag removed **because it
+lied** (every agent on disk was labelled registered at load whether or not it ever was). The third
+was a real race, fixed with a readiness poll rather than a retry.
+
+**The entry's own closing advice was right and its status was wrong:** *"do not assume these are
+regressions… two of the three have that shape."* Exactly two of three did. The reasoning was sound;
+the row never got updated when the work landed.
+
+### 5. `REVOKED-READS-OFFLINE-1` written up twice, classified once
+
+Full write-ups in both Tier 2 and the POST-LAUNCH BACKLOG, and only the backlog copy carries a
+classification — so a reader meeting the tier copy concludes it is in the gate. Left as a pointer.
+
+### Process note against myself
+
+The first version of all five corrections went into the DoD as long explanatory blocks — immediately
+after Andre had cut that file from 7,600 lines to 2,484 precisely to stop this. **The file's own
+header states the rule I broke:** an open line keeps what it is, why it blocks, the clauses, the
+enforcer and any live flag; *"what it does not keep: how we found out."* Corrected: the DoD carries
+one-to-six-line verdicts, the reasoning is here, and the file finished at **2,442 lines — below where
+it started**, so the corrections cost net negative length.
