@@ -1160,6 +1160,21 @@ outside that unit, and I am not opening it on a guess.**
 > no failover path**, and a restart re-picks a bundled endpoint the same attacker answers again. The
 > title now carries the qualifier rather than reading as blanket survivability.
 >
+> ### ✅ THE UNIT IS COMPLETE. What holds the tag is a SCOPE call, not unfinished work.
+> **Built, reviewed (pass 1), every finding applied, committed.** Gate: this file **4/4**; the whole
+> `core/daemon` package **2952 passed / 285 files**; typecheck clean.
+> **⚠️ ONE FILE FAILED IN THAT PACKAGE RUN AND IT IS NOT THIS UNIT'S** —
+> `mcp-001-agent-lifecycle.test.ts:119` asserts `toEqual({ ok: true })` on `cello_start_agent`, and
+> commit `9a41a39` (`DOD-M15-START-AGENT-UNAWAITED-1`, the OTHER lane) added `standing_receiver`,
+> `standing_receiver_cause` and `guidance` to that response. A strict-equality assertion against a
+> deliberately-widened response. **Not fixed here on purpose:** deciding whether that response shape
+> is now correct belongs to the unit that changed it, and loosening another lane's assertion to green
+> my own gate is the move this milestone exists to prevent. **Handed over, not swept.**
+>
+> **The line stays 🟡 for one reason and it is Andre's:** its literal title asks for an authenticated
+> channel (TLS on 9090), which this work does not build and — on the measurement — buys little.
+> Retitling a gate line is scope. **`DOD-M15-DIRAUTH-1` is waiting behind it.**
+>
 > **CARRIED as ACs (two-pass cap not yet spent, but Andre called the wrap):**
 > - **The suite-level hollow gap review proved:** delete `getManifestPeerIds,` from
 >   `consortium-bootstrap.ts:446` and **all four of my tests stay green**, as do the four M12 ones.
