@@ -282,6 +282,14 @@ its own.
 > around: **a search that finds nothing must be shown capable of finding something.** It belongs with
 > the two checks above — all three are the same question, which is whether the thing you are relying
 > on is actually load-bearing or only looks it.
+>
+> **IT CAUGHT A THIRD INSTANCE WITHIN MINUTES OF BEING WRITTEN, which is the argument for it.**
+> Auditing a `✅` bullet, a grep for `final_root` was run without re-entering the repo — the shell's
+> cwd reverts between calls, so it ran against the wrong repository. **The positive control is what
+> surfaced it**: the tool warned *"No such file or directory"* instead of quietly returning zero
+> matches, and the same command one line earlier had returned 9. **Two commands, one of which was
+> only there to prove the search could see.** Without it that would have been a third confident false
+> negative in one session.
 
 **A false CAUGHT is worse than a false GREEN, and this is why the rule exists.** A false green leaves
 the suspicion alive — the thing still looks unproven, and someone eventually re-checks. A false
