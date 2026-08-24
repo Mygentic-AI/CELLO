@@ -1059,7 +1059,30 @@ compromised and could weaponize "signature mismatch" as a false accusation.
 ### `DOD-M15-DIRAUTH-1` — 🟡 Directory authentication cannot be silently skipped (remainder lives in `BOOTSTRAP-AUTH-1`)
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
-### `DOD-M15-RELAYADMIN-KEYSET-1` — ❌ The relay's admin stream trusts ONE directory, not the consortium
+### `DOD-M15-RELAYADMIN-KEYSET-1` — 🟡 ANSWERED: the gap is real but small, and bounded by the idle sweep
+> ### ✅ THE QUESTION IS ANSWERED IN FULL, 2026-08-24 (CELLO_Support), read-only. **The alarming
+> ### reading — "one directory is load-bearing for every session the other two broker" — is FALSE.**
+> Traced per frame rather than per stream, which is what both earlier readings skipped:
+> - **Recording is FEDERATED.** A session brokered by directory 1 or 2 records fine, because the
+>   CLIENT presents the assignment (`client_record_assignment`) and its inner signature is verified
+>   against the **any-directory set**. The directory's own push was removed under Option B.
+> - **Sealing does not use this stream at all.** `confirm_seal` and `reject_seal` have **no sender** —
+>   *"no directory→relay confirmSeal dial; the relay idle-sweep reclaims the post-seal session."* No
+>   node can be blocked from a call nobody makes.
+> - **`discard_session` IS the real gap, and it is the only one.** It has a live caller — the
+>   directory holding the pending session, on a stream close before establishment — and it is signed
+>   with THAT node's key while the relay verifies against the **primary's**. So a non-primary broker's
+>   discard is refused.
+>
+> **What that costs, precisely:** an abandoned-before-establishment session brokered by directory 1
+> or 2 is not discarded at the relay, and lingers until the **24-hour idle sweep** reclaims it — the
+> same sweep that is the designed reclamation path for sealed sessions. So the consequence is a
+> stale relay-side record for up to a day, not a broken session and not a lost seal.
+> **🟡 rather than ✅** because the fix is real and unshipped, and it is the same wire surface as
+> `DOD-M15-RELAYADMIN-REPLAY-1` and `DOD-M15-RELAYADMIN-DEAD-FRAMES-1`. **Take all three together**
+> — each changes what this stream accepts, and shipping them apart is three fleet rolls.
+
+### (original finding, kept for the trail) The relay's admin stream trusts ONE directory, not the consortium
 **Found 2026-08-24 (CELLO_Support) while verifying `DISCLOSE-1` bullet 3. Recorded, NOT chased —
 outside that unit, and I am not opening it on a guess.**
 - The relay verifies a **session assignment** against the any-directory set:
