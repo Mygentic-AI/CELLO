@@ -1145,6 +1145,13 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
   silent writes nobody was looking for.
 
 ### `DOD-M15-SPINERED-1` — ❌ The multi-process evidence lane is HALF RED, and nobody knew
+
+> ## 🔒 CLAIMED 2026-08-24 by `CELLO_Coder_1` — do not start work on this line
+> **Files held:** `packages/e2e-tests/src/spine/*` and the journey files under it. Nothing in
+> `core/daemon` unless a triage cause lands there, and I will amend this block before touching one.
+> **Claimed BEFORE writing code**, which is the rule that came out of `SEALWIRE-1`: both lanes built
+> bullet 5's held-path test independently because ownership lived in a conversation instead of here.
+> `CELLO_Support` holds `RELAYONLY-1` and its files; I do not touch them.
 > ### PRE-RUN TRIAGE, 2026-08-24 (CELLO_Support) — read off the COMMITTED log, no runner used
 > The line's first unit is a triage, not 21 tickets. Done against
 > `receipts/2026-08-23_spine-lane-full-run.log` — which is exactly why that log was committed, and it
