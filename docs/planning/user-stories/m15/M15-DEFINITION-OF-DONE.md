@@ -2847,6 +2847,19 @@ written down nowhere, and a per-session salt fixes it as a side effect.
   exposure is on the record independently of the fix that closes it.
 
 ### `DOD-M15-SEALWIRE-1` — 🟡 The receipt is bound to the transcript (1, 2, 3, 4, 6, 7, 8 ✅; 5 = one test short)
+> **THE ALREADY-✅ BULLETS WERE RE-AUDITED before closing (2026-08-24), because a stale ✅ has been
+> this milestone's most reliable source of real findings — including this line's own header, which
+> still said bullet 5 was untouched long after its received half shipped.** Each check ran with a
+> POSITIVE CONTROL first, per §7:
+> - **`final_root` verification EXISTS** and the deferral comment is gone (9 hits for the control; 0
+>   for the deferral phrasing).
+> - **The circular root check is genuinely replaced**, and for the stated reason — the comparison is
+>   against *"the client's OWN signed claim about its own transcript … the only value in reach that
+>   the relay cannot produce."* That is exactly *"compare against something the relay did not
+>   supply"*, not a paraphrase of it.
+> - **`seal_attempt` is deleted from BOTH repos**, and a dedicated test keeps it deleted.
+> - **The content hash is salted in production** — confirmed live on this session's own record
+>   (`contentSalted: true`), not only in tests.
 > **✅ BULLET 6 — the content hash is salted.** All six B2b-2 constraints, both review passes spent
 > (→ Entries 49–52). A session holding an agreed salt hashes under `hmac-sha256-salt-v1`.
 >
