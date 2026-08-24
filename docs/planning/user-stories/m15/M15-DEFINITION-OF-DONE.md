@@ -3976,7 +3976,35 @@ The byte-match workaround is holding; the fail-open underneath it is not fixed.
 > (`cello_settings_set` description), `__tests__/dod-m15-relayonly-1.test.ts`.
 > **Correspondingly: `DOD-M15-SEALWIRE-1` and all remaining seal work belong to `CELLO_Coder_1`.**
 > Andre has forbidden me from further seal work; I am not to touch it even to fix something I see.
-> ### ⚠️ BUILT 2026-08-24 (CELLO_Support) AND **NOT DONE** — review returned TWO BLOCKING findings.
+> ### ✅ BOTH BLOCKING FINDINGS FIXED, 2026-08-24 — pass 2 out. **The fix is one idea: CIRCUIT-ONLY, not nothing.**
+> A `/p2p-circuit` multiaddr names the **RELAY** and our peer id, and terminates at the relay. So it
+> discloses nothing about the operator, it satisfies both directory guards, and it is what §7's
+> mitigation actually meant. Relay-only now **publishes** only the circuit subset and **dials** only
+> the counterparty's circuit — their direct address is dropped, because dialling it is what hands
+> them our IP.
+> - **F1/F2 fixed** — publish and dial circuit-only. `relayOnlyReachable()` distinguishes "no relay
+>   reservation yet" from "suppressed", so an empty set is a knowable state rather than a malformed
+>   frame.
+> - **F7/F8 fixed** — `relayOnlyState()` is a TRI-STATE. `getSetting` answers `null` both for *unset*
+>   and for *no database*, and reading the second as OFF **failed toward disclosure**: the standing
+>   receiver outlives the DB during shutdown. `unknown` now publishes circuit-only, and a THROW (a
+>   retired agent, on a catch-less ceremony path) is absorbed as `unknown` rather than becoming an
+>   unhandled rejection that makes the offer vanish.
+> - **F6 fixed** — the operator-facing wording claimed a counterparty *"never learns"* the address.
+>   False for one who kept it from an earlier session. Now states three limits: no revocation of a
+>   prior disclosure, new sessions only, and no hiding from the relay or directory.
+> - **THE HOLLOW-TEST FINDING FIXED, and this is the one that mattered:** the dial half previously
+>   survived nothing — reverting the gate left all ten tests green. Three tests now drive the real
+>   handler through `openSessionAs` and read what `connectToCounterparty` actually received.
+>   **Mutation RUN: restoring the old gate reddens 2 of the 3.**
+> - **Gate: 15 tests, typecheck 0, eslint 0.**
+> - **NOT fixed, carried to pass 2 for a verdict:** F3 (no-reservation refusal is written but not
+>   wired), F4 (the re-dial path bypasses the control, so this governs new sessions only —
+>   documented in the tool text rather than fixed), **F5 (dcutr — now that circuit connections
+>   actually form, does the standing receiver hole-punch to a direct connection and defeat the whole
+>   control at runtime while every test passes? My top worry)**, F9 (dead `advertisedAddress`).
+>
+> ### ⚠️ PASS 1, 2026-08-24 (CELLO_Support) — **NOT DONE** — review returned TWO BLOCKING findings.
 > **The setting as shipped does not make the operator private. It takes them OFF THE NETWORK.** Not
 > flipped, not claimed; recorded here so the commits (`0508d5e`, `3b07a92`) cannot be mistaken for a
 > working control. **It is inert until switched on** — the default is off — so nothing is live.
