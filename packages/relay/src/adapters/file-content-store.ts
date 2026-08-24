@@ -43,7 +43,7 @@ import { createHash } from "node:crypto";
 import { fsync } from "node:fs";
 import { join } from "node:path";
 import type { Logger, ContentStore, ContentStoreEntry } from "@cello-protocol/interfaces";
-import { CONTENT_STORE_TTL_MS, CONTENT_STORE_MAX_BYTES, CONTENT_STORE_MAX_ENTRIES } from "@cello-protocol/interfaces";
+import { CONTENT_STORE_TTL_MS, CONTENT_STORE_MAX_BYTES, CONTENT_STORE_MAX_ENTRIES, CONTENT_STORE_MAX_RECIPIENT_BYTES } from "@cello-protocol/interfaces";
 
 export type { ContentStore, ContentStoreEntry };
 
@@ -121,6 +121,16 @@ export interface FileContentStoreOptions {
   ttlMs?: number;
   maxBytes?: number;
   maxEntries?: number;
+  /**
+   * DOD-M15-RELAYABUSE-1: the most bytes ONE recipient's bucket may hold. Defaults to
+   * `CONTENT_STORE_MAX_RECIPIENT_BYTES`.
+   *
+   * ⚠️ This is the bound that actually exists to be enforced, and it is not the one the audit asked
+   * for. "Per depositor" cannot be keyed on anything: a park deposit is unauthenticated by design
+   * and carries no depositor identity. So the attacker picks the RECIPIENT key, and a per-recipient
+   * cap is what stops any single bucket being the whole store.
+   */
+  maxRecipientBytes?: number;
 }
 
 export class FileContentStore implements ContentStore {
@@ -129,6 +139,7 @@ export class FileContentStore implements ContentStore {
   readonly #ttlMs: number;
   readonly #maxBytes: number;
   readonly #maxEntries: number;
+  readonly #maxRecipientBytes: number;
 
   /** recipientHex -> (contentHashHex -> metadata), insertion-ordered for FIFO eviction. */
   readonly #index = new Map<string, Map<string, IndexEntry>>();
@@ -142,6 +153,7 @@ export class FileContentStore implements ContentStore {
     this.#ttlMs = opts.ttlMs ?? CONTENT_STORE_TTL_MS;
     this.#maxBytes = opts.maxBytes ?? CONTENT_STORE_MAX_BYTES;
     this.#maxEntries = opts.maxEntries ?? CONTENT_STORE_MAX_ENTRIES;
+    this.#maxRecipientBytes = opts.maxRecipientBytes ?? CONTENT_STORE_MAX_RECIPIENT_BYTES;
   }
 
   /** Same composition-root gate as FileSessionWal (AC-008). */
@@ -290,9 +302,16 @@ export class FileContentStore implements ContentStore {
     // wording; sustained content.store.full for one recipient is the capacity signal.
     let evictedCount = 0;
     let evictedBytes = 0;
+    let bucketBytes = 0;
+    for (const e of bucket.values()) bucketBytes += e.bytes;
     while (
       bucket.size > 0 &&
-      (this.#totalEntries + 1 > this.#maxEntries || this.#totalBytes + incomingBytes > this.#maxBytes)
+      (this.#totalEntries + 1 > this.#maxEntries ||
+        this.#totalBytes + incomingBytes > this.#maxBytes ||
+        // DOD-M15-RELAYABUSE-1: the per-recipient bound. Without it a single bucket may be the whole
+        // store, and a victim's own parked messages are the ones evicted to make room for the flood
+        // aimed at them.
+        bucketBytes + incomingBytes > this.#maxRecipientBytes)
     ) {
       const oldestKey = bucket.keys().next().value as string | undefined;
       if (oldestKey === undefined) break;
@@ -302,10 +321,54 @@ export class FileContentStore implements ContentStore {
       this.#totalEntries -= 1;
       evictedCount += 1;
       evictedBytes += oldest.bytes;
+      bucketBytes -= oldest.bytes;
       await this.#unlinkFile(rHex, oldest.fileName);
     }
     if (evictedCount > 0) {
       this.#logger.warn("content.store.full", { recipientPubkey: rHex, evictedCount, evictedBytes });
+    }
+
+    /**
+     * ⚠️ DOD-M15-RELAYABUSE-1 — **REFUSE. The previous code wrote anyway, and that is why the global
+     * cap was not a cap.**
+     *
+     * The loop above only ever evicts from the DEPOSITING recipient's bucket, deliberately, so a
+     * flood aimed at one recipient cannot delete another's messages. The consequence was recorded
+     * here as a known best-effort compromise: when the store is full of OTHER recipients' entries,
+     * the loop drains this bucket to empty and then writes regardless.
+     *
+     * That is exploitable without any privilege, because a park deposit is unauthenticated: the
+     * attacker chooses the recipient key, spreads across invented recipients so no bucket is ever
+     * large enough to evict, and the store grows until the disk does — taking the relay down for
+     * everyone, which is strictly worse than one refused deposit.
+     *
+     * So the cap now REFUSES. A refused deposit is visible and recoverable (the sender keeps its
+     * copy and retries, and delivery is unaffected for anyone whose messages are already parked); a
+     * full disk is neither.
+     */
+    if (
+      this.#totalEntries + 1 > this.#maxEntries ||
+      this.#totalBytes + incomingBytes > this.#maxBytes ||
+      bucketBytes + incomingBytes > this.#maxRecipientBytes
+    ) {
+      this.#logger.warn("content.store.deposit_refused", {
+        recipientPubkey: rHex,
+        incomingBytes,
+        bucketBytes,
+        totalBytes: this.#totalBytes,
+        totalEntries: this.#totalEntries,
+        impact:
+          "the parked-content store is at its bound, so this deposit was REFUSED rather than written " +
+          "past the cap — the depositor keeps its copy and may retry, and content already parked for " +
+          "other recipients is untouched",
+      });
+      /**
+       * THROWS rather than returning a flag, and that is deliberate rather than convenient: the one
+       * production caller (`content-park.ts`) already wraps this in try/catch and answers the
+       * depositor `{ ok: false, reason }`. So a throw becomes a negative ACK carrying a name the
+       * depositor can act on, with no interface change and no new failure path to wire.
+       */
+      throw new Error("content_store_full");
     }
 
     // Write atomically: temp file → fsync → rename.

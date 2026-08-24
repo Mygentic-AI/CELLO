@@ -203,3 +203,98 @@ describe("M12-P18: resolveContentTtlMs — the env-configurable retention", () =
     expect(CONTENT_STORE_TTL_MS).toBe(30 * 24 * 60 * 60 * 1000);
   });
 });
+
+describe("DOD-M15-RELAYABUSE-1 — the parked store is actually bounded", () => {
+  /** A deposit of `bytes` payload for `who`, with a distinct hash so it never dedupes. */
+  function entryFor(who: Uint8Array, bytes: number, tag: number): ContentStoreEntry {
+    const plaintext = new Uint8Array(bytes).fill(tag & 0xff);
+    const ciphertext = seal(plaintext);
+    return {
+      recipientPubkey: who,
+      contentHash: sha256(new Uint8Array([tag, bytes & 0xff, (bytes >> 8) & 0xff])),
+      sessionId: new Uint8Array(16).fill(1),
+      ciphertext,
+      depositedAt: Date.now(),
+    };
+  }
+
+  it("★★★ a FLOOD ACROSS MANY RECIPIENTS is REFUSED — it used to write past the global cap forever", async () => {
+    /**
+     * ⚠️ THE DEFECT, and the store documented it against itself: *"eviction only scans the
+     * depositing recipient's bucket… If the global cap is consumed by OTHER recipients this loop
+     * drains the current recipient to empty and **then writes anyway**."*
+     *
+     * That is exploitable with no privilege at all, because a park deposit is UNAUTHENTICATED by
+     * design — the attacker picks the recipient key. Spread across invented recipients, no single
+     * bucket is ever big enough to trigger eviction, nothing is refused, and the store grows until
+     * the disk does, which takes the relay down for everyone.
+     *
+     * A refused deposit is visible and recoverable — the depositor keeps its copy and retries, and
+     * content already parked for other recipients is untouched. A full disk is neither.
+     *
+     * **Revert test, RUN:** delete the refusal block in `file-content-store.ts` and this goes red
+     * while the eviction tests above stay green — they only ever exercised ONE recipient, which is
+     * exactly why this shipped.
+     */
+    const { logger, events } = captureLogger();
+    const store = new FileContentStore({ walDir: dir, logger, maxBytes: 4096, maxRecipientBytes: 4096 });
+
+    let refused = 0;
+    let accepted = 0;
+    // Twenty DIFFERENT recipients — the attacker invents them, so no bucket ever fills.
+    for (let i = 0; i < 20; i++) {
+      const victim = new Uint8Array(32).fill(i + 1);
+      try {
+        await store.deposit(entryFor(victim, 512, i));
+        accepted++;
+      } catch (err) {
+        expect(String(err)).toContain("content_store_full");
+        refused++;
+      }
+    }
+
+    expect(
+      refused,
+      "once the global cap is reached the store must REFUSE. Zero refusals means it wrote past its " +
+        "own cap, which is the unbounded-growth defect this test exists for.",
+    ).toBeGreaterThan(0);
+    expect(accepted, "and it must still have accepted deposits up to the bound — this is a cap, not a wall").toBeGreaterThan(0);
+    expect(
+      events.some((e) => e.name === "content.store.deposit_refused"),
+      "a refusal must be named in the log, not silent",
+    ).toBe(true);
+  });
+
+  it("★★ ONE recipient cannot become the whole store — the per-recipient cap holds", async () => {
+    /**
+     * The per-recipient half. Without it a single bucket may consume the entire store, and a flood
+     * aimed at one victim evicts that victim's own older messages to make room for more of the
+     * flood.
+     */
+    const { logger } = captureLogger();
+    const store = new FileContentStore({ walDir: dir, logger, maxBytes: 1024 * 1024, maxRecipientBytes: 2048 });
+
+    const victim = new Uint8Array(32).fill(0x7e);
+    for (let i = 0; i < 10; i++) {
+      try { await store.deposit(entryFor(victim, 512, i)); } catch { /* bounded */ }
+    }
+
+    const listed = await store.pull(Buffer.from(victim).toString("hex"));
+    const held = listed.reduce((n: number, e: ContentStoreEntry) => n + e.ciphertext.length, 0);
+    expect(
+      held,
+      "one recipient's bucket must stay within its own cap however much is aimed at it",
+    ).toBeLessThanOrEqual(2048 + 64);
+  });
+
+  it("★ the ordinary path is untouched — a normal deposit still lands and reads back", async () => {
+    /** The regression half: a bound that refuses ordinary traffic is its own outage. */
+    const { logger } = captureLogger();
+    const store = new FileContentStore({ walDir: dir, logger });
+    const e = entryFor(recipient, 1024, 99);
+    await store.deposit(e);
+    const got = await store.pull(Buffer.from(recipient).toString("hex"));
+    expect(got.length, "an ordinary deposit is unaffected by the cap").toBe(1);
+    expect(open(got[0]!.ciphertext), "and it round-trips intact").toEqual(new Uint8Array(1024).fill(99));
+  });
+});

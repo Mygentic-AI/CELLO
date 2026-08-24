@@ -36,6 +36,20 @@ export const CONTENT_STORE_MAX_BYTES = 256 * 1024 * 1024;
 /** Store-wide entry-count cap. On overflow the oldest entry for the affected recipient is evicted. */
 export const CONTENT_STORE_MAX_ENTRIES = 10_000;
 
+/**
+ * DOD-M15-RELAYABUSE-1 — the most bytes ONE recipient's parked bucket may hold.
+ *
+ * 16 MiB: four maximum-size frames, which is generous for the case this store exists to serve — a
+ * counterparty who was briefly offline — and small enough that filling the 256 MiB store requires
+ * sixteen distinct recipients rather than one.
+ *
+ * ⚠️ It does not, on its own, bound the store. A deposit is unauthenticated by design, so an
+ * attacker chooses the recipient key and can invent as many as they like. What bounds the store is
+ * the GLOBAL cap being enforced by REFUSAL — this cap stops one bucket becoming the whole store, and
+ * stops a single victim's bucket being used to evict itself repeatedly.
+ */
+export const CONTENT_STORE_MAX_RECIPIENT_BYTES = 16 * 1024 * 1024;
+
 /** A single parked content entry. Every datum has its own named slot (API parsimony). */
 export interface ContentStoreEntry {
   /** Recipient's stable identity pubkey — the store key. */
@@ -86,6 +100,14 @@ export interface ContentStore {
    * reachable), so this is a liveness/availability gap, not an integrity one. Mitigation
    * (deposit auth tying a deposit to a session participant, or per-depositor quotas) is
    * deferred to a follow-up — see m7/COORDINATION.md (CELLO-M7-MSG-001 review round 2).
+   *
+   * ⚠️ PARTIALLY ADDRESSED by `DOD-M15-RELAYABUSE-1`, named here so this comment is not read as
+   * wholly open. The store now enforces a per-RECIPIENT byte cap, and it REFUSES — throwing
+   * `content_store_full`, which the park handler turns into a negative ACK — rather than writing
+   * past its global cap, which it previously did. **A per-DEPOSITOR quota is still impossible:** a
+   * deposit carries no depositor identity to key one on, so that half waits on deposit auth. The
+   * eviction described above is also narrowed but not gone — a flood aimed at one victim still
+   * evicts that victim's older blobs, up to the per-recipient cap.
    */
   deposit(entry: ContentStoreEntry): Promise<void>;
 
