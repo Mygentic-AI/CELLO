@@ -1350,6 +1350,41 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > That is as far as this log goes: the sender-side lines for those hashes are in a different process's
 > capture, so the produce half needs a run with both daemons' output retained.
 >
+## ✅ TRIAGE COMPLETE 2026-08-24 — every journey file measured, 49 failures resolve to SIX causes
+
+**This is the unit the line asked for** (*"First unit is a triage: cluster the 49 by cause… do NOT open
+21 lines from this"*). Every one of the 36 spine files has now been run. **The lane is not half-red.**
+
+| cause | failures | status |
+|---|---|---|
+| **CLI banner glued into JSON** (`j-refresh`, `j-sign`, `j-tofn-dkg`×2, `j-tofn`, `j-relaysig`) | 6 | ✅ **all green** |
+| **Stale assertions in `j-spine`** — state vocabulary the product removed, plus one local race | 5 | ✅ **all green, fixed here** |
+| **Salt-split / no agreement** (`j-documents` 7, `j-stale-session` 1) | 8 | 🔴 **one live defect** — announce never fires |
+| **Tests compute the UNSALTED hash** (`j-content` 5) | 5 | 🟡 1 fixed, 4 same cause |
+| **Portal database** (`ECONNREFUSED`) | 2 | ✅ container up |
+| **Named lines already owned** (`j-unilateral`×2, `j-upgrade-bilateral` → `UNILATERAL-NOTARIZE-1`) | 3 | 🅿️ owned elsewhere |
+| **Individually-caused** (`j-end` 1, `j-remove` 1, `j-multiplayer` 4 timeouts) | 6 | 🔎 filed below |
+| **Green all along** (`j-upgrade`, `j-loopback`, `j-persist`, `j-canary`, `j-legibility`, `j-trust`, `j-tofn`…) | — | ✅ |
+
+**Files now measured green that the receipt lists red:** `j-spine` 7/7, `j-tofn` 4/4, `j-relaysig` 1/1,
+`j-upgrade`, `j-loopback`, `j-trust` 1/1, plus `j-end` 9/10 and `j-remove` 2/3.
+
+### 🔎 TWO INDIVIDUALLY-CAUSED FINDINGS, filed not fixed (freeze: nothing new enters the gate)
+
+**`DOD-M15-REVOKED-READS-OFFLINE-1` — a REVOKED agent is reported as merely offline.**
+`j-remove`: *"the directory must refuse a revoked target with `agent_revoked`: expected
+`counterparty_offline` to be `agent_revoked`"*. The directory's revoked gate is correct and correctly
+ordered — but **the client never reaches it.** It runs a discovery lookup first, and
+`classifyOnlineResult` accepts only `"online" | "offline" | "unknown_agent"` — **there is no revoked
+state on that path**, so a revoked agent classifies as offline and the session request is never sent.
+**The operator is told:** *"The counterparty exists but is not currently online. Have its operator
+bring it online, then retry."* — and goes to chase a counterparty who can never come back. That is
+error substitution of the exact shape `DOD-M15-ERRSTRING-1` fixed twelve lines below it in the same
+file. **Fix is a wire question** (discovery must be able to say revoked), which is why it is filed.
+
+**`j-end`** — *"Bob's genuine third-party endorsement must NOT be flagged as same-operator"*: a trust
+signal misclassified. One test, own cause, not investigated.
+
 ### 🔴 `j-documents` — 7 of 12 RED, AND IT IS THE SALT SPLIT, STILL LIVE
 
 Measured 2026-08-24, first run of these journeys in this milestone. The seven failures read as seven
