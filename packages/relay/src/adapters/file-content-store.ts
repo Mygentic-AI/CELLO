@@ -43,7 +43,7 @@ import { createHash } from "node:crypto";
 import { fsync } from "node:fs";
 import { join } from "node:path";
 import type { Logger, ContentStore, ContentStoreEntry } from "@cello-protocol/interfaces";
-import { CONTENT_STORE_TTL_MS, CONTENT_STORE_MAX_BYTES, CONTENT_STORE_MAX_ENTRIES, CONTENT_STORE_MAX_RECIPIENT_BYTES } from "@cello-protocol/interfaces";
+import { CONTENT_STORE_TTL_MS, CONTENT_STORE_MAX_BYTES, CONTENT_STORE_MAX_ENTRIES, CONTENT_STORE_MAX_RECIPIENT_BYTES, CONTENT_STORE_MAX_RECIPIENT_ENTRIES } from "@cello-protocol/interfaces";
 
 export type { ContentStore, ContentStoreEntry };
 
@@ -131,6 +131,8 @@ export interface FileContentStoreOptions {
    * cap is what stops any single bucket being the whole store.
    */
   maxRecipientBytes?: number;
+  /** DOD-M15-RELAYABUSE-1: the most ENTRIES one recipient's bucket may hold. See the constant. */
+  maxRecipientEntries?: number;
 }
 
 export class FileContentStore implements ContentStore {
@@ -140,6 +142,7 @@ export class FileContentStore implements ContentStore {
   readonly #maxBytes: number;
   readonly #maxEntries: number;
   readonly #maxRecipientBytes: number;
+  readonly #maxRecipientEntries: number;
 
   /** recipientHex -> (contentHashHex -> metadata), insertion-ordered for FIFO eviction. */
   readonly #index = new Map<string, Map<string, IndexEntry>>();
@@ -154,6 +157,7 @@ export class FileContentStore implements ContentStore {
     this.#maxBytes = opts.maxBytes ?? CONTENT_STORE_MAX_BYTES;
     this.#maxEntries = opts.maxEntries ?? CONTENT_STORE_MAX_ENTRIES;
     this.#maxRecipientBytes = opts.maxRecipientBytes ?? CONTENT_STORE_MAX_RECIPIENT_BYTES;
+    this.#maxRecipientEntries = opts.maxRecipientEntries ?? CONTENT_STORE_MAX_RECIPIENT_ENTRIES;
   }
 
   /** Same composition-root gate as FileSessionWal (AC-008). */
@@ -293,27 +297,73 @@ export class FileContentStore implements ContentStore {
 
     const incomingBytes = entry.ciphertext.length;
 
-    // Cap eviction: evict oldest-for-recipient until the new entry fits.
-    // L1 (review round 1): the global byte/entry caps are BEST-EFFORT — eviction only
-    // scans the depositing recipient's bucket so live delivery is never blocked. If the
-    // global cap is consumed by OTHER recipients this loop drains the current recipient
-    // to empty and then writes anyway; one hot recipient can push the store over the
-    // global cap. This matches the AC-017 "oldest entry for the affected recipient"
-    // wording; sustained content.store.full for one recipient is the capacity signal.
-    let evictedCount = 0;
-    let evictedBytes = 0;
+    /**
+     * ⚠️ REFUSE FIRST, EVICT SECOND — and getting this order wrong made the attack WORSE than the
+     * defect it fixed. The first version evicted, then refused. Since eviction only ever scans the
+     * DEPOSITING recipient's bucket (deliberately — a flood at one recipient must never delete
+     * another's mail), a store filled by OTHER recipients meant the loop drained this recipient to
+     * EMPTY, could not possibly make room, and then refused.
+     *
+     * That is an unauthenticated, repeatable, near-zero-cost wipe of a chosen victim: fill the store
+     * globally, then send ONE 1-byte deposit addressed to them, and their entire undelivered mailbox
+     * is unlinked while the attacker's own junk is untouched. The pre-change code at least stored the
+     * incoming message; emptying the bucket and keeping nothing was new damage.
+     *
+     * So the ordering is now: work out whether eviction COULD make room, and if it could not, refuse
+     * without touching a byte. Eviction is legitimate only for the bound this bucket actually
+     * controls — its own quota.
+     */
     let bucketBytes = 0;
     for (const e of bucket.values()) bucketBytes += e.bytes;
+    const bucketEntries = bucket.size;
+
+    // The room that exists for this recipient even if their whole bucket were dropped. Pressure from
+    // OTHER recipients lives outside this bucket, so draining it cannot relieve them.
+    const globalRoomIfDrained = this.#maxBytes - (this.#totalBytes - bucketBytes);
+    const globalEntryRoomIfDrained = this.#maxEntries - (this.#totalEntries - bucketEntries);
+
+    if (
+      incomingBytes > globalRoomIfDrained ||
+      incomingBytes > this.#maxRecipientBytes ||
+      globalEntryRoomIfDrained < 1 ||
+      this.#maxRecipientEntries < 1
+    ) {
+      this.#logger.warn("content.store.deposit_refused", {
+        recipientPubkey: rHex,
+        incomingBytes,
+        bucketBytes,
+        totalBytes: this.#totalBytes,
+        totalEntries: this.#totalEntries,
+        impact:
+          "the parked-content store is at a bound this deposit cannot fit inside, so it was REFUSED " +
+          "BEFORE anything was evicted — nothing already parked for this recipient or any other was " +
+          "touched. The depositor keeps its copy in the durable retry queue and may retry.",
+      });
+      if (bucket.size === 0) this.#index.delete(rHex);
+      throw new Error(
+        incomingBytes > this.#maxRecipientBytes || this.#maxRecipientEntries < 1
+          ? "content_store_recipient_full"
+          : "content_store_full",
+      );
+    }
+
+    /**
+     * Now evict, knowing it can succeed. FIFO WITHIN THIS RECIPIENT'S OWN QUOTA is the legitimate
+     * case: their mailbox is full of their own older mail and the newest message wins. That is
+     * ordinary rotation, not pressure — which is why it no longer raises `content.store.full`.
+     */
+    let evictedCount = 0;
+    let evictedBytes = 0;
+    // Which bound drove the eviction decides which signal it raises — see the log below.
+    const globalPressure =
+      this.#totalEntries + 1 > this.#maxEntries || this.#totalBytes + incomingBytes > this.#maxBytes;
     while (
       bucket.size > 0 &&
       (this.#totalEntries + 1 > this.#maxEntries ||
         this.#totalBytes + incomingBytes > this.#maxBytes ||
-        // DOD-M15-RELAYABUSE-1: the per-recipient bound. Without it a single bucket may be the whole
-        // store, and a victim's own parked messages are the ones evicted to make room for the flood
-        // aimed at them.
-        bucketBytes + incomingBytes > this.#maxRecipientBytes)
-    ) {
-      const oldestKey = bucket.keys().next().value as string | undefined;
+        bucketBytes + incomingBytes > this.#maxRecipientBytes ||
+        bucket.size + 1 > this.#maxRecipientEntries)
+    ) {      const oldestKey = bucket.keys().next().value as string | undefined;
       if (oldestKey === undefined) break;
       const oldest = bucket.get(oldestKey)!;
       bucket.delete(oldestKey);
@@ -324,51 +374,36 @@ export class FileContentStore implements ContentStore {
       bucketBytes -= oldest.bytes;
       await this.#unlinkFile(rHex, oldest.fileName);
     }
-    if (evictedCount > 0) {
-      this.#logger.warn("content.store.full", { recipientPubkey: rHex, evictedCount, evictedBytes });
-    }
-
     /**
-     * ⚠️ DOD-M15-RELAYABUSE-1 — **REFUSE. The previous code wrote anyway, and that is why the global
-     * cap was not a cap.**
-     *
-     * The loop above only ever evicts from the DEPOSITING recipient's bucket, deliberately, so a
-     * flood aimed at one recipient cannot delete another's messages. The consequence was recorded
-     * here as a known best-effort compromise: when the store is full of OTHER recipients' entries,
-     * the loop drains this bucket to empty and then writes regardless.
-     *
-     * That is exploitable without any privilege, because a park deposit is unauthenticated: the
-     * attacker chooses the recipient key, spreads across invented recipients so no bucket is ever
-     * large enough to evict, and the store grows until the disk does — taking the relay down for
-     * everyone, which is strictly worse than one refused deposit.
-     *
-     * So the cap now REFUSES. A refused deposit is visible and recoverable (the sender keeps its
-     * copy and retries, and delivery is unaffected for anyone whose messages are already parked); a
-     * full disk is neither.
+     * ⚠️ NO EMPTY-BUCKET CLEANUP HERE, and the reason is worth writing down because I nearly shipped
+     * the opposite. The empty bucket is removed only on the REFUSAL path above, where nothing more
+     * will be written. Doing it here too looks symmetrical and is a data-loss bug: `bucket.set(...)`
+     * below writes the incoming entry into THIS map object, so detaching it from `#index` first
+     * leaves the file on disk and the entry invisible to every read until a restart rebuilds from
+     * `readdir`.
      */
-    if (
-      this.#totalEntries + 1 > this.#maxEntries ||
-      this.#totalBytes + incomingBytes > this.#maxBytes ||
-      bucketBytes + incomingBytes > this.#maxRecipientBytes
-    ) {
-      this.#logger.warn("content.store.deposit_refused", {
-        recipientPubkey: rHex,
-        incomingBytes,
-        bucketBytes,
-        totalBytes: this.#totalBytes,
-        totalEntries: this.#totalEntries,
-        impact:
-          "the parked-content store is at its bound, so this deposit was REFUSED rather than written " +
-          "past the cap — the depositor keeps its copy and may retry, and content already parked for " +
-          "other recipients is untouched",
-      });
+    if (evictedCount > 0) {
       /**
-       * THROWS rather than returning a flag, and that is deliberate rather than convenient: the one
-       * production caller (`content-park.ts`) already wraps this in try/catch and answers the
-       * depositor `{ ok: false, reason }`. So a throw becomes a negative ACK carrying a name the
-       * depositor can act on, with no interface change and no new failure path to wire.
+       * ⚠️ RENAMED — review Finding 6. `content.store.full` used to mean "the relay is at 256 MiB":
+       * rare and alarming. After the per-recipient cap it would also fire every time a busy offline
+       * recipient rotates FIFO inside their own quota, which is ordinary steady state — one name for
+       * two meanings, with the frequent benign one drowning the rare serious one.
        */
-      throw new Error("content_store_full");
+      if (globalPressure) {
+        // The ORIGINAL meaning, preserved deliberately: the store as a whole is under pressure. Any
+        // alert keyed on this name keeps firing for exactly the condition it was written for.
+        this.#logger.warn("content.store.full", { recipientPubkey: rHex, evictedCount, evictedBytes });
+      } else {
+        this.#logger.info("content.store.recipient_rotated", {
+          recipientPubkey: rHex,
+          evictedCount,
+          evictedBytes,
+          impact:
+            "this recipient's own oldest parked content was rotated out to make room inside their " +
+            "own quota — no other recipient is affected, and this is expected for a recipient who " +
+            "has been offline a long time",
+        });
+      }
     }
 
     // Write atomically: temp file → fsync → rename.

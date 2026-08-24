@@ -10,6 +10,7 @@ import { describe, it, expect } from "vitest";
 import type { Logger, LogContext } from "../logger.js";
 import { InMemoryContentStore } from "../stubs/in-memory-content-store.js";
 import type { ContentStoreEntry } from "../content-store.js";
+import { CONTENT_STORE_MAX_BYTES, CONTENT_STORE_MAX_RECIPIENT_BYTES } from "../content-store.js";
 
 function captureLogger(): { logger: Logger; events: Array<{ name: string; ctx?: LogContext }> } {
   const events: Array<{ name: string; ctx?: LogContext }> = [];
@@ -125,5 +126,29 @@ describe("InMemoryContentStore (MSG-001)", () => {
     const pulled = await store.pull(rHex(7));
     expect(pulled).toHaveLength(1);
     expect(pulled[0].ciphertext.length).toBe(8); // first writer kept, second is a no-op
+  });
+});
+
+describe("DOD-M15-RELAYABUSE-1 — the store's caps relate to each other sensibly", () => {
+  it("★★ the per-recipient cap is SMALLER than the global cap — otherwise it bounds nothing", () => {
+    /**
+     * ⚠️ The invariant that makes a per-recipient cap mean anything, pinned because it is the kind of
+     * relationship that silently stops holding when someone tunes one number.
+     *
+     * If the per-recipient cap were >= the global cap, a single recipient's bucket could legitimately
+     * fill the whole store and the per-recipient bound would never bind — the store would be back to
+     * one global number, which is the state this unit exists to leave. The relay's own defence
+     * depends on there being room for several recipients before the global refusal fires.
+     */
+    expect(
+      CONTENT_STORE_MAX_RECIPIENT_BYTES,
+      "a per-recipient cap at or above the global cap never binds, and the store is back to one number",
+    ).toBeLessThan(CONTENT_STORE_MAX_BYTES);
+
+    expect(
+      Math.floor(CONTENT_STORE_MAX_BYTES / CONTENT_STORE_MAX_RECIPIENT_BYTES),
+      "and it must leave room for SEVERAL recipients — a store that fills after two is a bound in " +
+        "name only",
+    ).toBeGreaterThanOrEqual(4);
   });
 });

@@ -39,7 +39,8 @@ export const CONTENT_STORE_MAX_ENTRIES = 10_000;
 /**
  * DOD-M15-RELAYABUSE-1 — the most bytes ONE recipient's parked bucket may hold.
  *
- * 16 MiB: four maximum-size frames, which is generous for the case this store exists to serve — a
+ * 16 MiB: about SIXTEEN maximum-size messages (`MAX_CONTENT_BYTES` is 1 MiB — the first version of
+ * this comment said "four", which was wrong by 4x), generous for the case this store exists to serve — a
  * counterparty who was briefly offline — and small enough that filling the 256 MiB store requires
  * sixteen distinct recipients rather than one.
  *
@@ -49,6 +50,20 @@ export const CONTENT_STORE_MAX_ENTRIES = 10_000;
  * stops a single victim's bucket being used to evict itself repeatedly.
  */
 export const CONTENT_STORE_MAX_RECIPIENT_BYTES = 16 * 1024 * 1024;
+
+/**
+ * DOD-M15-RELAYABUSE-1 — the most ENTRIES one recipient's parked bucket may hold.
+ *
+ * ⚠️ A BYTE CAP ALONE DOES NOT BOUND A RECIPIENT, and review caught the gap: the entry budget was
+ * still purely global. 10,000 entries of ~200 bytes is **2 MB** — far inside the 16 MiB byte cap and
+ * 0.8% of the global byte cap — and it consumes the ENTIRE global entry budget, after which every
+ * deposit for every other recipient is refused. Two megabytes of attacker traffic would have denied
+ * the park service to everyone.
+ *
+ * 625 = the global entry budget / 16, mirroring the sixteen-recipients-to-fill reasoning the byte
+ * cap already uses, so the two dimensions agree about how many recipients it takes to fill the store.
+ */
+export const CONTENT_STORE_MAX_RECIPIENT_ENTRIES = Math.floor(CONTENT_STORE_MAX_ENTRIES / 16);
 
 /** A single parked content entry. Every datum has its own named slot (API parsimony). */
 export interface ContentStoreEntry {
