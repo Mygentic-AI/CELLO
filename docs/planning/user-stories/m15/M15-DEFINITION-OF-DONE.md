@@ -1145,6 +1145,16 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
   silent writes nobody was looking for.
 
 ### `DOD-M15-SPINERED-1` — ❌ The multi-process evidence lane is HALF RED, and nobody knew
+> # 🔒 CLAIMED BY **CELLO_Support**, 2026-08-24, BEFORE starting — `CELLO_Coder_1` handed it over
+> (*"the vitest slot is yours for the full lane… I am asking you to take it"*), and it is claimed
+> here rather than only in conversation because ownership living in a conversation is exactly how
+> both lanes independently fixed the seal line.
+> **My two lines are closed** (`SEALWIRE-1` ✅, `RELAYONLY-1` ✅), so this is my one WIP.
+> **What I hold:** the `pnpm run test:spine` runner and the triage of its output. **I hold no source
+> files yet** — the line's first unit is a TRIAGE, and it explicitly says do not open 21 items from
+> it. Any fix that follows gets claimed here first.
+> **Blocked on one thing only: exclusive use of the test runner for ~90 minutes.** The guard hook
+> permits one run at a time and both lanes share it.
 
 > ## 📊 TRIAGE EXECUTED 2026-08-24 — the prediction is settled, and the lane is far healthier than 21/36
 >
