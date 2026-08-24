@@ -263,6 +263,24 @@ describe("DOD-M15-RELAYABUSE-1 — the parked store is actually bounded", () => 
       events.some((e) => e.name === "content.store.deposit_refused"),
       "a refusal must be named in the log, not silent",
     ).toBe(true);
+
+    /**
+     * ⚠️ THE ASSERTION THE FIRST VERSION WAS MISSING — review found it. `refused > 0 && accepted > 0`
+     * is satisfied by an implementation that accepts one deposit and refuses everything after it.
+     * The actual claim is that the store STAYED WITHIN its bound, so assert that.
+     */
+    let onDisk = 0;
+    for (const r of await readdir(join(dir, "content"), { withFileTypes: true })) {
+      if (!r.isDirectory()) continue;
+      for (const f of await readdir(join(dir, "content", r.name))) {
+        onDisk += (await readFile(join(dir, "content", r.name, f))).length;
+      }
+    }
+    expect(
+      onDisk,
+      "the store must have stayed within its own cap — refusing some deposits is not the claim, " +
+        "staying bounded is",
+    ).toBeLessThanOrEqual(4096 * 3);
   });
 
   it("★★ ONE recipient cannot become the whole store — the per-recipient cap holds", async () => {
@@ -285,6 +303,20 @@ describe("DOD-M15-RELAYABUSE-1 — the parked store is actually bounded", () => 
       held,
       "one recipient's bucket must stay within its own cap however much is aimed at it",
     ).toBeLessThanOrEqual(2048 + 64);
+
+    /**
+     * ⚠️ AND IT MUST NOT BE EMPTY — review found the upper bound alone is passed by
+     * `async deposit() { throw }`, and by an implementation that drops the bucket every time. The
+     * property worth pinning is that the victim KEEPS THEIR MOST RECENT MAIL, which is exactly what
+     * the evict-before-refuse ordering destroyed.
+     */
+    expect(held, "the recipient must still hold their most recent messages, not nothing").toBeGreaterThan(0);
+    const kept = listed.map((e) => Buffer.from(open(e.ciphertext))[0]);
+    expect(
+      Math.max(...kept),
+      "FIFO: the NEWEST deposit survives — a store that keeps the oldest and drops the newest is " +
+        "the wrong end of the queue",
+    ).toBe(9);
   });
 
   it("★ the ordinary path is untouched — a normal deposit still lands and reads back", async () => {

@@ -33,6 +33,16 @@
  * ─── Observability (injected Logger) ─────────────────────────────────────────
  *
  *   content.store.full     WARN  { recipientPubkey, evictedCount, evictedBytes }
+ *                                — GLOBAL pressure forced eviction. Original meaning, preserved.
+ *   content.store.recipient_rotated
+ *                          INFO  { recipientPubkey, evictedCount, evictedBytes, impact }
+ *                                — ordinary FIFO inside one recipient's own quota. Split out
+ *                                  (DOD-M15-RELAYABUSE-1) so it stops drowning the WARN above.
+ *   content.store.deposit_refused
+ *                          WARN  { recipientPubkey, incomingBytes, bucketBytes, totalBytes,
+ *                                  totalEntries, impact }
+ *                                — a bound this deposit cannot fit inside; REFUSED before anything
+ *                                  was evicted. Throws content_store_full / content_store_recipient_full.
  *   content.store.corrupt  WARN  { recipientPubkey, contentHash, reason }
  *   content.store.deposited DEBUG { recipientPubkey, contentHash, bytes }
  *   content.store.write.failed ERROR { recipientPubkey, contentHash, reason }
@@ -125,10 +135,16 @@ export interface FileContentStoreOptions {
    * DOD-M15-RELAYABUSE-1: the most bytes ONE recipient's bucket may hold. Defaults to
    * `CONTENT_STORE_MAX_RECIPIENT_BYTES`.
    *
-   * ⚠️ This is the bound that actually exists to be enforced, and it is not the one the audit asked
-   * for. "Per depositor" cannot be keyed on anything: a park deposit is unauthenticated by design
-   * and carries no depositor identity. So the attacker picks the RECIPIENT key, and a per-recipient
-   * cap is what stops any single bucket being the whole store.
+   * ⚠️ This is not the bound the audit asked for, and the reason is NARROWER than I first wrote.
+   * I claimed a deposit "carries no depositor identity". **That was false** — review found the
+   * transport already hands the handler a Noise-authenticated `remotePeerId`
+   * (`CelloStreamHandler`), and `content-park.ts` simply discards it.
+   *
+   * The accurate statement: a libp2p peer id is not a CELLO agent identity and is cheap to rotate,
+   * so a per-peer quota raises an attacker's cost without being a hard bound — which is why the
+   * per-RECIPIENT cap is the one that actually binds. The distinction matters because the parent
+   * line still asks for per-peer rate limiting, and "impossible" would have read as already ruled
+   * out.
    */
   maxRecipientBytes?: number;
   /** DOD-M15-RELAYABUSE-1: the most ENTRIES one recipient's bucket may hold. See the constant. */

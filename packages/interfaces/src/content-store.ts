@@ -119,8 +119,11 @@ export interface ContentStore {
    * ⚠️ PARTIALLY ADDRESSED by `DOD-M15-RELAYABUSE-1`, named here so this comment is not read as
    * wholly open. The store now enforces a per-RECIPIENT byte cap, and it REFUSES — throwing
    * `content_store_full`, which the park handler turns into a negative ACK — rather than writing
-   * past its global cap, which it previously did. **A per-DEPOSITOR quota is still impossible:** a
-   * deposit carries no depositor identity to key one on, so that half waits on deposit auth. The
+   * past its global cap, which it previously did. **A per-DEPOSITOR quota is still not shipped — but
+   * NOT because it is impossible, which is what an earlier version of this comment claimed.** The
+   * transport already hands the handler a Noise-authenticated `remotePeerId`; the park handler
+   * discards it. The real objection is that a libp2p peer id is not a CELLO agent identity and is
+   * cheap to rotate, so a per-peer quota raises cost without being a hard bound. The
    * eviction described above is also narrowed but not gone — a flood aimed at one victim still
    * evicts that victim's older blobs, up to the per-recipient cap.
    */
