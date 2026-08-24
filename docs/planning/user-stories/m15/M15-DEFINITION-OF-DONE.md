@@ -2907,6 +2907,36 @@ root means. Both repos; version-bump ACs on both sides.
 - **The directory's circular root check is replaced.** It rebuilds a root from the same leaf array
   the relay supplied using the same code, so it validates arithmetic, not the relay, and cannot
   detect a dropped or reordered leaf. Compare against something the relay did not supply.
+> ### BULLET 5 — SENT HALF: a ruling was REVERSED on its merits 2026-08-24, and the reasoning is the record
+> **`CELLO_Coder_1` had ruled the sent half out** as *"judged not-worth-its-cost"* — a sent row's
+> signature proves only that a key you control signed something, *"which the row already claims by
+> existing"*. **It reversed after re-derivation, in its own words: *"The row claims nothing to a third
+> party. It is in MY database. I could have written anything into it."***
+>
+> **⚠️ AND "SELF-REFERENTIAL" IS NOT ANSWERED BY "A THIRD PARTY CAN CHECK IT" — that step is the one
+> both of us initially missed, and I nearly endorsed the original ruling because of it.** I hold my
+> own key, so I can sign anything and write the row; my signature over my own message does not stop
+> me fabricating one. **What defeats the objection is the SEAL.** The row's leaf sits in a Merkle
+> tree whose root the directory notarizes, so a fabricated sent row would have to produce a signature
+> that ALSO lands under a root a third party already holds. **The signature is checkable against an
+> EXTERNAL anchor, not against itself** — which is what makes it non-repudiable rather than
+> self-certifying, and it is the same property the received half has, pointing the other way.
+>
+> **The COST argument was also wrong, and on a premise nobody had checked.** It assumed the signature
+> exists only after the relay ack, forcing either a mutation of the append-only transcript or the
+> operator's words held hostage to that ack. **Neither: `keyProvider.sign(structure1)` runs BEFORE
+> anything goes on the wire** — it was simply never handed back. So it is threading a value we
+> already hold, at insert time, with no mutation; on the relay-degraded path there is no signature
+> and the row says so.
+>
+> **DONE (CELLO_Support):** `SubmitResult.sender_signature` carried back, paired with the in-flight
+> `structure1` and cleared with it — *a signature paired with the WRONG signed bytes is worse than
+> none*. Plus **the bug that would have shipped WITH the fix**: the attribution expression read
+> `authorship ? "verified_signature" : …`, so a sent row carrying a signature would have been
+> labelled **verified** — and we did not verify it, we produced it. **Direction decides first**, with
+> the negative asserted rather than commented.
+> **REMAINING (CELLO_Coder_1, holds the file):** carry `witnessed.sender_signature` from the submit
+> site to the sent transcript write.
 - **The sender's signature is stored with each leaf** (Decision 6(b)). Today the stored record has
   **no sender signature and no sender field** — a transcript row holds the message and a direction,
   and attribution comes entirely from local session state. The record must prove authorship
