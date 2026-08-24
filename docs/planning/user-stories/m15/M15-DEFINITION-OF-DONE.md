@@ -4004,6 +4004,21 @@ The byte-match workaround is holding; the fail-open underneath it is not fixed.
 >   actually form, does the standing receiver hole-punch to a direct connection and defeat the whole
 >   control at runtime while every test passes? My top worry)**, F9 (dead `advertisedAddress`).
 >
+> ### 🔴 F5 CONFIRMED BY READING, 2026-08-24 — **the control is defeated at runtime unless this lands**
+> `core/transport/src/node.ts` adds **`dcutr: dcutr()` unconditionally** — not gated on `nodeType`,
+> so a session node gets it — and its own comment states the mechanism: *"the standing receiver is
+> the inbound side of a relayed connection, **and the inbound side starts the upgrade**."*
+> **So a relay-only agent forms the circuit correctly and then HOLE-PUNCHES ITS WAY TO A DIRECT
+> CONNECTION, disclosing the address the setting exists to hide — while every test stays green,
+> because no test observes a live upgrade.** This is the F1 lesson repeating one layer down: the
+> first build failed by publishing too little, and this one fails by connecting too well.
+> **Fix path traced, not yet written** (files are under review pass 2 and must not move mid-review):
+> `CreateNodeOptions` gains `holePunch?: { enabled: boolean }` — matching the existing
+> `relayServer?.enabled` / `autonatResponder?.enabled` convention rather than inventing one — the
+> session-node factory forwards it, and `SessionNodeManager` sets it from the relay-only state at
+> the same place it already resolves the endpoint. `identify`'s listen-addr advertisement needs the
+> same treatment: announce the circuit only.
+>
 > ### ⚠️ PASS 1, 2026-08-24 (CELLO_Support) — **NOT DONE** — review returned TWO BLOCKING findings.
 > **The setting as shipped does not make the operator private. It takes them OFF THE NETWORK.** Not
 > flipped, not claimed; recorded here so the commits (`0508d5e`, `3b07a92`) cannot be mistaken for a
