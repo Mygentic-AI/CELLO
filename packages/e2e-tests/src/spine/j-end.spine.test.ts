@@ -158,18 +158,50 @@ describe("J-END — DOD-END-JOURNEY-1: an endorsement from Bob about Alice, end 
     // own account and phone stub makes him the stranger the story needs. Case (b) — the same-operator
     // POSITIVE — deliberately keeps the shared account, which is why the two cases must differ here
     // rather than in what the portal is told.
+    /**
+     * ⚠️ THIS FIXTURE WROTE A SUPERSEDED COLUMN, AND ITS OWN CHECK READ THE SAME SUPERSEDED COLUMN —
+     * `DOD-M15-SAMEOP-FALSEPOS-1`, which closed as **NOT a defect**: the flag was right and this
+     * journey was wrong.
+     *
+     * `CELLO-REPL-001` moved the reader off `agent_profiles.account_id`. The directory's
+     * `/internal/agent-by-pubkey` now resolves an agent's account from the replicated
+     * **`agent_account_links`** table, joined on the **stable `agent_id`** — pubkeys rotate, and that
+     * is the row an authorization decision is made from.
+     *
+     * So updating `agent_profiles.account_id` gave Bob a new account **that nothing reads**, the
+     * resolver still saw him sharing Alice's, and `same_operator: true` was the correct answer to the
+     * question actually being asked. **The linkage assertion was stale in the SAME direction**, which
+     * is why it passed and made the fixture look sound — *a stale fixture whose self-check is stale
+     * the same way cannot detect its own staleness.*
+     *
+     * Both halves now target the table the resolver reads. `agent_profiles` is still updated because
+     * the same-operator check also compares `phone_stub_hash`, which lives there.
+     */
     const bobAccount = randomUUID();
     psqlSpine(
       `INSERT INTO user_accounts (account_id, phone_stub_hash, chain_hash) ` +
       `VALUES ('${bobAccount}', 'jend-bob-phone-stub', 'jend-bob-chain'); ` +
       `UPDATE agent_profiles SET account_id = '${bobAccount}', phone_stub_hash = 'jend-bob-phone-stub' ` +
-      `WHERE lower(k_local_pubkey) = lower('${pubkeys["bob"]}')`,
+      `WHERE lower(k_local_pubkey) = lower('${pubkeys["bob"]}'); ` +
+      // THE ROW THE RESOLVER ACTUALLY READS. Keyed on agent_id, so it is resolved from the profile
+      // rather than assumed — and upserted, because `cello login` already linked Bob to the dev
+      // account and the PK is `agent_id`.
+      `INSERT INTO agent_account_links (agent_id, account_id) ` +
+      `SELECT agent_id, '${bobAccount}' FROM agent_profiles ` +
+      `WHERE lower(k_local_pubkey) = lower('${pubkeys["bob"]}') ` +
+      `ON CONFLICT (agent_id) DO UPDATE SET account_id = EXCLUDED.account_id`,
     );
     const linkage = psqlSpine(
-      `SELECT count(DISTINCT account_id) FROM agent_profiles ` +
-      `WHERE lower(k_local_pubkey) IN (lower('${pubkeys["bob"]}'), lower('${pubkeys["alice"]}'))`,
+      // Asserted against `agent_account_links`, NOT `agent_profiles` — checking the column the
+      // fixture writes rather than the one the product reads is what made this undetectable.
+      `SELECT count(DISTINCT l.account_id) FROM agent_account_links l ` +
+      `JOIN agent_profiles p ON p.agent_id = l.agent_id ` +
+      `WHERE lower(p.k_local_pubkey) IN (lower('${pubkeys["bob"]}'), lower('${pubkeys["alice"]}'))`,
     );
-    expect(linkage.replace(/\s/g, ""), "Bob and Alice must be DISTINCT operators for this hop").toContain("2");
+    expect(
+      linkage.replace(/\s/g, ""),
+      "Bob and Alice must be DISTINCT operators for this hop, in the table the resolver reads",
+    ).toContain("2");
 
     const statement = "Alice led the payments migration and shipped it with no incident.";
     const res = (await conn.call("cello_attestations_issue", {
