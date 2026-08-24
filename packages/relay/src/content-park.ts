@@ -40,6 +40,7 @@
  */
 
 import { Encoder, decode } from "cbor-x";
+import { DepositRateLimiter } from "./deposit-rate-limiter.js";
 import * as lp from "it-length-prefixed";
 import { randomBytes, createHash } from "node:crypto";
 import { verify } from "@cello-protocol/crypto";
@@ -97,6 +98,8 @@ export class ContentParkHandler {
   readonly #node: CelloNode;
   readonly #store: ContentStore;
   readonly #logger: Logger;
+  /** DOD-M15-RELAYABUSE-1: per-depositor deposit rate limiting. See `deposit-rate-limiter.ts`. */
+  readonly #rateLimiter = new DepositRateLimiter();
 
   constructor(opts: ContentParkHandlerOptions) {
     this.#node = opts.node;
@@ -106,8 +109,16 @@ export class ContentParkHandler {
 
   /** Register the content-park protocol handler. Call once after node.start(). */
   async start(): Promise<void> {
-    await this.#node.handle(CONTENT_PARK_PROTOCOL_ID, (stream) => {
-      void this.#handleStream(stream);
+    /**
+     * DOD-M15-RELAYABUSE-1 — **TAKE THE SECOND PARAMETER.** `CelloStreamHandler` has always passed
+     * the Noise-authenticated `remotePeerId` of the peer that opened this stream, and this handler
+     * registered a one-parameter callback and discarded it.
+     *
+     * That discard is what made me write — into code and into the DoD — that a park deposit "carries
+     * no depositor identity to key a quota on". It was false, and the datum was one parameter away.
+     */
+    await this.#node.handle(CONTENT_PARK_PROTOCOL_ID, (stream, remotePeerId) => {
+      void this.#handleStream(stream, remotePeerId);
     }, { maxInboundStreams: 1024 });
   }
 
@@ -141,7 +152,7 @@ export class ContentParkHandler {
     }
   }
 
-  async #handleStream(stream: Stream): Promise<void> {
+  async #handleStream(stream: Stream, remotePeerId?: string): Promise<void> {
     const iter = (lp.decode(stream) as AsyncIterable<unknown>)[Symbol.asyncIterator]() as AsyncIterator<unknown>;
     try {
       const first = await this.#readFrame(iter);
@@ -149,7 +160,7 @@ export class ContentParkHandler {
 
       switch (first["type"]) {
         case "content_park_deposit":
-          await this.#handleDeposit(stream, first);
+          await this.#handleDeposit(stream, first, remotePeerId);
           return;
         case "content_park_pull_request":
           await this.#handlePull(stream, iter, first);
@@ -223,12 +234,44 @@ export class ContentParkHandler {
     return true;
   }
 
-  async #handleDeposit(stream: Stream, frame: Record<string, unknown>): Promise<void> {
+  async #handleDeposit(stream: Stream, frame: Record<string, unknown>, remotePeerId?: string): Promise<void> {
     const recipientPubkey = asBytes(frame["recipient_pubkey"]);
     const contentHash = asBytes(frame["content_hash"]);
     const sessionId = asBytes(frame["session_id"]);
     const ciphertext = asBytes(frame["ciphertext"]);
     const rHex = recipientPubkey ? Buffer.from(recipientPubkey).toString("hex") : "unknown";
+
+    /**
+     * DOD-M15-RELAYABUSE-1 — rate limit BEFORE parsing or storing anything.
+     *
+     * Checked first deliberately: the point of a limiter is to stop spending work on a flood, and a
+     * check that runs after validation, hashing and a disk write has already spent it. The store's
+     * bounds decide how much can be STORED; this decides how fast it can be ATTEMPTED.
+     *
+     * ⚠️ Keyed on the Noise-authenticated peer id, which is a real cryptographic identity for the
+     * connection and is **cheap to rotate** — so this raises the cost of a flood and defeats the
+     * ordinary abusive case, and is honestly a speed bump rather than a gate. The hard bound is the
+     * store's.
+     */
+    const limit = this.#rateLimiter.check(remotePeerId);
+    if (!limit.allowed) {
+      this.#logger.warn("content.park.rate_limited", {
+        remotePeerId: remotePeerId ?? "(none)",
+        recipientPubkey: rHex,
+        attempts: limit.count,
+        retryAfterMs: limit.retryAfterMs,
+        impact:
+          "this peer exceeded the per-peer deposit rate, so the deposit was refused before any " +
+          "validation or disk write — the depositor keeps its copy and may retry after the window",
+      });
+      await this.#respond(stream, {
+        type: "content_park_deposit_ack",
+        content_hash: contentHash ?? new Uint8Array(0),
+        ok: false,
+        reason: "rate_limited",
+      });
+      return;
+    }
 
     if (!recipientPubkey || !contentHash || !ciphertext || !sessionId) {
       await this.#respond(stream, {
