@@ -12,7 +12,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { expectMatches, expectContains } from "../spine/expect-present.js";
+import { expectMatches } from "../spine/expect-present.js";
 
 /** Run `fn`, return the error it threw, or null. */
 function threw(fn: () => void): Error | null {
@@ -67,31 +67,64 @@ describe("DOD-M15-CLOSEROOT-1: an assertion on an absent value must keep its dia
     expect(threw(() => { expectMatches("a".repeat(64), "should pass", /^[a-f0-9]{64}$/); }), "the honest case must not throw").toBeNull();
   });
 
-  it("★★ a NON-STRING is named as such, not reported as a pattern mismatch", () => {
+  it("★★ FALSY NON-STRINGS are named by TYPE, never reported as absent", () => {
     /**
-     * `toMatch` on a number throws the same way `toMatch` on undefined does. A field that arrived as
-     * `0` or `false` is a producer bug, and reporting it as "did not match /^[0-9a-f]{64}$/" sends
-     * the reader to the regex.
+     * ⚠️ THIS TEST USED `42` AND THEREBY MISSED THE ENTIRE POINT — review pass 1.
+     *
+     * The clause is that a field arriving as `0` or `false` is a PRODUCER bug and must not be
+     * reported as a pattern mismatch. `42` is truthy, so it sailed past the `.toBeTruthy()` presence
+     * gate and reached the type check — the one path that was already correct. The two values the
+     * clause names took the OTHER branch and were reported as **"ABSENT (undefined/null)"**, which
+     * is a cause that did not occur.
+     *
+     * So the test picked the one non-string that could not expose the defect its own comment
+     * described. Now it uses exactly the values the clause is about.
      */
-    const err = threw(() => { expectMatches(42, "the submission id", /^[0-9a-f]{64}$/); });
-    expect(err).not.toBeNull();
-    expect(String(err?.message), "the type must be named").toMatch(/got number/);
+    for (const [value, typeName] of [[0, "number"], [false, "boolean"], ["", "string"]] as const) {
+      const err = threw(() => { expectMatches(value, "the submission id", /^[0-9a-f]{64}$/); });
+      expect(err, `${typeName}: a non-matching value must fail`).not.toBeNull();
+      expect(
+        String(err?.message),
+        `${typeName}: reporting a value the producer DID produce as absent sends the reader to the wrong subsystem`,
+      ).not.toMatch(/ABSENT/);
+    }
+    // And the type is named, so the reader is sent to the producer rather than to the regex.
+    expect(String(threw(() => { expectMatches(0, "x", /a/); })?.message)).toMatch(/got number/);
+    expect(String(threw(() => { expectMatches(false, "x", /a/); })?.message)).toMatch(/got boolean/);
+    // An empty string IS a string, so it fails honestly on the pattern rather than on the type.
+    expect(String(threw(() => { expectMatches("", "x", /a/); })?.message)).not.toMatch(/got /);
   });
 
-  it("★★ toContain has the SAME hazard, which is why expectContains exists", () => {
-    /**
-     * Asserted rather than assumed — `expect-present.ts` says so in a comment and this is what makes
-     * that comment true. If `toContain` did NOT throw here, `expectContains` would be dead weight.
-     */
-    const bare = threw(() => { expect(undefined, "THE-DIAGNOSTIC").toContain("payments migration"); });
-    expect(bare, "toContain must also throw on undefined").not.toBeNull();
-    expect(
-      String(bare?.message).includes("THE-DIAGNOSTIC"),
-      "and must also discard the message — if not, expectContains is unnecessary",
-    ).toBe(false);
+  it("★ null takes the same path as undefined — both are ABSENT", () => {
+    // Same code path, one line, and it was uncovered: the helper tests `=== undefined || === null`
+    // and only the first was ever exercised.
+    const err = threw(() => { expectMatches(null, "the root", /^[0-9a-f]{64}$/); });
+    expect(String(err?.message)).toMatch(/ABSENT/);
+    expect(String(err?.message)).toContain("the root");
+  });
 
-    const guarded = threw(() => { expectContains(undefined, "Bob's words, verbatim", "payments migration"); });
-    expect(String(guarded?.message)).toContain("Bob's words, verbatim");
-    expect(String(guarded?.message)).toMatch(/ABSENT/);
+  it("★★ toContain does NOT have this hazard — the claim I shipped was false, and measured here", () => {
+    /**
+     * ⚠️ THE RETRACTION, KEPT AS A TEST RATHER THAN DELETED.
+     *
+     * The first version of this file asserted that `toContain` discards its message exactly as
+     * `toMatch` does, described that as *"asserted rather than assumed"*, and shipped an
+     * `expectContains` to work around it. **It was never executed, and it is false** — this test
+     * went red on main.
+     *
+     * `toMatch` throws a raw `TypeError` from `@vitest/expect` before the message is attached.
+     * `toContain` falls through to chai's `include`, which throws an `AssertionError` WITH the
+     * message. So the workaround was for a hazard that does not exist, and it is gone.
+     *
+     * Kept as a live assertion because the retraction is only durable if something checks it: if a
+     * future vitest changes `toContain` to match `toMatch`'s behaviour, this goes red and tells us
+     * the helper needs a second function after all.
+     */
+    const err = threw(() => { expect(undefined, "THE-DIAGNOSTIC").toContain("payments migration"); });
+    expect(err, "toContain must still reject undefined").not.toBeNull();
+    expect(
+      String(err?.message).includes("THE-DIAGNOSTIC"),
+      "toContain PRESERVES the custom message — if this ever becomes false, expectContains must come back",
+    ).toBe(true);
   });
 });
