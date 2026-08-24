@@ -7132,3 +7132,85 @@ lane where two of tonight's findings came from."*
    type assertion as evidence of optionality, not as its absence.
 3. **A `.not.` assertion over a possibly-absent subject is hollow by construction.** Assert it threw
    first, then assert the message positively.
+
+---
+
+## Entry 65 — the check ran in production, and the log says `verified / both`
+
+`DOD-M15-SEALWIRE-1` bullets 3 and 4, deployed and PROVEN LIVE 2026-08-24 ~02:35 UTC.
+
+### The evidence, first, because everything else is process
+
+```
+seal.final_root.verified   coverage=both   sessionId=b502a51ffb3f28baff4183f3b2d10577
+seal.certificate.legibility.built
+seal.certificate.delivered
+```
+
+**Not `not_carried`. Not a fallback.** The directory compared the leaves the relay presented against
+**both participants' own signed `final_root`** and they matched. A real cross-machine session:
+`CELLO_Coder_1` on this laptop, `Miss_Chelly_H` on the EC2 Hermes box, over the GCP relay, notarized
+by the GCP directory. Receipt on this side: `sealed_root 20623ff6…`, 3 content leaves, both
+participants `attestation_mode: live`.
+
+**This is the first seal in CELLO's history where the directory could actually check that the relay
+delivered what the participants said.** Before it, every root comparison it could make used values
+the relay itself supplied — arithmetic, not evidence.
+
+### What shipped, and the order it shipped in
+
+Five legs, two repos, and the order was the whole safety argument:
+
+1. client computes the SEAL payload — always did
+2. **client SENDS it** — npm, `daemon 0.0.182` / `cli 0.0.189` / `connect 0.0.157`
+3. **relay ACCEPTS it** — ctrl leaf only, must decode as a SEAL payload for that session
+4. **relay FORWARDS it** in `seal_submission`
+5. **directory VERIFIES it** against the client-signed root
+
+Relay rolled first, directory second. Legs 3–4 only accept and forward, so they are inert against a
+directory that does not read them; leg 5 is the one that starts REFUSING, so it went onto a fleet
+already able to carry what it asks for. Receiver-first, one layer up from the wire.
+
+### The capacity discipline, because the instruction was "try not to lose the instance"
+
+The August outage playbook says the MACHINE TYPE is the variable, not the zone, and that
+trial-and-error through terraform costs a full apply per attempt. So **all five (zone, machine-type)
+pairs were probed with a throwaway instance BEFORE any roll** — including `us-central1`, the zone
+that went down. All five had capacity; no downsize was needed.
+
+That is the difference between "we might not get the instance back" and a known answer *before* the
+MIG deletes it. It cost five create/delete cycles and removed the only irreversible risk in the
+operation.
+
+### A 90-second window that looked exactly like an outage
+
+Straight after the `us-central1` roll, an anti-entropy query over 90 seconds returned **only
+`europe-west1`** — reading as two of three directory nodes missing, which is past what the threshold
+tolerates. A 4-minute window showed all three healthy. The node had not been up long enough to fill
+the shorter window.
+
+**The baseline in the playbook is quoted per 3 minutes and I queried 90 seconds.** Nothing was wrong;
+the measurement was. Recorded in `GCP-STATE.md` because the obvious reaction — roll back, or start
+chasing a node that is fine — is the expensive one.
+
+### What this does NOT prove, stated because a green seal is not the evidence
+
+**`not_carried` is still tolerated**, and it must be: every client is un-upgraded until it upgrades,
+and refusing an absent payload would have taken the federation down the moment this shipped. So
+"verified" and "nothing was carried" produce the SAME outcome for the two participants — a completed
+seal and a receipt. **The distinction exists only in the directory's log**, which is why the proof
+above is a log line and not a receipt.
+
+That is `DOD-M15-NOTCARRIED-REFUSE-1`: once clients and relays all carry it, absence must become a
+refusal, or the guard remains optional for exactly the party it guards against.
+
+### Rules earned
+
+1. **Probe the irreversible thing before you make it irreversible.** Capacity is knowable in advance
+   for the cost of one throwaway instance; discovering it after the MIG has deleted your node is a
+   different situation entirely.
+2. **Match the measurement window to the documented baseline.** A window shorter than the signal's
+   period reads a healthy node as a dead one, and the reaction to that misreading is worse than the
+   misreading.
+3. **When a permissive fallback exists, the receipt cannot be the evidence.** Verify at the layer
+   that can tell the two apart — here, the directory's own verdict line.
