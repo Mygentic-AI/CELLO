@@ -3849,6 +3849,29 @@ is not.** The test encodes a superseded threshold.
   nothing about refusal, which is worse than the red one — the red at least says something is
   unexamined. Rework the scenario for T=2, or state in writing that refusal is untested.
 
+- **✅ THE REWORK, derived 2026-08-24 — the scenario is fixable and the fix is a different PAIRING,
+  not a different assertion.** With the client always holding a share, the group is 2-of-4:
+
+  | directories suspended | who can still sign | vs T=2 | outcome |
+  |---|---|---|---|
+  | 1 of 3 | client + 2 | 3 ≥ 2 | signs |
+  | **2 of 3** | client + 1 | **2 = 2** | **signs** ← the current test expects a block here |
+  | **3 of 3** | client alone | **1 < 2** | **BLOCKS** |
+
+  **So the test's premise is not merely stale — under T=2 its chosen pair (2 → block, 1 → signs) has
+  the same outcome on both sides**, which is why it can no longer distinguish the property it is
+  named for. **The pair that CAN is (3 → block, 2 → signs).** That is a stronger test than the
+  original: *two of three directories refusing is not enough to stop an agent* is exactly the
+  sovereign-node redundancy claim, and *all three refusing does stop it* is exactly the kill switch.
+  One scenario, both halves, under the threshold we actually ship.
+  **The existing agent-B control and the fresh-`frost.ceremony.refused.revoked` check carry over
+  unchanged** — they already prove the refusal is agent-scoped and that a refusing node was genuinely
+  asked rather than skipped.
+  **Also in that file, taken from `CELLO_Coder_1`'s sweep:** line 172's `.pubkey!` — the non-null
+  assertion tells the type system a value is present while the runtime may hand back `undefined`, so
+  the failure surfaces later and elsewhere. Same mechanism as `j-upgrade-bilateral`. It goes in this
+  pass rather than as a drive-by.
+
 ### `DOD-M15-TOOLDESC-SCAN-1` — The claim scanner can see MCP tool descriptions
 **POST-LAUNCH** (§0z.1): the launch risk is whether the shipped descriptions are HONEST, and
 `DOD-M15-TIERTEXT-1` audits them by hand in this milestone. This line is the durable control that
