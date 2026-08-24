@@ -1731,7 +1731,42 @@ online in all three and nothing that was broken. Most of a day lost in the wrong
 > also rewritten, but tracing it showed the line is UNREACHABLE — a compiler backstop, not the
 > source of the incident, and the comment now says so rather than sending the next reader wrong.
 
-### `DOD-M15-REFUSED-INBOUND-SILENT-1` — ❌ A message we refused is a thing the operator gets told
+### `DOD-M15-REFUSED-INBOUND-SILENT-1` — ✅ A message we refused is a thing the operator gets told
+> **CLOSED 2026-08-24 (CELLO_Support). TWO review passes — the cap — verdict quoted: "FLIP".**
+> *"The defect this line was written about is closed and proven at the exit that produces it: an
+> operator who waits and hears nothing is now told their peer's messages are arriving and being
+> refused, why, and that waiting will not help… All four pass-1 blocking findings are real fixes, not
+> cosmetic — I re-derived the boundary arithmetic, the consumer keying, the guidance pairing and the
+> whitelist reader independently."*
+> Gate: **14/14** on the unit file, **2862/2862** on the full `core/daemon` suite, typecheck + lint
+> clean, revert probe run by hand against the correct line.
+>
+> **⚠️ ONE PATTERN COST THREE ROUNDS, and it is the durable lesson: I kept building a value and never
+> asking WHO READS IT.** (1) the store had no reader, so I tested the store; (2) the IPC tests I
+> added passed `since_seq: 0` — a finite number — so they took the batch exit and never ran the quiet
+> exit they were named for; (3) the salted-status field went on the session record, and
+> `selectSessions` is a WHITELIST, so it never reached the operator's surface at all. **Each time the
+> test passed and the operator saw nothing.**
+>
+> **CORRECTION — a claim in this entry and in a commit message was OVERSTATED.** I wrote that
+> `SELECT *` was *"shipping the raw `content_salt` BLOB to both listing surfaces"*. Pass 2 checked all
+> 19 `getSessionRecord` call sites and the four listing call sites: **every one reads named fields and
+> none returns a record wholesale, so the salt never reached an operator.** The change is good
+> hygiene with zero risk — an in-process method was carrying a salt it has no use for — but it was
+> not a leak, and the record said it was.
+>
+> **CARRIED as ACs on a later unit** (pass 2's list, in its order): the two-connection IPC test — the
+> `connectionId` threading is correct but untested, so passing `"default"` at all three call sites
+> keeps every test green while the sibling-consumption defect is fully restored; refusals on the
+> `counterparty_gone`, `delivery_impaired` and `content_undeliverable` exits — **`counterparty_gone`
+> is the sharp one**, it tells the operator their peer *"may have crashed or gone offline… call
+> `cello_close_session` to seal"* while the daemon holds the real reason in memory, steering them to
+> seal on a network story for a version fault; tests for the sealed and batch spreads, neither of
+> which any test protects; and **re-classifying `session_size_limit_exceeded` out of POST-LAUNCH** —
+> pass 2 makes the case that once a session crosses the sender's tier byte cap **every** later message
+> is refused for the life of the session, silently, which is the same permanent-quiet shape as the
+> three that are wired, and the remedy is entirely the operator's. **That reclassification is Andre's
+> call under the freeze, not mine.**
 **Found while invariant-checking `DOD-M15-SEALWIRE-1` part B1 (→ Entry 43). PRE-EXISTING, not
 introduced there** — `content_hash_mismatch` has had exactly this shape since it was written; B1
 added two more refusal reasons to the same silent path, which is what made it visible.
