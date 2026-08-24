@@ -19,6 +19,7 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { RELAY_PARK_REFUSALS } from "../relay-park-refusals.js";
 import { createHash } from "node:crypto";
 import {
   CONTENT_PARK_PROTOCOL_ID,
@@ -31,6 +32,19 @@ import {
 // being pinned.
 const CANONICAL_PROTOCOL_ID = "/cello/content-park/1.0.0";
 const CANONICAL_AUTH_DOMAIN = "CELLO-CONTENT-PARK-AUTH-v1";
+
+/**
+ * DOD-M15-RELAYABUSE-1 — the canonical park-refusal codes, transcribed from
+ * `@cello-protocol/protocol-types` (`RELAY_PARK_REFUSALS`).
+ *
+ * ⚠️ Transcribed on purpose, exactly like the two constants above: the point of a parity test is to
+ * fail when the two sides DRIFT, and importing the very symbol under test would make it tautological.
+ */
+const CANONICAL_PARK_REFUSALS = {
+  RATE_LIMITED: "rate_limited",
+  STORE_FULL: "content_store_full",
+  RECIPIENT_FULL: "content_store_recipient_full",
+} as const;
 
 function canonicalAuthMsg(nonce: Uint8Array, recipientPubkey: Uint8Array): Uint8Array {
   const domain = new TextEncoder().encode(CANONICAL_AUTH_DOMAIN);
@@ -74,5 +88,31 @@ describe("content-park auth construction parity (F4)", () => {
 
     expect(a).not.toBe(b); // nonce affects the message
     expect(a).not.toBe(c); // recipient affects the message
+  });
+
+  /**
+   * ⚠️ THE CROSS-REPO GUARD THIS FAMILY WAS MISSING. The three refusal strings were inline literals
+   * in two repos, agreeing only because someone checked by hand once — and verification-once is not
+   * a guard.
+   *
+   * What drift costs, concretely: the relay renames `rate_limited`, the client's branch stops
+   * matching, and an operator being deliberately throttled by a healthy relay is told their message
+   * will be re-sent *"when the relay link is back"* — a link that was never down, and a trigger that
+   * will never fire. That is the exact defect `DOD-M15-RELAYABUSE-1` removed, reintroduced by an edit
+   * nobody would think of as a protocol change. Every test on both sides stays green.
+   */
+  it("the relay's park-refusal codes match the canonical wire values", () => {
+    expect(RELAY_PARK_REFUSALS.RATE_LIMITED).toBe(CANONICAL_PARK_REFUSALS.RATE_LIMITED);
+    expect(RELAY_PARK_REFUSALS.STORE_FULL).toBe(CANONICAL_PARK_REFUSALS.STORE_FULL);
+    expect(RELAY_PARK_REFUSALS.RECIPIENT_FULL).toBe(CANONICAL_PARK_REFUSALS.RECIPIENT_FULL);
+  });
+
+  it("and the set is COMPLETE — a new code must be added to both sides, not just one", () => {
+    /**
+     * A value guard alone passes if the relay quietly gains a fourth refusal the client has never
+     * heard of: the client falls through to the generic outage wording for a cause that has a name.
+     * Counting the keys makes adding one a two-repo edit by construction.
+     */
+    expect(Object.keys(RELAY_PARK_REFUSALS).sort()).toEqual(Object.keys(CANONICAL_PARK_REFUSALS).sort());
   });
 });

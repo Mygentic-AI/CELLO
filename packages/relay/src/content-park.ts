@@ -41,6 +41,7 @@
 
 import { Encoder, decode } from "cbor-x";
 import { DepositRateLimiter, DEFAULT_DEPOSIT_RATE_LIMIT, type DepositRateLimitConfig } from "./deposit-rate-limiter.js";
+import { RELAY_PARK_REFUSALS } from "./relay-park-refusals.js";
 import * as lp from "it-length-prefixed";
 import { randomBytes, createHash } from "node:crypto";
 import { verify } from "@cello-protocol/crypto";
@@ -291,7 +292,7 @@ export class ContentParkHandler {
         type: "content_park_deposit_ack",
         content_hash: asBytes(frame["content_hash"]) ?? new Uint8Array(0),
         ok: false,
-        reason: "rate_limited",
+        reason: RELAY_PARK_REFUSALS.RATE_LIMITED,
         // DOD-M15-RELAYABUSE-1 review F2: the relay KNOWS when the window clears, and until now kept
         // it to itself — logged, asserted in a test, and never put on the wire. The client retries a
         // deferred park only on EVENTS (boot, agent start, drain hook, signaling reconnect), so the

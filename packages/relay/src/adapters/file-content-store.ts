@@ -53,6 +53,7 @@ import { createHash } from "node:crypto";
 import { fsync } from "node:fs";
 import { join } from "node:path";
 import type { Logger, ContentStore, ContentStoreEntry } from "@cello-protocol/interfaces";
+import { RELAY_PARK_REFUSALS } from "../relay-park-refusals.js";
 import { CONTENT_STORE_TTL_MS, CONTENT_STORE_MAX_BYTES, CONTENT_STORE_MAX_ENTRIES, CONTENT_STORE_MAX_RECIPIENT_BYTES, CONTENT_STORE_MAX_RECIPIENT_ENTRIES } from "@cello-protocol/interfaces";
 
 export type { ContentStore, ContentStoreEntry };
@@ -358,8 +359,8 @@ export class FileContentStore implements ContentStore {
       if (bucket.size === 0) this.#index.delete(rHex);
       throw new Error(
         incomingBytes > this.#maxRecipientBytes || this.#maxRecipientEntries < 1
-          ? "content_store_recipient_full"
-          : "content_store_full",
+          ? RELAY_PARK_REFUSALS.RECIPIENT_FULL
+          : RELAY_PARK_REFUSALS.STORE_FULL,
       );
     }
 
