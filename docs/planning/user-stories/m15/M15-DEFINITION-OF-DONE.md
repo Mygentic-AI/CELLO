@@ -1789,6 +1789,14 @@ been withdrawn.
 > routing around the one honoring node — that is the production gap"*); this run measures it end to
 > end and shows the agent does not even need to route around anything.
 >
+> ## 🔒 CLAIM AMENDED 2026-08-24 — `DOD-M15-SALTANNOUNCE-LATE-1`, and it enters `core/daemon`
+> **Files now held, beyond the spine lane:** `cello-client/core/daemon/src/session-node-manager.ts`
+> — specifically `#wireSessionLiveness` and its `onPeerConnect` registration. Amended **before**
+> writing, per the rule this milestone paid for. `CELLO_Support` holds `getStandingReceiverInfo` in
+> that same file and `RELAYONLY-1`; I touch neither.
+> **The unit:** after the announce handler is registered, sweep for a counterparty already attached
+> and announce for it — the connect event cannot fire for a connection that predates the listener.
+>
 > ## 🔒 CLAIMED 2026-08-24 by `CELLO_Coder_1` — do not start work on this line
 > **Files held:** `packages/e2e-tests/src/spine/*` and the journey files under it. Nothing in
 > `core/daemon` unless a triage cause lands there, and I will amend this block before touching one.
