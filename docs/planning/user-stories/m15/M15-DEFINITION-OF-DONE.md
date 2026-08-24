@@ -4629,10 +4629,16 @@ Parallel with Tier 4 — different disciplines, no shared files.
 > bound — satisfied by a deposit that always throws — and now asserts the bucket is non-empty and
 > that the NEWEST message survived, which is exactly what the bad ordering destroyed.
 > **Gate: relay + interfaces 30 files / 314 tests / exit 0; typecheck 0.**
-> **CARRIED, named rather than skipped:** the relay startup refusal has **no test** (spawn-based; the
-> pattern exists in `gcp-entrypoint.test.ts`); `InMemoryContentStore` is unbounded, so **no spine test
-> can ever see a refusal**; and `< 2` is a floor — a 2-of-3 set still passes, and cross-checking
-> against `CELLO_DIRECTORY_ENDPOINTS` would close it.
+> **✅ CARRY CLOSED — the startup refusal now HAS a test**, spawned through the real
+> `dist/bin/relay.js` because the assertion is an exit code. Three cases, and the second is what
+> keeps the first honest: one pubkey exits 1 naming the variable; **two pubkeys get PAST the guard**
+> and fail later on a different cause — without that, "exits 1" is satisfied by a relay that cannot
+> start for any reason, and a broken binary would pass; and `local` is exempt, which is not
+> hypothetical since the spine harness runs a single directory. **Revert test RUN** (remove the
+> guard, rebuild, re-run): reddens exactly the first case and leaves the other two green.
+> **STILL CARRIED:** `InMemoryContentStore` is unbounded, so **no spine test can ever see a
+> refusal**; and `< 2` is a floor — a 2-of-3 set still passes, and cross-checking against
+> `CELLO_DIRECTORY_ENDPOINTS` would close it.
 >
 > ### ✅ TWO ITEMS DONE 2026-08-24 (CELLO_Support) — now `RELAYPARK-1` and `RELAYPUBKEYS-1`.
 > **THE PARK STORE IS NOW ACTUALLY BOUNDED.** The store documented its own hole: eviction only scans
