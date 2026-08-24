@@ -37,10 +37,35 @@ then `content_salt` + `frozen_at`/`frozen_reason`. `diverged_at` carries a comme
 
 ## RESUME STATE — CELLO_Coder_1 (overwrite in place; CELLO_Support must not edit)
 
-> ### 🟢 `SEALWIRE-1`: bullets 1, 2, 3, 4, 6, 7, 8 CLOSED. **Bullet 5 is REOPENED — mine.**
-> Bullets 3+4 are **live in GCP production** and the check has been observed on a real seal
-> (`seal.final_root.verified coverage=both`). Bullet 8's assertion went green on its first live seal.
-> Both repos clean and pushed. Gate on `core/daemon`: **276 files, 2887 tests, 0 failures.**
+> ### ✅ `SEALWIRE-1` IS CLOSED — all eight bullets, both review passes, every blocking finding fixed.
+> 30 seal tests green across six files. Two limits are NAMED in the DoD rather than hidden by the tag:
+> a hold released across a daemon RESTART still loses its proof (`DOD-M15-HELD-AUTHORSHIP-1`, needs a
+> schema column, deferred by ruling), and the away-reply path has a call-site RATCHET rather than a
+> runtime value-proof (the away-path runtime test is a named AC).
+>
+> ### 🔵 CURRENT LINE: `DOD-M15-SPINERED-1` — TRIAGE UNIT COMPLETE, REVIEW IN FLIGHT.
+> **Claimed in the DoD before any code** (`packages/e2e-tests/src/spine/*`). The other lane holds
+> `RELAYONLY-1` and `getStandingReceiverInfo`; I do not touch either.
+>
+> **All 36 spine files are now measured. The receipt's 49 failures resolve to SIX causes**, and the
+> lane is far healthier than 21/36 implied:
+> - ✅ **CLI banner glued into JSON** (6) — all green.
+> - ✅ **Stale `j-spine` assertions** (5) — fixed here; `j-spine` is **7/7 from 4/7**. Four were state
+>   vocabulary the product deliberately removed (`registered`, `online`-after-start, `current`,
+>   `status.connections`); the fifth was a local race reported as a directory fault.
+> - 🔴 **Salt split / announce never fires** (8: `j-documents` 7, `j-stale-session` 1) — **the one live
+>   defect.** `session.salt.announced` is ZERO. Producer identified; hypothesis + one-query check in the
+>   DoD. **This is the next unit.**
+> - 🟡 **Tests compute the UNSALTED content hash** (`j-content` 5) — 1 fixed, 4 same cause.
+> - ✅ portal container (2) · 🅿️ `UNILATERAL-NOTARIZE-1` (3) · 🔎 individually-caused (6).
+>
+> **Filed, not fixed (freeze):** `DOD-M15-REVOKED-READS-OFFLINE-1` — a revoked agent reads as merely
+> *offline* to the operator, because the client's discovery lookup has no revoked state and never
+> reaches the directory's correct `agent_revoked` gate.
+>
+> **Measured and NOT ruled on — for Andre:** a session assignment is produced **without asking two of
+> three directories** (`node1=silent node2=silent`, 48 captured log lines each, so the capture is
+> proven). Consequence: **the kill switch only bites on the node that brokers the session.**
 
 - **🔴 READ THIS FIRST — THE LAUNCH BAR REPRIORITISES THIS LANE, and I had it wrong for hours.**
   Counted 2026-08-24 by `CELLO_Support` against the milestone's own marking: **35 lines open, and
