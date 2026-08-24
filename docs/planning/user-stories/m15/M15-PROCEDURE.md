@@ -291,6 +291,27 @@ its own.
 > only there to prove the search could see.** Without it that would have been a third confident false
 > negative in one session.
 
+> ### 🎯 A MUTATION THAT REDDENS IS NOT YET EVIDENCE — NAME THE WRITER
+>
+> **`SEALWIRE-1` bullet 5 was CLOSED on a mutation that reddened for the wrong reason.** Two
+> mutations, same file, opposite results — and only one of them was run before the tag flipped:
+> - remove the proof from `recordTranscriptMessage(...)` → **RED**. *Stopped here. Called it covered.*
+> - remove it from `placeOwnLeaf(..., authorship)` → **GREEN.** Never run.
+>
+> **Both writers feed the same row, so the red came from the one that was already covered.** On the
+> delivered path `placeOwnLeaf`'s argument is dead by construction — the row's proof arrives from the
+> call below it. That argument is load-bearing in exactly ONE case, when the leaf is HELD, and on
+> that path the other writer never runs at all. **The uncovered path was the whole point of the
+> argument, and a green tag was placed on top of it.**
+>
+> **The check:** after a mutation reddens, ask **WHICH code path produced the failure**, and whether
+> it is the one the mutation was aimed at. **If two paths can satisfy the same assertion, a red proves
+> only that AT LEAST ONE of them works.** Mutate each independently, or assert something only the
+> target path can produce.
+>
+> This is *"confirm it failed for the reason you think"* applied to mutation testing — the same rule,
+> one level out, and the level where a green tag gets attached to an unexercised path.
+
 **A false CAUGHT is worse than a false GREEN, and this is why the rule exists.** A false green leaves
 the suspicion alive — the thing still looks unproven, and someone eventually re-checks. A false
 caught **retires** the suspicion: the case is recorded as covered and nobody looks again. The second
