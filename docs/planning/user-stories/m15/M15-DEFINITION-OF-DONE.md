@@ -3642,6 +3642,42 @@ root means. Both repos; version-bump ACs on both sides.
 >   with a receipt. **The proof is not lost by waiting; it is only lost by not capturing it, which is
 >   what bullet 5 just fixed.**
 >
+> ### 🟡 CLOSING STATUS 2026-08-24 — the held path is COVERED and mutation-proven; two limits are named, not buried
+>
+> **The gap that reopened this bullet is closed.** `placeOwnLeaf`'s `authorship` argument is dead by
+> construction on the DELIVERED path — the row's proof arrives from the `recordTranscriptMessage`
+> call on the next line — and is load-bearing in exactly one case: a leaf **HELD** behind a sequence
+> gap, where `recordTranscriptMessage` never runs at all because it sits inside `if (placed.placed)`.
+> The held entry is then the only carrier to the eventual row. Measured, and it is the asymmetry that
+> proved the first close wrong:
+>
+> | mutation | result |
+> |---|---|
+> | `recordTranscriptMessage(..., sentAuthorship(sendResult))` → `undefined` | **RED** |
+> | `placeOwnLeaf(..., "msg", sentAuthorship(sendResult))` → `undefined` | **GREEN across the whole suite** |
+> | the carry into the held entry (`...(authorship ? { authorship } : {})`, `session-node-manager.ts:8587`) → deleted | **RED** on the held-path test, the other four in its file GREEN |
+>
+> **All six `placeOwnLeaf` call sites verified to carry the proof**: `session-content-handlers.ts`
+> 575 and 625, `daemon.ts` 1443/1677/1691 (the away-reply path — the highest-traffic sent-writer, and
+> the three that were silently omitting it), and `daemon.ts` 4860, the document transport, which
+> passes `undefined` with its reason written down because docs never go through `sendContent`.
+>
+> **⚠️ LIMIT 1 — A HOLD RELEASED ACROSS A DAEMON RESTART STILL LOSES THE PROOF.**
+> `held_content` has no authorship columns, so `#restoreHeldContent` rebuilds entries without one and
+> the released row commits `self_authored` with **no signature** — indistinguishable from a send the
+> relay never witnessed. It **cannot** be reconstructed (the signature covers Structure-1 bytes the
+> new process no longer holds) and **must not** be fabricated. It is announced at release rather than
+> hidden, and tracked as **`DOD-M15-HELD-AUTHORSHIP-1`**. **This bullet's green does not cover it,
+> and the tag must not be read as if it does.**
+>
+> **⚠️ LIMIT 2 — what is stored is still not a proof**, per the correction above: the columns are
+> under no root and the signed bytes are not stored beside the signature. *"A durable record of a
+> value we already held, correctly labelled."*
+>
+> **Both limits are the reason this says 🟡 and not ✅.** The tag flips when the unit review's verdict
+> is quoted here — **this bullet has been declared done twice on evidence that could not see its own
+> failure, and a third time on my say-so is not a close.**
+>
 > **The COST argument was also wrong, and on a premise nobody had checked.** It assumed the signature
 > exists only after the relay ack, forcing either a mutation of the append-only transcript or the
 > operator's words held hostage to that ack. **Neither: `keyProvider.sign(structure1)` runs BEFORE
