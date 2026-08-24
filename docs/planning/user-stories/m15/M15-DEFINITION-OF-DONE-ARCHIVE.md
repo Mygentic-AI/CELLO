@@ -3877,6 +3877,19 @@ lifetime. Client-side, small, standalone.
 > runner is busy, do not mutate at all until the slot is free.** I was blocked mid-mutation four
 > times that night; every one was a window for this.
 >
+> ### ⚠️ AND FOR A WHILE BOTH TESTS WERE PASSING ON A THROW — the finding that has no other home
+> After the release fix, the fake relay client had no `submitLeaf`. So the submit threw a
+> `TypeError`, and because the `finally` runs on the throw path too, the release still happened and
+> every leak assertion still held. **Both tests were green against an exception, and the normal path
+> — a submit that COMPLETES — had never been exercised at all.**
+> Nothing would have said so: a test that passes on a throw is indistinguishable, from the summary,
+> from one that passes on the real path. What caught it was an assertion added for pedantry — a
+> no-throw check replacing a bare `.catch(() => undefined)`, which had been swallowing the TypeError
+> whole. The fake now completes a submit and `submitCount() > 0` is a precondition, so a regression
+> back to the throw path reddens instead of passing quietly.
+> **Twice in this one unit an assertion added "just to be careful" caught a real hole, and both were
+> the same shape: an error firing BEFORE the code under test runs, with the test satisfied anyway.**
+>
 > **Revert proofs, run one at a time on the shipped tree:** remove the shutdown close loop → only the
 > shutdown test reddens; remove `releaseDetached()` from the `finally` → only the release test;
 > drop the claim guard → only the passenger test. **CARRIED:** MEDIUM-4's revive-teardown detach has
