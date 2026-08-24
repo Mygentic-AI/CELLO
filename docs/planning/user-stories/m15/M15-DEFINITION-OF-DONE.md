@@ -1102,7 +1102,11 @@ compromised and could weaponize "signature mismatch" as a false accusation.
 - One relay is one witness; this becomes a decentralized detection layer only with
   `DOD-M15-RELAYFANOUT-1`.
 
-### `DOD-M15-DIRAUTH-1` — 🟡 Directory authentication cannot be silently skipped (remainder lives in `BOOTSTRAP-AUTH-1`)
+### `DOD-M15-DIRAUTH-1` — ✅ Directory authentication cannot be silently skipped
+> ### ✅ CLOSED 2026-08-24 — its own stated condition is met.
+> This line held 🟡 deliberately, with *"it closes when `BOOTSTRAP-AUTH-1` does."* That line is now ✅,
+> so this closes with it. **Nothing was ever outstanding here** — everything inside it was done and
+> reviewed (the surfacing half plus two quick wins); the tag was held on another line's state.
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
 ### `DOD-M15-RELAYADMIN-KEYSET-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was 🟡 ANSWERED: the gap is real but small, and bounded by the idle sweep
@@ -1170,7 +1174,18 @@ outside that unit, and I am not opening it on a guess.**
   `DOD-M15-RELAYADMIN-REPLAY-1`. **Sequence them** — both change what this stream accepts, and
   shipping them apart is two fleet rolls.
 
-### `DOD-M15-BOOTSTRAP-AUTH-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was 🟡 The poisoned PEER ID is proven survivable; the poisoned ADDRESS stalls (→ `ADDR-1`); TLS not built
+### `DOD-M15-BOOTSTRAP-AUTH-1` — ✅ A poisoned bootstrap coordinate cannot impersonate a directory
+> ### ✅ CLOSED 2026-08-24 ON ANDRE'S RULING ("close it"). **RETITLED to what it protects.**
+> It previously demanded TLS on port 9090. Measurement says that buys almost nothing: the node roster
+> and every node's key are **signed and shipped in the client**, `/bootstrap` supplies only a dial
+> coordinate, and a coordinate whose peer id is not a declared member is **discarded before any dial**.
+> TLS would encrypt a channel whose contents are already authenticated by something the attacker
+> cannot forge. Descoping is Andre's call; he made it, and the retitle records what actually shipped.
+> **⚠️ This supersedes the `⬇️ OUT OF GATE` tag the other lane's Decision-16 sweep applied here.**
+> That ruling was about DOCUMENTS; this line was swept in with it. Andre ruled on this line
+> specifically, and "closed, retitled" is the narrower and correct disposition.
+> **CARRIED, so the tick covers nothing it did not earn:** `DOD-M15-BOOTSTRAP-ADDR-1` (a rogue
+> ADDRESS under a real peer id stalls this daemon's directory connection), plus the four review ACs.
 > ### ✅ THE UNPROVEN LINK IS NOW MEASURED, AND THE ANSWER IS STRONGER THAN THE SCOPING ASSUMED.
 > **2026-08-24 (CELLO_Support).** The scoping below called this line not-blocking on four points and
 > named the one it could not prove: *"that a client meeting a poisoned coordinate actually FAILS OVER
