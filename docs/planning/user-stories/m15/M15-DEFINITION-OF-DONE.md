@@ -1517,11 +1517,39 @@ hash-chained tables cannot verify on a freshly reset database after a fully gree
 > path** rather than needing a new one. Bounding it is the minimum change that makes the code do what
 > its own log line already claims.
 >
-> **🅿️ FILED, NOT BUILT — the freeze.** It is a behaviour change on a delivery path, and *how long* to
-> wait per holder is a product judgement (and whether to fan out in parallel at all). **Recorded with
-> the full chain so the decision needs no re-derivation.** User-visible: you accept an invitation to a
-> shared document and it hangs for a minute, because someone else in the document happens to be
-> offline.
+> **🅿️ THE BOUND IS FILED, NOT BUILT — and I checked that this is not decision theatre.**
+> The document layer's only existing bound is `RECONCILE_INFLIGHT_BOUND_MS = 60_000`, and its own doc
+> says what it is for: *"how long one attempt may hold the in-flight mark before the sweep stops
+> honoring it"* — a **background sweep**. Reusing it here does not work: 60 s per holder, with two
+> holders, is longer than the client's own 60 s timeout, so the hang survives the "fix". **An
+> interactive accept needs a bound the background path has no opinion about**, and picking one has a
+> real cost in both directions — too short falsely marks holders un-notified, which is a
+> membership-change correctness problem, and too long leaves the hang. **That is a genuine product
+> judgement, so filing it is correct rather than deferral.**
+>
+> **✅ WHAT IS *NOT* A JUDGEMENT, AND IS BUILT: THE SILENCE.** Right now the daemon logs **nothing**
+> while it blocks — invariant 2 says a failure is loud in the log *and* the agent response, and this
+> is loud in neither. A warn emitted **while the send is still outstanding** names the holder being
+> waited on, changes no behaviour, and turns an invisible hang into a diagnosable one. Shipped under
+> the freeze on that basis: observability, not behaviour.
+>
+> **⚠️ AC — THE NEW WARN IS UNCOVERED, AND I FAILED TWICE TO COVER IT.** Recorded rather than implied,
+> because an untested log line is the *"comment that happens to execute"* shape this milestone hunts.
+> Both attempts were measured, not guessed:
+> 1. Stalled `cello_doc_write` — the warn never fired, **correctly**: a content write is not an
+>    amendment and never reaches `fanOutAmendment`.
+> 2. Stalled `cello_doc_accept`, the exact chain the live timeouts came from — still nothing. The
+>    diagnostic in the failure message answered why: **`sends attempted: []`**. This fixture's plain
+>    proposal-accept fans out to **nobody**.
+>
+> **The accept that DOES fan out is the JOIN path** (an admin invites a third party), which needs the
+> three-party setup `JOIN-1` already builds. **The harness knob is in place and documented** — a
+> `sendHangs` beside the existing `sendFails`, defaulting to `undefined` so nothing existing changes —
+> so the eventual test needs the fixture wiring and nothing else. The failing test was **removed
+> rather than shipped red**.
+>
+> **User-visible today:** you accept an invitation to a shared document and it hangs for a minute,
+> because someone else in the document happens to be offline.
 >
 > #### 🔎 AND THE FAILING SET **CHANGES BETWEEN RUNS** — so no product cause can be attributed yet
 > Run in isolation 2026-08-24: **5 failed / 2 passed**, against **4 failed / 3 passed** in the batch.
