@@ -1753,6 +1753,13 @@ from the receiving operator's chair, a refused message simply never arrives.
   `session-content-handlers.ts:1225` and confirm the two positive tests go red. Test 3 asserts
   ABSENCE and will stay green through that revert by design (it is the false-positive guard), so it
   is not evidence either way and must not be counted as such.
+- **NEW ITEM from this unit → POST-LAUNCH (§0z.1), one item, trip-wire not tripped.** `cello_receive`
+  has a THIRD exit — `delivery_impaired` — and it returns without the refusals. So an operator whose
+  session is *both* impaired and being refused is told about the impairment only.
+  **Classified post-launch because the refusals are DEFERRED, not lost**, and that is read from the
+  code rather than assumed: draining happens inside `refusalsField`, which that branch never calls,
+  so the pending entries stay in the map and the next receive reaching the quiet exit still carries
+  them with the count intact. It also needs the rarer impaired state to appear at all.
 - **A fifth test was deleted rather than shipped**, with the reasoning left in the file: content
   never travels, but `noteContentRefusal` is never handed the content — the protection is at the two
   producers — so a wire-level version either fails correctly (`impact` is verbatim; no layer can
