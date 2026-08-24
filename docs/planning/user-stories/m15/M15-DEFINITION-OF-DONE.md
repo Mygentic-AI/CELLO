@@ -5318,7 +5318,14 @@ compromised and could weaponize "signature mismatch" as a false accusation.
 - One relay is one witness; this becomes a decentralized detection layer only with
   `DOD-M15-RELAYFANOUT-1`.
 
-### `DOD-M15-DIRAUTH-1` — 🟡 Directory authentication cannot be silently skipped
+### `DOD-M15-DIRAUTH-1` — 🟡 Directory authentication cannot be silently skipped (remainder lives in `BOOTSTRAP-AUTH-1`)
+> **WHY THIS IS STILL 🟡 AND WHAT IS ACTUALLY LEFT, because a tag that never moves stops being read.**
+> Everything inside this line is done and reviewed: the surfacing half, plus the two quick wins
+> below. **Its second bullet was EXTRACTED into `DOD-M15-BOOTSTRAP-AUTH-1`**, which is its own ❌
+> line — so there is no work left *here*, and the tag is held deliberately rather than because
+> something is unfinished. A reviewer ruled *"the line is not closable on this diff… make sure the
+> DoD tag reflects that rather than flipping green"*, and I am not overturning that from the outside;
+> **it closes when `BOOTSTRAP-AUTH-1` does.**
 > ### ✅ TWO QUICK WINS DONE 2026-08-24 (CELLO_Support) — Andre's re-ranking, items #5 and #3.
 > **#5 — a skipped identity check is no longer indistinguishable from an enforced one** — and review
 > found my first version had two defects of its own, both fixed. It fired **per connect**: the
