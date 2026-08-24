@@ -4015,6 +4015,34 @@ and, for the made-true rows, the units that make them true.
 
 # POST-LAUNCH BACKLOG
 
+### `DOD-M15-SCREENER-IDENTIFIER-FALSEPOS-1` — the secrets screener redacts CamelCase TYPE NAMES as credentials
+**FOUND 2026-08-24 by `CELLO_Coder_1`, in our own traffic, twice — filed here because BLOCKS is
+Andre's to grant, but I would argue for it and the reasoning is below.**
+
+**The evidence is two real messages, not a contrived case.** My send reached the other lane as
+`authorship: [REDACTED:generic-api-key] | undefined`. **The redacted "credential" was the TypeScript
+type name `SentAuthorship`.** Their previous message got the same treatment.
+
+- **It is LABELLED, not silent** — the sender is told via `transformations`, and that is the
+  difference between a defect and a disaster. Nothing is hidden.
+- **But the RECIPIENT receives mangled text**, and cannot tell a redacted secret from a redacted
+  identifier. In a technical conversation the redaction lands on exactly the words carrying the
+  meaning.
+
+**Why I would argue BLOCKS rather than post-launch.** The launch intent is *"two agents connect and
+communicate."* A screener that eats CamelCase identifiers does not stop them connecting — it
+degrades what they can say to each other, and **it degrades it hardest for the users most likely to
+notice**. Both of tonight's instances were ordinary type names in ordinary engineering discussion,
+which is the traffic two agents actually generate.
+
+**Why it might legitimately be post-launch:** the ICP is explicitly not only developers, and for
+non-technical traffic a CamelCase token is rare. **That is the real question and it is Andre's:
+how much of launch traffic looks like ours?**
+
+**NOT taken by either lane** — outside both gates, and neither of us should quietly widen scope into
+the security layer's own rules. **Recorded rather than fixed, deliberately.**
+
+
 **🧊 THE GATE IS FROZEN (Andre, 2026-08-23 — M15-PROCEDURE §0z.4).** Everything found from here
 lands HERE, however bad it looks, unless it is a security hole a customer actually reaches — and
 **BLOCKS is now Andre's to grant, not a lane's to choose.** Unclear no longer blocks; unclear comes
