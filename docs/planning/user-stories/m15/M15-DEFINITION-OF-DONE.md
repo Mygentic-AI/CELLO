@@ -3021,8 +3021,27 @@ root means. Both repos; version-bump ACs on both sides.
 > do with authorship — and the transcript gives the auditor no way to tell that is why.
 > **Not a lie** (the row stores no proof and claims none), which is why this is an item and not a
 > defect. **The fix is to carry the authorship into the held entry** and pass it on release.
-> **NOT taken now:** that file is under review for this same bullet, and editing it mid-review is how
-> the last two rounds of churn started.
+> ✅ **TAKEN** — `placeOwnLeaf` carries the authorship into the held entry and on to release.
+>
+> ### BULLET 5 — REVIEWED (pass 1 + pass 2), FIXED, AND WHAT IS STILL NOT COVERED
+> **Gate: `core/daemon` 274 files / 2881 passed / 0 failures.** `CELLO_Coder_1`'s real-crypto
+> assertion is GREEN — real submit, real bytes, `verify(pubkey_from_index_2, structure1_cbor,
+> signature)` — so **the Structure-1 index is confirmed by EXECUTION, not by reading.** A wrong index
+> would have produced rows that look checkable and fail silently.
+> **THE FINDING THAT MATTERED WAS MINE, and it is the exemplar check turned on me.** Two of five call
+> sites were **dead by construction** — inside `if (!sendResult.ok)` while the helper read
+> `r.ok ? … : undefined`. They typechecked and could never fire. Consequence: **every
+> relay-degraded-but-alive send** — witnessed, SIGNED, only the direct hand-off failed — wrote a row
+> with no proof **while the proof sat in the result object.** Fixed by carrying `authorship` on the
+> failure member, for the same reason `sequenceNumber` was already there.
+> **⚠️ MY END-TO-END TEST FAILED AND THE CODE WAS NOT THE REASON.** `two-connection-fixture`'s relay
+> points at a dead loopback address, so nothing is ever witnessed through it and there is legitimately
+> nothing signed to store. **I asserted a precondition the fixture never establishes** — the third
+> time tonight the instrument could not see what I claimed it measured. Rewritten to pin the
+> dead-wiring defect at its own seam instead, mutation-proven.
+> **STILL NOT COVERED — a WITNESSED send driven end to end.** It needs a relay that acks;
+> `m8c-away-1.test.ts` has one (`makeFakeRelayServerOneshot`), and promoting it to a shared helper is
+> the way in. **Named in the test file so it cannot read as done.**
 - **The sender's signature is stored with each leaf** (Decision 6(b)). Today the stored record has
   **no sender signature and no sender field** — a transcript row holds the message and a direction,
   and attribution comes entirely from local session state. The record must prove authorship
