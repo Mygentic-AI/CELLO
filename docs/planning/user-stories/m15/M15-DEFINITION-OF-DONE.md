@@ -2856,7 +2856,27 @@ written down nowhere, and a per-session salt fixes it as a side effect.
 > relay's `gap_fill_request` half, whose only trigger was the reply the first deletion removed.
 > Two POST-LAUNCH items fell out of it: `DOD-M15-GRACE-WINDOW-1` and `DOD-M15-RELAY-WAL-UNWIRED-1`.
 >
-> **🟡 BULLET 8 — written, both review passes spent, NOT RUN (→ Entry 63).** All ten `sealed_root`
+> **🟢 BULLET 8 — RUN, and `expectOwnTreeVerified` has been OBSERVED GREEN (2026-08-24 ~03:15 UTC).**
+> `j-legibility` passes, and its single test contains both assertion calls — so both executed and both
+> returned `verdict: "match"`. **The assertion has now done the thing it was written to do on a live
+> cross-process seal**, which is what "written-not-run" was blocking on.
+>
+> **My two open questions are answered:** `j-legibility` does NOT land `cannot_judge` — the concern
+> that its deliberately-unanswered tail would leave B's carry provably incomplete did not
+> materialise. `j-refresh` is still unmeasured (second batch, needs the `agentName` discriminator).
+>
+> **⚠️ AND THE ASSERTION NEVER FAILED ANYWHERE.** Across four journeys and 30 tests, zero occurrences
+> of any of its three failure messages. The 17 failures in that run are pre-existing and the counts
+> match the other lane's pre-bullet-8 baseline exactly (`j-documents` 7, `j-multiplayer` 5 after their
+> `SYNC-AC17` fix, `j-content` 5). **Bullet 8 introduced no failure.**
+>
+> **What it is NOT: a green lane.** Three of four journeys are red for reasons that predate this work
+> — most visibly a seal that does not produce a receipt within 60s in `j-documents`' rejection case,
+> which is `DOD-M15-CLOSEROOT-1`'s shape and now reports itself clearly instead of as a bare
+> `expected false to be true`. Bullet 8's own clause is satisfied; the lane's health is a separate
+> line.
+>
+> Original note (→ Entry 63): All ten `sealed_root`
 > equalities now carry a per-side assertion that the daemon compared the certified root against the
 > leaves IT holds; `cannot_judge` is explicitly not a pass. Pass 2's verdict: *"SPEC: FAITHFUL — all
 > ten converted, none declined, count verified independently."*
