@@ -265,7 +265,41 @@ The six known checked-then-ignored instances; three carry such a comment.
   clients perform this verification locally"* and the client's *"deliberately NOT compared at this
   layer"* — each pointing at a check the other does not perform.
 
-### `DOD-M15-TIERTEXT-1` — ✅ The tier descriptions do not promise a gate that does not exist
+### `DOD-M15-TIERTEXT-1` — ❌ The tier descriptions do not promise a gate that does not exist
+> **⚠️ I FLIPPED THIS ✅ AND IT WAS WRONG. Reverted 2026-08-24 on review — three blocking findings,
+> all confirmed by measurement, and two of them are worse than the defect the line opened with.**
+>
+> **1. MY REPLACEMENT TEXT DENIED THE KILL SWITCH.** It read *"note EVERY tier is auto-accepted"*.
+> **Acceptance IS tier-gated:** `checkUnknownSenderAcceptanceBound` reads `getTier`, resolves that
+> tier's `max_sessions` and refuses at the cap — and BLOCKED's cap is **0**, so a blocked contact is
+> refused on the FIRST knock (`inbound-sessions.ts`: *"BLOCKED 0 → refused here"*). The sentence
+> contradicted the `0=blocked` clause two clauses earlier and told an operator **their block does
+> nothing**. The original defect over-promised a protection; mine **denied one that exists**, and it
+> pointed at the kill switch. Corrected in place.
+> **⚠️ ANDRE — Option B was ruled on a premise stated in this entry that is FALSE.** The entry said
+> *"`isAutoAccept` (the only tier check that would gate this) has no production caller"*. True of
+> that function, and a DIFFERENT one does the gating. The ruling inherited my error, so the wording
+> you approved has been corrected as a matter of FACT, not style: *"tiers 1-4 are all auto-accepted
+> WITHIN THEIR CAPS; above tier 0, tiers govern how much, not whether"*. **Say the word if you want
+> it phrased differently.**
+>
+> **2. MY LOUDEST CLAIM WAS FALSE, AND THE WAY I GOT IT WRONG IS THE MOST INSTRUCTIVE THING HERE.**
+> I wrote — in the commit, this entry, and the test header — that `claims-ledger.ts` **had no
+> importer**. It has one: `dod-m15-claim-scanner-1.test.ts:47`, which already computes the shrinking
+> count. **`grep` returned nothing because that file contains a raw NUL byte and grep classified it
+> as BINARY.** The tool answered "no matches" for a file it never read, and I took the silence as
+> proof of absence. **"Who controls the absence" — here it was a stray byte**, and it produced a
+> confident false claim about false claims.
+>
+> **3. I SHIPPED A RED BUILD.** The six ledger rows named a surface `shippedSurfaces()` cannot
+> produce, so the scanner's orphan guard failed — correctly. Rows removed; **`cello-mcp.ts` cannot be
+> adjudicated until the scanner can SEE it, which is `DOD-M15-TOOLDESC-SCAN-1`** — an undocumented
+> dependency of this line on that one.
+>
+> **What stands:** the false claim IS gone from the surface, the corrected text is now guarded in
+> both directions, and the extractor was under-reading the file — it required the tool name on the
+> same line, so `cello_backup` and `cello_restore` (2 of 58, both with unread claim vocabulary) were
+> invisible to every guard built on it.
 > **CLOSED 2026-08-24 (CELLO_Support), on Andre's Option B ruling.** All three descriptions carry the
 > ruled text verbatim; `grep "auto-accepted when you're away"` → **0**. 5 tests, gate 3032 green.
 > **THE ENFORCER COULD NOT HAVE WORKED, and that is the finding.** It demands the audit be
