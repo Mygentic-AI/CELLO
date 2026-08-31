@@ -52,6 +52,18 @@ export interface RelayAuthResponse {
   type: "relay_auth_response";
   pubkey: Uint8Array;    // 32-byte Ed25519 K_local public key
   signature: Uint8Array; // 64-byte Ed25519 signature over "CELLO-RELAY-AUTH-v1" || nonce || pubkey
+  /**
+   * DOD-M15-RELAYAUTH-1: `"reservation"` proves key possession from THIS transport identity so the
+   * relay keeps this peer's circuit reservation, and does nothing else. Absent (the default) is the
+   * ordinary session auth, which additionally registers this stream as the agent's delivery target.
+   *
+   * ⚠️ The distinction exists because an agent legitimately runs SEVERAL nodes against one relay —
+   * the node promoted into a session, plus the replacement standing receiver behind it. Both must
+   * prove possession (each holds its own reservation), but only ONE may own the delivery stream.
+   * Without this flag the replacement receiver's auth silently stole delivery from the live
+   * session; with it, the replacement proves itself and leaves delivery alone.
+   */
+  purpose?: "reservation";
 }
 
 export type AuthFailedReason =

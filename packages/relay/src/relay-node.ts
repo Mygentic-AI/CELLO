@@ -1025,15 +1025,38 @@ export class CelloRelayNode {
             await this.#sendFrame(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "rate_limited", retry_after_ms: pubkeyLimit.retryAfterMs }));
             stream.abort(new Error("rate_limited")); return;
           }
-          const isReconnect = this.#streams.has(authedPubkeyHex);
-          this.#streams.set(authedPubkeyHex, stream);
-          authed = true;
-
           // DOD-M15-RELAYAUTH-1: this proves Ed25519 key POSSESSION, not participation in any
           // session — cancels this peer's reservation-revoke grace timer if one is running (see
           // relay-connection-gater.ts). Does NOT vouch the pubkey; that still requires a real
           // directory-signed assignment (recordAssignment(), below).
           if (remotePeerId) this.#connectionGater?.recordAuthenticated(remotePeerId);
+
+          /**
+           * DOD-M15-RELAYAUTH-1 review HIGH-1 — **A RESERVATION PROOF MUST NOT CLAIM THE DELIVERY
+           * STREAM.** An agent legitimately runs several nodes against one relay: the node promoted
+           * into a live session, plus the replacement standing receiver created behind it. Each
+           * holds its OWN circuit reservation, so each must prove possession — but `#streams` is
+           * keyed by PUBKEY, so a second full auth from the same agent overwrites the live session's
+           * delivery target and its counterparty's leaves start arriving at a node with no handler.
+           *
+           * So a `purpose: "reservation"` auth stops here: possession is proven (recorded above,
+           * which is the whole point), and nothing else is touched — no delivery registration, no
+           * liveness flip, no idle-timer reset, no queued-delivery drain, no park notify. The stream
+           * is closed rather than kept, because there is nothing further to say on it.
+           */
+          if (resp.purpose === "reservation") {
+            await this.#sendFrame(stream, encodeAuthOk({ type: "relay_auth_ok" }));
+            this.#logger.debug("relay.auth.reservation_proof", {
+              remotePeerId: remotePeerId ?? "(none)",
+              pubkey: truncHex(authedPubkeyHex),
+            });
+            await stream.close().catch(() => {});
+            return;
+          }
+
+          const isReconnect = this.#streams.has(authedPubkeyHex);
+          this.#streams.set(authedPubkeyHex, stream);
+          authed = true;
 
           // M7-SESSION-003 AC-001/AC-003: the authenticated standing connection
           // IS the session-path liveness signal for relay-mode sessions, keyed by
