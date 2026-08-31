@@ -141,7 +141,7 @@ All file:line refs are `packages/relay/src/` unless noted.
 | `#processHashSubmit` — session-exists (relay-node.ts:1205) | hard-fails |
 | `#processHashSubmit` — session-status active (relay-node.ts:1206) | hard-fails |
 | `#processHashSubmit` — sender-is-participant (relay-node.ts:1226) | hard-fails |
-| predecessor-ACK field presence gate (relay-node.ts:1243) | hard-fails; missing fields → SAME reason (`RELAY_PREDECESSOR_UNKNOWN`) as a verify failure — SI-002, exemplary |
+| predecessor-ACK field presence gate (relay-node.ts:1243) | hard-fails; missing fields → SAME reason (`RELAY_PREDECESSOR_UNKNOWN`) as a verify failure — SI-002. Called "exemplary" in the first pass; **that is over-stated** (corrected 2026-08-31): the verified `seq`/`ts` are used only to build the TBS and are read nowhere afterwards, so the success path is byte-identical to never having carried them. It fails closed and a client gains nothing either way, but a value that is checked and then discarded is this order's own opening sentence, sitting inside the fence |
 | predecessor-ACK directory-adapter/pubkey-lookup gates (relay-node.ts:1246,1253) | hard-fails — same `RELAY_PREDECESSOR_UNKNOWN` |
 | predecessor-ACK `verify(pubkey, tbs, sig)` (relay-node.ts:1269) | hard-fails; missing already routed identically above — full parity |
 | `leaf_kind` domain check (relay-node.ts:1291) | hard-fails — rejects 0x01 (RFC 6962 internal-node prefix) and anything outside the accepted map |
@@ -164,7 +164,7 @@ All file:line refs are `packages/relay/src/` unless noted.
 | content-park — `#handlePull`/`#handleConfirm` missing fields, unknown frame type (content-park.ts:344,396,183) | hard-fails |
 | `deposit-rate-limiter.ts` — absent-peerId branch (line 92) | not this pattern — see content-park row above; same conclusion, verified directly by reading both files together |
 | `file-session-wal.ts` checksum checks (271,391) | hard-fails (terminal `RELAY_SESSION_UNRECOVERABLE`); this WAL is currently unwired/unread in production per relay-node.ts:288-294 comment — not a live path today |
-| `file-content-store.ts` `#readEntry` checksum check (252) | hard-fails softly — corrupt entry is discarded and reads as "not found", truncated and mismatched collapse identically |
+| `file-content-store.ts` `#readEntry` checksum check (252) | **CORRECTED 2026-08-31 — not a hard fail.** A corrupt parked entry is discarded and served to the recipient as `found: false`, i.e. an empty mailbox, after the depositor was told `ok: true`. Truncated and mismatched do collapse identically, so it is not a checked-then-ignored *bypass* — but the earlier verdict "hard-fails softly" was not a verdict, and it hid silent message loss. The corruption reaches the operator only as a `content.store.corrupt` warn that nothing alerts on. See Newly discovered for the fix, which is out of this order's scope |
 | fire-and-forget patterns (`stream.close().catch(()=>{})`, session_interrupted sends, sweep timer) | reviewed individually — all are either benign (closing an already-terminating stream) or explicitly logged best-effort with the intent stated in an adjacent comment; no swallowed verification result found |
 
 ---
@@ -202,8 +202,12 @@ confidence in a verdict whose entire deliverable is "nothing found". Re-derived 
 > the suspicion for `network-directory-adapter.ts`, and correct three verdicts in the table.**
 > — `cello-unit-reviewer` (Opus)
 
-**STATUS: OUTSTANDING — none of the four below are fixed yet.** Recorded here so the suspicion is
-not retired by a clean-looking table.
+**STATUS (2026-08-31): 2, 3 and 4 are DONE — the table row, the false mechanism and the over-stated
+"exemplary" verdict are all corrected above, and the silent-message-loss fix that item 2 raised is
+recorded in Newly discovered as post-launch rather than grown into this order. 1 is OUTSTANDING**
+(the `getRelayPublicKey` code fix; it touches `relay-node.ts`, which was mid-review under order 002
+when the other three were corrected). Recorded here so the suspicion is not retired by a
+clean-looking table.
 
 1. **`network-directory-adapter.ts` (775 lines, 3 inbound frame types) was never walked.**
    `getRelayPublicKey` collapses directory-unreachable / stream-failed / undecodable / wrong-frame /
@@ -245,6 +249,14 @@ branch is safe because of the libp2p `StreamHandler` type, full stop).
 
 *(One or two lines each. Do not act on them.)*
 
+- **A corrupt parked message is delivered to the recipient as an empty mailbox** (`file-content-store.ts`
+  `#readEntry`, line 252 — see the corrected table row). The sender is told `ok: true`, the bytes rot on
+  disk, and the recipient is told there is nothing waiting. Recommended fix, deliberately NOT taken here
+  because this order is a sweep and the fix would grow it: `#readEntry` should distinguish "no such entry"
+  from "entry present but corrupt", and `pull` should surface the second as a refusal the recipient can
+  see, so a lost message reads as lost rather than as silence. Not a security hit and not attacker-
+  triggerable (it needs disk corruption), so it is post-launch, not a launch blocker.
+
 - `decodeStructure1` (relay-node.ts:1296) and the follow-on `buildStructure2` check both report
   `signature_invalid` for every shape violation (bad array length, wrong field types, wrong-length
   hash/pubkey/session_id, malformed submission_id) even though most have nothing to do with the
@@ -252,10 +264,17 @@ branch is safe because of the libp2p `StreamHandler` type, full stop).
   their cause) concern about a misleading client-facing label, not a checked-then-ignored bug.
 - `discard_session`/`get_seal_leaves`/`get_session_liveness` (relay-node.ts:510,521,542) cast
   `session_id`/`counterparty_pubkey` leniently (`instanceof Uint8Array ? x : new Uint8Array(x as
-  ArrayBuffer)`); a genuinely malformed field throws into the handler's outer catch, which logs it
-  at `debug` as `relay.directory.stream.closed` ("normal disconnect") — mis-classifying a malformed
-  admin frame as an ordinary disconnect. The directory_signature auth check upstream already gates
-  who can reach this code, so it's an observability gap, not a bypass.
+  ArrayBuffer)`). **MECHANISM CORRECTED 2026-08-31 — the original claim that a malformed field
+  "throws into the handler's outer catch" is false, and was asserted without testing.** Measured
+  directly (`node -e`, 2026-08-31): `new Uint8Array(x)` NEVER throws for these inputs. A string,
+  object, `null` or `undefined` all yield a ZERO-LENGTH array, and a *number* yields a zero-FILLED
+  array of that length — so `counterparty_pubkey: 32` becomes 32 zero bytes, a correctly-sized
+  all-zero key rather than an obvious reject. What actually happens: `discard_session` returns
+  `discard_ok` for a discard that discarded nothing, and `get_session_liveness` answers `unknown` —
+  a legitimate protocol value the directory then feeds into an ABSENT attestation. The conclusion is
+  unchanged (not a bypass: the `directory_signature` check upstream gates who can reach this code at
+  all), but a future reader will act on the mechanism, not the conclusion, so the mechanism had to be
+  fixed rather than left standing.
 - A successfully-decoded `relay_auth_response` frame arriving a second time, post-auth
   (relay-node.ts dispatch chain after line 1045), matches no `if`/`else if` branch and is silently
   dropped — no reply, no log. Not a verification check (nothing is being proven or ignored), but a
