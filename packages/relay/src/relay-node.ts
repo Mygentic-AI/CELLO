@@ -131,9 +131,18 @@ const MAX_LOGGED_FRAME_TYPE = 64;
  * Boring rather than clever, same philosophy as the deposit limiter this package already ships:
  * 20 attempts/minute is far above a legitimate reconnect burst (a flaky link retrying every few
  * seconds) and far below what a credential-stuffing or connection-flood attempt needs to be
- * effective. Applied twice per attempt — once keyed on the Noise-authenticated transport peer id
- * (bounds one machine hammering with many claimed keys), once on the CLAIMED pubkey from the
- * frame, pre-verification (bounds many machines hammering one target identity).
+ * effective. Applied twice per attempt, at DIFFERENT points in the handshake — the peer-keyed
+ * check runs BEFORE verification (bounds one machine hammering with many claimed keys, at no
+ * crypto cost); the pubkey-keyed check runs AFTER the signature verifies (bounds one real key used
+ * from many machines). The pubkey-keyed check must never run on the claimed-but-unverified pubkey:
+ * review caught that ordering letting anyone who merely KNOWS an agent's public key lock that agent
+ * out by claiming it with a garbage signature — see the comment at the check site in
+ * `#handleRelayStream`.
+ *
+ * ⚠️ Like the deposit limiter, this is a speed bump, not a gate: a rewritten client can mint a
+ * fresh transport peer AND a fresh real keypair per burst and get a fresh bucket on both axes each
+ * time. It raises the cost of hammering this relay; it does not make hammering impossible. The
+ * relay's own enforcement is what's load-bearing here, not any assumption about client behaviour.
  */
 const DEFAULT_AUTH_RATE_LIMIT: DepositRateLimitConfig = { maxPerWindow: 20, windowMs: 60_000 };
 
@@ -143,8 +152,13 @@ const DEFAULT_AUTH_RATE_LIMIT: DepositRateLimitConfig = { maxPerWindow: 20, wind
  * Sized for real conversational traffic, not the deposit path's occasional message: 120/minute
  * (2/second sustained) comfortably covers a busy back-and-forth exchange while still bounding a
  * peer trying to spend the relay's CPU, disk and per-session lock at line rate. Applied per the
- * Noise-authenticated peer id AND per the AUTHENTICATED sender pubkey (both are trustworthy here —
- * unlike the auth-phase limit above, hash_submit only runs after the pubkey has been verified).
+ * Noise-authenticated peer id AND per the AUTHENTICATED sender pubkey — both trustworthy here,
+ * since hash_submit only runs after auth (there is no pre-auth hash_submit path, unlike the auth
+ * limiter above, whose peer/pubkey checks straddle the verification step for exactly that reason).
+ *
+ * ⚠️ Same speed-bump caveat as `DEFAULT_AUTH_RATE_LIMIT`: a rewritten client can rotate its
+ * transport peer per burst and get a fresh bucket on that axis (the pubkey axis cannot be spoofed
+ * post-auth, but a fresh real session under a fresh real key resets it too).
  */
 const DEFAULT_HASH_SUBMIT_RATE_LIMIT: DepositRateLimitConfig = { maxPerWindow: 120, windowMs: 60_000 };
 
@@ -896,25 +910,29 @@ export class CelloRelayNode {
 
           const resp = parsed;
 
-          // DOD-M15-RELAYABUSE-1: rate-limit BEFORE the nonce lookup and the Ed25519 verify below —
-          // both peer and claimed-pubkey checks are cheap map lookups, so a limited caller is turned
-          // away before the relay spends any crypto work on it. Missing/malformed already refused
-          // above ("expected_auth_response"); this is strictly about volume from a caller who IS
-          // sending well-formed frames.
-          const claimedPubkeyHex = Buffer.from(resp.pubkey).toString("hex");
+          // DOD-M15-RELAYABUSE-1 (review finding, fixed before this unit closed): rate-limit the
+          // PEER before the nonce lookup and the Ed25519 verify below — a cheap map lookup keyed on
+          // the Noise-authenticated transport identity, which the caller cannot forge, so turning a
+          // limited peer away here costs no crypto work.
+          //
+          // ⚠️ The CLAIMED pubkey is NOT checked here, and that is deliberate — it was the defect
+          // review caught. `resp.pubkey` at this point is an UNVERIFIED ASSERTION: anyone who merely
+          // KNOWS an agent's public key (which CELLO agents hand out freely so others can connect)
+          // could claim it here with a garbage signature, spend the VICTIM's rate-limit bucket, and
+          // lock the real key-holder out of this relay with `rate_limited` — a third party denying
+          // one specific agent service, at zero cost, with no proof of key possession required. The
+          // pubkey-keyed check runs only AFTER the signature verifies below, so incrementing that
+          // bucket requires actually owning the key.
           const peerLimit = this.#authPeerLimiter.check(remotePeerId);
-          const pubkeyLimit = this.#authPubkeyLimiter.check(claimedPubkeyHex);
-          if (!peerLimit.allowed || !pubkeyLimit.allowed) {
-            const retry_after_ms = Math.max(peerLimit.retryAfterMs, pubkeyLimit.retryAfterMs);
+          if (!peerLimit.allowed) {
             this.#logger.warn("relay.auth.rate_limited", {
               remotePeerId: remotePeerId ?? "(none)",
-              claimedPubkey: truncHex(claimedPubkeyHex),
-              peerLimited: !peerLimit.allowed,
-              pubkeyLimited: !pubkeyLimit.allowed,
-              retryAfterMs: retry_after_ms,
+              peerLimited: true,
+              pubkeyLimited: false,
+              retryAfterMs: peerLimit.retryAfterMs,
               impact: "this auth attempt was refused before verification — the caller may retry after the window",
             });
-            await this.#sendFrame(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "rate_limited", retry_after_ms }));
+            await this.#sendFrame(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "rate_limited", retry_after_ms: peerLimit.retryAfterMs }));
             stream.abort(new Error("rate_limited")); return;
           }
 
@@ -944,7 +962,23 @@ export class CelloRelayNode {
             stream.abort(new Error("signature_invalid")); return;
           }
 
+          // DOD-M15-RELAYABUSE-1: the pubkey-keyed check, now that the signature has verified — the
+          // caller has just PROVEN ownership of this key, so this bucket cannot be spent on a
+          // victim's behalf by anyone who does not hold their private key.
           authedPubkeyHex = Buffer.from(resp.pubkey).toString("hex");
+          const pubkeyLimit = this.#authPubkeyLimiter.check(authedPubkeyHex);
+          if (!pubkeyLimit.allowed) {
+            this.#logger.warn("relay.auth.rate_limited", {
+              remotePeerId: remotePeerId ?? "(none)",
+              claimedPubkey: truncHex(authedPubkeyHex),
+              peerLimited: false,
+              pubkeyLimited: true,
+              retryAfterMs: pubkeyLimit.retryAfterMs,
+              impact: "this auth attempt was refused after a VALID signature — this key has authenticated too often too fast; the caller may retry after the window",
+            });
+            await this.#sendFrame(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "rate_limited", retry_after_ms: pubkeyLimit.retryAfterMs }));
+            stream.abort(new Error("rate_limited")); return;
+          }
           const isReconnect = this.#streams.has(authedPubkeyHex);
           this.#streams.set(authedPubkeyHex, stream);
           authed = true;

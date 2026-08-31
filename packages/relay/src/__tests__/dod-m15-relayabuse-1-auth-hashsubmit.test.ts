@@ -203,6 +203,56 @@ describe("DOD-M15-RELAYABUSE-1 — relay authentication is rate limited, per pee
     const honestResult = await attemptAuth(honestNode, relayPeerId, generateKeypair());
     expect(honestResult["type"], "one peer's flood must never lock out another").toBe("relay_auth_ok");
   }, 20_000);
+
+  it("REGRESSION: a forged attempt CLAIMING a victim's real pubkey (wrong signature) does NOT spend the victim's bucket", async () => {
+    /**
+     * The exact shape a review pass caught: the pubkey-keyed limiter must key on a VERIFIED pubkey,
+     * never a merely-claimed one. Anyone who knows an agent's public key (which CELLO agents hand
+     * out freely so others can connect) could otherwise open many streams, claim that pubkey with a
+     * garbage signature, exhaust the victim's bucket, and lock the real key-holder out with
+     * `rate_limited` — at zero cost and with no proof of key possession required.
+     */
+    const dirKp = generateKeypair();
+    const { node: relayNode, stop } = await createRelayNode({
+      directoryPubkey: await dirKp.getPublicKey(),
+      authRateLimit: { maxPerWindow: 1, windowMs: 60_000 },
+    });
+    scope.addCleanup(stop);
+    const relayPeerId = relayNode.getPeerId();
+    const relayAddr = relayNode.listenAddresses()[0]!;
+    const victimKp = generateKeypair();
+    const victimPubkey = await victimKp.getPublicKey();
+
+    // The forger opens many DIFFERENT connections (so the PEER-keyed limit never trips) and claims
+    // the victim's real pubkey with a signature that does not verify against it.
+    for (let i = 0; i < 3; i++) {
+      const forgerNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+      await forgerNode.start();
+      scope.addCleanup(async () => { await forgerNode.stop(); });
+      await forgerNode.dial(relayAddr);
+      const stream = await forgerNode.newStream(relayPeerId, RELAY_PROTOCOL_ID);
+      const reader = new StreamReader(stream);
+      await reader.readDecoded(); // relay_auth_challenge
+      sendFrame(stream, CBOR_ENC.encode({
+        type: "relay_auth_response",
+        pubkey: victimPubkey, // claims the VICTIM's real key
+        signature: new Uint8Array(randomBytes(64)), // but never proves it — garbage signature
+      }));
+      const verdict = await reader.readDecoded();
+      expect(verdict["type"], "a forged claim must fail on signature, never on rate — it never got that far legitimately").toBe("relay_auth_failed");
+      expect(verdict["reason"]).toBe("signature_invalid");
+      stream.close().catch(() => {});
+    }
+
+    // The REAL key-holder must still be able to authenticate — the forger's attempts must not have
+    // spent a bucket keyed on the victim's pubkey, because none of them ever verified.
+    const victimNode = await createNode({ keyProvider: victimKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await victimNode.start();
+    scope.addCleanup(async () => { await victimNode.stop(); });
+    await victimNode.dial(relayAddr);
+    const victimResult = await attemptAuth(victimNode, relayPeerId, victimKp);
+    expect(victimResult["type"], "the real key-holder must not be locked out by a forger who never proved anything").toBe("relay_auth_ok");
+  }, 20_000);
 });
 
 describe("DOD-M15-RELAYABUSE-1 — hash_submit is rate limited, per peer AND per authenticated pubkey", () => {

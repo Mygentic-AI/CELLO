@@ -123,10 +123,33 @@ infrastructure-level flood protection, anything in the directory or the client.
 
 ## Review
 
-*(Reviewer verdict. One quote. Not a transcript.)*
+> **1 blocking finding.** SPEC: FAITHFUL (all 7 clauses implemented as written). NO SILENT
+> FALLBACKS. ERRORS NAME THEIR CAUSE. TESTS HAVE TEETH — all seven new/modified tests survive the
+> revert test on direct code-path verification. REMOVALS PROVEN (gap-fill's deadness independently
+> re-confirmed in both repos). **One HIGH-severity finding stood: the auth path's pre-verification,
+> pubkey-keyed rate limiter let any third party who merely knows an agent's public key — information
+> CELLO agents are meant to share to be reachable — lock that specific agent out of a specific relay
+> at zero cost, with no proof of key possession required, by claiming its pubkey with a garbage
+> signature 20+ times a minute. This is a new attack surface introduced by this unit.** Fix: move
+> the pubkey-keyed check to after Ed25519 verification, leaving the peer-keyed check where it is. —
+> `cello-unit-reviewer`
+
+**Fixed in this branch, same session:** the pubkey-keyed check for authentication now runs strictly
+after the signature verifies — a forged claim on someone else's pubkey fails on `signature_invalid`
+before it ever reaches the limiter, so it cannot spend the real key-holder's bucket. The peer-keyed
+check is unchanged (it was never vulnerable — it keys on the caller's own Noise-authenticated
+transport identity, which they cannot forge). Added a regression test
+(`REGRESSION: a forged attempt CLAIMING a victim's real pubkey...`) and revert-tested it against the
+reintroduced vulnerable ordering: reddened with the forger's second attempt returning
+`rate_limited` instead of `signature_invalid` — direct proof the victim's bucket had been spent by
+an unverified claim — then passed again once restored. Hash_submit's pubkey-keyed check was never
+at risk (it keys on the AUTHENTICATED sender pubkey, post-verification, by construction — there is
+no pre-auth hash_submit path).
 
 ---
 
 ## Newly discovered
 
-*(One or two lines each. Do not act on them.)*
+*(none outstanding — the one documentation gap the reviewer noted, the speed-bump caveat missing
+next to `DEFAULT_AUTH_RATE_LIMIT`/`DEFAULT_HASH_SUBMIT_RATE_LIMIT`, was closed in the same commit
+as the security fix since it was a one-line addition to code already being touched.)*
