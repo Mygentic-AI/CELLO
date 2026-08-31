@@ -40,9 +40,12 @@
  *                                        mail is swept after this; a bad/empty value falls back to 30 and
  *                                        logs relay.config.content_ttl_invalid.
  *   RELAY_SESSION_IDLE_TIMEOUT_MS     — DOD-M15-RELAYABUSE-1: per-session idle timer, in ms (default
- *                                        3600000 / 1h). Distinct from RELAY_SESSION_MAX_IDLE_MS below —
- *                                        this reclaims ONE idle session promptly; the sweep is the 24h
- *                                        backstop. A bad/empty value falls back to the default and logs
+ *                                        86400000 / 24h). Distinct from RELAY_SESSION_MAX_IDLE_MS below —
+ *                                        this reclaims ONE idle session; the sweep is the periodic
+ *                                        backstop. ⚠️ A RECLAIMER, NOT A CONVERSATION TIMEOUT: lowering
+ *                                        it destroys live sessions whose agents are merely quiet, and the
+ *                                        teardown is not surfaced to them. See the note at the read site.
+ *                                        A bad/empty value falls back to the default and logs
  *                                        relay.config.session_idle_ms_invalid.
  *   RELAY_CIRCUIT_DURATION_LIMIT_MS   — DOD-M15-RELAYABUSE-1: cap on a relayed connection's duration
  *                                        (default 604800000 / 7 days). A bad/empty value falls back to
@@ -526,11 +529,25 @@ if (directoryMultiaddr) {
 // was the hourly CELLO-M6B-009 sweep against its 24h default. Same NaN-guarded, log-what-is-in-force
 // discipline as RELAY_SESSION_MAX_IDLE_MS below: a bad or empty value falls back to the default AND
 // says so.
-const parsedSessionIdleMs = parseInt(process.env["RELAY_SESSION_IDLE_TIMEOUT_MS"] ?? "3600000", 10);
+//
+// ⚠️ **24 HOURS, AND THE NUMBER IS A PRODUCT DECISION — NOT A TUNING PREFERENCE.** This shipped at
+// 1 hour and that was a live regression, ruled by Andre on 2026-08-31 after review traced what an
+// operator actually experiences:
+//
+//   two agents go quiet for an hour (the normal working pattern — open a session, go and code,
+//   come back) → the relay destroys the session and emits `session_interrupted{timeout}` → the
+//   client's watcher for that frame has NO production caller, so it is dropped in silence → the
+//   daemon still lists the session as active → the next send fails `session_not_found` on a
+//   conversation the operator could see a moment earlier → and it can never be sealed, because the
+//   relay's leaf log went with the session.
+//
+// So this timer must be a RECLAIMER for abandoned sessions, never a conversation timeout. 24h
+// matches the sweep it complements: past a day, "start a fresh session" is the natural instinct
+// anyway, so the one case it costs is one the operator was not relying on.
+const parsedSessionIdleMs = parseInt(process.env["RELAY_SESSION_IDLE_TIMEOUT_MS"] ?? "86400000", 10);
 const sessionIdleTimeoutMs = Number.isFinite(parsedSessionIdleMs) && parsedSessionIdleMs > 0
   ? parsedSessionIdleMs
-  : 3_600_000; // 1 hour — an order of magnitude tighter than the 24h sweep it complements, while
-               // still generous enough for normal gaps between messages in a live conversation.
+  : 86_400_000; // 24 hours — see the note above; this is a reclaimer, not a conversation timeout.
 if (sessionIdleTimeoutMs !== parsedSessionIdleMs) {
   logger.warn("relay.config.session_idle_ms_invalid", {
     supplied: process.env["RELAY_SESSION_IDLE_TIMEOUT_MS"] ?? "",

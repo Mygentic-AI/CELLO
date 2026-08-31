@@ -63,6 +63,7 @@ function sendFrame(stream: Stream, data: Uint8Array): void {
 function spawnRelayBinary(extraEnv: Record<string, string>): {
   child: RelayChild;
   relayAddr: Promise<string>;
+  configLine: Promise<Record<string, unknown> | null>;
   cleanupDir: () => void;
 } {
   const sandbox = mkdtempSync(join(tmpdir(), "cello-relay-idle-timer-test-"));
@@ -82,11 +83,25 @@ function spawnRelayBinary(extraEnv: Record<string, string>): {
 
   let resolveAddr: (v: string) => void;
   const relayAddr = new Promise<string>((r) => { resolveAddr = r; });
+  // The structured line the binary logs declaring the idle timeout ACTUALLY IN FORCE. Captured so a
+  // test can assert the DEFAULT, not merely that an env override is plumbed through.
+  let resolveConfig: (v: Record<string, unknown> | null) => void;
+  const configLine = new Promise<Record<string, unknown> | null>((r) => { resolveConfig = r; });
   let resolved = false;
+  let configResolved = false;
   const stdoutBuf: string[] = [];
   const onData = (buf: Buffer) => {
     const text = buf.toString("utf8");
     stdoutBuf.push(text);
+    if (!configResolved) {
+      for (const raw of text.split("\n")) {
+        if (!raw.includes("relay.config.session_idle_timeout")) continue;
+        try {
+          const o = JSON.parse(raw.trim()) as Record<string, unknown>;
+          if (o["event"] === "relay.config.session_idle_timeout") { configResolved = true; resolveConfig(o); }
+        } catch { /* interleaved non-JSON protocol log line — keep looking */ }
+      }
+    }
     if (resolved) return;
     // protocol-log.ts's plain-text format: "...  [RELAY] Started — peer <id>, relay <multiaddr>"
     const m = /\[RELAY\]\s+Started — peer \S+, relay (\S+)/.exec(text);
@@ -96,9 +111,10 @@ function spawnRelayBinary(extraEnv: Record<string, string>): {
   child.stderr.on("data", onData);
   setTimeout(() => {
     if (!resolved) { resolved = true; resolveAddr(`__TIMEOUT__ captured output: ${stdoutBuf.join("")}`); }
+    if (!configResolved) { configResolved = true; resolveConfig(null); }
   }, 15_000);
 
-  return { child, relayAddr, cleanupDir: () => { try { rmSync(sandbox, { recursive: true, force: true }); } catch { /* best effort */ } } };
+  return { child, relayAddr, configLine, cleanupDir: () => { try { rmSync(sandbox, { recursive: true, force: true }); } catch { /* best effort */ } } };
 }
 
 async function authedStream(
@@ -138,6 +154,27 @@ describe("DOD-M15-RELAYABUSE-1 — the production relay BINARY passes the idle t
   it("precondition: dist/bin/relay.js exists (run `pnpm run typecheck` first — it builds dist/)", () => {
     expect(existsSync(RELAY_BIN), `${RELAY_BIN} is missing — build the relay package before running this test`).toBe(true);
   });
+
+  it("★ the DEFAULT idle timeout is 24h — a reclaimer, not a conversation timeout", async () => {
+    /**
+     * Review gap this closes: the behavioural test below sets `RELAY_SESSION_IDLE_TIMEOUT_MS=500`,
+     * so it proves the env plumbing and says NOTHING about the default. Change the default to any
+     * value — including the 1 hour that was a live regression, destroying sessions of agents who
+     * had merely gone quiet — and that test stays green. This pins the shipped number, with NO env
+     * var set, from the running binary.
+     */
+    const { child, configLine, cleanupDir } = spawnRelayBinary({});
+    activeChild = child;
+    activeCleanup = cleanupDir;
+
+    const line = await configLine;
+    expect(line, "the binary must declare the idle timeout it is running with").not.toBeNull();
+    expect(
+      line!["sessionIdleTimeoutMs"],
+      "24h. Lower is a conversation timeout, not a reclaimer: the teardown is not surfaced to either " +
+        "agent, so a quiet pair loses its session and only finds out when the next send fails.",
+    ).toBe(86_400_000);
+  }, 20_000);
 
   it("a session recorded on the REAL BINARY is torn down on its own once idle — session_interrupted, reason timeout", async () => {
     // The directory identity is OURS in this test (not the binary's ephemeral NODE_ENV=test one) so
