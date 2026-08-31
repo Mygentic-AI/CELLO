@@ -39,6 +39,17 @@
  *   RELAY_CONTENT_TTL_DAYS            — parked-content retention in days (default 30). Store-and-forward
  *                                        mail is swept after this; a bad/empty value falls back to 30 and
  *                                        logs relay.config.content_ttl_invalid.
+ *   RELAY_SESSION_IDLE_TIMEOUT_MS     — DOD-M15-RELAYABUSE-1: per-session idle timer, in ms (default
+ *                                        3600000 / 1h). Distinct from RELAY_SESSION_MAX_IDLE_MS below —
+ *                                        this reclaims ONE idle session promptly; the sweep is the 24h
+ *                                        backstop. A bad/empty value falls back to the default and logs
+ *                                        relay.config.session_idle_ms_invalid.
+ *   RELAY_CIRCUIT_DURATION_LIMIT_MS   — DOD-M15-RELAYABUSE-1: cap on a relayed connection's duration
+ *                                        (default 604800000 / 7 days). A bad/empty value falls back to
+ *                                        the default and logs relay.config.circuit_duration_limit_invalid.
+ *   RELAY_CIRCUIT_DATA_LIMIT_BYTES    — DOD-M15-RELAYABUSE-1: cap on a relayed connection's total bytes
+ *                                        (default 1073741824 / 1 GiB). A bad/empty value falls back to
+ *                                        the default and logs relay.config.circuit_data_limit_invalid.
  *
  * SI-001: the relay private key MUST NEVER be logged, written to disk (after initial load),
  * or included in any error message. logRelayServiceStartFailed does not accept a relayId
@@ -507,6 +518,61 @@ if (directoryMultiaddr) {
   logger.info("adapter.initialised", { adapterName: "NetworkDirectoryAdapter", directoryMultiaddr, env: celloEnv });
 }
 
+// ─── DOD-M15-RELAYABUSE-1: per-session idle timer ──────────────────────────────
+//
+// M7-SESSION-001's per-session idle timer exists (relay-node.ts's #sessionIdleTimer* methods) and
+// works — it emits session_interrupted to the remaining participant and reclaims the session — but
+// this binary never passed `sessionIdleTimeoutMs` in, so the only thing reclaiming an idle session
+// was the hourly CELLO-M6B-009 sweep against its 24h default. Same NaN-guarded, log-what-is-in-force
+// discipline as RELAY_SESSION_MAX_IDLE_MS below: a bad or empty value falls back to the default AND
+// says so.
+const parsedSessionIdleMs = parseInt(process.env["RELAY_SESSION_IDLE_TIMEOUT_MS"] ?? "3600000", 10);
+const sessionIdleTimeoutMs = Number.isFinite(parsedSessionIdleMs) && parsedSessionIdleMs > 0
+  ? parsedSessionIdleMs
+  : 3_600_000; // 1 hour — an order of magnitude tighter than the 24h sweep it complements, while
+               // still generous enough for normal gaps between messages in a live conversation.
+if (sessionIdleTimeoutMs !== parsedSessionIdleMs) {
+  logger.warn("relay.config.session_idle_ms_invalid", {
+    supplied: process.env["RELAY_SESSION_IDLE_TIMEOUT_MS"] ?? "",
+    using: sessionIdleTimeoutMs,
+  });
+}
+logger.info("relay.config.session_idle_timeout", { sessionIdleTimeoutMs });
+
+// ─── DOD-M15-RELAYABUSE-1: relayed (circuit-relay) connection caps ─────────────
+//
+// DOD-NAT-REACHABILITY-1 disabled libp2p's own duration/byte limit on a relayed connection
+// (`applyDefaultLimit: false`) because it killed the exact case a relayed connection exists for.
+// "Restore the caps" means restoring A cap, not libp2p's 2-minute/128-KiB one — see
+// DEFAULT_CIRCUIT_DURATION_LIMIT_MS / DEFAULT_CIRCUIT_DATA_LIMIT_BYTES in relay-node.ts for the
+// reasoning behind the defaults used when these are unset.
+const parsedCircuitDurationMs = parseInt(process.env["RELAY_CIRCUIT_DURATION_LIMIT_MS"] ?? "", 10);
+const circuitDurationLimitMs = Number.isFinite(parsedCircuitDurationMs) && parsedCircuitDurationMs > 0
+  ? parsedCircuitDurationMs
+  : undefined; // undefined → relay-node.ts's own default (7 days)
+if (process.env["RELAY_CIRCUIT_DURATION_LIMIT_MS"] !== undefined && circuitDurationLimitMs === undefined) {
+  logger.warn("relay.config.circuit_duration_limit_invalid", {
+    supplied: process.env["RELAY_CIRCUIT_DURATION_LIMIT_MS"] ?? "",
+  });
+}
+let circuitDataLimitBytes: bigint | undefined;
+const rawCircuitDataLimit = process.env["RELAY_CIRCUIT_DATA_LIMIT_BYTES"];
+if (rawCircuitDataLimit !== undefined) {
+  try {
+    const parsed = BigInt(rawCircuitDataLimit);
+    circuitDataLimitBytes = parsed > 0n ? parsed : undefined;
+  } catch {
+    circuitDataLimitBytes = undefined;
+  }
+  if (circuitDataLimitBytes === undefined) {
+    logger.warn("relay.config.circuit_data_limit_invalid", { supplied: rawCircuitDataLimit });
+  }
+}
+logger.info("relay.config.circuit_limits", {
+  circuitDurationLimitMs: circuitDurationLimitMs ?? "(default: 7 days)",
+  circuitDataLimitBytes: circuitDataLimitBytes !== undefined ? circuitDataLimitBytes.toString() : "(default: 1 GiB)",
+});
+
 // ─── Relay node startup ────────────────────────────────────────────────────────
 
 let relayResult: Awaited<ReturnType<typeof createRelayNode>>;
@@ -523,6 +589,9 @@ try {
     relayId,
     contentStore,
     logger,
+    sessionIdleTimeoutMs,
+    ...(circuitDurationLimitMs !== undefined ? { circuitDurationLimitMs } : {}),
+    ...(circuitDataLimitBytes !== undefined ? { circuitDataLimitBytes } : {}),
   });
 } catch (err: unknown) {
   const reason = err instanceof Error ? err.message : String(err);

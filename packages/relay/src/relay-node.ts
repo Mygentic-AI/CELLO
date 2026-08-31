@@ -80,7 +80,7 @@ import * as transport from "@cello-protocol/transport";
 import type { CelloNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import type { Logger, SessionWal, ContentStore } from "@cello-protocol/interfaces";
-import type { DepositRateLimitConfig } from "./deposit-rate-limiter.js";
+import { DepositRateLimiter, type DepositRateLimitConfig } from "./deposit-rate-limiter.js";
 import { ContentParkHandler } from "./content-park.js";
 import { RELAY_LEAF_KINDS, RELAY_LEAF_HASHERS } from "./relay-types.js";
 import type {
@@ -124,6 +124,68 @@ const NONCE_TTL_MS = 30_000;
  * logging the type at all. 64 still turns 4 MiB into a line, and fits anything real.
  */
 const MAX_LOGGED_FRAME_TYPE = 64;
+
+/**
+ * DOD-M15-RELAYABUSE-1: default per-key limit on relay authentication attempts.
+ *
+ * Boring rather than clever, same philosophy as the deposit limiter this package already ships:
+ * 20 attempts/minute is far above a legitimate reconnect burst (a flaky link retrying every few
+ * seconds) and far below what a credential-stuffing or connection-flood attempt needs to be
+ * effective. Applied twice per attempt, at DIFFERENT points in the handshake — the peer-keyed
+ * check runs BEFORE verification (bounds one machine hammering with many claimed keys, at no
+ * crypto cost); the pubkey-keyed check runs AFTER the signature verifies (bounds one real key used
+ * from many machines). The pubkey-keyed check must never run on the claimed-but-unverified pubkey:
+ * review caught that ordering letting anyone who merely KNOWS an agent's public key lock that agent
+ * out by claiming it with a garbage signature — see the comment at the check site in
+ * `#handleRelayStream`.
+ *
+ * ⚠️ Like the deposit limiter, this is a speed bump, not a gate: a rewritten client can mint a
+ * fresh transport peer AND a fresh real keypair per burst and get a fresh bucket on both axes each
+ * time. It raises the cost of hammering this relay; it does not make hammering impossible. The
+ * relay's own enforcement is what's load-bearing here, not any assumption about client behaviour.
+ */
+const DEFAULT_AUTH_RATE_LIMIT: DepositRateLimitConfig = { maxPerWindow: 20, windowMs: 60_000 };
+
+/**
+ * DOD-M15-RELAYABUSE-1: default per-key limit on hash_submit, applied post-authentication.
+ *
+ * Sized for real conversational traffic, not the deposit path's occasional message: 120/minute
+ * (2/second sustained) comfortably covers a busy back-and-forth exchange while still bounding a
+ * peer trying to spend the relay's CPU, disk and per-session lock at line rate. Applied per the
+ * Noise-authenticated peer id AND per the AUTHENTICATED sender pubkey — both trustworthy here,
+ * since hash_submit only runs after auth (there is no pre-auth hash_submit path, unlike the auth
+ * limiter above, whose peer/pubkey checks straddle the verification step for exactly that reason).
+ *
+ * ⚠️ Same speed-bump caveat as `DEFAULT_AUTH_RATE_LIMIT`: a rewritten client can rotate its
+ * transport peer per burst and get a fresh bucket on that axis (the pubkey axis cannot be spoofed
+ * post-auth, but a fresh real session under a fresh real key resets it too).
+ */
+const DEFAULT_HASH_SUBMIT_RATE_LIMIT: DepositRateLimitConfig = { maxPerWindow: 120, windowMs: 60_000 };
+
+/**
+ * DOD-M15-RELAYABUSE-1: default cap on a single relayed (circuit-relay) connection's DURATION.
+ *
+ * `applyDefaultLimit: false` (DOD-NAT-REACHABILITY-1) removed libp2p's own default — 2 minutes —
+ * because it killed the exact case a relayed connection exists for: a hole-punch failure
+ * (symmetric NAT, strict corporate firewall) where the relayed link IS the session, for as long as
+ * the conversation runs. "Restore the cap" cannot mean putting the 2-minute value back; it means
+ * bounding what was left fully unbounded. 7 days is long enough that no real CELLO conversation —
+ * which reconnects and re-authenticates far more often than that in practice — should ever hit it,
+ * and short enough to eventually reclaim a circuit someone is holding open indefinitely to tunnel
+ * unrelated traffic through this relay. Tunable via `RELAY_CIRCUIT_DURATION_LIMIT_MS` in
+ * `bin/relay.ts` without a code change, precisely because this number is a judgement call.
+ */
+const DEFAULT_CIRCUIT_DURATION_LIMIT_MS = 7 * 24 * 60 * 60 * 1000;
+
+/**
+ * DOD-M15-RELAYABUSE-1: default cap on a single relayed connection's total BYTES, for the same
+ * reason as the duration cap above. libp2p's own default is 128 KiB — far too small for a
+ * multi-day text conversation carried entirely over a relayed link. 1 GiB is generously above any
+ * realistic CELLO session's content (hash_submit/leaf_deliver frames are hundreds of bytes; parked
+ * ciphertext goes through content-park, not this circuit) while still bounding a relay being used
+ * as a general-purpose data tunnel. Tunable via `RELAY_CIRCUIT_DATA_LIMIT_BYTES`.
+ */
+const DEFAULT_CIRCUIT_DATA_LIMIT_BYTES = BigInt(1024) * BigInt(1024) * BigInt(1024);
 
 const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
@@ -305,6 +367,17 @@ export interface RelayNodeOptions {
    */
   depositRateLimit?: DepositRateLimitConfig;
   /**
+   * DOD-M15-RELAYABUSE-1: per-peer AND per-claimed-pubkey relay-authentication rate limit.
+   * Defaults to 20/minute (see `DEFAULT_AUTH_RATE_LIMIT`). Threaded for the same reasons as
+   * `depositRateLimit`.
+   */
+  authRateLimit?: DepositRateLimitConfig;
+  /**
+   * DOD-M15-RELAYABUSE-1: per-peer AND per-authenticated-pubkey hash_submit rate limit.
+   * Defaults to 120/minute (see `DEFAULT_HASH_SUBMIT_RATE_LIMIT`).
+   */
+  hashSubmitRateLimit?: DepositRateLimitConfig;
+  /**
    * PERSIST-012: Signing key provider for signed relay ACKs.
    * When present, the relay signs every hash_submit_ack with this key and
    * includes relay_id, relay_signature, and timestamp in the ACK frame.
@@ -385,6 +458,15 @@ export class CelloRelayNode {
   /** M7-SESSION-001: pubkey_hex → set of session_id_hex where this pubkey is a participant. */
   readonly #participantSessions = new Map<string, Set<string>>();
 
+  /** DOD-M15-RELAYABUSE-1: auth-attempt rate limit, keyed on the Noise-authenticated peer id. */
+  readonly #authPeerLimiter: DepositRateLimiter;
+  /** DOD-M15-RELAYABUSE-1: auth-attempt rate limit, keyed on the CLAIMED (pre-verification) pubkey. */
+  readonly #authPubkeyLimiter: DepositRateLimiter;
+  /** DOD-M15-RELAYABUSE-1: hash_submit rate limit, keyed on the Noise-authenticated peer id. */
+  readonly #hashSubmitPeerLimiter: DepositRateLimiter;
+  /** DOD-M15-RELAYABUSE-1: hash_submit rate limit, keyed on the AUTHENTICATED sender pubkey. */
+  readonly #hashSubmitPubkeyLimiter: DepositRateLimiter;
+
   constructor(opts: RelayNodeOptions) {
     this.#node = opts.node;
     this.#directoryPubkey = opts.directoryPubkey;
@@ -422,12 +504,20 @@ export class CelloRelayNode {
     this.#ackSigningKeyProvider = opts.ackSigningKeyProvider ?? null;
     this.#relayId = opts.relayId ?? null;
     this.#sessionIdleTimeoutMs = opts.sessionIdleTimeoutMs;
+    this.#authPeerLimiter = new DepositRateLimiter(opts.authRateLimit ?? DEFAULT_AUTH_RATE_LIMIT);
+    this.#authPubkeyLimiter = new DepositRateLimiter(opts.authRateLimit ?? DEFAULT_AUTH_RATE_LIMIT);
+    this.#hashSubmitPeerLimiter = new DepositRateLimiter(opts.hashSubmitRateLimit ?? DEFAULT_HASH_SUBMIT_RATE_LIMIT);
+    this.#hashSubmitPubkeyLimiter = new DepositRateLimiter(opts.hashSubmitRateLimit ?? DEFAULT_HASH_SUBMIT_RATE_LIMIT);
   }
 
   async start(): Promise<void> {
     // CELLO-M6B-009 AC-005: explicit maxInboundStreams caps
-    await this.#node.handle(RELAY_PROTOCOL_ID, (stream) => {
-      void this.#handleRelayStream(stream);
+    // DOD-M15-RELAYABUSE-1: the remotePeerId (Noise-authenticated transport identity) is threaded
+    // into #handleRelayStream so auth and hash_submit can be rate-limited per PEER, not only per
+    // claimed/authenticated pubkey — the same identity source content-park.ts already uses for its
+    // deposit limiter.
+    await this.#node.handle(RELAY_PROTOCOL_ID, (stream, remotePeerId) => {
+      void this.#handleRelayStream(stream, remotePeerId);
     }, { maxInboundStreams: 2048 });
     await this.#node.handle(DIRECTORY_RELAY_PROTOCOL_ID, (stream) => {
       void this.#handleDirectoryRelayStream(stream);
@@ -780,7 +870,7 @@ export class CelloRelayNode {
 
   // ─── Stream handler ─────────────────────────────────────────────────────────
 
-  async #handleRelayStream(stream: Stream): Promise<void> {
+  async #handleRelayStream(stream: Stream, remotePeerId?: string): Promise<void> {
     // Sweep expired nonces on each new connection to prevent unbounded accumulation
     // from abandoned auth attempts (client opens stream but never sends a response).
     const now = Date.now();
@@ -819,6 +909,33 @@ export class CelloRelayNode {
           }
 
           const resp = parsed;
+
+          // DOD-M15-RELAYABUSE-1 (review finding, fixed before this unit closed): rate-limit the
+          // PEER before the nonce lookup and the Ed25519 verify below — a cheap map lookup keyed on
+          // the Noise-authenticated transport identity, which the caller cannot forge, so turning a
+          // limited peer away here costs no crypto work.
+          //
+          // ⚠️ The CLAIMED pubkey is NOT checked here, and that is deliberate — it was the defect
+          // review caught. `resp.pubkey` at this point is an UNVERIFIED ASSERTION: anyone who merely
+          // KNOWS an agent's public key (which CELLO agents hand out freely so others can connect)
+          // could claim it here with a garbage signature, spend the VICTIM's rate-limit bucket, and
+          // lock the real key-holder out of this relay with `rate_limited` — a third party denying
+          // one specific agent service, at zero cost, with no proof of key possession required. The
+          // pubkey-keyed check runs only AFTER the signature verifies below, so incrementing that
+          // bucket requires actually owning the key.
+          const peerLimit = this.#authPeerLimiter.check(remotePeerId);
+          if (!peerLimit.allowed) {
+            this.#logger.warn("relay.auth.rate_limited", {
+              remotePeerId: remotePeerId ?? "(none)",
+              peerLimited: true,
+              pubkeyLimited: false,
+              retryAfterMs: peerLimit.retryAfterMs,
+              impact: "this auth attempt was refused before verification — the caller may retry after the window",
+            });
+            await this.#sendFrame(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "rate_limited", retry_after_ms: peerLimit.retryAfterMs }));
+            stream.abort(new Error("rate_limited")); return;
+          }
+
           const nonceEntry = this.#nonces.get(nonceHex);
           if (!nonceEntry) {
             await this.#sendFrame(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "nonce_unknown" }));
@@ -845,7 +962,23 @@ export class CelloRelayNode {
             stream.abort(new Error("signature_invalid")); return;
           }
 
+          // DOD-M15-RELAYABUSE-1: the pubkey-keyed check, now that the signature has verified — the
+          // caller has just PROVEN ownership of this key, so this bucket cannot be spent on a
+          // victim's behalf by anyone who does not hold their private key.
           authedPubkeyHex = Buffer.from(resp.pubkey).toString("hex");
+          const pubkeyLimit = this.#authPubkeyLimiter.check(authedPubkeyHex);
+          if (!pubkeyLimit.allowed) {
+            this.#logger.warn("relay.auth.rate_limited", {
+              remotePeerId: remotePeerId ?? "(none)",
+              claimedPubkey: truncHex(authedPubkeyHex),
+              peerLimited: false,
+              pubkeyLimited: true,
+              retryAfterMs: pubkeyLimit.retryAfterMs,
+              impact: "this auth attempt was refused after a VALID signature — this key has authenticated too often too fast; the caller may retry after the window",
+            });
+            await this.#sendFrame(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "rate_limited", retry_after_ms: pubkeyLimit.retryAfterMs }));
+            stream.abort(new Error("rate_limited")); return;
+          }
           const isReconnect = this.#streams.has(authedPubkeyHex);
           this.#streams.set(authedPubkeyHex, stream);
           authed = true;
@@ -1043,7 +1176,7 @@ export class CelloRelayNode {
           continue;
         }
         if (parsed.type === "hash_submit") {
-          await this.#processHashSubmit(stream, authedPubkeyHex!, parsed);
+          await this.#processHashSubmit(stream, authedPubkeyHex!, parsed, remotePeerId);
         } else if (parsed.type === "session_liveness_query") {
           await this.#processSessionLivenessQuery(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "client_record_assignment") {
@@ -1154,21 +1287,24 @@ export class CelloRelayNode {
   async #processHashSubmit(
     stream: Stream,
     senderPubkeyHex: string,
-    frame: import("./relay-types.js").HashSubmit
+    frame: import("./relay-types.js").HashSubmit,
+    remotePeerId?: string
   ): Promise<void> {
     const sessionKey = Buffer.from(frame.session_id).toString("hex");
 
-    // M7-SESSION-001: reset idle timer on activity
-    this.#resetSessionIdleTimer(sessionKey);
-
     // `detail` carries the UPSTREAM cause when one is known — the directory's own refusal reason,
     // which `rejectSeal` used to discard (review F6). The `reason` names the class; `detail` names
-    // what actually happened.
-    const reply = async (error: HashSubmitErrorReason, detail?: string) => {
+    // what actually happened. `retryAfterMs` rides only for `rate_limited` (DOD-M15-RELAYABUSE-1).
+    const reply = async (error: HashSubmitErrorReason, detail?: string, retryAfterMs?: number) => {
       try {
         await this.#sendFrame(
           stream,
-          encodeHashSubmitError({ type: "hash_submit_error", reason: error, ...(detail ? { detail } : {}) }),
+          encodeHashSubmitError({
+            type: "hash_submit_error",
+            reason: error,
+            ...(detail ? { detail } : {}),
+            ...(retryAfterMs !== undefined ? { retry_after_ms: retryAfterMs } : {}),
+          }),
         );
       } catch (err) {
         this.#logger.error("relay.send.failed", {
@@ -1179,6 +1315,30 @@ export class CelloRelayNode {
         });
       }
     };
+
+    // DOD-M15-RELAYABUSE-1: rate-limit BEFORE the idle-timer reset and the per-session lock below —
+    // both are per-call work an unthrottled flood would otherwise get for free. Both the sender's
+    // AUTHENTICATED pubkey and the Noise-authenticated peer id are trustworthy here (unlike the
+    // auth-phase limit, this runs strictly after identity is verified).
+    const peerLimit = this.#hashSubmitPeerLimiter.check(remotePeerId);
+    const pubkeyLimit = this.#hashSubmitPubkeyLimiter.check(senderPubkeyHex);
+    if (!peerLimit.allowed || !pubkeyLimit.allowed) {
+      const retryAfterMs = Math.max(peerLimit.retryAfterMs, pubkeyLimit.retryAfterMs);
+      this.#logger.warn("relay.hash_submit.rate_limited", {
+        remotePeerId: remotePeerId ?? "(none)",
+        senderPubkey: truncHex(senderPubkeyHex),
+        sessionId: truncHex(sessionKey),
+        peerLimited: !peerLimit.allowed,
+        pubkeyLimited: !pubkeyLimit.allowed,
+        retryAfterMs,
+        impact: "this submit was refused before the session lock and store write — the sender keeps its copy and may retry after the window",
+      });
+      await reply("rate_limited", undefined, retryAfterMs);
+      return;
+    }
+
+    // M7-SESSION-001: reset idle timer on activity
+    this.#resetSessionIdleTimer(sessionKey);
 
     // Serialize per-session to guarantee monotonic sequencing (SI-002)
     const prev = this.#sessionLocks.get(sessionKey) ?? Promise.resolve();
@@ -2098,6 +2258,20 @@ export interface CreateRelayNodeOptions {
   directoryPubkey: Uint8Array;
   /** DOD-M15-RELAYABUSE-1: per-depositor park-deposit rate limit. Forwarded to the park handler. */
   depositRateLimit?: DepositRateLimitConfig;
+  /** DOD-M15-RELAYABUSE-1: per-peer AND per-claimed-pubkey relay-authentication rate limit. */
+  authRateLimit?: DepositRateLimitConfig;
+  /** DOD-M15-RELAYABUSE-1: per-peer AND per-authenticated-pubkey hash_submit rate limit. */
+  hashSubmitRateLimit?: DepositRateLimitConfig;
+  /**
+   * DOD-M15-RELAYABUSE-1: cap on how long a single relayed (circuit-relay) connection may stay
+   * open. Defaults to `DEFAULT_CIRCUIT_DURATION_LIMIT_MS` (7 days) — see that constant for why.
+   */
+  circuitDurationLimitMs?: number;
+  /**
+   * DOD-M15-RELAYABUSE-1: cap on how many bytes a single relayed connection may carry.
+   * Defaults to `DEFAULT_CIRCUIT_DATA_LIMIT_BYTES` (1 GiB) — see that constant for why.
+   */
+  circuitDataLimitBytes?: bigint;
   /** FED-OPTIONB-SETUP-001: consortium directory pubkeys (any-directory). Falls back to [directoryPubkey]. */
   directoryPubkeys?: Uint8Array[];
   /**
@@ -2200,17 +2374,25 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     //     reusing the old one. Fifteen slots are gone almost immediately in real use —
     //     after which the relay completes the handshake and silently grants NOTHING, so
     //     agents come up looking healthy and reachable by nobody.
-    //   * applyDefaultLimit: true — relayed connections are capped at 2 minutes and
+    //   * applyDefaultLimit: true — relayed connections were capped at 2 minutes and
     //     128 KiB. That is fatal for the case that matters most: where the hole punch
     //     FAILS (symmetric NAT, strict corporate firewall) the relayed connection is not
     //     a fallback, it IS the session, and it must last as long as the conversation.
     //
-    // For a relay whose entire job is carrying CELLO sessions, both defaults are wrong.
+    // For a relay whose entire job is carrying CELLO sessions, libp2p's toy-scale defaults were
+    // wrong on both counts. maxReservations stays raised. The duration/data limit is DOD-M15-
+    // RELAYABUSE-1's item 3, "restore the caps" — not the 2-min/128-KiB values (those would
+    // reopen this exact defect), but a CELLO-sized cap: see DEFAULT_CIRCUIT_DURATION_LIMIT_MS /
+    // DEFAULT_CIRCUIT_DATA_LIMIT_BYTES for the reasoning. An unbounded relayed connection is an
+    // open door with no closing time — a circuit nobody is using for a real session can otherwise
+    // sit on this relay forever.
     relayServer: {
       enabled: true,
       reservations: {
         maxReservations: 4096,
-        applyDefaultLimit: false,
+        applyDefaultLimit: true,
+        defaultDurationLimit: opts.circuitDurationLimitMs ?? DEFAULT_CIRCUIT_DURATION_LIMIT_MS,
+        defaultDataLimit: opts.circuitDataLimitBytes ?? DEFAULT_CIRCUIT_DATA_LIMIT_BYTES,
       },
     },
     // DOD-RELAY-KEEPALIVE-1 — THE RELAY MUST NEVER SEVER A CLIENT LINK ON ONE SLOW PING.
@@ -2246,6 +2428,8 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     sessionWal: opts.sessionWal,
     contentStore: opts.contentStore,
     ...(opts.depositRateLimit ? { depositRateLimit: opts.depositRateLimit } : {}),
+    ...(opts.authRateLimit ? { authRateLimit: opts.authRateLimit } : {}),
+    ...(opts.hashSubmitRateLimit ? { hashSubmitRateLimit: opts.hashSubmitRateLimit } : {}),
     logger: opts.logger,
     ackSigningKeyProvider: opts.ackSigningKeyProvider,
     relayId: opts.relayId,

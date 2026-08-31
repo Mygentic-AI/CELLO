@@ -63,7 +63,13 @@ export function encodeAuthChallenge(frame: RelayAuthChallenge): Uint8Array {
 }
 
 export function encodeAuthFailed(frame: RelayAuthFailed): Uint8Array {
-  return ENC.encode({ type: frame.type, reason: frame.reason });
+  // `retry_after_ms` rides only when present (rate_limited) — additive on the wire, same
+  // convention as `hash_submit_error.detail` and `content_park_deposit_ack.retry_after_ms`.
+  return ENC.encode({
+    type: frame.type,
+    reason: frame.reason,
+    ...(frame.retry_after_ms !== undefined ? { retry_after_ms: frame.retry_after_ms } : {}),
+  });
 }
 
 export function encodeAuthOk(_frame: RelayAuthOk): Uint8Array {
@@ -91,7 +97,13 @@ export function encodeHashSubmitError(frame: HashSubmitError): Uint8Array {
   // `detail` rides only when present — Invariant 3 (DOD-M15-TERMINAL-REASON-1 review F6): the relay
   // carries the DIRECTORY's own refusal cause instead of discarding it behind a class name. An
   // older client ignores an unknown field, so this is additive on the wire.
-  return ENC.encode({ type: frame.type, reason: frame.reason, ...(frame.detail ? { detail: frame.detail } : {}) });
+  // `retry_after_ms` rides only when present (rate_limited) — DOD-M15-RELAYABUSE-1.
+  return ENC.encode({
+    type: frame.type,
+    reason: frame.reason,
+    ...(frame.detail ? { detail: frame.detail } : {}),
+    ...(frame.retry_after_ms !== undefined ? { retry_after_ms: frame.retry_after_ms } : {}),
+  });
 }
 
 export function encodeLeafDeliver(frame: LeafDeliver): Uint8Array {

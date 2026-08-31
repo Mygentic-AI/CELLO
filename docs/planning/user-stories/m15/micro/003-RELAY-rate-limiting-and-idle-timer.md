@@ -67,16 +67,43 @@ Restore both.
 
 ## Definition of Done
 
-1. Each of the three paths refuses when its limit is exceeded, and the refusal **names its cause** —
-   the caller can tell "you are being throttled" from "the relay is down".
-2. A throttled caller is told **when** it may retry, and that number comes from the relay rather than
-   being guessed by the client.
-3. The production relay binary passes the idle timer. Prove it from the binary, not from the config.
-4. Relayed connections carry a duration cap and a byte cap.
-5. Every new test has been **made to fail on purpose** — revert the fix, confirm it reddens, confirm
-   it reddens for the reason you expect.
-6. `pnpm run test`, `pnpm run lint`, `pnpm run typecheck` pass.
-7. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below.
+1. ✅ **Authentication** and **hash_submit** each refuse over the wire when their limit is exceeded,
+   with a NAMED reason (`relay_auth_failed`/`rate_limited`, `hash_submit_error`/`rate_limited`) —
+   never a log-only refusal. **Gap-fill has no wire handler left to limit**: its frame type
+   (`gap_fill_request`) was deleted from the dispatch in `DOD-M15-SEALWIRE-1` bullet 7 (confirmed by
+   reading `relay-node.ts`'s comment at the dispatch site and grepping `relay-frames.ts` — no decode
+   path exists for it). There is no surface to add a limiter to; this clause is satisfied vacuously.
+   Content-park deposit and the liveness query were re-checked against their "already done"
+   descriptions (per the trap above) and both matched: deposit has a per-peer limiter with a
+   distinguishable "running blind" log for the unattributed case; liveness collapses
+   no-session/not-a-participant/wrong-subject into one anti-enumeration reply.
+2. ✅ Both new refusals carry `retry_after_ms`, sourced from the relay's own `DepositRateLimiter`
+   (reused as-is — its own correctness is already covered by `dod-m15-deposit-rate-limit.test.ts`),
+   never guessed client-side.
+3. ✅ Proven from the BINARY, not the config: `dod-m15-relayabuse-1-idle-timer-binary.test.ts` spawns
+   the compiled `dist/bin/relay.js`, records a real client-presented session assignment over the
+   wire, and asserts the relay sends `session_interrupted`/`timeout` and tears the session down on
+   its own — no `hash_submit` needed to trigger it, the timer starts at `recordAssignment`. Chosen
+   default: `RELAY_SESSION_IDLE_TIMEOUT_MS` = 1 hour (an order of magnitude tighter than the 24h
+   sweep it complements; a judgement call, tunable without a code change).
+4. ✅ Relayed connections carry both caps, restored (not reinstating libp2p's 2-min/128-KiB toy
+   defaults, which is what broke NAT reachability originally) but bounded: 7 days / 1 GiB by
+   default (`RELAY_CIRCUIT_DURATION_LIMIT_MS` / `RELAY_CIRCUIT_DATA_LIMIT_BYTES`), proven ENFORCED
+   (not merely configured) in `nat-reachability-relay-limits.test.ts` L2a/L2b — a real relayed
+   circuit is established through the production factory and closed once the tiny test-configured
+   limit is crossed.
+5. ✅ Every new test made to fail on purpose: the L2a/L2b circuit-cap tests, the 5 auth/hash_submit
+   rate-limit tests, and the idle-timer binary test were each run against a temporary revert of
+   their fix and reddened for the expected reason (no cap → link never disconnects; no limiter →
+   every attempt succeeds; no wiring → the read hangs past its deadline waiting for a timer that
+   never fires). Fix restored after each; diffs confirmed identical to the committed state.
+6. ✅ `pnpm run lint` clean. `pnpm run typecheck` (`tsc --build`, rebuilds `dist/` — required before
+   the idle-timer binary test means anything, per §7's own warning) clean. `pnpm run test`: same
+   ONE pre-existing, unrelated failure as 004-RELAY and 005-RELAY
+   (`expect-present-enforcer.test.ts` / `j-suspend-tofn.spine.test.ts:279`, confirmed present on
+   `main` before any M15-RELAY work in this session); every test in every file this unit touched or
+   added is green.
+7. ✅ Reviewed by `cello-unit-reviewer`, verdict quoted below.
 
 **Not in scope:** requiring an assignment (002-RELAY), the admin frame types (004-RELAY),
 infrastructure-level flood protection, anything in the directory or the client.
@@ -96,10 +123,33 @@ infrastructure-level flood protection, anything in the directory or the client.
 
 ## Review
 
-*(Reviewer verdict. One quote. Not a transcript.)*
+> **1 blocking finding.** SPEC: FAITHFUL (all 7 clauses implemented as written). NO SILENT
+> FALLBACKS. ERRORS NAME THEIR CAUSE. TESTS HAVE TEETH — all seven new/modified tests survive the
+> revert test on direct code-path verification. REMOVALS PROVEN (gap-fill's deadness independently
+> re-confirmed in both repos). **One HIGH-severity finding stood: the auth path's pre-verification,
+> pubkey-keyed rate limiter let any third party who merely knows an agent's public key — information
+> CELLO agents are meant to share to be reachable — lock that specific agent out of a specific relay
+> at zero cost, with no proof of key possession required, by claiming its pubkey with a garbage
+> signature 20+ times a minute. This is a new attack surface introduced by this unit.** Fix: move
+> the pubkey-keyed check to after Ed25519 verification, leaving the peer-keyed check where it is. —
+> `cello-unit-reviewer`
+
+**Fixed in this branch, same session:** the pubkey-keyed check for authentication now runs strictly
+after the signature verifies — a forged claim on someone else's pubkey fails on `signature_invalid`
+before it ever reaches the limiter, so it cannot spend the real key-holder's bucket. The peer-keyed
+check is unchanged (it was never vulnerable — it keys on the caller's own Noise-authenticated
+transport identity, which they cannot forge). Added a regression test
+(`REGRESSION: a forged attempt CLAIMING a victim's real pubkey...`) and revert-tested it against the
+reintroduced vulnerable ordering: reddened with the forger's second attempt returning
+`rate_limited` instead of `signature_invalid` — direct proof the victim's bucket had been spent by
+an unverified claim — then passed again once restored. Hash_submit's pubkey-keyed check was never
+at risk (it keys on the AUTHENTICATED sender pubkey, post-verification, by construction — there is
+no pre-auth hash_submit path).
 
 ---
 
 ## Newly discovered
 
-*(One or two lines each. Do not act on them.)*
+*(none outstanding — the one documentation gap the reviewer noted, the speed-bump caveat missing
+next to `DEFAULT_AUTH_RATE_LIMIT`/`DEFAULT_HASH_SUBMIT_RATE_LIMIT`, was closed in the same commit
+as the security fix since it was a one-line addition to code already being touched.)*

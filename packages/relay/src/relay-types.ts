@@ -58,11 +58,19 @@ export type AuthFailedReason =
   | "nonce_expired"
   | "nonce_unknown"
   | "nonce_reused"
-  | "signature_invalid";
+  | "signature_invalid"
+  /** DOD-M15-RELAYABUSE-1: per-peer or per-claimed-pubkey auth attempt rate exceeded. */
+  | "rate_limited";
 
 export interface RelayAuthFailed {
   type: "relay_auth_failed";
   reason: AuthFailedReason;
+  /**
+   * DOD-M15-RELAYABUSE-1: milliseconds until the caller's rate-limit window clears. Present only
+   * when `reason` is `rate_limited` — the relay knows when the window resets, so it says so rather
+   * than leaving the caller to guess a retry interval.
+   */
+  retry_after_ms?: number;
 }
 
 export interface RelayAuthOk {
@@ -200,7 +208,9 @@ export type HashSubmitErrorReason =
    * wrong. Splitting them costs one union member and is the difference between a client author
    * checking their signature and a client author auditing a rule they never broke.
    */
-  | "submit_malformed";
+  | "submit_malformed"
+  /** DOD-M15-RELAYABUSE-1: per-peer or per-sender-pubkey hash_submit rate exceeded. */
+  | "rate_limited";
 
 export interface HashSubmitError {
   type: "hash_submit_error";
@@ -211,6 +221,12 @@ export interface HashSubmitError {
    * unknown field. Invariant 3 — `reason` is the class, `detail` is what happened.
    */
   detail?: string;
+  /**
+   * DOD-M15-RELAYABUSE-1: milliseconds until the caller's rate-limit window clears. Present only
+   * when `reason` is `rate_limited`, mirroring `content_park_deposit_ack`'s own field — the relay
+   * knows when the window resets, so throttling is distinguishable from an outage.
+   */
+  retry_after_ms?: number;
 }
 
 export interface HashSubmitAck {
