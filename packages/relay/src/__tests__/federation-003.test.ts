@@ -44,6 +44,7 @@ import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID, DIRECTORY_RELAY_PROTOCOL_ID } from "../relay-node.js";
 import type { DirectoryAdapter } from "../relay-node.js";
+import type { RelayPubkeyLookup } from "../relay-types.js";
 import { NetworkDirectoryAdapter } from "../network-directory-adapter.js";
 import { createRelayHealthServer } from "../relay-service-lifecycle.js";
 
@@ -305,9 +306,14 @@ describe("FEDERATION-003 AC-005/AC-006/SI-002: predecessor relay ACK verificatio
     // Mock directory adapter that implements getRelayPublicKey
     const mockDirectory: DirectoryAdapter = {
       async processSeal() { return { ok: false, reason: "not_implemented" }; },
-      async getRelayPublicKey(relayId: string): Promise<string | undefined> {
-        if (relayId === opts.knownRelayId) return opts.knownRelayPubkeyHex;
-        return undefined;
+      async getRelayPublicKey(relayId: string): Promise<RelayPubkeyLookup> {
+        // Both halves required: a fixture configured with a known id but no key is not a directory
+        // that "found" something. The old `string | undefined` return let those two blur together.
+        if (relayId === opts.knownRelayId && opts.knownRelayPubkeyHex !== undefined) {
+          return { ok: true, publicKeyHex: opts.knownRelayPubkeyHex };
+        }
+        // The directory ANSWERED and holds no key for this id — a verdict, not a failure to ask.
+        return { ok: false, reason: "not_registered" };
       },
     };
 
@@ -436,8 +442,8 @@ describe("FEDERATION-003 AC-005/AC-006/SI-002: predecessor relay ACK verificatio
     // Directory adapter that does NOT know this relayId
     const mockDirectory: DirectoryAdapter = {
       async processSeal() { return { ok: false, reason: "not_implemented" }; },
-      async getRelayPublicKey(_relayId: string): Promise<string | undefined> {
-        return undefined; // always unknown
+      async getRelayPublicKey(_relayId: string): Promise<RelayPubkeyLookup> {
+        return { ok: false, reason: "not_registered" }; // always unknown
       },
     };
 
@@ -532,6 +538,114 @@ describe("FEDERATION-003 AC-005/AC-006/SI-002: predecessor relay ACK verificatio
     }
   });
 
+  it("★★★ DOD-M15-SWEEP-1 item 1: a directory it CANNOT REACH is not reported as an unregistered relay", async () => {
+    /**
+     * The sweep's one real finding. `getRelayPublicKey` was a bare `catch { return undefined }`
+     * around a network call, so a dead link to the directory produced the same `undefined` as a
+     * directory that answered "no such relay" — and the caller logged `relay.predecessor.unknown`,
+     * sending an operator to check a relay's registration when the actual fault was that this relay
+     * could not reach its directory at all, which affects far more than one ACK.
+     *
+     * The REFUSAL is deliberately unchanged: SI-002 forbids accepting an unverified ACK, so failing
+     * to reach the directory must still refuse, and the client still sees RELAY_PREDECESSOR_UNKNOWN.
+     * What changes is what the OPERATOR is told. So this asserts both halves — the wire behaviour is
+     * identical, the diagnosis is not — and it asserts the ABSENCE of the misleading event, which is
+     * the half that actually pins the fix.
+     */
+    const predecessorKp = generateKeypair();
+    const predecessorRelayId = Buffer.from(await predecessorKp.getPublicKey()).toString("hex");
+    const logger = makeLogger();
+
+    const mockDirectory: DirectoryAdapter = {
+      async processSeal() { return { ok: false, reason: "not_implemented" }; },
+      // The directory is unreachable — this relay never got an answer, of any kind.
+      async getRelayPublicKey(_relayId: string): Promise<RelayPubkeyLookup> {
+        return { ok: false, reason: "directory_unreachable", error: "connection_lost: no open connection" };
+      },
+    };
+
+    const directoryKp = generateKeypair();
+    const relay = await createRelayNode({
+      directoryPubkey: await directoryKp.getPublicKey(),
+      directory: mockDirectory,
+      logger,
+    });
+
+    try {
+      const sessionKpA = generateKeypair();
+      const pubA = await sessionKpA.getPublicKey();
+      const pubB = await generateKeypair().getPublicKey();
+      const sessionId = new Uint8Array(randomBytes(16));
+      const sessionTimestamp = Date.now();
+      const assignmentTbs = CBOR_ENC.encode([
+        sessionId, pubA, pubB,
+        sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
+      ]);
+      const rec = relay.relay.recordAssignment({
+        session_id: sessionId, participant_a: pubA, participant_b: pubB,
+        session_timestamp: sessionTimestamp, directory_signature: await directoryKp.sign(assignmentTbs),
+      });
+      expect(rec.ok, `recordAssignment failed: ${JSON.stringify(rec)}`).toBe(true);
+
+      const contentHash = new Uint8Array(randomBytes(32));
+      const struct1Cbor = CBOR_ENC.encode([1, contentHash, pubA, sessionId, 0, Date.now()]) as Uint8Array;
+      const senderSig = await sessionKpA.sign(struct1Cbor);
+      const predecessorSeq = 1;
+      const predecessorTs = Date.now();
+      const predecessorSig = await predecessorKp.sign(buildRelayAckTbs(contentHash, predecessorSeq, predecessorTs));
+
+      const clientNode = await createNode({ keyProvider: sessionKpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+      await clientNode.start();
+      await clientNode.dial(String(relay.node.listenAddresses()[0]));
+      const stream = await clientNode.newStream(relay.node.getPeerId(), RELAY_PROTOCOL_ID);
+      const iter = (lp.decode(stream) as AsyncIterable<unknown>)[Symbol.asyncIterator]() as AsyncIterator<Uint8Array>;
+
+      const { value: cRaw } = await iter.next();
+      const cBytes = cRaw instanceof Uint8Array ? cRaw : (cRaw as unknown as { slice(): Uint8Array }).slice();
+      const challenge = decode(cBytes) as { type: string; nonce: Uint8Array };
+      const nonce = challenge.nonce instanceof Uint8Array ? challenge.nonce : new Uint8Array(challenge.nonce as unknown as ArrayBuffer);
+      const authMsg = new Uint8Array(Buffer.concat([Buffer.from("CELLO-RELAY-AUTH-v1", "utf8"), nonce, pubA]));
+      const authSig = await sessionKpA.sign(new Uint8Array(createHash("sha256").update(authMsg).digest()));
+      stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_auth_response", pubkey: pubA, signature: authSig })));
+      const { value: ackRaw } = await iter.next();
+      const ackBytes = ackRaw instanceof Uint8Array ? ackRaw : (ackRaw as unknown as { slice(): Uint8Array }).slice();
+      expect((decode(ackBytes) as { type: string }).type).toBe("relay_auth_ok");
+
+      stream.send(lp.encode.single(CBOR_ENC.encode({
+        type: "hash_submit",
+        session_id: sessionId,
+        leaf_kind: 0x00,
+        structure1_cbor: struct1Cbor,
+        sender_signature: senderSig,
+        predecessor_relay_id: predecessorRelayId,
+        predecessor_relay_signature: predecessorSig,
+        predecessor_relay_sequence: predecessorSeq,
+        predecessor_relay_timestamp: predecessorTs,
+      })));
+
+      const { value: respRaw } = await iter.next();
+      const respBytes = respRaw instanceof Uint8Array ? respRaw : (respRaw as unknown as { slice(): Uint8Array }).slice();
+      const resp = decode(respBytes) as { type: string; reason?: string };
+      expect(resp.type, "the refusal itself is unchanged — SI-002 still forbids an unverified ACK").toBe("hash_submit_error");
+      expect(resp.reason).toBe("RELAY_PREDECESSOR_UNKNOWN");
+
+      const failed = logger.errorEvents.find(([ev]) => ev === "relay.predecessor.lookup_failed");
+      expect(failed, "an unreachable directory must be reported at ERROR, naming the reason").toBeDefined();
+      expect(failed![1]).toMatchObject({ relayId: predecessorRelayId, reason: "directory_unreachable" });
+
+      expect(
+        logger.warnEvents.find(([ev]) => ev === "relay.predecessor.unknown"),
+        "relay.predecessor.unknown must NOT be logged — the directory never said the relay was " +
+          "unregistered, it never answered at all, and reporting it as unregistered is what sent " +
+          "operators hunting a registration bug while the real fault was a dead link to the directory.",
+      ).toBeUndefined();
+
+      await clientNode.stop();
+    } finally {
+      await relay.stop();
+    }
+  });
+
   it("SI-002: relay rejects re-submission when predecessor ACK signature is invalid — no fallback", async () => {
     const predecessorKp = generateKeypair();
     const predecessorPubkey = await predecessorKp.getPublicKey();
@@ -543,9 +657,9 @@ describe("FEDERATION-003 AC-005/AC-006/SI-002: predecessor relay ACK verificatio
     // Directory knows the predecessor relay
     const mockDirectory: DirectoryAdapter = {
       async processSeal() { return { ok: false, reason: "not_implemented" }; },
-      async getRelayPublicKey(relayId: string): Promise<string | undefined> {
-        if (relayId === predecessorRelayId) return predecessorRelayId; // real pubkey hex
-        return undefined;
+      async getRelayPublicKey(relayId: string): Promise<RelayPubkeyLookup> {
+        if (relayId === predecessorRelayId) return { ok: true, publicKeyHex: predecessorRelayId }; // real pubkey hex
+        return { ok: false, reason: "not_registered" };
       },
     };
 

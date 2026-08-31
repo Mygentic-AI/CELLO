@@ -18,7 +18,7 @@ import { buildRelayRegistrationTbs } from "@cello-protocol/crypto";
 import type { CelloNode } from "@cello-protocol/transport";
 import type { Logger } from "@cello-protocol/interfaces";
 import type { DirectoryAdapter } from "./relay-node.js";
-import type { SealData } from "./relay-types.js";
+import type { SealData, RelayPubkeyLookup } from "./relay-types.js";
 
 const CBOR_ENC = new Encoder({ useRecords: false, mapsAsObjects: false });
 const DIRECTORY_RELAY_PROTOCOL_ID = "/cello/directory-relay/1.0.0";
@@ -644,11 +644,24 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
    * FEDERATION-003 AC-004: Look up a relay's registered public key from the directory.
    *
    * Sends a relay_pubkey_request frame over /cello/directory-relay/1.0.0.
-   * Returns the public_key_hex string, or undefined if the relayId is not registered.
-   * Used by the new relay when verifying a predecessor relay's ACK signature.
+   *
+   * DOD-M15-SWEEP-1 re-review item 1 — **"NOT REGISTERED" AND "COULD NOT ASK" ARE DIFFERENT
+   * ANSWERS, AND THIS USED TO GIVE THE SAME ONE FOR BOTH.**
+   *
+   * This method was a bare `catch { return undefined }` wrapped around a network call, so a dead
+   * link to the directory, a stream that failed to open, an undecodable response and a directory
+   * that answered "no such relay" all collapsed into one `undefined`. The caller reads that as "not
+   * registered" and answers `RELAY_PREDECESSOR_UNKNOWN` — telling an operator a relay is
+   * unregistered when the real fault is that this relay cannot reach its directory at all. It fails
+   * CLOSED, so it was never a security hole; it is error substitution, and it is the exact `return
+   * null` trap the sweep that found it was written to hunt.
+   *
+   * The discriminated result keeps the two apart. `processSeal` in this same file already draws this
+   * distinction — "refused" versus "unknown" versus "unreachable" — with a comment on why it is
+   * load-bearing there; this is the same idea applied to a lookup.
    */
-  async getRelayPublicKey(relayId: string): Promise<string | undefined> {
-    if (!this.#node) return undefined;
+  async getRelayPublicKey(relayId: string): Promise<RelayPubkeyLookup> {
+    if (!this.#node) return { ok: false, reason: "no_transport" };
 
     const frame = CBOR_ENC.encode({
       type: "relay_pubkey_request",
@@ -668,13 +681,18 @@ export class NetworkDirectoryAdapter implements DirectoryAdapter {
         const raw = chunk instanceof Uint8Array ? chunk : (chunk as unknown as { slice(): Uint8Array }).slice();
         const resp = cborDecode(raw) as Record<string, unknown>;
         if (resp["type"] === "relay_pubkey_response") {
-          return resp["public_key_hex"] as string | undefined;
+          const hex = resp["public_key_hex"];
+          // The directory answered, and its answer is that it holds no key for this relay. THIS is
+          // the only branch that means "not registered".
+          if (typeof hex !== "string" || hex.length === 0) return { ok: false, reason: "not_registered" };
+          return { ok: true, publicKeyHex: hex };
         }
-        return undefined;
+        return { ok: false, reason: "unexpected_response" };
       }
-      return undefined;
-    } catch {
-      return undefined;
+      // The stream closed without a frame. The directory never answered — that is not a verdict.
+      return { ok: false, reason: "no_response" };
+    } catch (err: unknown) {
+      return { ok: false, reason: "directory_unreachable", error: describeThrown(err) };
     }
   }
 

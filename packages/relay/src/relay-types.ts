@@ -403,3 +403,28 @@ export interface ClientRecordAssignment {
   counterparty_session_peer_id?: string;
   assignment_signature: Uint8Array;  // 64-byte per-node directory sig over the relay TBS (relayDirSig)
 }
+
+/**
+ * DOD-M15-SWEEP-1 re-review item 1: the result of asking the directory for a relay's registered
+ * public key.
+ *
+ * The point of the type is the second line: **`not_registered` is a directory VERDICT; everything
+ * else is a failure to obtain one.** Before this existed, the lookup returned `string | undefined`
+ * and the caller had no way to tell "the directory says it has no key for that relay" from "this
+ * relay cannot reach its directory" — so an operator debugging a dead network link was told a relay
+ * was unregistered.
+ */
+export type RelayPubkeyLookup =
+  | { ok: true; publicKeyHex: string }
+  | {
+      ok: false;
+      /**
+       * `not_registered` — the directory answered and holds no key for this relay. A real answer.
+       * Everything below means no answer was obtained, and must never be reported as "unregistered":
+       * `no_transport` (this adapter has no node), `no_response` (stream closed with no frame),
+       * `unexpected_response` (a frame arrived, but not the one asked for), `directory_unreachable`
+       * (the call threw — dial, stream open, or decode).
+       */
+      reason: "not_registered" | "no_transport" | "no_response" | "unexpected_response" | "directory_unreachable";
+      error?: string;
+    };

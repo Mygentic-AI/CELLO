@@ -161,7 +161,7 @@ async function sealThen(opts: {
       asked++;
       return opts.answer();
     },
-    async getRelayPublicKey() { return undefined; },
+    async getRelayPublicKey() { return { ok: false as const, reason: "not_registered" as const }; },
   } as unknown as DirectoryAdapter;
 
   const { relay, node, stop } = await createRelayNode({

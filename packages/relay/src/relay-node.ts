@@ -89,6 +89,7 @@ import type {
   SessionAssignment,
   RelaySessionState,
   SealData,
+  RelayPubkeyLookup,
   HashSubmitErrorReason,
   SessionLivenessQuery,
   ClientRecordAssignment,
@@ -319,7 +320,12 @@ export interface DirectoryAdapter {
    * Returns undefined if the relayId is not registered.
    * Used when verifying predecessor relay ACK signatures on re-submission.
    */
-  getRelayPublicKey?(relayId: string): Promise<string | undefined>;
+  /**
+   * DOD-M15-SWEEP-1 re-review item 1: returns a discriminated result, not `string | undefined`.
+   * Only `reason: "not_registered"` means the directory answered; every other failure means no
+   * answer was obtained and must not be reported to an operator as "that relay is unregistered".
+   */
+  getRelayPublicKey?(relayId: string): Promise<RelayPubkeyLookup>;
 }
 
 export interface RelayNodeOptions {
@@ -1509,14 +1515,34 @@ export class CelloRelayNode {
       }
 
       // Look up the predecessor relay's public key from the directory (AC-005/AC-006).
-      const pubKeyHex = await this.#directory.getRelayPublicKey(predecessorRelayId);
-      if (!pubKeyHex) {
-        // AC-006: predecessor relayId not found in directory.
+      const lookup = await this.#directory.getRelayPublicKey(predecessorRelayId);
+      if (!lookup.ok) {
         const s1ForLog = decodeStructure1(frame.structure1_cbor);
         const hashHex = s1ForLog ? Buffer.from(s1ForLog.content_hash).toString("hex").slice(0, 16) : "(unknown)";
-        this.#logger.warn("relay.predecessor.unknown", { relayId: predecessorRelayId, hashHex });
+        if (lookup.reason === "not_registered") {
+          // AC-006: the directory answered, and it holds no key for this relay id.
+          this.#logger.warn("relay.predecessor.unknown", { relayId: predecessorRelayId, hashHex });
+        } else {
+          /**
+           * DOD-M15-SWEEP-1 re-review item 1: a DIFFERENT event, at error, because this is a
+           * different problem. The refusal below is unchanged and still correct — SI-002 forbids
+           * accepting an unverified ACK, so failing to reach the directory must still refuse — but
+           * an operator seeing only `relay.predecessor.unknown` would go looking for a missing
+           * relay registration when the actual fault is that this relay cannot reach its directory,
+           * which affects far more than one ACK.
+           */
+          this.#logger.error("relay.predecessor.lookup_failed", {
+            relayId: predecessorRelayId,
+            hashHex,
+            reason: lookup.reason,
+            ...(lookup.error ? { error: lookup.error } : {}),
+            impact: "could not ASK the directory for this relay's key, so the predecessor ACK cannot be verified and is refused. " +
+              "This is NOT evidence that the relay is unregistered — the directory never answered.",
+          });
+        }
         await reply("RELAY_PREDECESSOR_UNKNOWN"); return;
       }
+      const pubKeyHex = lookup.publicKeyHex;
 
       // Verify the predecessor ACK signature: verify(pubKey, buildRelayAckTbs(contentHash, seq, ts), sig)
       // The TBS is SHA-256(hash_bytes || seq_BE4 || ts_BE8) per PERSIST-012.

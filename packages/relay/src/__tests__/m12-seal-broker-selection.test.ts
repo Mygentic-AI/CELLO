@@ -134,7 +134,7 @@ function spyDirectory(results: Array<{ ok: boolean; reason?: string }>): {
       const r = results[Math.min(call++, results.length - 1)]!;
       return r.ok ? { ok: true as const } : { ok: false as const, reason: r.reason ?? "spy_refused" };
     },
-    async getRelayPublicKey() { return undefined; },
+    async getRelayPublicKey() { return { ok: false as const, reason: "not_registered" as const }; },
   } as unknown as DirectoryAdapter;
   return { adapter, targets };
 }

@@ -165,7 +165,7 @@ async function reasonAfterSeal(opts: {
       if (opts.hold) await (opts.gate ?? held);
       return opts.answer();
     },
-    async getRelayPublicKey() { return undefined; },
+    async getRelayPublicKey() { return { ok: false as const, reason: "not_registered" as const }; },
   } as unknown as DirectoryAdapter;
 
   const { relay, node, stop } = await createRelayNode({
