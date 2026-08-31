@@ -1261,13 +1261,54 @@ capability, and this Telegram bot is the ONLY thing that issues one to a human �
 
 | | |
 |---|---|
-| Cloud Run | `cello-ops-agent`, us-east1, `INGRESS_TRAFFIC_INTERNAL_ONLY`, image **`ops-01b5fd5e`** (rolled 2026-08-09, revision `cello-ops-agent-00016-tmq`; was `ops-c04bb0fa`) |
+| Cloud Run | `cello-ops-agent`, us-east1, `INGRESS_TRAFFIC_INTERNAL_ONLY`, image **`ops-01b5fd5e`** (built 2026-08-09; revision **`cello-ops-agent-00017-7v6`** since 2026-08-31 — same image, env-only change, see the outage below) |
 | Scaling | **min = max = 1, `cpu_idle = false`** — the Telegram adapter long-polls, so it needs a process between requests; two instances would race for the same update; a throttled poll loop goes deaf while looking healthy |
 | Directory | `http://10.10.0.35:8081` (gcp-use1 internal) + that node's own internal API key |
 | Database | `cello-ops-agent-database-url` → gcp-use1 Cloud SQL over PSC as **`cello_ops_agent`** (V26's least-privilege role — never the `postgres` owner, never `cello_service`). **No cross-cloud DB connection** |
-| Migration version | **62** as of 2026-08-09 (was 57 — see the drift note below). Set by `ops_agent_expected_migration_version` in `infra/terraform/ops-agent.tf`, asserted at startup as an EXACT match |
+| Migration version | **63** as of 2026-08-31 (was 62; the .tf default was bumped to 63 on 2026-08-22 but never applied — that gap is the outage below). Set by `ops_agent_expected_migration_version` in `infra/terraform/ops-agent.tf`, asserted at startup as an EXACT match |
 | Per-node health | `DIRECTORY_HEALTH_URLS` → all three nodes' `/health` on 9090, **every 5 minutes**, after the port opens. Verified live: `3/3 nodes at schema 57`, and it caught both a real transient (`unreachable: 10.10.1.25 (timeout after 5000ms)` during a node roll) and its recovery |
 | Verified | `ops_agent.started`, `ops_agent.telegram.connected`, `telegram.polling.started`, `ops_agent.health_server.started` |
+
+### 2026-08-31 — the registration bot was down for 5 days, and the trap above sprang exactly as written
+
+**What the operator saw.** Messages to the Telegram registration bot got no reply at all. Two were
+sent on 2026-08-31; the bot had in fact been dead since **2026-08-26 03:55 UTC** — 5 days 16 hours.
+
+**The sequence.**
+1. `V63__otp_send_log.sql` landed and was applied to all three node databases; the nodes moved to
+   schema **63**.
+2. `ops_agent_expected_migration_version` was bumped `62 → 63` in `infra/terraform/ops-agent.tf` in
+   the same commit as the migration (2026-08-22) — which is the rule, and it was followed. **But
+   `terraform apply` was never run for the ops agent**, so the RUNNING revision
+   `cello-ops-agent-00016-tmq` still carried `EXPECTED_MIGRATION_VERSION=62`.
+3. It kept running anyway, because the assertion is a STARTUP gate. `ops_agent.nodes.degraded` fired
+   every five minutes with the drift and nobody read it — the second time that warning has gone
+   unread.
+4. At 2026-08-26 03:55 UTC Cloud Run recycled the instance (`ops_agent.shutting_down`, then
+   `MANUAL_OR_CUSTOMER_MIN_INSTANCE`). The restart re-ran the gate, found
+   `mismatch: found V63, expected V62`, logged `ops_agent.startup.failed` and called `exit(1)`.
+5. At `min = max = 1` that is a permanent crash loop — roughly every 2–3 minutes for five days, with
+   the service still reporting `Ready: True` off the last healthy deploy. **`gcloud run services
+   describe` said the service was fine while the bot was deaf.**
+
+**The fix.** `terraform apply -target=google_cloud_run_v2_service.ops_agent` — plan was exactly
+`0 to add, 1 to change, 0 to destroy`, the env var and the `expected-schema` label both `62 → 63`.
+New revision `cello-ops-agent-00017-7v6`, image unchanged. Within 15 seconds:
+`ops_agent.started`, `ops_agent.telegram.connected`, `ops_agent.nodes.ok — 3/3 nodes at schema 63`,
+and the three queued Telegram updates were drained and answered (`telegram.message.received` ×3 →
+`registration.already_registered.warned` ×3). No `startup.failed` on 00017; the old revision drained
+and stopped.
+
+**What this changes about the rule.** "Bump the variable in the same commit as the migration" is
+necessary and was NOT sufficient — a committed variable that is never applied is indistinguishable
+from one that was never bumped. **The bump is not done until `terraform apply` has produced a new
+revision carrying it.** Same-commit bump + no apply is the worst of both: the repo reads as correct.
+
+**Still not deployed:** the ops-agent image is `ops-01b5fd5e` (2026-08-09). Six ops-agent commits sit
+ahead of it, including `DOD-M15-SIGNUP-1` and `DOD-M15-SIGNUP-DURABLE-1` — the per-person signup
+throttle and the durable limiter that V63's `otp_send_log` exists to back. The bot is up and issuing
+capabilities, but the limiter running in production is still the in-memory one that forgets on
+restart. The table is now consistent (env 63, schema 63); the CODE that uses V63 is not shipped.
 
 ### 2026-08-09 — rolled for the sign-up copy fix, and the schema assertion was 5 versions stale
 
