@@ -571,3 +571,81 @@ describe("FED-OPTIONB-SETUP-001: client_record_assignment — any-directory veri
     stream.close().catch(() => {});
   }, 15_000);
 });
+
+
+// ─── Re-review finding 4: the retired frames are actually REFUSED, and the relay says so ────────
+
+describe("DOD-M15-RELAYADMIN-DEAD-FRAMES-1 re-review: a retired frame is refused AND logged", () => {
+  let scope = createTestScope();
+  beforeEach(() => { scope = createTestScope(); });
+  afterEach(() => scope.run(async () => {}));
+
+  it("★★★ an AUTHENTICATED confirm_seal gets no response, does not mutate state, and is logged", async () => {
+    /**
+     * Finding 4: nothing in the deletion diff tested the behaviour the deletion introduced. Every
+     * surviving test in this file passes identically if all three deleted handlers are restored — so
+     * the deletion was not self-defending, and re-adding the branches tomorrow would go unnoticed.
+     *
+     * This is the missing test. It also covers finding 3: the relay used to abort here writing
+     * NOTHING down — `stream.abort()` does not throw locally, so even the catch below it never ran —
+     * while the directory reported `relay_unavailable` about a relay that was up and authenticating
+     * fine. A retired frame is now a named, logged, diagnosable event rather than a silent reset.
+     *
+     * The signature is CORRECT and the relay accepts the directory key, deliberately. If the frame
+     * were rejected at the auth check this would prove nothing about frame-type dispatch.
+     */
+    const logged: Array<{ event: string; ctx: Record<string, unknown> }> = [];
+    const dirKp = generateKeypair();
+    const dirPubkey = await dirKp.getPublicKey();
+    const { relay, node: relayNode, stop } = await createRelayNode({
+      directoryPubkey: dirPubkey,
+      logger: {
+        debug: () => {},
+        info: () => {},
+        warn: (event: string, ctx?: Record<string, unknown>) => { logged.push({ event, ctx: ctx ?? {} }); },
+        error: () => {},
+      },
+    });
+    scope.addCleanup(stop);
+
+    // A live session, so "no state mutation" is a claim with something to be false about.
+    const clientKpA = generateKeypair();
+    const clientKpB = generateKeypair();
+    const pubA = await clientKpA.getPublicKey();
+    const pubB = await clientKpB.getPublicKey();
+    const sessionId = new Uint8Array(randomBytes(16));
+    relay.recordAssignment(await makeAssignment(sessionId, pubA, pubB, dirKp));
+
+    const dirNode = await createNode({ keyProvider: dirKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await dirNode.start();
+    scope.addCleanup(async () => { await dirNode.stop(); });
+    await dirNode.dial(relayNode.listenAddresses()[0]!);
+
+    const body: Record<string, unknown> = { type: "confirm_seal", session_id: sessionId };
+    const directory_signature = await signFrameBody(dirKp, body);
+    const stream = await dirNode.newStream(relayNode.getPeerId(), DIRECTORY_RELAY_PROTOCOL_ID);
+    sendFrame(stream, CBOR_ENC.encode({ ...body, directory_signature }) as Uint8Array);
+
+    // No response frame — the relay resets the stream rather than answering a type it retired.
+    const reader = new StreamReader(stream);
+    await expect(
+      reader.readDecoded(),
+      "a retired frame must NOT be answered — an answer would mean the handler is back",
+    ).rejects.toThrow();
+
+    // The session is untouched: a retired frame must never mutate state on its way to being refused.
+    expect(
+      relay.getSealLeaves(sessionId).ok,
+      "confirm_seal used to DESTROY the session. Refusing it must leave the session exactly as it was.",
+    ).toBe(true);
+
+    // Finding 3: and it is diagnosable. Without this the whole event left no trace on either machine.
+    const unknown = logged.find((e) => e.event === "relay.directory.frame.unknown");
+    expect(
+      unknown,
+      "the relay must record that it refused an AUTHENTICATED directory frame. Silently resetting " +
+        "makes the directory report `relay_unavailable` about a relay that is up and answering.",
+    ).toBeDefined();
+    expect(unknown?.ctx["frameType"], "and it must name the frame it refused").toBe("confirm_seal");
+  }, 15_000);
+});

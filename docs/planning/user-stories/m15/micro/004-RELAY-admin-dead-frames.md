@@ -139,6 +139,57 @@ Fixed: this file, same commit.
 
 ---
 
+### ⚠️ OPUS RE-REVIEW (2026-08-31) — the deletion is SOUND; it left three problems behind
+
+Commissioned because this unit **and its first review were both run on Sonnet**, and the two sibling
+units re-reviewed on Opus (003 and 005) both turned up real defects the Sonnet pass missed.
+
+> **The deletion itself is sound** — I re-derived the deadness independently and it holds on both the
+> code-path and fleet-dated lens. But the unit left three real problems behind, and one of them is a
+> landmine for the next deletion unit in this same milestone. The Sonnet review missed all four.
+> — `cello-unit-reviewer` (Opus)
+
+**Deadness re-derived, and on stronger evidence than the order itself gave.** The reviewer added a
+proof the order never made: `packages/relay/package.json` exposes exactly one export (`"."`), and
+`directory-relay-types.ts` is not re-exported from `src/index.ts` — so the deleted interfaces were
+never on the package's public surface and no by-name import anywhere can break. It also reproduced
+the fleet claim six-for-six against every recorded image plus the live tfvars pin. Deleted-test
+triage: all five, no live coverage orphaned.
+
+**ALL FOUR FIXED 2026-08-31.**
+
+1. **The rewritten header stated something false, assertively, with a DoD stamp on it.** It said
+   `discard_session` "remains the one live directory→relay dial". The relay handles **three** live
+   frames on that protocol, and the other two sit ten and thirty lines below the branches this unit
+   deleted. The type unions were worse: `DirectoryToRelayFrame = DiscardSessionFrame` asserted a
+   single-frame protocol, and `DirectoryRelayResponse` omitted three responses the relay actually
+   sends. Nothing consumes either union, which is exactly why being wrong cost nothing until someone
+   believed it. **This was the top finding because this milestone is running a deletion campaign:**
+   the next unit to read that header would have concluded `get_session_liveness` was dead, and
+   deleting it silently breaks the ABSENT attestation. The unit reproduced the exact mistake its own
+   first trap warns about — do not generalise from the frames you looked at to the ones you did not.
+   - **Correction to the reviewer, verified at the call sites:** it named `get_seal_leaves` as live.
+     It is not. The relay handles it and the directory adapter still implements the sender, but
+     **no directory calls it** — Option B rebuilds the chain from client-carried leaves
+     (`directory-node.ts:4473`, `seal-unilateral-verify.ts`). It is the same shape as the three
+     frames deleted here. Recorded below, not acted on.
+2. **The receiver was gone; the sender was still fully wired, documented, and silent.** On this
+   unit's own stated axis — abandoned-looking code in a public repo — the repo came out WORSE than
+   before: sender and receiver used to match, and afterwards the directory kept three
+   apparently-working senders whose header still promised `assignment_ok` / `confirm_ok` / `reject_ok`
+   responses no relay will ever send. `confirmSeal` and `rejectSeal` swallowed the failure in a bare
+   `catch {}` — no log, no return value. All three now refuse by name and send nothing.
+3. **The relay refused an authenticated directory frame and wrote nothing down.** `stream.abort()`
+   does not throw locally, so even the catch below it never ran, and a libp2p reset carries no reason
+   across the wire — the event left no trace on either machine. Meanwhile the directory reported
+   `relay_unavailable` for a relay that was up, authenticating, and answering every other frame: an
+   exit-point label pointing at the network for a wire-protocol narrowing. Now logged at warn, naming
+   the frame type and version skew as the likely cause.
+4. **Nothing tested the behaviour the deletion introduced.** Every surviving test passed identically
+   with all three handlers restored — the deletion was not self-defending. Now covered on both sides,
+   and revert-tested: restoring the `confirm_seal` handler reddens the new test with *"promise
+   resolved { type: confirm_ok } instead of rejecting"* while the other eight stay green.
+
 ## Newly discovered
 
 - `packages/directory/src/network-relay-adapter.ts` still defines `recordAssignment()`,
@@ -151,3 +202,14 @@ Fixed: this file, same commit.
   `packages/e2e-tests/src/__tests__/expect-present-enforcer.test.ts` flags an un-exempted
   `.toMatch` on a possibly-absent subject at `j-suspend-tofn.spine.test.ts:279`. Confirmed present
   before this unit's changes via `git stash` + re-run.
+- **`get_seal_leaves` is the same shape as the three frames this order deleted** — relay handler at
+  `relay-node.ts:680`, sender at `network-relay-adapter.ts:261`, and **no directory caller** since
+  Option B moved unilateral sealing to client-carried leaves (`directory-node.ts:4473`,
+  `seal-unilateral-verify.ts`). A candidate for the next deletion pass; not touched here.
+- **`getSessionLiveness` maps EVERY failure to `"unknown"`** (`network-relay-adapter.ts`), including
+  the relay answering `auth_invalid`. `"unknown"` is a legitimate protocol value the directory feeds
+  into an ABSENT attestation, so a relay refusing our authentication is indistinguishable from a
+  relay that genuinely does not know. A live path, not a retired one — the checked-then-ignored shape
+  005-RELAY hunts, sitting just outside its fence.
+- The premise inherited from the milestone DoD, "the relay accepts four commands from a directory",
+  was never true — it is six. Worth correcting at the source; this order did not re-derive it.

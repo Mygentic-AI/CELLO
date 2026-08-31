@@ -708,7 +708,31 @@ export class CelloRelayNode {
         return;
       }
 
-      // Unknown frame type — close without state mutation
+      /**
+       * DOD-M15-RELAYADMIN-DEAD-FRAMES-1 re-review — **THE RELAY WAS REJECTING AN AUTHENTICATED
+       * DIRECTORY FRAME AND WRITING NOTHING DOWN.**
+       *
+       * The abort is right: an unrecognised frame must not mutate state. But `stream.abort()` does
+       * not throw locally, so the catch below never ran either, and a libp2p reset carries no reason
+       * across the wire. The whole event left no trace on either machine.
+       *
+       * What the operator saw instead: the directory's own adapter reports
+       * `reason: "relay_unavailable"` when its stream dies with no response — so a relay that is up,
+       * authenticating correctly, and answering every other frame gets reported as UNAVAILABLE. That
+       * is an exit-point label pointing at the network for what is a wire-protocol mismatch, and it
+       * is the failure mode this repo's debugging discipline names first.
+       *
+       * That was survivable while only a malformed frame could land here. Deleting three named
+       * frame types from this protocol made it a live version-skew path — an older directory sending
+       * `record_assignment` lands exactly here — so it needs to say so.
+       */
+      this.#logger.warn("relay.directory.frame.unknown", {
+        frameType: typeof frameType === "string" ? frameType : "(non-string)",
+        impact: "an AUTHENTICATED directory frame was refused because this relay does not handle that " +
+          "type. The directory will see its stream die with no response and may report the relay as " +
+          "unavailable — it is not. Most likely a version skew: a directory newer or older than this " +
+          "relay, or one still sending a frame type that was retired.",
+      });
       stream.abort(new Error("unknown_directory_relay_frame_type"));
     } catch (err: unknown) {
       // stream closed or reset — normal disconnect

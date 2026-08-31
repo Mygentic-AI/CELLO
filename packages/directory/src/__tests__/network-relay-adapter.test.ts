@@ -137,9 +137,10 @@ describe("Regression: recordAssignment transport failure exposes exception messa
     const relayMultiaddrs = relayLibp2p.listenAddresses();
 
     const loggedEvents: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    const warnEvents: Array<{ event: string; fields: Record<string, unknown> }> = [];
     const mockLogger = {
       info: () => {},
-      warn: () => {},
+      warn: (event: string, fields: Record<string, unknown>) => { warnEvents.push({ event, fields }); },
       error: (event: string, fields: Record<string, unknown>) => { loggedEvents.push({ event, fields }); },
       debug: () => {},
     };
@@ -162,64 +163,76 @@ describe("Regression: recordAssignment transport failure exposes exception messa
     // Stop the relay so the next sendAndReceive throws
     await stopRelay();
 
-    const sessionId = new Uint8Array(randomBytes(16));
-    const sessionTimestamp = Date.now();
     const clientKpA = generateKeypair();
-    const clientKpB = generateKeypair();
-    const pubA = await clientKpA.getPublicKey();
-    const pubB = await clientKpB.getPublicKey();
-    const tbs = CBOR_ENC.encode([
-      sessionId, pubA, pubB,
-      sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
-    ]) as Uint8Array;
-    const directory_signature = await dirKp.sign(tbs);
 
-    const result = await networkAdapter.recordAssignment({
-      session_id: sessionId,
-      participant_a: pubA,
-      participant_b: pubB,
-      session_timestamp: sessionTimestamp,
-      directory_signature,
-    });
+    /**
+     * DOD-M15-RELAYADMIN-DEAD-FRAMES-1 re-review: RE-POINTED from `recordAssignment` to
+     * `getSessionLiveness`. The subject here has always been `describeThrown` — that CelloNode
+     * throws plain objects, so a naive `String(err)` yields "[object Object]" and destroys the only
+     * diagnostic on this path. That subject is alive and worth keeping; the frame it used to ride on
+     * is not, since `record_assignment` no longer reaches the wire at all and the test would have
+     * been asserting against a method that returns before sending anything.
+     *
+     * `getSessionLiveness` is a genuinely live directory→relay dial, so this now proves the same
+     * property on a path that still exists.
+     */
+    const counterpartyPubkey = await clientKpA.getPublicKey();
+    const liveness = await networkAdapter.getSessionLiveness(counterpartyPubkey);
+    expect(liveness, "a relay we cannot reach yields unknown, never a fabricated verdict").toBe("unknown");
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      // Canonical token — error detail goes to the logger, not embedded in the reason string
-      expect(result.reason).toBe("relay_unavailable");
-    }
-    // Logger must have captured the transport error with the actual exception message
-    const transportErr = loggedEvents.find(e => e.event === "relay.record_assignment.transport_error");
-    expect(transportErr).toBeDefined();
+    const transportErr = warnEvents.find(e => e.event === "relay.get_session_liveness.transport_error");
+    expect(transportErr, "the transport failure must be recorded — it is this path's only diagnostic").toBeDefined();
     expect(typeof transportErr?.fields.error).toBe("string");
+    expect(
+      (transportErr?.fields.error as string),
+      "describeThrown must render CelloNode's plain-object throw into something readable — " +
+        "'[object Object]' is the regression this test exists for.",
+    ).not.toBe("[object Object]");
     expect((transportErr?.fields.error as string).length).toBeGreaterThan(0);
   }, 20_000);
 });
 
-describe("Regression: recordAssignment relay rejection exposes relay response type", () => {
+describe("DOD-M15-RELAYADMIN-DEAD-FRAMES-1 re-review: the retired senders REFUSE, by name", () => {
   let scope = createTestScope();
   beforeEach(() => { scope = createTestScope(); });
   afterEach(() => scope.run(async () => {}));
 
-  it("returns auth_invalid when relay rejects due to wrong directory key", async () => {
-    // Start relay configured with a DIFFERENT directory pubkey than the adapter uses
-    const relayKp = generateKeypair();
-    const wrongPubkey = await relayKp.getPublicKey(); // relay expects this key
-    const dirKp = generateKeypair();                  // adapter signs with this key (wrong)
+  it("★★★ recordAssignment / confirmSeal / rejectSeal send NOTHING and say so — not 'relay unavailable'", async () => {
+    /**
+     * Re-review finding 2. Deleting the three frames from the relay's wire left the DIRECTORY's
+     * senders fully wired, fully documented, and completely broken — and the breakage was engineered
+     * to be invisible. `recordAssignment` built and signed a frame, sent it into an abort, and
+     * reported `relay_unavailable` about a relay that was up, authenticating, and answering every
+     * other frame. `confirmSeal` and `rejectSeal` were worse: a bare `catch {}` with no log and a
+     * void return, so a caller wiring one back in would get a method that compiles, is declared
+     * non-optional by the interface, is documented as returning `confirm_ok`, and does nothing
+     * forever, silently, on both machines.
+     *
+     * The relay is deliberately HEALTHY and correctly keyed here. That is the whole point: if the
+     * refusal came from the relay being unreachable, this test would prove nothing.
+     */
+    const dirKp = generateKeypair();
+    const dirPubkey = await dirKp.getPublicKey();
 
     const { node: relayLibp2p, stop: stopRelay } = await createRelayNode({
-      directoryPubkey: wrongPubkey,
+      directoryPubkey: dirPubkey, // CORRECT key — the relay would authenticate us happily
     });
     scope.addCleanup(stopRelay);
 
+    const errorEvents: Array<{ event: string; fields: Record<string, unknown> }> = [];
+    const mockLogger = {
+      info: () => {}, warn: () => {}, debug: () => {},
+      error: (event: string, fields: Record<string, unknown>) => { errorEvents.push({ event, fields }); },
+    };
+
     const relayPeerId = relayLibp2p.getPeerId();
     const relayMultiaddrs = relayLibp2p.listenAddresses();
-
     const networkAdapter = new NetworkRelayAdapter({
-      keyProvider: dirKp,   // wrong key — relay will reject with auth_invalid
+      keyProvider: dirKp,
       relayPeerId,
       relayMultiaddrs,
+      logger: mockLogger,
     });
-
     const dirResult = await createDirectoryNode({
       keyProvider: dirKp,
       relay: networkAdapter,
@@ -229,30 +242,37 @@ describe("Regression: recordAssignment relay rejection exposes relay response ty
     await networkAdapter.connect(dirResult.node);
 
     const sessionId = new Uint8Array(randomBytes(16));
-    const sessionTimestamp = Date.now();
     const clientKpA = generateKeypair();
     const clientKpB = generateKeypair();
-    const pubA = await clientKpA.getPublicKey();
-    const pubB = await clientKpB.getPublicKey();
-    const tbs = CBOR_ENC.encode([
-      sessionId, pubA, pubB,
-      sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
-    ]) as Uint8Array;
-    const directory_signature = await dirKp.sign(tbs);
-
     const result = await networkAdapter.recordAssignment({
       session_id: sessionId,
-      participant_a: pubA,
-      participant_b: pubB,
-      session_timestamp: sessionTimestamp,
-      directory_signature,
+      participant_a: await clientKpA.getPublicKey(),
+      participant_b: await clientKpB.getPublicKey(),
+      session_timestamp: Date.now(),
+      directory_signature: new Uint8Array(64),
     });
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      // Must be the relay's actual rejection type, not the swallowed generic string
-      expect(result.reason).toBe("auth_invalid");
+      expect(
+        result.reason,
+        "the reason must name the RETIREMENT. `relay_unavailable` would be a lie about a healthy " +
+          "relay and would send whoever reads it to debug the network.",
+      ).toBe("frame_type_retired_relayadmin_dead_frames_1");
     }
+    expect(errorEvents.find(e => e.event === "relay.record_assignment.retired")).toBeDefined();
+
+    // void returns, so the log is the only channel these two have.
+    await networkAdapter.confirmSeal(sessionId);
+    expect(
+      errorEvents.find(e => e.event === "relay.confirm_seal.retired"),
+      "confirmSeal used to swallow its failure entirely — no log, no return value, nothing.",
+    ).toBeDefined();
+
+    await networkAdapter.rejectSeal(sessionId, "merkle_root_mismatch");
+    const rejected = errorEvents.find(e => e.event === "relay.reject_seal.retired");
+    expect(rejected).toBeDefined();
+    expect(rejected?.fields.reason, "the caller's reason is kept, not dropped on the floor").toBe("merkle_root_mismatch");
   }, 20_000);
 });
 

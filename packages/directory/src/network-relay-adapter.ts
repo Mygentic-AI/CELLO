@@ -156,45 +156,25 @@ export class NetworkRelayAdapter implements RelayAdapter {
     });
   }
 
-  async recordAssignment(assignment: RelaySessionAssignment): Promise<{ ok: true } | { ok: false; reason: string }> {
-    if (!this.#node) return { ok: false, reason: "relay_unavailable" };
-
-    const tsEncoded = assignment.session_timestamp > 0xffffffff
-      ? BigInt(assignment.session_timestamp)
-      : assignment.session_timestamp;
-
-    // assignment_signature: standard relay assignment TBS (CBOR [session_id, pubA, pubB, timestamp])
-    // This is what relay.recordAssignment() verifies internally.
-    const assignmentTbs = CBOR_ENC.encode([
-      assignment.session_id,
-      assignment.participant_a,
-      assignment.participant_b,
-      tsEncoded,
-    ]) as Uint8Array;
-    const assignment_signature = await this.#keyProvider.sign(assignmentTbs);
-
-    // Frame body (without directory_signature) for frame-level auth
-    const body: Record<string, unknown> = {
-      type: "record_assignment",
-      session_id: assignment.session_id,
-      participant_a: assignment.participant_a,
-      participant_b: assignment.participant_b,
-      session_timestamp: tsEncoded,
-      assignment_signature,
-    };
-    const directory_signature = await this.#keyProvider.sign(CBOR_ENC.encode(body) as Uint8Array);
-    const frame = CBOR_ENC.encode({ ...body, directory_signature }) as Uint8Array;
-
-    try {
-      const response = await this.#sendAndReceive(frame);
-      if (response["type"] === "assignment_ok") return { ok: true };
-      const reason = (response["type"] as string) ?? "relay_error";
-      this.#logger?.error("relay.record_assignment.rejected", { reason });
-      return { ok: false, reason };
-    } catch (err) {
-      this.#logger?.error("relay.record_assignment.transport_error", { error: describeThrown(err) });
-      return { ok: false, reason: "relay_unavailable" };
-    }
+  /**
+   * ⛔ RETIRED WIRE FRAME — DOD-M15-RELAYADMIN-DEAD-FRAMES-1 (2026-08-24), re-review finding 2.
+   *
+   * `record_assignment` was deleted from the relay's directory-admin protocol. No relay accepts it,
+   * and none ever will again: under Option B the CLIENT presents its own assignment.
+   *
+   * The method stays only because `RelayAdapter` (directory-node.ts) declares it non-optional. It
+   * must NOT stay as an apparently-working sender. Left as it was, it built a frame, signed it, sent
+   * it into an abort, and reported `relay_unavailable` — so anyone wiring this back in would compile
+   * cleanly, read a doc comment promising `assignment_ok`, and get silence forever, while the log
+   * blamed a relay that was up and healthy. Refusing here, by name, is the difference between a
+   * five-minute discovery and a day of chasing the network.
+   */
+  async recordAssignment(_assignment: RelaySessionAssignment): Promise<{ ok: true } | { ok: false; reason: string }> {
+    this.#logger?.error("relay.record_assignment.retired", {
+      impact: "record_assignment was removed from the relay wire protocol and no relay accepts it. " +
+        "Nothing was sent. If a caller needs this, the assignment path is client-presented (Option B).",
+    });
+    return { ok: false, reason: "frame_type_retired_relayadmin_dead_frames_1" };
   }
 
   async discardSession(sessionId: Uint8Array): Promise<void> {
@@ -220,36 +200,30 @@ export class NetworkRelayAdapter implements RelayAdapter {
     return { ok: false, reason: "not_supported_in_network_path" };
   }
 
-  async confirmSeal(sessionId: Uint8Array): Promise<void> {
-    if (!this.#node) return;
-
-    const body: Record<string, unknown> = { type: "confirm_seal", session_id: sessionId };
-    const directory_signature = await this.#keyProvider.sign(CBOR_ENC.encode(body) as Uint8Array);
-    const frame = CBOR_ENC.encode({ ...body, directory_signature }) as Uint8Array;
-
-    try {
-      await this.#sendAndReceive(frame);
-    } catch {
-      // best effort
-    }
+  /**
+   * ⛔ RETIRED WIRE FRAME — see `recordAssignment` above. Re-review finding 2.
+   *
+   * These two were worse than `recordAssignment`, because their whole failure was `catch {}` with
+   * not even a comment's worth of evidence: no log, no return value, nothing. A caller wiring
+   * `confirmSeal` back into a seal path would get a method that compiles, is declared non-optional
+   * by the interface, is documented as returning `confirm_ok`, and does absolutely nothing forever,
+   * on both machines, in silence. `void` return means a refusal cannot be returned — so it is
+   * logged at error, which is the only channel left.
+   */
+  async confirmSeal(_sessionId: Uint8Array): Promise<void> {
+    this.#logger?.error("relay.confirm_seal.retired", {
+      impact: "confirm_seal was removed from the relay wire protocol and no relay accepts it. " +
+        "Nothing was sent, and the seal was NOT confirmed to any relay.",
+    });
   }
 
-  async rejectSeal(sessionId: Uint8Array, reason: string): Promise<void> {
-    if (!this.#node) return;
-
-    const body: Record<string, unknown> = {
-      type: "reject_seal",
-      session_id: sessionId,
+  /** ⛔ RETIRED WIRE FRAME — see `confirmSeal` above. Re-review finding 2. */
+  async rejectSeal(_sessionId: Uint8Array, reason: string): Promise<void> {
+    this.#logger?.error("relay.reject_seal.retired", {
       reason,
-    };
-    const directory_signature = await this.#keyProvider.sign(CBOR_ENC.encode(body) as Uint8Array);
-    const frame = CBOR_ENC.encode({ ...body, directory_signature }) as Uint8Array;
-
-    try {
-      await this.#sendAndReceive(frame);
-    } catch {
-      // best effort
-    }
+      impact: "reject_seal was removed from the relay wire protocol and no relay accepts it. " +
+        "Nothing was sent, and the rejection was NOT communicated to any relay.",
+    });
   }
 
   /**
