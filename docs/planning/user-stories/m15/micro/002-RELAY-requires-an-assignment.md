@@ -160,6 +160,83 @@ directory. **Client-side scope was widened by Andre mid-unit** (see above) — t
 
 *(Reviewer verdict. One quote. Not a transcript.)*
 
+### Pass 1 (Opus) — three HIGH, all fixed and revert-tested before pass 2
+
+HIGH-1 the replacement standing receiver stole the live session's delivery stream (fixed via an
+additive `purpose: "reservation"` on `relay_auth_response` — relay half `7a9c9d7d`, client half
+`61f239b`); HIGH-2 the assignment was presented only to the directory-picked witness relay, not to
+the relay that actually gates the dial (`44b2792`); HIGH-3 a content-park pull refusal was flattened
+at the client. **Note pass 2 found the identical HIGH-3 defect still standing on the CONFIRM path in
+the same file — see M3.**
+
+### Pass 2 (Opus, 2026-08-31) — MERGE REFUSED
+
+> **Merge recommendation: do not merge as-is.** H1 and T1 are blocking; H2 is blocking unless Andre
+> rules the post-restart mailbox gap acceptable for launch (it is cheap to close via option (a), and
+> the gate it protects has near-zero marginal security value over the existing challenge-response).
+> … this diff touches persistence, crypto-adjacent auth, notification/queue and registration-shaped
+> state, and I did **not** come out clean — the two findings I would most expect to have missed (a
+> gate that denies the legitimate case, and a durable store gated on volatile state) are both here
+> and both real. — `cello-unit-reviewer` (Opus)
+
+**BLOCKING**
+
+- **H1 — the gate denies the LEGITIMATE first dial, on a race the code usually loses.** Both parties
+  get the assignment independently. A dials B's circuit address after ~2 RTT; B presents the
+  assignment to its own reservation relay — unawaited — after ~3–4 RTT. A arrives first more often
+  than not and the relay answers `PERMISSION_DENIED`. For every session where B is NAT'd and B's
+  reservation relay ≠ the witness relay (the diff's own comment calls that "the ordinary case, not a
+  corner"), the relayed link never forms. `cello_initiate_session` still returns
+  `{ok:true, transportMode:"relay"}` and every message for the life of that conversation silently
+  falls to the park backstop. Fix: **A** presents the same assignment to B's reservation relay and
+  **awaits** it before dialling — A is a named participant, the assignment is self-authenticating, so
+  presenting it more widely grants nothing and the ordering becomes local to one thread.
+- **H2 — parked mail becomes uncollectable after any relay restart.** The pull/confirm gate is
+  enforced against `#vouchedPubkeys`, which is in-process and never persisted; the content store is
+  durable (`FileContentStore` under `WAL_DIR`). Roll the relay and the recipient is *notified* that
+  mail is waiting, then refused `not_a_participant` on the pull, because clients do not re-present an
+  assignment on reconnect. Mail is stranded until some new session happens to be brokered on that
+  same relay.
+- **T1 — the HIGH-1 fix has NO relay-side test.** The grace test's `completeRelayAuth` never sends
+  `purpose`, so the whole `purpose === "reservation"` dispatch is unexercised against the real relay.
+  **Delete that block and the entire trustless-cello relay suite stays green.** The client-side
+  assertion runs against a fake relay defined in the test file, so it proves the client *sends* the
+  flag and nothing about what the relay does with it.
+
+**NON-BLOCKING**
+
+- **M1** `void #presentAssignmentToReservationRelay(...)` has no `.catch()`, and its prologue sits
+  outside its own `try` — a throw becomes an unhandled rejection that can kill the daemon. The
+  sibling call site does attach `.catch`.
+- **M2** reservation-slot exhaustion is unmitigated: `recordAuthenticated` fires for any successful
+  `relay_auth`, which proves possession of *some* keypair only, so 4096 throwaway keys fill the
+  reservation table and every legitimate agent loses NAT reachability. **Belongs in 003's mission**,
+  not in Newly discovered — 003 will otherwise rate-limit submits and not reservations.
+- **M3** error substitution, and the exact HIGH-3 defect left standing one function away in the same
+  file: the relay answers a refused confirm with a well-formed
+  `content_park_confirm_ack {ok:false, reason:"not_a_participant"}` and the client discards it to
+  report the wire-shape complaint `no_confirm_ack`. Reachable when the relay restarts between a
+  successful pull and its confirm: pickup is never confirmed, the entry is never deleted, and the
+  recipient is re-notified about it forever.
+- **M4** the reservation-relay client and its session registration are leaked per session — detach
+  only knows the *witness* relay's key. Relay-side, the dial-through binding it holds is then cleared
+  only by the idle timer, now **24h**.
+- **M5** the standing receiver's proof is a silent no-op when the builder isn't wired
+  (`relay_auth.no_builder` at **debug**); the receiver never proves possession, the relay revokes its
+  reservation 15s later, and the agent is NAT-unreachable with no visible trace.
+- **L1** revoke timers are never cleared on `stop()` and are not `unref()`'d. **L2** the event name
+  `content.park.pull.refused` is emitted by BOTH relay and client — two meanings, one name.
+  **L3** the denial reason names the exit point, sending the operator after a directory bug for what
+  is a timing race.
+
+**Clause verdicts:** clause 1 partial (H2); clause 2 (*the authenticating key must be one the
+assignment names*) **NOT IMPLEMENTED** — recorded under Newly discovered, must not be read as ✅, and
+it is the enabling condition for M2; clause 3 implemented, with the reservation-grant sub-clause
+deviated under Andre's recorded ruling; clause 4 implemented. **Confirmed sound:**
+`connection.remotePeer` is Noise-authenticated so the source peer id cannot be spoofed; the hooks
+were checked against the installed `@libp2p/circuit-relay-v2@4.2.3`; `purpose` is additive and
+outside every signed TBS, so bilateral order holds.
+
 ---
 
 ## Newly discovered
