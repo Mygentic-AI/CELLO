@@ -229,6 +229,27 @@ the same file — see M3.**
   **L3** the denial reason names the exit point, sending the operator after a directory bug for what
   is a timing race.
 
+### Pass 2 outcome — ALL findings fixed (2026-08-31)
+
+Every finding above is fixed, each with a revert test. Two are worth remembering for the shape
+rather than the code:
+
+- **H1's fix had to remove the race, not shorten it.** Presenting the assignment sooner would have
+  narrowed the window and left the bug. The dialer now presents it to the relay that will gate the
+  dial and *waits*, so the ordering is local to one thread. The test asserts ordering with **no
+  polling** — a `waitUntil` would re-admit the bug, which is exactly why the existing HIGH-2 test
+  stayed green through it.
+- **H2's fix had to be as durable as the thing it guards.** Vouching is now persisted beside the
+  content store and both are selected on the same condition in the composition root, because if one
+  becomes durable and the other does not, the outage returns.
+
+M2 was **not** fixed here — by the reviewer's own instruction it was written into **003's mission**
+as work item 4, since fixing it here would grow this order and leaving it in Newly discovered would
+let 003 close with the reservation table still open.
+
+**No third review pass.** Two is the cap; pass 2 found what pass 1 missed, and anything further is
+recorded rather than re-reviewed.
+
 **Clause verdicts:** clause 1 partial (H2); clause 2 (*the authenticating key must be one the
 assignment names*) **NOT IMPLEMENTED** — recorded under Newly discovered, must not be read as ✅, and
 it is the enabling condition for M2; clause 3 implemented, with the reservation-grant sub-clause
@@ -242,6 +263,17 @@ outside every signed TBS, so bilateral order holds.
 ## Newly discovered
 
 *(One or two lines each. Do not act on them.)*
+
+- **Clause 2 of this order — "the authenticating key must be one the assignment names" — is NOT
+  implemented, and must not be read as done.** `relay_auth` still admits any Ed25519 keypair: it
+  takes a delivery-stream slot, flips session-path liveness to alive, resets idle timers and receives
+  park notifications. Vouching (added here) gates content-park pull/confirm on a real assignment, and
+  the dial-through gate is unconditional, so the headline refusals hold — but the AUTH step itself
+  still proves possession of *some* keypair only. This is the enabling condition for reservation
+  exhaustion, which is now item 4 of 003-RELAY's mission.
+- A rate-limited auth aborts BEFORE `recordAuthenticated`, so a peer that trips 003's auth throttle
+  also loses its circuit reservation to this order's grace-window revoke — a throttle becoming an
+  outage. Low likelihood at 20/min; neither order's tests cover the combination. Recorded in 003 too.
 
 - **A bare authenticated keypair still occupies a standing-receiver slot.** `relay_auth_ok` alone
   (proving only key possession, naming no session) still enters `#streams` unconditionally and
