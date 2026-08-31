@@ -80,6 +80,40 @@ rate limit into an outage. A rate-limited auth aborts BEFORE `recordAuthenticate
 trips the auth throttle also loses its circuit reservation. Neither order's tests cover the
 combination.
 
+#### ⛔ NOT IMPLEMENTED — this one needs Andre's decision, and here is why (2026-08-31)
+
+Everything else in this order is done. This item is deliberately left open rather than guessed at,
+because **every workable mitigation is a behaviour change to reservation GRANTS, and denying a grant
+is what caused a previous outage** — `relay-connection-gater.ts`'s own header records it: deny at
+grant time and you strand every brand-new agent, because a brand-new agent cannot have authenticated
+yet. That is the DOD-NAT-REACHABILITY-1 class.
+
+The obvious limits do not work, and it is worth writing down why so nobody re-derives them:
+
+- **Per-peer.** Useless against the stated attack. The attacker uses 4096 *different* peers, one
+  reservation each, so a per-peer limit is never approached.
+- **Per-pubkey.** Same. Keypairs are free to generate.
+- **Relying on the auth throttle.** Also no. It is per-peer and per-pubkey, and the attacker varies
+  both, so each throwaway identity authenticates once, well inside every limit.
+
+What would actually work, and the tradeoff each carries:
+
+1. **Implement 002's clause 2** — require the authenticating key to be one a directory-signed
+   assignment names. This removes the attack at its root: throwaway keypairs stop being admissible.
+   It is the real fix, and it is a bigger change than this order.
+2. **Cap reservations held by peers that have NOT yet proven key possession** (say, a quarter of the
+   table), so proven agents always have slots. Effective and local to the gater. **But it denies a
+   legitimate brand-new agent whenever the unproven pool is saturated** — exactly the failure mode
+   the gater header warns about, softened but not eliminated.
+3. **Limit by IP or subnet** — the standard answer, because addresses are the one thing an attacker
+   cannot vary for free. Needs the remote multiaddr, which the reservation hook does not currently
+   receive, so it is a new plumb.
+
+**This is a product call, not a coder's.** Option 2 trades a real availability risk for a
+hypothetical one, and CELLO has zero users and no adversary today while the outage it risks is one
+we have already lived through. Recommendation: take option 1 when clause 2 is done, and do nothing
+here in the meantime — but that is Andre's to decide, not something to slip in overnight.
+
 ---
 
 ## Definition of Done
@@ -192,7 +226,13 @@ Commissioned by Andre because this unit **and its first review were both run on 
   surfaces the refusal only if it does not clear. `retry_after_ms` is now carried on `SubmitResult`
   and read. (cello-client, branch `m15/002-relay-requires-an-assignment`.)
 
-**OUTSTANDING — not yet fixed:**
+**ALL FIXED 2026-08-31** (`41938d1c` relay side, `9d1ee85` client side) — the list below is kept as
+the record of what each one was. F5 was measured, not reasoned about: a 30-day cap fires after 3ms.
+The two hollow tests were replaced by two that pull the axes apart, and the revert test now
+demonstrates the point — removing either limiter reddens exactly one of them, while both original
+tests stay green through both removals.
+
+**Former OUTSTANDING list:**
 
 1. **F2 — the auth refusal is destroyed at the client boundary.** `session-relay-client.ts`'s
    `#authenticate` inspects only `frame["type"]`, logs `reason: "auth_rejected"`, and drops both
