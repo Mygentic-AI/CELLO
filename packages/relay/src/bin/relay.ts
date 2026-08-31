@@ -68,6 +68,7 @@ import { createRelayNode } from "../index.js";
 import { NetworkDirectoryAdapter } from "../network-directory-adapter.js";
 import { FileSessionWal, InMemorySessionWal } from "../adapters/file-session-wal.js";
 import { FileContentStore, resolveContentTtlMs } from "../adapters/file-content-store.js";
+import { FileVouchedKeyStore, InMemoryVouchedKeyStore } from "../adapters/file-vouched-keys.js";
 import { InMemoryContentStore } from "@cello-protocol/interfaces/stubs";
 import { CONTENT_STORE_TTL_MS } from "@cello-protocol/interfaces";
 import {
@@ -166,6 +167,16 @@ logger.info("relay.config.content_ttl", { contentTtlMs, contentTtlDays: contentT
 const contentStore = celloEnv === "local"
   ? new InMemoryContentStore({ logger, ttlMs: contentTtlMs })
   : new FileContentStore({ walDir, logger, ttlMs: contentTtlMs });
+/**
+ * DOD-M15-RELAYAUTH-1 review H2: vouching gates who may COLLECT parked content, so it has to be
+ * exactly as durable as the content store above — same condition, deliberately. Held only in
+ * memory, a relay roll left agents being told mail was waiting and then refused when they asked
+ * for it. Keep these two lines together: if one becomes durable and the other does not, that
+ * outage comes straight back.
+ */
+const vouchedKeyStore = celloEnv === "local"
+  ? new InMemoryVouchedKeyStore()
+  : new FileVouchedKeyStore({ walDir, logger });
 
 // ─── Directory pubkey validation ───────────────────────────────────────────────
 
@@ -605,6 +616,7 @@ try {
     ackSigningKeyProvider: kp,
     relayId,
     contentStore,
+    vouchedKeyStore,
     logger,
     sessionIdleTimeoutMs,
     ...(circuitDurationLimitMs !== undefined ? { circuitDurationLimitMs } : {}),

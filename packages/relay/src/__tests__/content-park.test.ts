@@ -11,6 +11,9 @@
  */
 
 import { describe, it, expect } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { randomBytes, createHash } from "node:crypto";
 import { Encoder, decode } from "cbor-x";
 import * as lp from "it-length-prefixed";
@@ -21,6 +24,8 @@ import { createNode } from "@cello-protocol/transport";
 import { InMemoryContentStore } from "@cello-protocol/interfaces/stubs";
 import type { Logger } from "@cello-protocol/interfaces";
 import { createRelayNode } from "../relay-node.js";
+import { FileContentStore } from "../adapters/file-content-store.js";
+import { FileVouchedKeyStore } from "../adapters/file-vouched-keys.js";
 import { CONTENT_PARK_PROTOCOL_ID, buildContentParkAuthMsg } from "../content-park.js";
 
 const ENC = new Encoder({ tagUint8Array: false });
@@ -249,6 +254,100 @@ describe("relay content-park protocol (MSG-001)", () => {
       await node.stop();
     } finally {
       await stop();
+    }
+  }, 30_000);
+
+  it("★★★ review H2: parked mail is STILL COLLECTABLE after the relay restarts", async () => {
+    /**
+     * The flip side of the refusal above, and the more expensive one. Vouching lived only in the
+     * relay process; the content store lives on disk. So: park mail for an agent, roll the relay —
+     * a deploy, a MIG roll, a crash — and on reconnect the agent is TOLD content is waiting and
+     * then REFUSED when it asks for it, because the vouched set came up empty and a client does not
+     * re-present its assignment on reconnect. The mail sat there uncollectable until some unrelated
+     * new session happened to be brokered on that same relay.
+     *
+     * A refusal that breaks availability is worse than the leniency it replaced, so this asserts
+     * the whole round trip across a REAL restart: two relay processes, one WAL_DIR, nothing carried
+     * over in memory. Both stores must be file-backed for the test to mean anything — an in-memory
+     * content store would lose the mail too and the pull would return `found:false` for the wrong
+     * reason, passing a test that proves nothing.
+     */
+    const { logger } = captureLogger();
+    const walDir = await mkdtemp(join(tmpdir(), "cello-vouched-"));
+    const dirKp = generateKeypair();
+    const dirPubkey = await dirKp.getPublicKey();
+
+    const recipientKp = generateKeypair();
+    const recipientPub = await recipientKp.getPublicKey();
+    const rHex = Buffer.from(recipientPub).toString("hex");
+    const ciphertext = new Uint8Array(randomBytes(64));
+    const contentHash = new Uint8Array(createHash("sha256").update(Buffer.from([9, 9, 9])).digest());
+
+    try {
+      // ── Relay process #1: the session exists, and mail is parked for the recipient. ──
+      const store1 = new FileContentStore({ walDir, logger });
+      const first = await createRelayNode({
+        directoryPubkey: dirPubkey,
+        contentStore: store1,
+        vouchedKeyStore: new FileVouchedKeyStore({ walDir, logger }),
+        logger,
+      });
+      await vouch(first.relay, dirKp, recipientPub);
+      const senderNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+      await senderNode.start();
+      await senderNode.dial(first.node.listenAddresses()[0]!);
+      const depositStream = await senderNode.newStream(first.node.getPeerId(), CONTENT_PARK_PROTOCOL_ID);
+      const depositRead = frameReader(depositStream);
+      send(depositStream, {
+        type: "content_park_deposit",
+        recipient_pubkey: recipientPub,
+        content_hash: contentHash,
+        session_id: new Uint8Array(randomBytes(16)),
+        ciphertext,
+      });
+      expect((await depositRead())?.["ok"], "precondition: the sender is told the mail was accepted").toBe(true);
+      await senderNode.stop();
+      await first.stop();
+
+      // ── The roll. Nothing survives but WAL_DIR. ──
+      const store2 = new FileContentStore({ walDir, logger });
+      const second = await createRelayNode({
+        directoryPubkey: dirPubkey,
+        contentStore: store2,
+        vouchedKeyStore: new FileVouchedKeyStore({ walDir, logger }),
+        logger,
+      });
+      try {
+        expect(await store2.hasContent(rHex), "precondition: the mail itself survived the restart").toBe(true);
+
+        const recipientNode = await createNode({ keyProvider: recipientKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+        await recipientNode.start();
+        await recipientNode.dial(second.node.listenAddresses()[0]!);
+        const pullStream = await recipientNode.newStream(second.node.getPeerId(), CONTENT_PARK_PROTOCOL_ID);
+        const pullRead = frameReader(pullStream);
+        send(pullStream, { type: "content_park_pull_request", recipient_pubkey: recipientPub });
+        await authHandshake(pullStream, pullRead, recipientKp, recipientPub);
+
+        // THE ASSERTION: the recipient collects its mail, on a relay that has never met it.
+        const countFrame = await pullRead();
+        expect(
+          countFrame?.["type"],
+          "the recipient must be able to collect mail parked before the restart. A refusal here is " +
+            "the outage this fix exists to prevent: the relay tells the agent content is waiting and " +
+            "then refuses to hand it over, and the message is stranded until an unrelated new session " +
+            "happens to be brokered on this same relay.",
+        ).toBe("content_park_pull_count");
+        expect(countFrame?.["count"]).toBe(1);
+        const entryFrame = await pullRead();
+        expect(entryFrame?.["found"]).toBe(true);
+        expect(Buffer.from(toU8(entryFrame!["ciphertext"]))).toEqual(Buffer.from(ciphertext));
+
+        await recipientNode.stop();
+      } finally {
+        await second.stop();
+      }
+    } finally {
+      await rm(walDir, { recursive: true, force: true });
     }
   }, 30_000);
 

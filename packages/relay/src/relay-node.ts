@@ -83,6 +83,7 @@ import type { Logger, SessionWal, ContentStore } from "@cello-protocol/interface
 import { DepositRateLimiter, type DepositRateLimitConfig } from "./deposit-rate-limiter.js";
 import { ContentParkHandler } from "./content-park.js";
 import { RelayConnectionGater } from "./relay-connection-gater.js";
+import { InMemoryVouchedKeyStore, type VouchedKeyStore } from "./adapters/file-vouched-keys.js";
 import { RELAY_LEAF_KINDS, RELAY_LEAF_HASHERS } from "./relay-types.js";
 import type {
   SessionAssignment,
@@ -358,6 +359,14 @@ export interface RelayNodeOptions {
    */
   connectionGater?: RelayConnectionGater;
   /**
+   * DOD-M15-RELAYAUTH-1 review H2: where "this pubkey is a real participant" is persisted. Defaults
+   * to a no-op store, which is right whenever the content store is in-memory too — with nothing
+   * durable on either side there is no parked mail a restart could strand. Wire the file-backed one
+   * wherever the content store is file-backed, or a relay roll leaves agents unable to collect mail
+   * the relay is actively telling them about.
+   */
+  vouchedKeyStore?: VouchedKeyStore;
+  /**
    * PERSIST-013 leaf-durability WAL. **Currently accepted and unused** — its only reader was the
    * gap-fill handler deleted in `DOD-M15-SEALWIRE-1` bullet 7, and the composition root has never
    * passed it in (see `bin/relay.ts`, unused since 2026-05-16). Kept as the injection seam so
@@ -492,7 +501,15 @@ export class CelloRelayNode {
    * pruned: a pubkey once vouched stays vouched for the relay's lifetime, matching the real
    * lifecycle (an agent that finishes one session is still the same registered agent for the next).
    */
-  readonly #vouchedPubkeys = new Set<string>();
+  #vouchedPubkeys = new Set<string>();
+
+  /**
+   * Review H2: the durable half of the above. In memory alone this gate stranded parked mail across
+   * every relay restart — see `file-vouched-keys.ts`. Defaults to a no-op store, which is correct
+   * wherever the content store is in-memory too (tests, `CELLO_ENV=local`): nothing survives on
+   * either side, so there is no mailbox to strand.
+   */
+  readonly #vouchedKeyStore: VouchedKeyStore;
 
   constructor(opts: RelayNodeOptions) {
     this.#node = opts.node;
@@ -520,6 +537,10 @@ export class CelloRelayNode {
     this.#store = opts.store ?? new InMemoryRelayStore({ logger: this.#logger });
     this.#sessionWal = opts.sessionWal ?? null;
     this.#connectionGater = opts.connectionGater ?? null;
+    // Review H2: seed from disk BEFORE the content-park handler is built, so an agent whose mail was
+    // parked before a restart is already vouched the first time it asks for it.
+    this.#vouchedKeyStore = opts.vouchedKeyStore ?? new InMemoryVouchedKeyStore();
+    this.#vouchedPubkeys = this.#vouchedKeyStore.load();
     this.#contentParkHandler = opts.contentStore
       ? new ContentParkHandler({
           node: this.#node,
@@ -807,6 +828,9 @@ export class CelloRelayNode {
     // participant may not have connected yet at all).
     this.#vouchedPubkeys.add(aHex);
     this.#vouchedPubkeys.add(bHex);
+    // Review H2: and durably, so a restart does not strand their parked content.
+    this.#vouchedKeyStore.add(aHex);
+    this.#vouchedKeyStore.add(bHex);
 
     // M7-SESSION-001 AC-002: start idle timeout timer if configured
     this.#startSessionIdleTimer(sessionKey);
@@ -2358,6 +2382,8 @@ export interface CreateRelayNodeOptions {
   connectionGater?: RelayConnectionGater;
   /** DOD-M15-RELAYAUTH-1: see `DEFAULT_RESERVATION_GRACE_MS` in relay-connection-gater.ts. */
   reservationGraceMs?: number;
+  /** DOD-M15-RELAYAUTH-1 review H2: durable vouching — see `RelayNodeOptions.vouchedKeyStore`. */
+  vouchedKeyStore?: VouchedKeyStore;
   /** FED-OPTIONB-SETUP-001: consortium directory pubkeys (any-directory). Falls back to [directoryPubkey]. */
   directoryPubkeys?: Uint8Array[];
   /**
@@ -2524,6 +2550,7 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     store: opts.store,
     sessionWal: opts.sessionWal,
     contentStore: opts.contentStore,
+    ...(opts.vouchedKeyStore ? { vouchedKeyStore: opts.vouchedKeyStore } : {}),
     ...(opts.depositRateLimit ? { depositRateLimit: opts.depositRateLimit } : {}),
     ...(opts.authRateLimit ? { authRateLimit: opts.authRateLimit } : {}),
     ...(opts.hashSubmitRateLimit ? { hashSubmitRateLimit: opts.hashSubmitRateLimit } : {}),
