@@ -82,6 +82,8 @@ import type { Stream } from "@libp2p/interface";
 import type { Logger, SessionWal, ContentStore } from "@cello-protocol/interfaces";
 import { DepositRateLimiter, type DepositRateLimitConfig } from "./deposit-rate-limiter.js";
 import { ContentParkHandler } from "./content-park.js";
+import { RelayConnectionGater } from "./relay-connection-gater.js";
+import { InMemoryVouchedKeyStore, type VouchedKeyStore } from "./adapters/file-vouched-keys.js";
 import { RELAY_LEAF_KINDS, RELAY_LEAF_HASHERS } from "./relay-types.js";
 import type {
   SessionAssignment,
@@ -348,6 +350,23 @@ export interface RelayNodeOptions {
   store?: RelayStore;
   logger?: Logger;
   /**
+   * DOD-M15-RELAYAUTH-1: the connection gater passed into `createNode()` — see
+   * `relay-connection-gater.ts` for what it enforces (dial-through gated on a real session
+   * assignment; reservation grants time-boxed on proving key possession). Required so
+   * `CelloRelayNode` can feed it session bindings and auth events as they happen; the relay
+   * cannot function correctly with `store`/`recordAssignment` state and the gater's state
+   * drifting apart.
+   */
+  connectionGater?: RelayConnectionGater;
+  /**
+   * DOD-M15-RELAYAUTH-1 review H2: where "this pubkey is a real participant" is persisted. Defaults
+   * to a no-op store, which is right whenever the content store is in-memory too — with nothing
+   * durable on either side there is no parked mail a restart could strand. Wire the file-backed one
+   * wherever the content store is file-backed, or a relay roll leaves agents unable to collect mail
+   * the relay is actively telling them about.
+   */
+  vouchedKeyStore?: VouchedKeyStore;
+  /**
    * PERSIST-013 leaf-durability WAL. **Currently accepted and unused** — its only reader was the
    * gap-fill handler deleted in `DOD-M15-SEALWIRE-1` bullet 7, and the composition root has never
    * passed it in (see `bin/relay.ts`, unused since 2026-05-16). Kept as the injection seam so
@@ -467,6 +486,31 @@ export class CelloRelayNode {
   /** DOD-M15-RELAYABUSE-1: hash_submit rate limit, keyed on the AUTHENTICATED sender pubkey. */
   readonly #hashSubmitPubkeyLimiter: DepositRateLimiter;
 
+  /**
+   * DOD-M15-RELAYAUTH-1: fed session bindings and auth events as they happen — see
+   * `relay-connection-gater.ts`. Optional only so tests/local callers that don't need the
+   * enforcement can omit it; production wiring always supplies one (`createRelayNode`).
+   */
+  readonly #connectionGater: RelayConnectionGater | null;
+
+  /**
+   * DOD-M15-RELAYAUTH-1: pubkeys named by at least one directory-signed assignment this relay has
+   * recorded — "this is a real participant, not a bare keypair that merely authenticated." Grows
+   * only via `recordAssignment()` succeeding, which requires an unforgeable directory signature —
+   * unlike a peer-id-keyed cache, this is not free for an attacker to inflate at will. Never
+   * pruned: a pubkey once vouched stays vouched for the relay's lifetime, matching the real
+   * lifecycle (an agent that finishes one session is still the same registered agent for the next).
+   */
+  #vouchedPubkeys = new Set<string>();
+
+  /**
+   * Review H2: the durable half of the above. In memory alone this gate stranded parked mail across
+   * every relay restart — see `file-vouched-keys.ts`. Defaults to a no-op store, which is correct
+   * wherever the content store is in-memory too (tests, `CELLO_ENV=local`): nothing survives on
+   * either side, so there is no mailbox to strand.
+   */
+  readonly #vouchedKeyStore: VouchedKeyStore;
+
   constructor(opts: RelayNodeOptions) {
     this.#node = opts.node;
     this.#directoryPubkey = opts.directoryPubkey;
@@ -492,11 +536,20 @@ export class CelloRelayNode {
     // are routed through the injected logger instead of console.warn.
     this.#store = opts.store ?? new InMemoryRelayStore({ logger: this.#logger });
     this.#sessionWal = opts.sessionWal ?? null;
+    this.#connectionGater = opts.connectionGater ?? null;
+    // Review H2: seed from disk BEFORE the content-park handler is built, so an agent whose mail was
+    // parked before a restart is already vouched the first time it asks for it.
+    this.#vouchedKeyStore = opts.vouchedKeyStore ?? new InMemoryVouchedKeyStore();
+    this.#vouchedPubkeys = this.#vouchedKeyStore.load();
     this.#contentParkHandler = opts.contentStore
       ? new ContentParkHandler({
           node: this.#node,
           store: opts.contentStore,
           logger: this.#logger,
+          // DOD-M15-RELAYAUTH-1: pull/confirm proves the caller OWNS the recipient key (I1) but
+          // that alone is not "this is a real relay participant" — see the class comment on
+          // #vouchedPubkeys. Closed-over, not a snapshot: reads whatever is vouched at call time.
+          isVouched: (pubkeyHex: string) => this.#vouchedPubkeys.has(pubkeyHex),
           ...(opts.depositRateLimit ? { rateLimit: opts.depositRateLimit } : {}),
         })
       : null;
@@ -752,6 +805,14 @@ export class CelloRelayNode {
         initiator: assignment.initiator_session_peer_id,
         counterparty: assignment.counterparty_session_peer_id,
       });
+      // DOD-M15-RELAYAUTH-1: feed the dial-through gate — see relay-connection-gater.ts. Session
+      // Peer IDs are required by the client's own initiate-session path (a session cannot start
+      // without both), so this is the common case, not a fallback.
+      this.#connectionGater?.recordSessionBinding(
+        sessionKey,
+        assignment.initiator_session_peer_id,
+        assignment.counterparty_session_peer_id,
+      );
     }
 
     // M7-SESSION-001: track participant → session mapping for interrupt emission
@@ -761,6 +822,15 @@ export class CelloRelayNode {
     if (!this.#participantSessions.has(bHex)) this.#participantSessions.set(bHex, new Set());
     this.#participantSessions.get(aHex)!.add(sessionKey);
     this.#participantSessions.get(bHex)!.add(sessionKey);
+
+    // DOD-M15-RELAYAUTH-1: a directory-signed assignment naming these two pubkeys IS the
+    // credential — both are now vouched, regardless of which one presented the frame (the OTHER
+    // participant may not have connected yet at all).
+    this.#vouchedPubkeys.add(aHex);
+    this.#vouchedPubkeys.add(bHex);
+    // Review H2: and durably, so a restart does not strand their parked content.
+    this.#vouchedKeyStore.add(aHex);
+    this.#vouchedKeyStore.add(bHex);
 
     // M7-SESSION-001 AC-002: start idle timeout timer if configured
     this.#startSessionIdleTimer(sessionKey);
@@ -979,6 +1049,35 @@ export class CelloRelayNode {
             await this.#sendFrame(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "rate_limited", retry_after_ms: pubkeyLimit.retryAfterMs }));
             stream.abort(new Error("rate_limited")); return;
           }
+          // DOD-M15-RELAYAUTH-1: this proves Ed25519 key POSSESSION, not participation in any
+          // session — cancels this peer's reservation-revoke grace timer if one is running (see
+          // relay-connection-gater.ts). Does NOT vouch the pubkey; that still requires a real
+          // directory-signed assignment (recordAssignment(), below).
+          if (remotePeerId) this.#connectionGater?.recordAuthenticated(remotePeerId);
+
+          /**
+           * DOD-M15-RELAYAUTH-1 review HIGH-1 — **A RESERVATION PROOF MUST NOT CLAIM THE DELIVERY
+           * STREAM.** An agent legitimately runs several nodes against one relay: the node promoted
+           * into a live session, plus the replacement standing receiver created behind it. Each
+           * holds its OWN circuit reservation, so each must prove possession — but `#streams` is
+           * keyed by PUBKEY, so a second full auth from the same agent overwrites the live session's
+           * delivery target and its counterparty's leaves start arriving at a node with no handler.
+           *
+           * So a `purpose: "reservation"` auth stops here: possession is proven (recorded above,
+           * which is the whole point), and nothing else is touched — no delivery registration, no
+           * liveness flip, no idle-timer reset, no queued-delivery drain, no park notify. The stream
+           * is closed rather than kept, because there is nothing further to say on it.
+           */
+          if (resp.purpose === "reservation") {
+            await this.#sendFrame(stream, encodeAuthOk({ type: "relay_auth_ok" }));
+            this.#logger.debug("relay.auth.reservation_proof", {
+              remotePeerId: remotePeerId ?? "(none)",
+              pubkey: truncHex(authedPubkeyHex),
+            });
+            await stream.close().catch(() => {});
+            return;
+          }
+
           const isReconnect = this.#streams.has(authedPubkeyHex);
           this.#streams.set(authedPubkeyHex, stream);
           authed = true;
@@ -2057,6 +2156,9 @@ export class CelloRelayNode {
 
     // Remove the bound session Peer IDs (M7-WIRE-001 SI-003).
     this.#sessionPeerIdBindings.delete(sessionIdHex);
+    // DOD-M15-RELAYAUTH-1: keep the dial-through gate's own copy in lockstep — a torn-down
+    // session no longer authorizes a circuit dial between its two peer ids.
+    this.#connectionGater?.removeSessionBinding(sessionIdHex);
 
     // The brokering directory (DOD-SEAL-BROKER-1). Safe to drop here: the seal path reads it before
     // confirmSeal/rejectSeal reach cleanup. Without this the relay accumulated one entry per session
@@ -2272,6 +2374,16 @@ export interface CreateRelayNodeOptions {
    * Defaults to `DEFAULT_CIRCUIT_DATA_LIMIT_BYTES` (1 GiB) — see that constant for why.
    */
   circuitDataLimitBytes?: bigint;
+  /**
+   * DOD-M15-RELAYAUTH-1: override the connection gater entirely (mainly for tests that need to
+   * inspect its state directly, e.g. `pendingRevokeCount()`). Normal callers should leave this
+   * unset and use `reservationGraceMs` to tune the one thing worth tuning.
+   */
+  connectionGater?: RelayConnectionGater;
+  /** DOD-M15-RELAYAUTH-1: see `DEFAULT_RESERVATION_GRACE_MS` in relay-connection-gater.ts. */
+  reservationGraceMs?: number;
+  /** DOD-M15-RELAYAUTH-1 review H2: durable vouching — see `RelayNodeOptions.vouchedKeyStore`. */
+  vouchedKeyStore?: VouchedKeyStore;
   /** FED-OPTIONB-SETUP-001: consortium directory pubkeys (any-directory). Falls back to [directoryPubkey]. */
   directoryPubkeys?: Uint8Array[];
   /**
@@ -2360,10 +2472,19 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
   stop: () => Promise<void>;
 }> {
   const keyProvider = opts.keyProvider ?? generateKeypair();
+  // DOD-M15-RELAYAUTH-1: the gater must exist BEFORE createNode() (circuit-relay-v2's server
+  // component requires a connectionGater in its DI graph) but needs a live `node` reference to
+  // revoke a connection — see `attachNode` below and the class header for the full design.
+  const relayLogger = opts.logger ?? { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+  const connectionGater = opts.connectionGater ?? new RelayConnectionGater({
+    logger: relayLogger,
+    reservationGraceMs: opts.reservationGraceMs,
+  });
   const node = await createNode({
     keyProvider,
     listenAddresses: opts.listenAddresses ?? ["/ip4/127.0.0.1/tcp/0"],
     transportPrivateKey: opts.transportPrivateKey,
+    connectionGater,
     // DOD-NAT-REACHABILITY-1 — THE ROOT CAUSE of "agents cannot get a reservation".
     //
     // The relay was running libp2p's DEFAULTS, which are sized for a public DHT where
@@ -2413,9 +2534,11 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     },
   });
   await node.start();
+  connectionGater.attachNode(node);
 
   const relay = new CelloRelayNode({
     node,
+    connectionGater,
     directoryPubkey: opts.directoryPubkey,
     directoryPubkeys: opts.directoryPubkeys,
     // This factory copies options FIELD BY FIELD, so a new option that is not listed here is
@@ -2427,6 +2550,7 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     store: opts.store,
     sessionWal: opts.sessionWal,
     contentStore: opts.contentStore,
+    ...(opts.vouchedKeyStore ? { vouchedKeyStore: opts.vouchedKeyStore } : {}),
     ...(opts.depositRateLimit ? { depositRateLimit: opts.depositRateLimit } : {}),
     ...(opts.authRateLimit ? { authRateLimit: opts.authRateLimit } : {}),
     ...(opts.hashSubmitRateLimit ? { hashSubmitRateLimit: opts.hashSubmitRateLimit } : {}),
@@ -2446,6 +2570,9 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     stop: async () => {
       relay.stopIdleSweep();
       relay.stopContentSweep();
+      // Review L1: the gater's pending-revoke timers were the one set of handles this shutdown did
+      // NOT clear, so a stopped relay could still be held open by them for up to the grace window.
+      connectionGater.stop();
       await node.stop();
     },
   };

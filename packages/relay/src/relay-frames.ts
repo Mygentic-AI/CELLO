@@ -181,7 +181,16 @@ export function decodeInboundFrame(bytes: Uint8Array): InboundRelayFrame | null 
     const signature = toUint8Array(o["signature"]);
     if (!pubkey || pubkey.length !== 32) return null;
     if (!signature || signature.length !== 64) return null;
-    return { type: "relay_auth_response", pubkey, signature };
+    /**
+     * DOD-M15-RELAYAUTH-1 review HIGH-1: `purpose: "reservation"` marks an auth whose ONLY job is
+     * to prove key possession from THIS transport identity, so the relay can keep the peer's
+     * circuit reservation. It must NOT claim the agent's delivery stream — see the dispatch in
+     * relay-node.ts. Unknown/absent means the ordinary session auth, so an older client is
+     * unaffected; an unrecognised value is treated as absent rather than refused, because the
+     * failure mode of guessing wrong here is refusing a legitimate agent.
+     */
+    const purpose = o["purpose"] === "reservation" ? ("reservation" as const) : undefined;
+    return { type: "relay_auth_response", pubkey, signature, ...(purpose ? { purpose } : {}) };
   }
 
   if (o["type"] === "hash_submit") {

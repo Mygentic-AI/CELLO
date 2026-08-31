@@ -562,7 +562,23 @@ claim.
 Recorded because they drove the design and constrain it.
 
 **Fleet coordination.** One channel every coding agent listens to. This is the case that produced the
-requirement and the one the shared-key tier already serves.
+requirement and the one the shared-key tier already serves. The traffic is operational heads-up:
+
+- *"I am about to rotate the relays — if you start getting weird results, that is why."*
+- *"We are doing a `cello publish` shortly. Contact me if you want us to wait so you can squeeze
+  yours in."*
+
+Both are worth reading closely, because they are what the design has to survive. The first is pure
+one-way notice: no reply is wanted, and an agent that answered it would be noise. The second **invites
+a reply and still is not a conversation** — the responder opens a normal one-to-one session with the
+publisher as themselves. That is the artifact model working as intended rather than a gap in it: the
+channel carries the announcement, the DM carries the negotiation, and the channel never grows a reply
+path that five hundred subscribers can write into.
+
+It also shows why the doorbell decision (Part 3) is not a detail. A relay rotation notice is worth
+nothing if it arrives after the rotation; it is worth *less than nothing* if it interrupts thirty
+agents mid-task. Turn-boundary delivery is what makes an operational channel usable rather than a
+thirty-way interruption.
 
 **Announcements.** Already planned. Upgrades, maintenance windows, disruption notices.
 
@@ -811,3 +827,26 @@ Two edges to have answers ready for:
   below the DCPE corpus discussion; `TIERTEXT-1` is the inbound gate a marketplace would need.
 - [[M8C-MONIKER-SPEC]] — the contact and tier model any subscription would sit on.
 - [[protocol-map]] — protocol domains and readiness; a broadcast primitive would be a new domain.
+
+### Three one-to-many designs exist. They are not the same feature.
+
+Written down because the shapes rhyme and a later reader will assume one supersedes the others.
+Both documents below predate any code — they are design-by-imagination against a protocol that did
+not exist yet. This log is the opposite: it starts from what is built and what an operator actually
+hit.
+
+- [[2026-04-19_2045_group-room-design|Group Room Design]] — **a different feature: group chat.** Many
+  agents talking to each other, with floor control so they take turns. Its *Archetype 4* reaches a
+  broadcast-shaped result by configuring a room down to 3 speakers and 100 listeners, and enforcing
+  listener silence at the relay. **That is not the route to a broadcast channel**, and this log says
+  why: a broadcast is not a conversation with the talking turned off, it is a signed artifact with no
+  session to reply into — so listener silence needs no enforcement, and the fan-out cost stops being
+  tied to the tamper-evident record. Archetype 4 is superseded *as a way to build a broadcast
+  channel*. **The group chat design itself is not superseded by anything here** — this log does not
+  design group conversation and does not replace it.
+- [[2026-04-18_1407_push-publish-subscription-model|Push-Publish Subscription Model]] — **a different
+  feature: a paid content subscription**, roadmapped under M17 Commerce. You subscribe to a
+  *publisher* and pay per delivery; the terms are negotiated bilaterally in a normal session first.
+  A broadcast channel is subscribe-to-a-*topic*, unpaid, and has no negotiated agreement behind it.
+  The two could share a delivery mechanism later; they are not the same product decision, and neither
+  blocks the other.

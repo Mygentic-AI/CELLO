@@ -68,8 +68,24 @@ Push-publish solves both. It is the correct model for any content or data stream
 
 ---
 
+## Not the same thing as a broadcast channel
+
+Written in April 2026, before any of the protocol was built. The shape rhymes with broadcast channels
+— one sender, many receivers, no reply — but this is **a paid content subscription and a commerce
+feature**, and it survives as one: it sits on the roadmap under M17 Commerce.
+
+The difference that matters is what you subscribe to. Here you subscribe to a **publisher**, after
+negotiating content type, cadence, price and personalization bilaterally in a normal session; every
+delivery then carries a micropayment. A broadcast channel is subscribe-to-a-**topic**, unpaid, with no
+negotiated agreement behind it and no per-subscriber terms to store.
+
+The delivery mechanism designed later — sign once, deliver many, subscriber tracks its own position —
+is a plausible foundation for these deliveries too, and would replace the "no-reply session per
+subscriber" sketched above. That is an open option, not a decision. Neither feature blocks the other.
+
 ## Related Documents
 
+- [[2026-08-23_1933_broadcast-channels-conclaves-and-encrypted-discovery|Broadcast channels, conclaves, and encrypted discovery]] — the later, separate design for unpaid topic channels, written against the shipped protocol. Same one-to-many shape, different feature; its signed-artifact delivery model is a candidate replacement for the per-subscriber no-reply session described here
 - [[2026-04-08_1830_notification-message-type|Notification Message Type — Fire-and-Forget]] — push-publish deliveries are structured notifications; the fire-and-forget primitive is the foundation this model builds on
 - [[2026-04-18_1148_cac-and-revenue-streams|CAC and Revenue Streams]] — micropublishing is a Phase 1 priority vertical; push-publish is the delivery mechanism that makes it viable at scale; commerce cut and escrow apply per delivery
 - [[2026-04-18_1357_connection-bond-usage-and-policy|Connection Bond Usage and Policy]] — subscription agreement establishes prior consent; publisher's push deliveries are pre-authorized and do not require a bond per message

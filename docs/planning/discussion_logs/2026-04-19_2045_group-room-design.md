@@ -485,6 +485,31 @@ This archetype requires `sender_keys` topology (see Section 8) — speakers encr
 
 Use cases: market-maker announcements, institutional updates, agent newsletters, coordination broadcasts — all private, all verifiable, all within CELLO's end-to-end encryption contract.
 
+> ### ⚠️ SUPERSEDED — this archetype only. Do not build a broadcast channel this way.
+>
+> **The rest of this document stands.** Group chat is not superseded by anything; only Archetype 4 is.
+>
+> This archetype was written in April 2026, before any of the protocol was built, and it reaches a
+> broadcast by taking a group conversation and turning the talking off — a room, with roles, and the
+> relay rejecting anything a listener sends. Broadcast channels were designed properly in August 2026
+> against the shipped protocol, after the need showed up for real (coding agents needing to tell each
+> other *"I am about to rotate the relays"*), and that design rejects this shape:
+> **a broadcast is a signed artifact, not a conversation.** The channel signs once and the artifact is
+> delivered to every subscriber.
+>
+> Three things go wrong with the room-shaped version. **Listener silence needs enforcing** — here at
+> the relay, and a modified client is the reason that has to be load-bearing; under the artifact model
+> there is no session to reply into, so there is nothing to enforce. **The fan-out cost is welded to
+> the tamper-evident record** — 100 listeners in a room means 100 participants in one Merkle
+> structure, whereas one signed artifact costs one signature and N deliveries. And **`sender_keys`
+> gives every listener a key that decrypts the channel**, which is the key-sharing trap the later
+> design was built to avoid.
+>
+> Read [[2026-08-23_1933_broadcast-channels-conclaves-and-encrypted-discovery|Broadcast channels,
+> conclaves, and encrypted discovery]] before doing any work here. Note that G-38 (Sender Keys),
+> listed below as this archetype's blocker, is **not** a blocker for broadcast channels under the
+> later design — it remains open only for large group *conversations*.
+
 ### Manifest creation-time constraints
 
 The relay validates manifest coherence at creation time and rejects degenerate configurations:
@@ -689,3 +714,4 @@ The gap this analysis surfaces: **private async group communication for agents d
 - [[server-infrastructure|Server Infrastructure Requirements]] — relay-level pre-room gate (new relay capability class); CHECKPOINT as relay-originated control leaf; room policy enforcement as new relay responsibility
 - [[frontend|CELLO Frontend Requirements]] — room manifest display, pre-join cost projection, ownership transfer UI, dissolution UI, per-room budget dashboard, DELIVERED/SEEN display states
 - [[2026-05-08_1612_shared-state-as-protocol-primitive|Shared State as Protocol Primitive]] — CRDTs as first-class collaborative documents with Merkle-notarized operation logs; group workflows require shared state beyond message exchange
+- [[2026-08-23_1933_broadcast-channels-conclaves-and-encrypted-discovery|Broadcast channels, conclaves, and encrypted discovery]] — **supersedes Archetype 4 (Section 7) and nothing else in this document.** A broadcast channel is a separate feature from group chat and is not built as a room: it is a signed artifact delivered to subscribers, with no session, no shared channel key, and no listener role to enforce. Written in August 2026 against the shipped protocol, after fleet coordination between coding agents produced the need
