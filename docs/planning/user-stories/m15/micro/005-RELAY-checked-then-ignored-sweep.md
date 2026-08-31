@@ -202,12 +202,17 @@ confidence in a verdict whose entire deliverable is "nothing found". Re-derived 
 > the suspicion for `network-directory-adapter.ts`, and correct three verdicts in the table.**
 > — `cello-unit-reviewer` (Opus)
 
-**STATUS (2026-08-31): 2, 3 and 4 are DONE — the table row, the false mechanism and the over-stated
-"exemplary" verdict are all corrected above, and the silent-message-loss fix that item 2 raised is
-recorded in Newly discovered as post-launch rather than grown into this order. 1 is OUTSTANDING**
-(the `getRelayPublicKey` code fix; it touches `relay-node.ts`, which was mid-review under order 002
-when the other three were corrected). Recorded here so the suspicion is not retired by a
-clean-looking table.
+**STATUS (2026-08-31): ALL FOUR DONE.** 2, 3 and 4 were record corrections — the table row, the
+false mechanism and the over-stated "exemplary" verdict — with the silent-message-loss fix that item
+2 raised recorded in Newly discovered as post-launch rather than grown into this order. **Item 1 is
+fixed in code** (`7d1040c0`): `getRelayPublicKey` returns a discriminated result, only
+`not_registered` means the directory answered, and an unreachable directory now gets its own
+error-level event instead of being reported as an unregistered relay. The refusal is unchanged —
+SI-002 still forbids accepting an unverified ACK — so only the diagnosis moved. Revert-tested.
+
+Worth keeping: the type change made the compiler find four test doubles, three of which returned a
+shape that would now crash the caller and none of which is exercised today. A convention would have
+found none of them.
 
 1. **`network-directory-adapter.ts` (775 lines, 3 inbound frame types) was never walked.**
    `getRelayPublicKey` collapses directory-unreachable / stream-failed / undecodable / wrong-frame /
