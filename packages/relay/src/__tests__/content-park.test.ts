@@ -56,6 +56,32 @@ function send(stream: Stream, frame: Record<string, unknown>): void {
   stream.send(lp.encode.single(ENC.encode(frame) as Uint8Array));
 }
 
+/**
+ * DOD-M15-RELAYAUTH-1: pull/confirm now also require the caller be VOUCHED — named by at least
+ * one directory-signed assignment the relay has recorded — on top of I1's existing proof of key
+ * ownership. Records one in-process, mirroring what a real client_record_assignment produces.
+ */
+async function vouch(
+  relay: Awaited<ReturnType<typeof createRelayNode>>["relay"],
+  dirKp: KeyProvider,
+  recipientPub: Uint8Array,
+): Promise<void> {
+  const sessionId = new Uint8Array(randomBytes(16));
+  const otherPub = await generateKeypair().getPublicKey();
+  const sessionTimestamp = Date.now();
+  const ts = sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp;
+  const tbs = ENC.encode([sessionId, recipientPub, otherPub, ts]) as Uint8Array;
+  const directory_signature = await dirKp.sign(tbs);
+  const result = relay.recordAssignment({
+    session_id: sessionId,
+    participant_a: recipientPub,
+    participant_b: otherPub,
+    session_timestamp: sessionTimestamp,
+    directory_signature,
+  });
+  if (!result.ok) throw new Error(`test setup: vouch() failed to record assignment: ${result.reason}`);
+}
+
 /** Perform the content-park auth handshake on `stream` (after the initial request frame). */
 async function authHandshake(
   stream: Stream,
@@ -79,7 +105,7 @@ describe("relay content-park protocol (MSG-001)", () => {
     const store = new InMemoryContentStore({ logger });
     const dirKp = generateKeypair();
     const dirPubkey = await dirKp.getPublicKey();
-    const { node: relayNode, stop } = await createRelayNode({ directoryPubkey: dirPubkey, contentStore: store, logger });
+    const { relay, node: relayNode, stop } = await createRelayNode({ directoryPubkey: dirPubkey, contentStore: store, logger });
     try {
       const relayAddr = relayNode.listenAddresses()[0]!;
 
@@ -90,6 +116,8 @@ describe("relay content-park protocol (MSG-001)", () => {
       const plaintextLike = new Uint8Array([1, 2, 3]);
       const contentHash = new Uint8Array(createHash("sha256").update(Buffer.from(plaintextLike)).digest());
       const sessionId = new Uint8Array(randomBytes(16));
+      // DOD-M15-RELAYAUTH-1: pull/confirm now also require the recipient be a vouched participant.
+      await vouch(relay, dirKp, recipientPub);
 
       // Sender deposits encrypted content (deposit is open by design).
       const senderNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
@@ -146,11 +174,13 @@ describe("relay content-park protocol (MSG-001)", () => {
     const { logger } = captureLogger();
     const store = new InMemoryContentStore({ logger });
     const dirKp = generateKeypair();
-    const { node: relayNode, stop } = await createRelayNode({ directoryPubkey: await dirKp.getPublicKey(), contentStore: store, logger });
+    const { relay, node: relayNode, stop } = await createRelayNode({ directoryPubkey: await dirKp.getPublicKey(), contentStore: store, logger });
     try {
       const relayAddr = relayNode.listenAddresses()[0]!;
       const recipientKp = generateKeypair();
       const recipientPub = await recipientKp.getPublicKey();
+      // DOD-M15-RELAYAUTH-1: pull now also requires the recipient be a vouched participant.
+      await vouch(relay, dirKp, recipientPub);
       const node = await createNode({ keyProvider: recipientKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
       await node.start();
       await node.dial(relayAddr);
@@ -162,6 +192,60 @@ describe("relay content-park protocol (MSG-001)", () => {
       const entryFrame = await read();
       expect(countFrame?.["type"]).toBe("content_park_pull_count");
       expect(entryFrame?.["found"]).toBe(false);
+      await node.stop();
+    } finally {
+      await stop();
+    }
+  }, 30_000);
+
+  it("DOD-M15-RELAYAUTH-1: pull is REFUSED for a key that owns itself but was never vouched by an assignment", async () => {
+    /**
+     * The gap this order closes: I1 already proves the caller OWNS `recipientPubkey`. That is a
+     * different claim from "this key is a real relay participant" — a bare, never-registered
+     * keypair could otherwise still collect mail addressed to itself. No `vouch()` call here,
+     * deliberately — the recipient below proves ownership perfectly and must still be refused.
+     */
+    const { logger } = captureLogger();
+    const store = new InMemoryContentStore({ logger });
+    const dirKp = generateKeypair();
+    const { node: relayNode, stop } = await createRelayNode({ directoryPubkey: await dirKp.getPublicKey(), contentStore: store, logger });
+    try {
+      const relayAddr = relayNode.listenAddresses()[0]!;
+      const recipientKp = generateKeypair();
+      const recipientPub = await recipientKp.getPublicKey();
+      const rHex = Buffer.from(recipientPub).toString("hex");
+      const contentHash = new Uint8Array(createHash("sha256").update(Buffer.from([7])).digest());
+      await store.deposit({
+        recipientPubkey: recipientPub,
+        contentHash,
+        sessionId: new Uint8Array(randomBytes(16)),
+        ciphertext: new Uint8Array(randomBytes(48)),
+        depositedAt: Date.now(),
+      });
+
+      const node = await createNode({ keyProvider: recipientKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+      await node.start();
+      await node.dial(relayAddr);
+      const pullStream = await node.newStream(relayNode.getPeerId(), CONTENT_PARK_PROTOCOL_ID);
+      const pullRead = frameReader(pullStream);
+      send(pullStream, { type: "content_park_pull_request", recipient_pubkey: recipientPub });
+      await authHandshake(pullStream, pullRead, recipientKp, recipientPub); // proves ownership — legitimately
+      const pullVerdict = await pullRead();
+      expect(pullVerdict?.["type"]).toBe("content_park_pull_refused");
+      expect(pullVerdict?.["reason"]).toBe("not_a_participant");
+      // The entry survives — refused, not served and not deleted.
+      expect(await store.hasContent(rHex)).toBe(true);
+
+      const confirmStream = await node.newStream(relayNode.getPeerId(), CONTENT_PARK_PROTOCOL_ID);
+      const confirmRead = frameReader(confirmStream);
+      send(confirmStream, { type: "content_park_confirm", recipient_pubkey: recipientPub, content_hash: contentHash });
+      await authHandshake(confirmStream, confirmRead, recipientKp, recipientPub);
+      const confirmVerdict = await confirmRead();
+      expect(confirmVerdict?.["type"]).toBe("content_park_confirm_ack");
+      expect(confirmVerdict?.["ok"]).toBe(false);
+      expect(confirmVerdict?.["reason"]).toBe("not_a_participant");
+      expect(await store.hasContent(rHex), "confirm must not delete-on-pickup for an unvouched caller").toBe(true);
+
       await node.stop();
     } finally {
       await stop();

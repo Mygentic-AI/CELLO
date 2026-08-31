@@ -526,6 +526,30 @@ describe("FED-OPTIONB-SETUP-001: client_record_assignment — any-directory veri
     stream.close().catch(() => {});
   }, 15_000);
 
+  it("DOD-M15-RELAYAUTH-1: a VALID assignment that does not NAME the caller is refused → not_a_participant", async () => {
+    /**
+     * The DoD's second refusal. Distinct from the forged-signature case above: this assignment is
+     * genuinely consortium-signed and would record fine — it simply names two OTHER agents. Without
+     * this check an authenticated stranger could pre-record (and so become a relay-recognised
+     * participant of) sessions it has no part in, purely by replaying an assignment it observed.
+     */
+    const fix = await makeConsortiumRelay();
+    const strangerKp = generateKeypair(); // authenticates as itself, is named by nothing
+    const pubA = await generateKeypair().getPublicKey();
+    const pubB = await generateKeypair().getPublicKey();
+    const { stream, reader } = await authedClientStream(fix.relayPeerId, fix.relayAddr, strangerKp);
+
+    const sessionId = new Uint8Array(randomBytes(16));
+    // Signed by a REAL consortium directory — the signature is not the problem here.
+    const frame = await makeClientRecordAssignmentFrame(sessionId, pubA, pubB, Date.now(), fix.node1Kp);
+    sendFrame(stream, frame);
+
+    const resp = await reader.readDecoded();
+    expect(resp["type"]).toBe("assignment_invalid");
+    expect(resp["reason"]).toBe("not_a_participant");
+    stream.close().catch(() => {});
+  }, 15_000);
+
   it("after a client_record_assignment, the relay accepts the session's hash_submit (the session was recorded)", async () => {
     const fix = await makeConsortiumRelay();
     const clientKp = generateKeypair();

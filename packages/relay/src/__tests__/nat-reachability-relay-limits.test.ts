@@ -14,6 +14,8 @@
  *      hole punch fails, the relayed connection IS the session.
  */
 import { setupV3Tests, createTestScope, describe, it, expect, beforeEach, afterEach } from "@claude-flow/testing";
+import { randomBytes } from "node:crypto";
+import { Encoder } from "cbor-x";
 import { createNode } from "@cello-protocol/transport";
 import { generateKeypair } from "@cello-protocol/crypto";
 import { createRelayNode } from "../relay-node.js";
@@ -90,13 +92,46 @@ describe("DOD-M15-RELAYABUSE-1: relayed connections carry a REAL duration and by
   /** Stand up a relay via the PRODUCTION factory (createRelayNode), with the given circuit overrides. */
   async function makeRelay(opts: { circuitDurationLimitMs?: number; circuitDataLimitBytes?: bigint }) {
     const dirKp = generateKeypair();
-    const { node, stop } = await createRelayNode({
+    const { relay, node, stop } = await createRelayNode({
       directoryPubkey: await dirKp.getPublicKey(),
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
       ...opts,
     });
     scope.addCleanup(stop);
-    return node;
+    return { relay, node, dirKp };
+  }
+
+  /**
+   * DOD-M15-RELAYAUTH-1: the dial-through gate now refuses a circuit dial unless a recorded
+   * session assignment names BOTH transport peer ids. These L2 tests are about the DURATION/BYTE
+   * cap specifically, so they vouch dialer+receiver as session peers up front — otherwise every
+   * dial in this file would (correctly) be refused before the caps are ever exercised.
+   */
+  async function vouchCircuitPeers(
+    relay: Awaited<ReturnType<typeof createRelayNode>>["relay"],
+    dirKp: ReturnType<typeof generateKeypair>,
+    initiatorPeerId: string,
+    counterpartyPeerId: string,
+  ): Promise<void> {
+    const sessionId = new Uint8Array(randomBytes(16));
+    const pubA = await generateKeypair().getPublicKey();
+    const pubB = await generateKeypair().getPublicKey();
+    const sessionTimestamp = Date.now();
+    const ts = sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp;
+    const tbs = new Encoder({ tagUint8Array: false }).encode([
+      sessionId, pubA, pubB, ts, initiatorPeerId, counterpartyPeerId,
+    ]) as Uint8Array;
+    const directory_signature = await dirKp.sign(tbs);
+    const result = relay.recordAssignment({
+      session_id: sessionId,
+      participant_a: pubA,
+      participant_b: pubB,
+      session_timestamp: sessionTimestamp,
+      directory_signature,
+      initiator_session_peer_id: initiatorPeerId,
+      counterparty_session_peer_id: counterpartyPeerId,
+    });
+    if (!result.ok) throw new Error(`test setup: vouchCircuitPeers failed: ${result.reason}`);
   }
 
   /** A's standing receiver: reserves with the relay and serves ECHO_PROTOCOL. */
@@ -120,11 +155,30 @@ describe("DOD-M15-RELAYABUSE-1: relayed connections carry a REAL duration and by
     return { node, circuitAddr };
   }
 
-  /** B dials A THROUGH the relay's circuit (no hole-punch attempt — a direct circuit dial). */
+/** B dials A THROUGH the relay's circuit (no hole-punch attempt — a direct circuit dial). */
   async function connectThroughCircuit(circuitAddr: string, receiverPeerId: string) {
     const node = await createNode({ keyProvider: generateKeypair(), listenAddresses: [] });
     scope.addCleanup(async () => { try { await node.stop(); } catch { /* cleanup */ } });
     await node.start();
+    await node.dial(circuitAddr);
+    const stream = await node.newStream(receiverPeerId, ECHO_PROTOCOL);
+    return { node, stream };
+  }
+
+  /**
+   * Same as `connectThroughCircuit`, but VOUCHES dialer+receiver as session peers first — the
+   * dialer's peer id must be known before the dial-through gate will allow it.
+   */
+  async function connectThroughCircuitVouched(
+    relay: Awaited<ReturnType<typeof createRelayNode>>["relay"],
+    dirKp: ReturnType<typeof generateKeypair>,
+    circuitAddr: string,
+    receiverPeerId: string,
+  ) {
+    const node = await createNode({ keyProvider: generateKeypair(), listenAddresses: [] });
+    scope.addCleanup(async () => { try { await node.stop(); } catch { /* cleanup */ } });
+    await node.start();
+    await vouchCircuitPeers(relay, dirKp, node.getPeerId(), receiverPeerId);
     await node.dial(circuitAddr);
     const stream = await node.newStream(receiverPeerId, ECHO_PROTOCOL);
     return { node, stream };
@@ -141,12 +195,12 @@ describe("DOD-M15-RELAYABUSE-1: relayed connections carry a REAL duration and by
   }
 
   it("L2a: a tiny circuitDurationLimitMs closes the relayed link once it elapses", async () => {
-    const relay = await makeRelay({ circuitDurationLimitMs: 400 });
-    const relayAddr = relay.listenAddresses().find((a) => a.includes("/p2p/"))!;
+    const { relay, node, dirKp } = await makeRelay({ circuitDurationLimitMs: 400 });
+    const relayAddr = node.listenAddresses().find((a) => a.includes("/p2p/"))!;
     const { circuitAddr } = await makeReceiver(relayAddr);
     const receiverPeerId = circuitAddr.split("/p2p/").pop()!;
 
-    const { node: dialer } = await connectThroughCircuit(circuitAddr, receiverPeerId);
+    const { node: dialer } = await connectThroughCircuitVouched(relay, dirKp, circuitAddr, receiverPeerId);
 
     // The link must be ALIVE well before the 400ms limit (this is the revert-test's teeth: without
     // the fix, `applyDefaultLimit: false` means it also survives long past it).
@@ -159,7 +213,7 @@ describe("DOD-M15-RELAYABUSE-1: relayed connections carry a REAL duration and by
   }, 20_000);
 
   it("L2b: a tiny circuitDataLimitBytes closes the relayed link once exceeded", async () => {
-    const relay = await makeRelay({
+    const { relay, node, dirKp } = await makeRelay({
       circuitDurationLimitMs: 60_000, // generous — this test is about BYTES, not time
       // 4 KiB: small enough to trip with one application-level send, large enough that the
       // multistream-select + protocol negotiation overhead of ESTABLISHING the circuit stream
@@ -167,11 +221,11 @@ describe("DOD-M15-RELAYABUSE-1: relayed connections carry a REAL duration and by
       // that overhead alone reset the stream at a 64-byte cap when this test was first written.
       circuitDataLimitBytes: 4096n,
     });
-    const relayAddr = relay.listenAddresses().find((a) => a.includes("/p2p/"))!;
+    const relayAddr = node.listenAddresses().find((a) => a.includes("/p2p/"))!;
     const { circuitAddr } = await makeReceiver(relayAddr);
     const receiverPeerId = circuitAddr.split("/p2p/").pop()!;
 
-    const { node: dialer, stream } = await connectThroughCircuit(circuitAddr, receiverPeerId);
+    const { node: dialer, stream } = await connectThroughCircuitVouched(relay, dirKp, circuitAddr, receiverPeerId);
 
     // Send well past the 4 KiB cap. The relay counts bytes crossing the circuit in EITHER
     // direction, so exceeding it from the dialer's side is sufficient to trip the limit — and it
@@ -186,6 +240,35 @@ describe("DOD-M15-RELAYABUSE-1: relayed connections carry a REAL duration and by
 
     const disconnected = await awaitDisconnect(dialer, receiverPeerId, 5_000);
     expect(sendThrew || disconnected).toBe(true);
+  }, 20_000);
+
+  /**
+   * DOD-M15-RELAYAUTH-1 — "the libp2p hook restricting who may dial a reservation holder was
+   * never installed." L2a/L2b above already prove the dial-through gate is WORKING (an unvouched
+   * dial is what made them fail with PERMISSION_DENIED before they were updated to vouch first —
+   * see this file's own history). These two tests make that the explicit, named subject.
+   */
+  it("DOD-M15-RELAYAUTH-1: a stranger with NO session assignment cannot dial through to a reservation holder", async () => {
+    const { node } = await makeRelay({});
+    const relayAddr = node.listenAddresses().find((a) => a.includes("/p2p/"))!;
+    const { circuitAddr } = await makeReceiver(relayAddr);
+    const receiverPeerId = circuitAddr.split("/p2p/").pop()!;
+
+    // No vouchCircuitPeers call — this dialer and the receiver share no recorded assignment.
+    await expect(connectThroughCircuit(circuitAddr, receiverPeerId)).rejects.toThrow();
+  }, 20_000);
+
+  it("DOD-M15-RELAYAUTH-1: the counterparty a real assignment names CAN dial through", async () => {
+    const { relay, node, dirKp } = await makeRelay({});
+    const relayAddr = node.listenAddresses().find((a) => a.includes("/p2p/"))!;
+    const { circuitAddr } = await makeReceiver(relayAddr);
+    const receiverPeerId = circuitAddr.split("/p2p/").pop()!;
+
+    const { stream } = await connectThroughCircuitVouched(relay, dirKp, circuitAddr, receiverPeerId);
+    // Reaching this line without throwing IS the assertion — newStream() would have rejected had
+    // the CONNECT been denied. A trivial send confirms the stream is genuinely usable, not just
+    // nominally open.
+    expect(() => stream.send(new Uint8Array([1, 2, 3]))).not.toThrow();
   }, 20_000);
 });
 

@@ -103,6 +103,16 @@ export interface ContentParkHandlerOptions {
    * instead of thirty-one.
    */
   rateLimit?: DepositRateLimitConfig;
+  /**
+   * DOD-M15-RELAYAUTH-1: is this pubkey named by at least one directory-signed assignment the
+   * relay has recorded? Deposit stays open by design (see the header comment — E2E encryption is
+   * the mitigation, not identity). Pull and confirm are different: I1's challenge-response already
+   * proves the caller OWNS the recipient key, but "owns a keypair" and "is a real relay
+   * participant" are different claims, and only the second is the credential this milestone
+   * requires before the relay does anything for a caller beyond taking a deposit. Required (not
+   * optional) — a `ContentParkHandler` wired without this check would silently reopen the gap.
+   */
+  isVouched: (pubkeyHex: string) => boolean;
 }
 
 export class ContentParkHandler {
@@ -111,12 +121,15 @@ export class ContentParkHandler {
   readonly #logger: Logger;
   /** DOD-M15-RELAYABUSE-1: per-depositor deposit rate limiting. See `deposit-rate-limiter.ts`. */
   readonly #rateLimiter: DepositRateLimiter;
+  /** DOD-M15-RELAYAUTH-1: see `ContentParkHandlerOptions.isVouched`. */
+  readonly #isVouched: (pubkeyHex: string) => boolean;
 
   constructor(opts: ContentParkHandlerOptions) {
     this.#node = opts.node;
     this.#store = opts.store;
     this.#logger = opts.logger;
     this.#rateLimiter = new DepositRateLimiter(opts.rateLimit ?? DEFAULT_DEPOSIT_RATE_LIMIT);
+    this.#isVouched = opts.isVouched;
   }
 
   /** Register the content-park protocol handler. Call once after node.start(). */
@@ -351,6 +364,20 @@ export class ContentParkHandler {
       return;
     }
 
+    // DOD-M15-RELAYAUTH-1: proven key OWNERSHIP is not the same claim as "is a real relay
+    // participant" — see ContentParkHandlerOptions.isVouched. Named refusal, not a silent close:
+    // the caller has just proven who they are, so telling them why is not an information leak to
+    // an unauthorized party.
+    if (!this.#isVouched(rHex)) {
+      this.#logger.warn("content.park.pull.refused", {
+        recipientPubkey: rHex,
+        reason: "not_a_participant",
+        impact: "this key has never been named by a directory-signed assignment this relay has seen",
+      });
+      await this.#respond(stream, { type: "content_park_pull_refused", reason: "not_a_participant" });
+      return;
+    }
+
     try {
       const entries = oneHash
         ? await (async () => {
@@ -400,6 +427,18 @@ export class ContentParkHandler {
     // I1: authenticate the caller before deleting on pickup (denial-of-delivery guard).
     if (!(await this.#authenticateCaller(stream, iter, recipientPubkey, rHex))) {
       await stream.close().catch(() => {});
+      return;
+    }
+
+    // DOD-M15-RELAYAUTH-1: same gate as #handlePull — see the comment there.
+    if (!this.#isVouched(rHex)) {
+      this.#logger.warn("content.park.confirm.refused", {
+        recipientPubkey: rHex,
+        contentHash: cHex,
+        reason: "not_a_participant",
+        impact: "this key has never been named by a directory-signed assignment this relay has seen",
+      });
+      await this.#respond(stream, { type: "content_park_confirm_ack", content_hash: contentHash, ok: false, reason: "not_a_participant" });
       return;
     }
 
