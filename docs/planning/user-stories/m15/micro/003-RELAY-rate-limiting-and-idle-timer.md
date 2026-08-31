@@ -63,6 +63,23 @@ The feature exists. `bin/relay.ts` never passes it. Pass it.
 The default limit capping a relayed connection's **duration** and **bytes** is deliberately disabled.
 Restore both.
 
+### 4. Rate limit RESERVATIONS — added 2026-08-31 by the 002-RELAY review (M2)
+**Added to the mission deliberately, rather than filed under Newly discovered.** The 002 reviewer's
+reason: without it this order rate-limits submits and leaves the reservation table wide open, and
+whoever reads the closed order later will reasonably believe the abuse surface was covered.
+
+A reservation is granted to any peer, up to 4096, and the grace-window revoke only requires a
+successful `relay_auth` — which proves possession of *some* Ed25519 keypair, not that the key belongs
+to a registered agent (002's clause 2 is NOT implemented; see that order). So an attacker with 4096
+throwaway keypairs can reserve, authenticate, hold, and fill the table permanently. Every legitimate
+agent then loses NAT reachability — nobody can start a session with them — with no attack visible
+anywhere, because each individual peer did nothing wrong.
+
+**Watch the trap this order already names:** a throttle that costs a peer its reservation turns a
+rate limit into an outage. A rate-limited auth aborts BEFORE `recordAuthenticated`, so a peer that
+trips the auth throttle also loses its circuit reservation. Neither order's tests cover the
+combination.
+
 ---
 
 ## Definition of Done
