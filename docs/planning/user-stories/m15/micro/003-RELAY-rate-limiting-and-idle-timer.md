@@ -146,6 +146,77 @@ an unverified claim — then passed again once restored. Hash_submit's pubkey-ke
 at risk (it keys on the AUTHENTICATED sender pubkey, post-verification, by construction — there is
 no pre-auth hash_submit path).
 
+### ⚠️ OPUS RE-REVIEW (2026-08-31) — "SPEC: FAITHFUL" does NOT survive a second look
+
+Commissioned by Andre because this unit **and its first review were both run on Sonnet**.
+
+> The security fix in `93befef9` is correct and complete … The prior verdict of "SPEC: FAITHFUL"
+> does not survive a second look. This unit's two new refusals are never heard: the daemon collapses
+> `relay_auth_failed` into `auth_rejected` and reads neither the reason nor `retry_after_ms`, and a
+> rate-limited `hash_submit` is written to a log line and then discarded, after which `cello_send`
+> returns `{ok: true, delivered: true}` — and in the parked branch tells the operator the message is
+> "sealed, witnessed and on its way" when the relay just refused to witness it. … Separately,
+> turning the idle timer on at a one-hour default is a live regression rather than a hardening …
+> **Blocking before this closes: surface both refusals to the caller with their retry window, and
+> get Andre's decision on the idle-timer default — that number is a product call, not a coder's.**
+> — `cello-unit-reviewer` (Opus)
+
+**FIXED (Andre's rulings, 2026-08-31):**
+
+- **F3 / D1 — the idle timer.** Shipped at 1h; that destroyed sessions of agents who had merely gone
+  quiet, the `session_interrupted{timeout}` frame was dropped by a client watcher with no production
+  caller, the daemon still showed the session active, and the next send failed `session_not_found`
+  on an unsealable session. **Andre ruled 24h (Flow B).** Fixed + cherry-picked to `main`
+  (`f659866a`), with a new test that reads the shipped default off the running binary with NO env
+  var set — the old test set the value explicitly, so it stayed green for any default.
+- **F1 / D2 — a throttled `hash_submit` was silently unwitnessed.** **Andre ruled: retry on the
+  relay's own timing, surface only as fallback.** `#doSubmit` now waits out the relay's stated
+  window and resubmits (3 attempts, per-wait ceiling so a hostile relay cannot stall a sender), and
+  surfaces the refusal only if it does not clear. `retry_after_ms` is now carried on `SubmitResult`
+  and read. (cello-client, branch `m15/002-relay-requires-an-assignment`.)
+
+**OUTSTANDING — not yet fixed:**
+
+1. **F2 — the auth refusal is destroyed at the client boundary.** `session-relay-client.ts`'s
+   `#authenticate` inspects only `frame["type"]`, logs `reason: "auth_rejected"`, and drops both
+   `reason` and `retry_after_ms`. A throttled agent is indistinguishable from a bad signature, a
+   nonce failure, or a dead relay — the exact distinction the DoD line demanded. HIGH.
+2. **F4 — the auth limiter sits after the expensive part.** Every new stream mints a nonce, stores
+   it with a 30s TTL and sends a challenge BEFORE any limit is consulted; the nonce map is swept
+   O(n) per new stream, so holding N nonces makes each open O(N). Opening streams and never replying
+   is unlimited and superlinear. Fix: check the peer limiter at the top of `#handleRelayStream`.
+   MEDIUM.
+3. **F5 — `RELAY_CIRCUIT_DURATION_LIMIT_MS` overflow.** Guarded only for NaN and `> 0`; it reaches
+   `AbortSignal.timeout(ms)`, and any value above 2,147,483,647 ms (~24.8 days) clamps to 1 ms and
+   fires immediately — every relayed connection dies on establishment. `2592000000` (30 days) is a
+   plausible operator value. Clamp + warn. MEDIUM.
+4. **F6 — absent-key leniency lost its signal.** Both new limiters reuse `DepositRateLimiter`, whose
+   absent key is allowed through; `content-park.ts` compensates with a
+   `content.park.deposit.unattributed` log so "running blind" ≠ "no abuse". Neither new call site
+   does. Not exploitable today (peer id is always populated) — one refactor from a silent no-op.
+5. **F7 — the refusal frame races its own abort.** Every refusal does `#sendFrame` (no flush) then
+   `stream.abort(...)`. Over loopback it arrives; under backpressure a reset can beat it and the
+   caller sees a bare stream reset, i.e. "the relay is down" — defeating clause 1. MEDIUM.
+6. **HOLLOW TESTS — the two `hash_submit` rate-limit tests do not pin the "AND".** Both use one
+   client = one peer = one pubkey, so both limiters trip together. **Deleting EITHER
+   `#hashSubmitPeerLimiter` or `#hashSubmitPubkeyLimiter` leaves both tests green** — a single-axis
+   implementation passes a clause that says per-peer AND per-pubkey. Fix: one test with two pubkeys
+   over the SAME transport peer, one with the same pubkey over two peers. (The three auth tests, the
+   regression test, the idle-timer binary test and L2a all DO survive the revert test.)
+7. **L2b's assertion is a weak OR.** `expect(sendThrew || disconnected).toBe(true)` — one disjunct
+   can be satisfied by a muxer-level rejection unrelated to the data cap. It does still survive the
+   revert, so not hollow; tighten to `expect(disconnected).toBe(true)`, since the relay tearing the
+   link IS the property under test. LOW.
+8. **F8 — claim-truth.** The comment says 20/min is "far above a legitimate reconnect burst (a flaky
+   link retrying every few seconds)". A retry every 3s is exactly 20/min — at the limit, not far
+   above it. The number is still fine (the daemon re-auths on demand, not on a grid); the
+   justification's arithmetic is wrong. LOW.
+
+**Cross-unit hazard (with DOD-M15-RELAYAUTH-1):** a rate-limited auth aborts BEFORE
+`recordAuthenticated`, so a peer that trips the auth throttle also loses its circuit reservation —
+a throttle becoming an outage, this order's own named trap. Low likelihood at 20/min; neither unit's
+tests cover the combination.
+
 ---
 
 ## Newly discovered

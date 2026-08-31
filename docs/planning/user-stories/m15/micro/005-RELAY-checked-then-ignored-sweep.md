@@ -187,6 +187,58 @@ All file:line refs are `packages/relay/src/` unless noted.
 
 No findings to fix.
 
+### ⚠️ OPUS RE-REVIEW (2026-08-31) — security conclusion HOLDS, coverage claim does NOT
+
+Commissioned by Andre because this unit **and its first review were both run on Sonnet**, lowering
+confidence in a verdict whose entire deliverable is "nothing found". Re-derived independently.
+
+> **The "zero hits" conclusion survives independent scrutiny on the security question, and fails on
+> the coverage question.** I re-walked `packages/relay/src` myself before reading the sweep's table
+> and could not construct a counterexample … What the sweep did **not** do is walk
+> `network-directory-adapter.ts`, which handles three inbound frame types and contains the package's
+> one bare `catch { return undefined }` — in `getRelayPublicKey`, whose caller turns every transport
+> failure into `RELAY_PREDECESSOR_UNKNOWN`, telling the operator a relay is unregistered when the
+> real fault is a dead link to the directory. … **Net: keep the security conclusion, do not retire
+> the suspicion for `network-directory-adapter.ts`, and correct three verdicts in the table.**
+> — `cello-unit-reviewer` (Opus)
+
+**STATUS: OUTSTANDING — none of the four below are fixed yet.** Recorded here so the suspicion is
+not retired by a clean-looking table.
+
+1. **`network-directory-adapter.ts` (775 lines, 3 inbound frame types) was never walked.**
+   `getRelayPublicKey` collapses directory-unreachable / stream-failed / undecodable / wrong-frame /
+   no-response into one `undefined`; the caller (`relay-node.ts`, predecessor-ACK path) reads that
+   as "not registered" and answers `RELAY_PREDECESSOR_UNKNOWN`. Fails CLOSED, so not a security hit
+   — it is **error substitution**, and it is this order's own named `return null` trap. Fix: return
+   a discriminated result so "not registered" and "could not ask" stay different reasons. MEDIUM.
+2. **Table verdict wrong — `file-content-store.ts` `#readEntry` checksum.** "hard-fails softly" is
+   not a verdict. A corrupt parked entry is discarded and served as `found: false`, so the RECIPIENT
+   is told the mailbox is empty after the DEPOSITOR was told `ok: true`. Silent message loss, traced
+   only by a `content.store.corrupt` warn nobody alerts on. Correct verdict: *not a hard fail —
+   corruption is reported to the operator but presented to the recipient as an empty mailbox.* MEDIUM.
+3. **A "Newly discovered" item states a FALSE mechanism.** I wrote that malformed
+   `session_id`/`counterparty_pubkey` fields "throw into the handler's outer catch". Measured by the
+   reviewer: `new Uint8Array(x)` yields a ZERO-LENGTH array for strings, objects, `null` and
+   `undefined` — it does not throw. So a malformed `discard_session` returns `discard_ok` for a
+   discard that discarded nothing, and `get_session_liveness` answers `unknown` (a legitimate
+   protocol value the directory feeds into an ABSENT attestation). The conclusion (not a bypass,
+   directory-signature gated) is unchanged; the mechanism was asserted without testing and is wrong.
+   Fix the sentence — a future reader will act on the mechanism, not the conclusion.
+4. **Under-stated:** the predecessor-ACK verification the table calls "exemplary" verifies the
+   signature and then **discards the verified `seq`/`ts`** — they are used only to build the TBS and
+   read nowhere after, so the success path is byte-identical to omitting the field. Harmless (fails
+   closed; a client gains nothing either way) but it is the literal archetype of this order's
+   opening sentence, inside the fence, labelled a model citizen.
+
+**What the Opus pass CONFIRMED** (so it is not re-litigated): `verify()` never throws and never
+passes on garbage (tested against empty/short/zeroed keys and signatures); the 4-field/6-field
+assignment TBS branch cannot be played in either direction; `hash_submit` and
+`session_liveness_query` really are transitively gated behind a directory signature via
+`recordAssignment`; and the deposit-limiter's absent-peer-id leniency is not attacker-reachable —
+though the sweep's stated REASON for that was wrong (it cited a `content.park.deposit.unattributed`
+warn that, if no production path can produce an absent peer id, can never fire in production; the
+branch is safe because of the libp2p `StreamHandler` type, full stop).
+
 ---
 
 ## Newly discovered
