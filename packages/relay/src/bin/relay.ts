@@ -574,14 +574,39 @@ logger.info("relay.config.session_idle_timeout", { sessionIdleTimeoutMs });
 // "Restore the caps" means restoring A cap, not libp2p's 2-minute/128-KiB one — see
 // DEFAULT_CIRCUIT_DURATION_LIMIT_MS / DEFAULT_CIRCUIT_DATA_LIMIT_BYTES in relay-node.ts for the
 // reasoning behind the defaults used when these are unset.
+/**
+ * DOD-M15-RELAYABUSE-1 review F5 — **A LARGER NUMBER MADE THE LIMIT SHORTER, NOT LONGER.**
+ *
+ * This value reaches `AbortSignal.timeout(ms)`, which is backed by a 32-bit timer: anything above
+ * 2,147,483,647 ms (~24.8 days) does not mean "a very long time", it CLAMPS TO 1 ms and fires
+ * immediately. So an operator raising the cap to 30 days — `2592000000`, an entirely reasonable
+ * thing to type — would have killed every relayed connection at the instant it was established. The
+ * relay would look up and healthy while nothing could talk through it, and the number in the config
+ * would look generous.
+ *
+ * Guarding only for NaN and `> 0` did not catch it, because the value is a perfectly valid positive
+ * integer. So it is clamped to the maximum a timer can actually express, and the clamp is announced
+ * at WARN: silently using a different number than the operator configured is its own trap.
+ */
+const MAX_TIMER_MS = 2_147_483_647;
 const parsedCircuitDurationMs = parseInt(process.env["RELAY_CIRCUIT_DURATION_LIMIT_MS"] ?? "", 10);
-const circuitDurationLimitMs = Number.isFinite(parsedCircuitDurationMs) && parsedCircuitDurationMs > 0
+let circuitDurationLimitMs = Number.isFinite(parsedCircuitDurationMs) && parsedCircuitDurationMs > 0
   ? parsedCircuitDurationMs
   : undefined; // undefined → relay-node.ts's own default (7 days)
 if (process.env["RELAY_CIRCUIT_DURATION_LIMIT_MS"] !== undefined && circuitDurationLimitMs === undefined) {
   logger.warn("relay.config.circuit_duration_limit_invalid", {
     supplied: process.env["RELAY_CIRCUIT_DURATION_LIMIT_MS"] ?? "",
   });
+}
+if (circuitDurationLimitMs !== undefined && circuitDurationLimitMs > MAX_TIMER_MS) {
+  logger.warn("relay.config.circuit_duration_limit_clamped", {
+    supplied: circuitDurationLimitMs,
+    usingMs: MAX_TIMER_MS,
+    impact: "the configured cap exceeds the longest interval a timer can express (~24.8 days). " +
+      "Left as supplied it would have wrapped to 1ms and torn down EVERY relayed connection on " +
+      "establishment, so it is clamped to the maximum instead.",
+  });
+  circuitDurationLimitMs = MAX_TIMER_MS;
 }
 let circuitDataLimitBytes: bigint | undefined;
 const rawCircuitDataLimit = process.env["RELAY_CIRCUIT_DATA_LIMIT_BYTES"];

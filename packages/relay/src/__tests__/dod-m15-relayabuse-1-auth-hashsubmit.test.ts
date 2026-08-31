@@ -148,6 +148,54 @@ describe("DOD-M15-RELAYABUSE-1 — relay authentication is rate limited, per pee
     expect(v3["retry_after_ms"], "the relay must say WHEN, not just no").toBeGreaterThan(0);
   }, 20_000);
 
+  it("★★★ review F4: opening streams and NEVER replying is limited — the cost is in the open", async () => {
+    /**
+     * The limit used to be consulted inside the branch that handles the auth RESPONSE, so everything
+     * before that ran unmetered: each new stream swept the nonce map, minted a nonce, stored it for
+     * thirty seconds and sent a challenge. A caller who opened streams and simply never answered
+     * paid nothing, was never limited, and made every subsequent open more expensive — superlinear
+     * work chosen entirely by the attacker.
+     *
+     * The three tests above cannot see this: all of them complete the handshake, so they exercise a
+     * path where both the old and new placements behave identically. This one never sends a response
+     * at all, which is the whole point.
+     */
+    const dirKp = generateKeypair();
+    const { node: relayNode, stop } = await createRelayNode({
+      directoryPubkey: await dirKp.getPublicKey(),
+      authRateLimit: { maxPerWindow: 2, windowMs: 60_000 },
+    });
+    scope.addCleanup(stop);
+    const relayPeerId = relayNode.getPeerId();
+    const relayAddr = relayNode.listenAddresses()[0]!;
+
+    const clientNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await clientNode.start();
+    scope.addCleanup(async () => { await clientNode.stop(); });
+    await clientNode.dial(relayAddr);
+
+    /** Open a stream, read the relay's FIRST frame, and walk away without answering. */
+    async function openAndAbandon(): Promise<Record<string, unknown>> {
+      const stream = await clientNode.newStream(relayPeerId, RELAY_PROTOCOL_ID);
+      const first = await new StreamReader(stream).readDecoded();
+      stream.close().catch(() => {});
+      return first;
+    }
+
+    expect((await openAndAbandon())["type"], "the first open is under the limit").toBe("relay_auth_challenge");
+    expect((await openAndAbandon())["type"], "the second open is under the limit").toBe("relay_auth_challenge");
+
+    const third = await openAndAbandon();
+    expect(
+      third["type"],
+      "the third open must be REFUSED, not challenged. If a challenge comes back here, the limit is " +
+        "still sitting behind the nonce mint and a caller can make the relay do unbounded — and " +
+        "increasingly expensive — work without ever proving anything.",
+    ).toBe("relay_auth_failed");
+    expect(third["reason"]).toBe("rate_limited");
+    expect(third["retry_after_ms"], "a refusal must say when, not just no").toBeGreaterThan(0);
+  }, 20_000);
+
   it("repeated attempts CLAIMING the same pubkey (from different peers) are ALSO refused", async () => {
     const dirKp = generateKeypair();
     const { node: relayNode, stop } = await createRelayNode({
@@ -364,5 +412,112 @@ describe("DOD-M15-RELAYABUSE-1 — hash_submit is rate limited, per peer AND per
     const { structure1_cbor: s1c, sender_signature: sig1c } = await makeStructure1(sessionId2, new Uint8Array(randomBytes(32)), kpC, 0);
     sendFrame(streamC, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId2, leaf_kind: 0x00, structure1_cbor: s1c, sender_signature: sig1c }));
     expect((await readerC.readDecoded())["type"], "one sender's flood must never refuse another's submit").toBe("hash_submit_ack");
+  }, 20_000);
+
+  /**
+   * ★★★ Review: THE TWO TESTS ABOVE ARE HOLLOW, and these two exist to close that.
+   *
+   * The DoD clause says hash_submit is limited per peer AND per authenticated pubkey. Both tests
+   * above use one client, which is one transport peer holding one pubkey — so both limiters trip
+   * together on the same submit, and **deleting EITHER limiter leaves both of them green.** A
+   * single-axis implementation passes a clause that asks for two.
+   *
+   * Separating them needs the axes pulled apart: two pubkeys sharing one transport peer isolates the
+   * peer limiter, and one pubkey spread across two transport peers isolates the pubkey limiter.
+   */
+  it("★★★ TWO pubkeys over ONE transport peer: the PEER limit refuses the second — isolates the peer axis", async () => {
+    const dirKp = generateKeypair();
+    const { relay, node: relayNode, stop } = await createRelayNode({
+      directoryPubkey: await dirKp.getPublicKey(),
+      hashSubmitRateLimit: { maxPerWindow: 1, windowMs: 60_000 },
+    });
+    scope.addCleanup(stop);
+    const relayPeerId = relayNode.getPeerId();
+    const relayAddr = relayNode.listenAddresses()[0]!;
+
+    // Two SEPARATE sessions, two SEPARATE identities — so the pubkey-keyed bucket for the second
+    // sender is completely untouched when it submits. Only the shared transport peer can refuse it.
+    const kp1 = generateKeypair();
+    const kp2 = generateKeypair();
+    const pub1 = await kp1.getPublicKey();
+    const pub2 = await kp2.getPublicKey();
+    const sessions: Uint8Array[] = [];
+    for (const pub of [pub1, pub2]) {
+      const sid = new Uint8Array(randomBytes(16));
+      const other = await generateKeypair().getPublicKey();
+      const ts = Date.now();
+      const tbs = CBOR_ENC.encode([sid, pub, other, ts > 0xffffffff ? BigInt(ts) : ts]) as Uint8Array;
+      relay.recordAssignment({ session_id: sid, participant_a: pub, participant_b: other, session_timestamp: ts, directory_signature: await dirKp.sign(tbs) });
+      sessions.push(sid);
+    }
+
+    // ONE transport node — so both authenticated streams share a single remotePeerId.
+    const node = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await node.start();
+    scope.addCleanup(async () => { await node.stop(); });
+    await node.dial(relayAddr);
+
+    const a = await authedStream(node, relayPeerId, kp1);
+    const { structure1_cbor: s1, sender_signature: sig1 } = await makeStructure1(sessions[0]!, new Uint8Array(randomBytes(32)), kp1, 0);
+    sendFrame(a.stream, CBOR_ENC.encode({ type: "hash_submit", session_id: sessions[0]!, leaf_kind: 0x00, structure1_cbor: s1, sender_signature: sig1 }));
+    expect((await a.reader.readDecoded())["type"], "the first submit is under the limit").toBe("hash_submit_ack");
+
+    const b = await authedStream(node, relayPeerId, kp2);
+    const { structure1_cbor: s2, sender_signature: sig2 } = await makeStructure1(sessions[1]!, new Uint8Array(randomBytes(32)), kp2, 0);
+    sendFrame(b.stream, CBOR_ENC.encode({ type: "hash_submit", session_id: sessions[1]!, leaf_kind: 0x00, structure1_cbor: s2, sender_signature: sig2 }));
+    const verdict = await b.reader.readDecoded();
+    expect(
+      verdict["reason"],
+      "a DIFFERENT pubkey on the SAME transport peer must still be refused. Its own pubkey bucket is " +
+        "untouched, so only the per-peer limit can refuse it — if this passes, that limiter is gone " +
+        "and one machine can flood the relay simply by rotating keys.",
+    ).toBe("rate_limited");
+  }, 20_000);
+
+  it("★★★ ONE pubkey over TWO transport peers: the PUBKEY limit refuses the second — isolates the pubkey axis", async () => {
+    const dirKp = generateKeypair();
+    const { relay, node: relayNode, stop } = await createRelayNode({
+      directoryPubkey: await dirKp.getPublicKey(),
+      hashSubmitRateLimit: { maxPerWindow: 1, windowMs: 60_000 },
+    });
+    scope.addCleanup(stop);
+    const relayPeerId = relayNode.getPeerId();
+    const relayAddr = relayNode.listenAddresses()[0]!;
+
+    const senderKp = generateKeypair();
+    const senderPub = await senderKp.getPublicKey();
+    const otherPub = await generateKeypair().getPublicKey();
+    const sessionId = new Uint8Array(randomBytes(16));
+    const ts = Date.now();
+    const tbs = CBOR_ENC.encode([sessionId, senderPub, otherPub, ts > 0xffffffff ? BigInt(ts) : ts]) as Uint8Array;
+    relay.recordAssignment({ session_id: sessionId, participant_a: senderPub, participant_b: otherPub, session_timestamp: ts, directory_signature: await dirKp.sign(tbs) });
+
+    // TWO transport nodes with distinct transport keys, both authenticating as the SAME agent —
+    // so the second submit meets a fresh per-peer bucket and only the pubkey limit can refuse it.
+    const nodeA = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeA.start();
+    scope.addCleanup(async () => { await nodeA.stop(); });
+    await nodeA.dial(relayAddr);
+    const nodeB = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await nodeB.start();
+    scope.addCleanup(async () => { await nodeB.stop(); });
+    await nodeB.dial(relayAddr);
+    expect(nodeA.getPeerId(), "precondition: these must be DIFFERENT transport peers").not.toBe(nodeB.getPeerId());
+
+    const a = await authedStream(nodeA, relayPeerId, senderKp);
+    const { structure1_cbor: s1, sender_signature: sig1 } = await makeStructure1(sessionId, new Uint8Array(randomBytes(32)), senderKp, 0);
+    sendFrame(a.stream, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: 0x00, structure1_cbor: s1, sender_signature: sig1 }));
+    expect((await a.reader.readDecoded())["type"], "the first submit is under the limit").toBe("hash_submit_ack");
+
+    const b = await authedStream(nodeB, relayPeerId, senderKp);
+    const { structure1_cbor: s2, sender_signature: sig2 } = await makeStructure1(sessionId, new Uint8Array(randomBytes(32)), senderKp, 1);
+    sendFrame(b.stream, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: 0x00, structure1_cbor: s2, sender_signature: sig2 }));
+    const verdict = await b.reader.readDecoded();
+    expect(
+      verdict["reason"],
+      "the SAME pubkey from a NEW transport peer must still be refused. Its per-peer bucket is fresh, " +
+        "so only the per-pubkey limit can refuse it — if this passes, that limiter is gone and one " +
+        "agent can flood the relay simply by opening connections from more machines.",
+    ).toBe("rate_limited");
   }, 20_000);
 });

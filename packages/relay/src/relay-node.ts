@@ -132,12 +132,22 @@ const MAX_LOGGED_FRAME_TYPE = 64;
  * DOD-M15-RELAYABUSE-1: default per-key limit on relay authentication attempts.
  *
  * Boring rather than clever, same philosophy as the deposit limiter this package already ships:
- * 20 attempts/minute is far above a legitimate reconnect burst (a flaky link retrying every few
- * seconds) and far below what a credential-stuffing or connection-flood attempt needs to be
- * effective. Applied twice per attempt, at DIFFERENT points in the handshake — the peer-keyed
- * check runs BEFORE verification (bounds one machine hammering with many claimed keys, at no
- * crypto cost); the pubkey-keyed check runs AFTER the signature verifies (bounds one real key used
- * from many machines). The pubkey-keyed check must never run on the claimed-but-unverified pubkey:
+ * 20 attempts/minute is far below what a credential-stuffing or connection-flood attempt needs to
+ * be effective, while leaving normal use untouched.
+ *
+ * ⚠️ Review F8 corrected the JUSTIFICATION, not the number. This used to claim 20/min was "far
+ * above a legitimate reconnect burst (a flaky link retrying every few seconds)" — but a retry every
+ * three seconds is exactly 20/min, which is AT the limit, not far above it. The arithmetic was
+ * wrong and would have misled the next person to tune this. The number is still right for a
+ * different reason: the daemon re-authenticates on demand — when it reserves, and when it is
+ * promoted into a session — not on a fixed retry grid, so it does not produce sustained per-minute
+ * bursts at all. If a client is ever changed to retry on a timer, revisit this number rather than
+ * trusting this comment.
+ *
+ * Applied twice per attempt, at DIFFERENT points in the handshake — the peer-keyed check runs
+ * BEFORE any nonce is minted (bounds one machine hammering with many claimed keys, at no crypto
+ * cost, and covers a caller who opens streams and never replies at all); the pubkey-keyed check
+ * runs AFTER the signature verifies (bounds one real key used from many machines). The pubkey-keyed check must never run on the claimed-but-unverified pubkey:
  * review caught that ordering letting anyone who merely KNOWS an agent's public key lock that agent
  * out by claiming it with a garbage signature — see the comment at the check site in
  * `#handleRelayStream`.
@@ -946,7 +956,83 @@ export class CelloRelayNode {
 
   // ─── Stream handler ─────────────────────────────────────────────────────────
 
+  /**
+   * DOD-M15-RELAYABUSE-1 review F7 — **A REFUSAL THAT LOSES A RACE WITH ITS OWN ABORT READS AS
+   * "THE RELAY IS DOWN".**
+   *
+   * Every auth refusal used to be `#sendFrame(...)` followed immediately by `stream.abort(...)`.
+   * `#sendFrame` does not flush, so over loopback the frame arrives and in tests everything looks
+   * right — but under real backpressure the reset can beat the frame out, and the caller then sees a
+   * bare stream reset with no reason at all. That defeats the first clause of this order: a refusal
+   * must be loud and must name its cause, because a relay that silently drops is indistinguishable
+   * from a relay that is down.
+   *
+   * So the refusal is sent and the stream is closed GRACEFULLY, which flushes. `abort` remains only
+   * as the fallback for when the close itself fails — at which point the peer is gone anyway and
+   * there is nobody left to tell.
+   */
+  async #refuseAuth(stream: Stream, frame: Uint8Array, reason: string): Promise<void> {
+    try {
+      await this.#sendFrame(stream, frame);
+      await stream.close();
+    } catch {
+      stream.abort(new Error(reason));
+    }
+  }
+
   async #handleRelayStream(stream: Stream, remotePeerId?: string): Promise<void> {
+    /**
+     * DOD-M15-RELAYABUSE-1 review F4 — **THE LIMIT NOW GUARDS THE EXPENSIVE PART, INSTEAD OF SITTING
+     * BEHIND IT.**
+     *
+     * This check used to live further down, inside the branch handling the auth RESPONSE. Everything
+     * above it ran unmetered: every new stream swept the nonce map (O(n) in nonces held), minted a
+     * 32-byte nonce, stored it under a 30-second TTL, and sent a challenge. A caller that opened
+     * streams and simply never replied therefore paid nothing and was never limited, while each open
+     * made the next one more expensive — superlinear work driven entirely by the attacker.
+     *
+     * Consulting it here also changes the unit being limited, correctly: one token per stream OPENED
+     * rather than per auth response RECEIVED. Opening a stream is the thing that costs the relay.
+     *
+     * The key is the Noise-authenticated transport identity, which a caller cannot forge, so this
+     * costs one map lookup and no crypto. The CLAIMED pubkey is still not consulted until after the
+     * signature verifies — see the note at the pubkey-keyed check below, which is a security
+     * property, not an ordering preference.
+     */
+    const peerLimit = this.#authPeerLimiter.check(remotePeerId);
+    if (!peerLimit.allowed) {
+      this.#logger.warn("relay.auth.rate_limited", {
+        remotePeerId: remotePeerId ?? "(none)",
+        peerLimited: true,
+        pubkeyLimited: false,
+        retryAfterMs: peerLimit.retryAfterMs,
+        impact: "this auth attempt was refused before any nonce was minted — the caller may retry after the window",
+      });
+      await this.#refuseAuth(
+        stream,
+        encodeAuthFailed({ type: "relay_auth_failed", reason: "rate_limited", retry_after_ms: peerLimit.retryAfterMs }),
+        "rate_limited",
+      );
+      return;
+    }
+    if (remotePeerId === undefined) {
+      /**
+       * Review F6 — **"RUNNING BLIND" MUST NOT LOOK LIKE "NO ABUSE".**
+       *
+       * `DepositRateLimiter` lets an absent key through. That is safe here today because
+       * `remotePeerId` comes from libp2p's `StreamHandler`, which always supplies the
+       * Noise-authenticated `connection.remotePeer` — a caller cannot omit it. But "safe because of
+       * a type upstream" is one refactor away from a silently unlimited path, and the content-park
+       * limiter already carries a matching signal for exactly this reason. If this ever fires, the
+       * assumption above has been broken and auth is no longer rate limited at all.
+       */
+      this.#logger.warn("relay.auth.unattributed", {
+        impact: "an auth stream arrived with NO transport peer id, so the per-peer auth rate limit " +
+          "could not be applied to it. This should be impossible — treat it as the limiter having " +
+          "been bypassed, not as a quiet success.",
+      });
+    }
+
     // Sweep expired nonces on each new connection to prevent unbounded accumulation
     // from abandoned auth attempts (client opens stream but never sends a response).
     const now = Date.now();
@@ -986,45 +1072,28 @@ export class CelloRelayNode {
 
           const resp = parsed;
 
-          // DOD-M15-RELAYABUSE-1 (review finding, fixed before this unit closed): rate-limit the
-          // PEER before the nonce lookup and the Ed25519 verify below — a cheap map lookup keyed on
-          // the Noise-authenticated transport identity, which the caller cannot forge, so turning a
-          // limited peer away here costs no crypto work.
+          // ⚠️ The CLAIMED pubkey is NOT checked against a rate limit here, and that is deliberate —
+          // it was the defect review caught. `resp.pubkey` at this point is an UNVERIFIED ASSERTION:
+          // anyone who merely KNOWS an agent's public key (which CELLO agents hand out freely so
+          // others can connect) could claim it here with a garbage signature, spend the VICTIM's
+          // rate-limit bucket, and lock the real key-holder out of this relay with `rate_limited` —
+          // a third party denying one specific agent service, at zero cost, with no proof of key
+          // possession required. The pubkey-keyed check runs only AFTER the signature verifies
+          // below, so incrementing that bucket requires actually owning the key.
           //
-          // ⚠️ The CLAIMED pubkey is NOT checked here, and that is deliberate — it was the defect
-          // review caught. `resp.pubkey` at this point is an UNVERIFIED ASSERTION: anyone who merely
-          // KNOWS an agent's public key (which CELLO agents hand out freely so others can connect)
-          // could claim it here with a garbage signature, spend the VICTIM's rate-limit bucket, and
-          // lock the real key-holder out of this relay with `rate_limited` — a third party denying
-          // one specific agent service, at zero cost, with no proof of key possession required. The
-          // pubkey-keyed check runs only AFTER the signature verifies below, so incrementing that
-          // bucket requires actually owning the key.
-          const peerLimit = this.#authPeerLimiter.check(remotePeerId);
-          if (!peerLimit.allowed) {
-            this.#logger.warn("relay.auth.rate_limited", {
-              remotePeerId: remotePeerId ?? "(none)",
-              peerLimited: true,
-              pubkeyLimited: false,
-              retryAfterMs: peerLimit.retryAfterMs,
-              impact: "this auth attempt was refused before verification — the caller may retry after the window",
-            });
-            await this.#sendFrame(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "rate_limited", retry_after_ms: peerLimit.retryAfterMs }));
-            stream.abort(new Error("rate_limited")); return;
-          }
+          // The PEER-keyed limit was consulted at the top of this handler (review F4), before any
+          // nonce was minted for this stream.
 
           const nonceEntry = this.#nonces.get(nonceHex);
           if (!nonceEntry) {
-            await this.#sendFrame(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "nonce_unknown" }));
-            stream.abort(new Error("nonce_unknown")); return;
+            await this.#refuseAuth(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "nonce_unknown" }), "nonce_unknown"); return;
           }
           if (Date.now() > nonceEntry.expiresAt) {
             this.#nonces.delete(nonceHex);
-            await this.#sendFrame(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "nonce_expired" }));
-            stream.abort(new Error("nonce_expired")); return;
+            await this.#refuseAuth(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "nonce_expired" }), "nonce_expired"); return;
           }
           if (nonceEntry.used) {
-            await this.#sendFrame(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "nonce_reused" }));
-            stream.abort(new Error("nonce_reused")); return;
+            await this.#refuseAuth(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "nonce_reused" }), "nonce_reused"); return;
           }
           nonceEntry.used = true;
           this.#nonces.delete(nonceHex);
@@ -1034,8 +1103,7 @@ export class CelloRelayNode {
           const authMsg = new Uint8Array(Buffer.concat([domain, nonce, resp.pubkey]));
           const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
           if (!verify(resp.pubkey, msgHash, resp.signature)) {
-            await this.#sendFrame(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "signature_invalid" }));
-            stream.abort(new Error("signature_invalid")); return;
+            await this.#refuseAuth(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "signature_invalid" }), "signature_invalid"); return;
           }
 
           // DOD-M15-RELAYABUSE-1: the pubkey-keyed check, now that the signature has verified — the
@@ -1052,8 +1120,7 @@ export class CelloRelayNode {
               retryAfterMs: pubkeyLimit.retryAfterMs,
               impact: "this auth attempt was refused after a VALID signature — this key has authenticated too often too fast; the caller may retry after the window",
             });
-            await this.#sendFrame(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "rate_limited", retry_after_ms: pubkeyLimit.retryAfterMs }));
-            stream.abort(new Error("rate_limited")); return;
+            await this.#refuseAuth(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "rate_limited", retry_after_ms: pubkeyLimit.retryAfterMs }), "rate_limited"); return;
           }
           // DOD-M15-RELAYAUTH-1: this proves Ed25519 key POSSESSION, not participation in any
           // session — cancels this peer's reservation-revoke grace timer if one is running (see

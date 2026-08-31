@@ -231,15 +231,26 @@ describe("DOD-M15-RELAYABUSE-1: relayed connections carry a REAL duration and by
     // direction, so exceeding it from the dialer's side is sufficient to trip the limit — and it
     // does so immediately: the relay resets the stream inline rather than waiting for a next tick,
     // which is itself proof the limit is enforced, not merely configured.
-    let sendThrew = false;
+    // The send may or may not throw locally depending on where backpressure lands; that is not the
+    // property under test and was never worth asserting.
     try {
       stream.send(new Uint8Array(65_536).fill(1));
-    } catch {
-      sendThrew = true;
-    }
+    } catch { /* see below — the local throw is not the evidence */ }
 
+    /**
+     * Review L2b: this was `expect(sendThrew || disconnected).toBe(true)`, and the first disjunct
+     * could be satisfied by a muxer-level rejection that has nothing to do with the data cap — so a
+     * relay that never enforced the limit could still pass if the local send happened to throw.
+     *
+     * The property this test exists for is that THE RELAY TEARS THE LINK DOWN when the cap is
+     * exceeded, so that is what is asserted, on its own.
+     */
     const disconnected = await awaitDisconnect(dialer, receiverPeerId, 5_000);
-    expect(sendThrew || disconnected).toBe(true);
+    expect(
+      disconnected,
+      "the relay must tear down a relayed connection that exceeds its byte cap. A local send error " +
+        "is not evidence of that — it can come from the muxer for unrelated reasons.",
+    ).toBe(true);
   }, 20_000);
 
   /**
