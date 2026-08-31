@@ -73,6 +73,13 @@ export class RelayConnectionGater implements ConnectionGater {
   readonly #pendingRevoke = new Map<string, NodeJS.Timeout>();
   /** session_id_hex → the two EPHEMERAL SESSION peer ids a recorded assignment names. */
   readonly #sessionBindings = new Map<string, { initiator: string; counterparty: string }>();
+  /**
+   * Review L3: transport peer id → when this relay granted it a reservation. Diagnostics only —
+   * nothing gates on it. It exists so a denial can distinguish "the assignment has not arrived here
+   * yet" from "this dialer has no business with this destination", which the reason string alone
+   * cannot. Bounded the same way `#authenticatedPeers` is, and by the same population.
+   */
+  readonly #reservedAt = new Map<string, number>();
 
   constructor(opts: RelayConnectionGaterOptions) {
     this.#logger = opts.logger;
@@ -139,8 +146,23 @@ export class RelayConnectionGater implements ConnectionGater {
         });
       });
     }, this.#graceMs);
+    // Review L1: a pending revoke must not hold the process open. Without unref, a relay asked to
+    // stop sat there for up to the full grace window per reserving peer waiting on timers whose only
+    // job is to hang up connections that are about to be torn down anyway.
+    timer.unref?.();
     this.#pendingRevoke.set(id, timer);
+    this.#reservedAt.set(id, Date.now());
     return false;
+  }
+
+  /**
+   * Review L1: drop every pending revoke timer. Called from the relay's own `stop()` — the sweeps
+   * there were already cleared, and these were not, so the gater alone could keep the event loop
+   * alive after a clean shutdown.
+   */
+  stop(): void {
+    for (const timer of this.#pendingRevoke.values()) clearTimeout(timer);
+    this.#pendingRevoke.clear();
   }
 
   /**
@@ -157,11 +179,32 @@ export class RelayConnectionGater implements ConnectionGater {
         return false; // allow
       }
     }
+    /**
+     * Review L3: say enough to tell the two causes apart.
+     *
+     * "No assignment names both peers" is accurate and is an exit-point label. It reads as a
+     * directory or credential problem, and it sent people hunting one — when the far more common
+     * cause was a TIMING race: the assignment existed and simply had not been presented here yet
+     * (review H1). The two extra fields separate them. A destination with NO bindings at all, whose
+     * reservation was granted moments ago, is a race. A destination holding bindings to other peers
+     * is a genuinely unauthorized dial.
+     */
+    let bindingsForDestination = 0;
+    for (const binding of this.#sessionBindings.values()) {
+      if (binding.initiator === d || binding.counterparty === d) bindingsForDestination++;
+    }
+    const reservedAt = this.#reservedAt.get(d);
     this.#logger.warn("relay.circuit.dial_denied", {
       source: truncId(s),
       destination: truncId(d),
       reason: "no_session_assignment_names_both_peers",
-      impact: "this relayed dial was refused — no recorded session assignment authorizes it",
+      destinationBindingCount: bindingsForDestination,
+      destinationReservedMsAgo: reservedAt === undefined ? -1 : Date.now() - reservedAt,
+      impact: "this relayed dial was refused — no recorded session assignment authorizes it. " +
+        "destinationBindingCount 0 with a recent destinationReservedMsAgo usually means the " +
+        "assignment has not been presented to THIS relay yet, not that the dialer is unauthorized; " +
+        "a non-zero count means this destination is in other sessions but not one with this source. " +
+        "destinationReservedMsAgo of -1 means this relay holds no reservation for the destination.",
     });
     return true; // deny
   }

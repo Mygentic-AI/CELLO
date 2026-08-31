@@ -2570,6 +2570,9 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     stop: async () => {
       relay.stopIdleSweep();
       relay.stopContentSweep();
+      // Review L1: the gater's pending-revoke timers were the one set of handles this shutdown did
+      // NOT clear, so a stopped relay could still be held open by them for up to the grace window.
+      connectionGater.stop();
       await node.stop();
     },
   };
