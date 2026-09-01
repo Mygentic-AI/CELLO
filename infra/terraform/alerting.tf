@@ -378,3 +378,157 @@ resource "google_monitoring_alert_policy" "directory_cpu_sustained" {
     EOT
   }
 }
+
+# ─── 2. Memory ───────────────────────────────────────────────────────────────────────────────────
+#
+# 🔴 `cello.node.memory` IS A LOG LINE, NOT A METRIC, AND THAT IS WHY THIS RESOURCE EXISTS.
+# The host sampler in directory-cloud-init.yaml `echo`s a text line every 60 s; GCP collects memory
+# for a VM only through the Ops Agent, which Container-Optimized OS does not ship. So there was no
+# metric to write a policy against, and a policy written against the name anyway would have been the
+# worst version of this file's own warning: permanently silent, and indistinguishable from a healthy
+# fleet. This turns the stream that already exists into a metric. It does NOT add a sampler.
+#
+# CONFIRMED ARRIVING BEFORE THIS WAS WRITTEN, with the filter below run verbatim against the live
+# project: it returned samples from all three nodes (gcp-use1, gcp-usc1, gcp-euw1) within the last
+# hour, and 20,000 samples across the last 7 days. A negative control with a deliberately wrong
+# SYSLOG_IDENTIFIER returned nothing, which is what proves the filter discriminates rather than
+# matching everything. Both extractor regexes were run against the real message strings.
+#
+# The filter needs no directory-vs-relay clause: only directory nodes carry the sampler, verified by
+# grouping 3 hours of live samples by hostname — six hostnames, all directory, no relay.
+#
+# ⚠️ ANYTHING ADDED TO A NODE THAT MUST BE READABLE REMOTELY HAS TO LOG AT WARNING OR ABOVE. COS
+# forwards journald to Cloud Logging at WARNING and above only; the sampler shipped once at info,
+# produced perfect lines that never left the instance, and cost a second roll of all three nodes.
+# `logName=".../cos_journal_warning"` below is pinned deliberately: if someone lowers the sampler's
+# SyslogLevel this metric goes empty rather than quietly half-working.
+resource "google_logging_metric" "directory_node_rss" {
+  name    = "cello_directory_node_rss_kb"
+  project = var.project_id
+
+  filter = <<-EOT
+    resource.type="gce_instance"
+    AND logName="projects/${var.project_id}/logs/cos_journal_warning"
+    AND jsonPayload.SYSLOG_IDENTIFIER="cello-memsample"
+    AND jsonPayload.MESSAGE:"rss_kb="
+  EOT
+
+  metric_descriptor {
+    metric_kind  = "DELTA"
+    value_type   = "DISTRIBUTION"
+    unit         = "kBy"
+    display_name = "Directory node resident memory"
+
+    labels {
+      key         = "node_id"
+      value_type  = "STRING"
+      description = "Stable node identity (gcp-use1, …). The METRIC label rather than the instance, because instances are replaced on every roll and a memory trend that resets its identity every deploy is one nobody can read."
+    }
+  }
+
+  value_extractor = "REGEXP_EXTRACT(jsonPayload.MESSAGE, \"rss_kb=([0-9]+)\")"
+
+  label_extractors = {
+    node_id = "REGEXP_EXTRACT(jsonPayload.MESSAGE, \"node_id=([a-z0-9-]+)\")"
+  }
+
+  # LINEAR, not exponential. Exponential buckets put ~1,100 MB of width in the bucket the threshold
+  # falls into, which would make the percentile below meaningless exactly where it is read. 50 MB of
+  # resolution everywhere, out to 4,800 MB — past the ~4,288 MB ceiling, where the process is dead
+  # anyway and the overflow bucket is the honest answer.
+  bucket_options {
+    linear_buckets {
+      num_finite_buckets = 96
+      width              = 51200
+      offset             = 0
+    }
+  }
+}
+
+# THRESHOLD: 60% of the V8 ceiling — 2,572 MB of the 4,288 MB the process can actually reach.
+# Both halves measured against 7 days of the real sampler output (20,000 samples, all three nodes):
+#
+#   WOULD IT CATCH THE FAILURE IN TIME? The stall zone is ~80% of the ceiling, ~3,430 MB — that is
+#   where V8 stops collecting occasionally and collects continuously, pinning a core and blocking
+#   the HTTP thread for 40 s at a time (GCP-STATE, measured 2026-08-16 across two nodes at 81% and
+#   74%). Firing at 60% leaves 857 MB of runway. The STEEPEST growth observed over a single
+#   uninterrupted process run in those 7 days was 407 MB/day, so that is at worst ~2 days of
+#   warning, and ~3.4 days at the ~250 MB/day the fleet typically shows. Rolling a node takes
+#   minutes, so two days is a real decision window rather than a notification about a fait accompli.
+#
+#   WOULD IT FIRE ON A NORMAL WEEK? No, with a wide margin. Across those 7 days the nodes ran
+#   181-841 MB — fresh start ~185 MB, medians 507/567/638 MB, and the single highest sample anywhere
+#   was 841 MB. The threshold sits 3.1x above the worst reading the fleet has ever produced, and
+#   getting there from a fresh start needs about six uninterrupted days even at the worst growth
+#   rate ever recorded.
+#
+# Derived from heap_mb rather than hardcoded, so raising a node's ceiling moves the alert with it —
+# a literal here would silently become a 40%-of-ceiling alert the next time that value changes.
+resource "google_monitoring_alert_policy" "directory_memory_ceiling" {
+  display_name = "Directory node approaching its heap ceiling"
+  project      = var.project_id
+  combiner     = "OR"
+  severity     = "WARNING"
+
+  conditions {
+    display_name = "Directory node RSS over 60% of the V8 ceiling"
+
+    condition_threshold {
+      filter = join(" AND ", [
+        "metric.type=\"logging.googleapis.com/user/${google_logging_metric.directory_node_rss.name}\"",
+        "resource.type=\"gce_instance\"",
+      ])
+
+      comparison      = "COMPARISON_GT"
+      threshold_value = local.directory_rss_alert_kb
+      duration        = "1800s"
+
+      aggregations {
+        alignment_period = "600s"
+        # PERCENTILE_99 and not MEAN: this is a hard ceiling, so the worst sample in the window is
+        # the number that matters. (MAX is not a legal aligner for a distribution-valued metric.)
+        per_series_aligner = "ALIGN_PERCENTILE_99"
+        # Collapse to ONE SERIES PER NODE. Without this the series is keyed on instance_id, which
+        # churns on every roll — and this alert is about a trend measured in DAYS, so an identity
+        # that resets each deploy would hide exactly the thing being watched.
+        cross_series_reducer = "REDUCE_MAX"
+        group_by_fields      = ["metric.label.node_id"]
+      }
+
+      trigger {
+        count = 1
+      }
+    }
+  }
+
+  notification_channels = [google_monitoring_notification_channel.operator_email.id]
+
+  alert_strategy {
+    auto_close = "86400s"
+  }
+
+  documentation {
+    mime_type = "text/markdown"
+    content   = <<-EOT
+      A directory node's resident memory has passed 60% of the ceiling its process can actually
+      reach. Normal is 185-841 MB; the stall zone is around 3,430 MB.
+
+      **What happens if this is left alone.** Near ~80% of the ceiling V8 stops collecting
+      occasionally and starts collecting continuously, on the same single thread that serves HTTP.
+      The node then answers nothing — not `/bootstrap`, not `/health` — for about 40 s at a time,
+      while still looking alive. Clients drop it from the roster, the roster falls below threshold,
+      and the session surfaces `counterparty_offline`, which names the other agent and nothing that
+      is actually wrong.
+
+      **Two things to do, in order:**
+
+      1. Confirm the trend and see which node:
+         `gcloud logging read 'jsonPayload.SYSLOG_IDENTIFIER="cello-memsample"' --project cello-infra --freshness=24h --format="value(timestamp,jsonPayload.MESSAGE)"`
+      2. Roll THAT NODE ONLY — `terraform apply -target` on its instance group, and confirm it is
+         serving before touching another. `infra/CLAUDE.md` §2 has the procedure and the reason: an
+         untargeted apply replaces all three at once and the threshold tolerates exactly one down.
+
+      A restart resets memory and buys days. It does not fix the growth, which is its own open line.
+    EOT
+  }
+}
