@@ -133,8 +133,18 @@ interface SlotRecord {
    * Without this flag its ledger entry — which the delivery auth legitimately creates — would have
    * satisfied the gate on its own, handing the reservation table a population the design never
    * described. Set only by a `purpose: "reservation"` auth, and it STAYS set: libp2p re-enters the
-   * gate on every reservation refresh, and a refresh that found no proof would take a working
-   * agent's front door away roughly half an hour after it opened.
+   * gate on **every** reservation refresh, not only the first RESERVE — verified in
+   * `circuit-relay-v2`'s `handleReserve`, which calls `denyInboundRelayReservation` unconditionally
+   * — so a refresh that found no proof would take a working agent's front door away roughly half an
+   * hour after it opened.
+   *
+   * ⚠️ The case this does NOT cover, stated rather than left to be discovered: a connection that
+   * drops and returns more than `PROVEN_PEER_MEMORY_MS` later. `recordDisconnect` deletes the ledger
+   * entry — it must, or the leak this order closed comes straight back — so that peer's refresh is
+   * refused. It recovers on its own: the daemon's standing-receiver watchdog runs every 30 seconds
+   * and watches the CONNECTION to the relay rather than the circuit address, so it rebuilds, and the
+   * rebuild proves itself. A long relay outage therefore costs about half a minute of unreachability
+   * afterwards, not a lost front door.
    */
   provenForReservation: boolean;
   /**
