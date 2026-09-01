@@ -27,3 +27,17 @@ export type { RegistrationState, RegistrationRecord } from "./registration-state
 
 // M7-MANIFEST-002: directory-side manifest interfaces
 export type { DirectoryKeyProvider, DirectoryManifestStore } from "./manifest.js";
+
+// 008-RELAY: the directory-issued token a relay checks before letting an agent keep a slot.
+// Lives here because the directory MINTS it and the relay VERIFIES it, and this is the only
+// workspace package both of them share — so the two halves cannot drift apart.
+export type { OnlineTokenFailure, OnlineTokenVerification, MintOnlineTokenParams } from "./relay-online-token.js";
+export {
+  ONLINE_TOKEN_DOMAIN,
+  ONLINE_TOKEN_BYTES,
+  ONLINE_TOKEN_MAX_LIFETIME_MS,
+  ONLINE_TOKEN_ISSUE_LIFETIME_MS,
+  onlineTokenTbs,
+  mintOnlineToken,
+  verifyOnlineToken,
+} from "./relay-online-token.js";
