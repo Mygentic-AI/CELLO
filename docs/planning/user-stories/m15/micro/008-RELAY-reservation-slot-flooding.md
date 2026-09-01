@@ -270,6 +270,19 @@ different question from who may HOLD a slot.
 
 ---
 
+## Revert proofs — Part 1 (the token)
+
+Each mutation applied ALONE, compiled and linted before running (a mutant that fails the gate proves
+nothing — the red came from the mutation, not from a broken build), then restored. `git diff` empty
+afterwards, verified.
+
+| Mutation | What reddened | Reason it gave |
+|---|---|---|
+| Relay: never act on the token refusal | 7 of 10 refusal tests; the 3 happy paths stayed green | `expected 'relay_auth_ok' to be 'relay_auth_failed'` |
+| Relay: skip the token→challenge key comparison | exactly 1 — the lifted-token test | same, and only that one, so the binding is isolated by one assertion |
+| Directory: issue a token without reading the profile | exactly 1 — the unregistered-key test | `expected Uint8Array[…] to be undefined` |
+| Verifier: treat an empty directory key set as valid | 2 — the unit test AND the over-the-wire test | `expected { ok: true } to deeply equal { ok: false }` |
+
 ## Review
 
 *(Reviewer verdict. One quote. Not a transcript.)*
