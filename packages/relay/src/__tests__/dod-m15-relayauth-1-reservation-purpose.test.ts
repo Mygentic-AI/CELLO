@@ -31,6 +31,7 @@ import { generateKeypair } from "@cello-protocol/crypto";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
+import { testOnlineToken } from "./helpers/online-token.js";
 
 setupV3Tests();
 
@@ -77,6 +78,8 @@ async function authenticate(
   node: Awaited<ReturnType<typeof createNode>>,
   relayPeerId: string,
   kp: ReturnType<typeof generateKeypair>,
+  // DOD-M15-RELAYSLOTS-1: both the live receiver and the replacement now need the directory's token.
+  dirKp: ReturnType<typeof generateKeypair>,
   purpose?: string,
 ): Promise<{ stream: Stream; reader: StreamReader; verdict: Record<string, unknown> }> {
   const stream = await node.newStream(relayPeerId, RELAY_PROTOCOL_ID);
@@ -92,6 +95,7 @@ async function authenticate(
     type: "relay_auth_response",
     pubkey,
     signature,
+    online_token: await testOnlineToken(dirKp, kp),
     ...(purpose === undefined ? {} : { purpose }),
   }));
   const verdict = await reader.readDecoded();
@@ -148,7 +152,7 @@ describe("DOD-M15-RELAYAUTH-1: a reservation proof refreshes the reservation wit
     await liveNode.start();
     scope.addCleanup(async () => { await liveNode.stop(); });
     await liveNode.dial(relayAddr);
-    const live = await authenticate(liveNode, relayPeerId, kpAgent);
+    const live = await authenticate(liveNode, relayPeerId, kpAgent, dirKp);
     expect(live.verdict["type"], "the live receiver authenticates normally").toBe("relay_auth_ok");
 
     // The REPLACEMENT standing receiver: a DIFFERENT transport node holding the SAME agent key.
@@ -158,7 +162,7 @@ describe("DOD-M15-RELAYAUTH-1: a reservation proof refreshes the reservation wit
     await replacementNode.start();
     scope.addCleanup(async () => { await replacementNode.stop(); });
     await replacementNode.dial(relayAddr);
-    const replacement = await authenticate(replacementNode, relayPeerId, kpAgent, "reservation");
+    const replacement = await authenticate(replacementNode, relayPeerId, kpAgent, dirKp, "reservation");
     expect(
       replacement.verdict["type"],
       "a reservation proof is still an authentication — it must be accepted, not refused",
@@ -170,7 +174,7 @@ describe("DOD-M15-RELAYAUTH-1: a reservation proof refreshes the reservation wit
     await otherNode.start();
     scope.addCleanup(async () => { await otherNode.stop(); });
     await otherNode.dial(relayAddr);
-    const other = await authenticate(otherNode, relayPeerId, kpOther);
+    const other = await authenticate(otherNode, relayPeerId, kpOther, dirKp);
     expect(other.verdict["type"]).toBe("relay_auth_ok");
 
     const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, new Uint8Array(randomBytes(32)), kpOther, 0);

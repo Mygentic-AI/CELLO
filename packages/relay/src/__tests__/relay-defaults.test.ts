@@ -22,6 +22,7 @@ import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import * as relayPackage from "../index.js";
 import { createRelayNode } from "../relay-node.js";
+import { DEFAULT_SLOT_CEILING } from "../relay-connection-gater.js";
 import { generateKeypair } from "@cello-protocol/crypto";
 import { WAN_PING_TIMEOUT_FLOOR_MS } from "@cello-protocol/transport";
 
@@ -107,8 +108,15 @@ describe("createRelayNode's libp2p policy — asserted on the RUNNING node, not 
     // own init, which the node exposes no accessor for. The behavioural counterpart already exists
     // — nat-reachability-relay-limits.test.ts proves maxReservations is honoured against a live
     // relay — so this is a cheap tripwire on top of a real test, not a substitute for one.
+    //
+    // DOD-M15-RELAYSLOTS-1: the literal moved behind `DEFAULT_SLOT_CEILING`, because the reaper's
+    // pressure line is a fraction of the ceiling and two copies of the number would give a reaper
+    // that either never fires or fires constantly — both of which look like it working. So the
+    // tripwire now checks BOTH halves: that the ceiling is still 4096, and that the libp2p option
+    // is fed from that constant rather than from a second literal that could drift away from it.
     const src = readFileSync(join(SRC, "relay-node.ts"), "utf-8");
-    expect(src).toMatch(/maxReservations:\s*4096/);
+    expect(DEFAULT_SLOT_CEILING, "libp2p's own default of 15 caused a real outage").toBe(4096);
+    expect(src).toMatch(/maxReservations:\s*DEFAULT_SLOT_CEILING/);
     expect(src).toMatch(/applyDefaultLimit:\s*false/);
   });
 });

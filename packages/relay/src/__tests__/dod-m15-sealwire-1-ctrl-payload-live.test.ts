@@ -38,6 +38,7 @@ import { createNode } from "@cello-protocol/transport";
 import { encodeSealPayload } from "@cello-protocol/protocol-types";
 import type { Logger } from "@cello-protocol/interfaces";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
+import { testOnlineToken } from "./helpers/online-token.js";
 
 const CBOR = new Encoder({ tagUint8Array: false });
 const SESSION_ID = new Uint8Array(16).fill(0x11);
@@ -99,7 +100,13 @@ describe("DOD-M15-SEALWIRE-1 relay leg (live): a refused submit is answered, not
     const pubkey = await clientKp.getPublicKey();
     const authMsg = new Uint8Array(Buffer.concat([Buffer.from("CELLO-RELAY-AUTH-v1", "utf8"), nonce, pubkey]));
     const signature = await clientKp.sign(new Uint8Array(createHash("sha256").update(authMsg).digest()));
-    send(stream, CBOR.encode({ type: "relay_auth_response", pubkey, signature }));
+    send(stream, CBOR.encode({
+      type: "relay_auth_response",
+      pubkey,
+      signature,
+      // DOD-M15-RELAYSLOTS-1: the relay refuses an auth with no directory-issued online token.
+      online_token: await testOnlineToken(dirKp, clientKp),
+    }));
     const authOk = await reader.next();
     expect(authOk["type"], "precondition: genuinely authenticated, or this exercises the wrong branch").toBe("relay_auth_ok");
 
@@ -189,7 +196,13 @@ describe("DOD-M15-SEALWIRE-1 relay leg (live): a refused submit is answered, not
     const pubkey = await clientKp.getPublicKey();
     const authMsg = new Uint8Array(Buffer.concat([Buffer.from("CELLO-RELAY-AUTH-v1", "utf8"), nonce, pubkey]));
     const signature = await clientKp.sign(new Uint8Array(createHash("sha256").update(authMsg).digest()));
-    send(stream, CBOR.encode({ type: "relay_auth_response", pubkey, signature }));
+    send(stream, CBOR.encode({
+      type: "relay_auth_response",
+      pubkey,
+      signature,
+      // DOD-M15-RELAYSLOTS-1: the relay refuses an auth with no directory-issued online token.
+      online_token: await testOnlineToken(dirKp, clientKp),
+    }));
     expect((await reader.next())["type"]).toBe("relay_auth_ok");
 
     // ── (a) A ctrl leaf whose payload names ANOTHER session. Content IS present. ──
@@ -263,7 +276,13 @@ describe("DOD-M15-SEALWIRE-1 relay leg (live): a refused submit is answered, not
     const pubkey = await clientKp.getPublicKey();
     const authMsg = new Uint8Array(Buffer.concat([Buffer.from("CELLO-RELAY-AUTH-v1", "utf8"), nonce, pubkey]));
     const signature = await clientKp.sign(new Uint8Array(createHash("sha256").update(authMsg).digest()));
-    send(stream, CBOR.encode({ type: "relay_auth_response", pubkey, signature }));
+    send(stream, CBOR.encode({
+      type: "relay_auth_response",
+      pubkey,
+      signature,
+      // DOD-M15-RELAYSLOTS-1: the relay refuses an auth with no directory-issued online token.
+      online_token: await testOnlineToken(dirKp, clientKp),
+    }));
     expect((await reader.next())["type"]).toBe("relay_auth_ok");
 
     events.length = 0;

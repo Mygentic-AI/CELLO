@@ -58,6 +58,7 @@ import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
 import type { SessionAssignment } from "../relay-types.js";
+import { testOnlineToken } from "./helpers/online-token.js";
 
 setupV3Tests();
 
@@ -87,10 +88,12 @@ class StreamReader {
   }
 }
 
+// DOD-M15-RELAYSLOTS-1: the relay refuses an auth carrying no directory-issued online token.
 async function performRelayAuth(
   reader: StreamReader,
   stream: Stream,
   kp: ReturnType<typeof generateKeypair>,
+  dirKp: ReturnType<typeof generateKeypair>,
 ): Promise<void> {
   const challenge = await reader.readDecoded();
   expect(challenge["type"]).toBe("relay_auth_challenge");
@@ -98,7 +101,12 @@ async function performRelayAuth(
   const pubkey = await kp.getPublicKey();
   const authMsg = new Uint8Array(Buffer.concat([Buffer.from("CELLO-RELAY-AUTH-v1", "utf8"), nonce, pubkey]));
   const signature = await kp.sign(new Uint8Array(createHash("sha256").update(authMsg).digest()));
-  sendFrame(stream, CBOR_ENC.encode({ type: "relay_auth_response", pubkey, signature }) as Uint8Array);
+  sendFrame(stream, CBOR_ENC.encode({
+    type: "relay_auth_response",
+    pubkey,
+    signature,
+    online_token: await testOnlineToken(dirKp, kp),
+  }) as Uint8Array);
   const ack = await reader.readDecoded();
   if (ack["type"] === "relay_auth_failed") throw new Error(`relay_auth_failed: ${String(ack["reason"])}`);
   expect(ack["type"]).toBe("relay_auth_ok");
@@ -174,7 +182,7 @@ async function harness(scope: ReturnType<typeof createTestScope>) {
     await cn.dial(node.listenAddresses()[0]!);
     const stream = await cn.newStream(node.getPeerId(), RELAY_PROTOCOL_ID);
     const reader = new StreamReader(stream);
-    await performRelayAuth(reader, stream, kp);
+    await performRelayAuth(reader, stream, kp, dirKp);
 
     return async (o: {
       contentHash: Uint8Array;

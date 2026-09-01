@@ -142,6 +142,7 @@ import { buildSealLegibility, bindLegibilityToTbs, findSealCeremonyPair } from "
 import { verifySealFinalRoots, SEAL_FINAL_ROOT_REASONS, SEAL_FINAL_ROOT_GUIDANCE } from "./seal-final-root.js";
 import { WALL_CLOCK } from "./directory-types.js";
 import type { DirectoryStore } from "@cello-protocol/interfaces";
+import { mintOnlineToken, ONLINE_TOKEN_ISSUE_LIFETIME_MS } from "@cello-protocol/interfaces";
 import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
 import { listSubmissionResults } from "./submission-results-repository.js";
 import {
@@ -2026,6 +2027,14 @@ export class CelloDirectoryNode {
           // unreachable for its very first inbound request. Rides every auth_ok
           // variant (signed and bare); omitted when no relay is known.
           const relayEndpointsForAuthOk = this.#relayEndpointsForAuthOk();
+          /**
+           * DOD-M15-RELAYSLOTS-1: and hand it the credential those relays now require. The relay
+           * pool above tells the agent WHERE to ask for a reservation slot; this is what lets it
+           * keep one. See `#issueOnlineToken`.
+           */
+          const online = await this.#issueOnlineToken(authedPubkeyHex, nonceHex);
+          const onlineToken = online.token;
+          const onlineTokenAbsentReason = online.absentReason;
           if (this.#directoryKeyProvider) {
             const nodeId = this.#directoryKeyProvider.getNodeId();
             const isoTimestamp = new Date(this.#clock.now()).toISOString();
@@ -2051,6 +2060,8 @@ export class CelloDirectoryNode {
                 signature: sigHex,
                 timestamp: isoTimestamp,
                 relay_endpoints: relayEndpointsForAuthOk,
+                online_token: onlineToken,
+                ...(onlineTokenAbsentReason ? { online_token_absent_reason: onlineTokenAbsentReason } : {}),
               }));
             } catch (err) {
               this.#logger?.warn("directory.auth.challenge.sign.failed", {
@@ -2058,11 +2069,24 @@ export class CelloDirectoryNode {
                 agentPubkeyHex: authedPubkeyHex.slice(0, 16),
                 error: err instanceof Error ? err.message : String(err),
               });
-              // Signing failed: fall back to bare auth_ok for availability
-              this.#sendFrame(stream, encodeSignalingAuthOk({ type: "signaling_auth_ok", relay_endpoints: relayEndpointsForAuthOk }));
+              // Signing failed: fall back to bare auth_ok for availability. The online token is
+              // still carried — it is signed by a different key for a different purpose, and
+              // withholding it here would cost the agent its relay reachability over an unrelated
+              // failure.
+              this.#sendFrame(stream, encodeSignalingAuthOk({
+                type: "signaling_auth_ok",
+                relay_endpoints: relayEndpointsForAuthOk,
+                online_token: onlineToken,
+                ...(onlineTokenAbsentReason ? { online_token_absent_reason: onlineTokenAbsentReason } : {}),
+              }));
             }
           } else {
-            this.#sendFrame(stream, encodeSignalingAuthOk({ type: "signaling_auth_ok", relay_endpoints: relayEndpointsForAuthOk }));
+            this.#sendFrame(stream, encodeSignalingAuthOk({
+              type: "signaling_auth_ok",
+              relay_endpoints: relayEndpointsForAuthOk,
+              online_token: onlineToken,
+              ...(onlineTokenAbsentReason ? { online_token_absent_reason: onlineTokenAbsentReason } : {}),
+            }));
           }
 
           // Stash peer transport info for session assignments.
@@ -5956,6 +5980,77 @@ export class CelloDirectoryNode {
   }
 
   // ─── Transport helpers ───────────────────────────────────────────────────────
+
+  /**
+   * DOD-M15-RELAYSLOTS-1 — mint the token that lets this agent keep a relay reservation slot.
+   *
+   * Returns `undefined` when no token should be issued, which is not an error path: an unregistered
+   * key gets nothing, and the caller simply omits the field.
+   *
+   * ─── Why this looks up the profile instead of trusting the handshake ───────────────────────
+   *
+   * The caller has just completed the signaling challenge-response. **That proves key possession and
+   * nothing else** — it is the same check the relay already performs for itself, and it admits any
+   * keypair anyone cares to generate. If this method issued a token to whoever reached it, the token
+   * would carry exactly as much information as the check it exists to replace: the flood would still
+   * work, every log line would look healthy, and the feature would be indistinguishable from having
+   * shipped nothing.
+   *
+   * So registration is read explicitly, with a read-through so an agent registered against a SIBLING
+   * sovereign node — whose profile replicated here after this node booted — is recognised rather
+   * than being told it is a stranger.
+   *
+   * ─── Which key signs it ───────────────────────────────────────────────────────────────────
+   *
+   * `#keyProvider`, the same key that signs the relay-facing half of a session assignment. The relay
+   * verifies both against one set of consortium directory pubkeys, so signing with anything else
+   * would produce a token no relay could check — a failure that would surface far from its cause.
+   */
+  async #issueOnlineToken(
+    agentPubkeyHex: string,
+    correlationId: string,
+  ): Promise<{ token?: Uint8Array; absentReason?: "not_registered_here" | "issue_failed" }> {
+    try {
+      const profile = await this.#store.getProfileWithReadThrough(agentPubkeyHex, correlationId);
+      if (!profile) {
+        this.#logger?.info("directory.online_token.not_issued", {
+          agentPubkeyHex: agentPubkeyHex.slice(0, 16),
+          correlationId,
+          reason: "not_registered",
+          impact: "this key authenticated on the signaling stream but has no agent profile here, so " +
+            "it gets no relay online token and no relay will grant it a reservation slot. That is " +
+            "the intended outcome for an unregistered key; for a real agent it means its profile has " +
+            "not replicated to this node yet.",
+        });
+        // Review M1: say WHICH absence. The client cannot tell "no profile here" from "the lookup
+        // threw" from the absence of a field, and its advice for the generic case sends the operator
+        // to check a directory connection that is working perfectly.
+        return { absentReason: "not_registered_here" };
+      }
+      return { token: await mintOnlineToken({
+        agentPubkey: new Uint8Array(Buffer.from(agentPubkeyHex, "hex")),
+        expiresAtMs: this.#clock.now() + ONLINE_TOKEN_ISSUE_LIFETIME_MS,
+        sign: async (tbs) => new Uint8Array(await this.#keyProvider.sign(tbs)),
+      }) };
+    } catch (err) {
+      /**
+       * The lookup or the signing failed. The agent still authenticates — breaking signaling over
+       * this would take away session offers too, which is a strictly larger outage than losing
+       * relay reachability. But it gets NO token: an agent that cannot be shown to be registered
+       * does not get a slot, and inventing one here is the fail-open this whole unit exists to
+       * prevent.
+       */
+      this.#logger?.error("directory.online_token.failed", {
+        agentPubkeyHex: agentPubkeyHex.slice(0, 16),
+        correlationId,
+        error: err instanceof Error ? err.message : String(err),
+        impact: "no relay online token was issued, so this agent's standing receiver will be refused " +
+          "a reservation slot and it will be unreachable through any relay until this succeeds. " +
+          "Signaling itself is unaffected — session offers still arrive on this stream.",
+      });
+      return { absentReason: "issue_failed" };
+    }
+  }
 
   /**
    * DOD-NAT-REACHABILITY-1: the relay endpoints an authenticating agent may take

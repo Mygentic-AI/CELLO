@@ -80,9 +80,10 @@ import * as transport from "@cello-protocol/transport";
 import type { CelloNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import type { Logger, SessionWal, ContentStore } from "@cello-protocol/interfaces";
+import { verifyOnlineToken } from "@cello-protocol/interfaces";
 import { DepositRateLimiter, type DepositRateLimitConfig } from "./deposit-rate-limiter.js";
 import { ContentParkHandler } from "./content-park.js";
-import { RelayConnectionGater } from "./relay-connection-gater.js";
+import { RelayConnectionGater, DEFAULT_SLOT_CEILING } from "./relay-connection-gater.js";
 import { InMemoryVouchedKeyStore, type VouchedKeyStore } from "./adapters/file-vouched-keys.js";
 import { RELAY_LEAF_KINDS, RELAY_LEAF_HASHERS } from "./relay-types.js";
 import type {
@@ -93,6 +94,8 @@ import type {
   HashSubmitErrorReason,
   SessionLivenessQuery,
   ClientRecordAssignment,
+  RelayAuthResponse,
+  AuthFailedReason,
 } from "./relay-types.js";
 import type { RelayStore } from "./relay-store.js";
 import { InMemoryRelayStore } from "./relay-store.js";
@@ -111,6 +114,21 @@ import { protocolLog, truncId, truncHex } from "./protocol-log.js";
 
 export const RELAY_PROTOCOL_ID = "/cello/relay/1.0.0";
 export const DIRECTORY_RELAY_PROTOCOL_ID = "/cello/directory-relay/1.0.0";
+
+/**
+ * DOD-M15-RELAYSLOTS-1 — the most CONCURRENT sessions this relay will hold between one pair of
+ * identities.
+ *
+ * This closes the second door into the reservation table, and it only appears once the first is
+ * shut. With an online token required, an attacker can no longer mint keys — but they can register
+ * two agents they own, open thousands of sessions between them, put one message down each, and take
+ * the table with slots that are genuinely, correctly in use. Nothing bounded that.
+ *
+ * Five is chosen to be obviously past what any real pair needs: two agents holding five separate
+ * live conversations with each other at the same instant is already unusual, and the sixth is far
+ * more likely to be conversations that were never closed than one anybody is waiting on.
+ */
+export const SESSION_CAP_PER_PAIR = 5;
 const AUTH_DOMAIN = "CELLO-RELAY-AUTH-v1";
 const NONCE_TTL_MS = 30_000;
 
@@ -340,7 +358,19 @@ export interface DirectoryAdapter {
 
 export interface RelayNodeOptions {
   node: CelloNode;
-  directoryPubkey: Uint8Array;
+  /**
+   * The primary sovereign directory's Ed25519 public key.
+   *
+   * ⚠️ OPTIONAL, and its absence is a real deployment state rather than a test convenience: a relay
+   * started without one holds nothing to verify directory signatures against. It must then REFUSE —
+   * every online token, every admin frame, every assignment — because a verifier that cannot verify
+   * and admits the caller anyway is how a security check ends up installed and decorative
+   * (DOD-M15-RELAYSLOTS-1). `bin/relay.ts` still requires the environment variable in production;
+   * this is what makes the misconfigured case fail loudly instead of open.
+   */
+  directoryPubkey?: Uint8Array;
+  /** DOD-M15-RELAYSLOTS-1: see `SESSION_CAP_PER_PAIR`. */
+  sessionCapPerPair?: number;
   /**
    * FED-OPTIONB-SETUP-001 (any-directory): the full set of sovereign consortium directory node
    * pubkeys. Under Option B a client presents a directory-signed session assignment to its chosen
@@ -439,7 +469,10 @@ export interface RelayNodeOptions {
 
 export class CelloRelayNode {
   readonly #node: CelloNode;
-  readonly #directoryPubkey: Uint8Array;
+  /** `null` when no directory key is configured — see `RelayNodeOptions.directoryPubkey`. */
+  readonly #directoryPubkey: Uint8Array | null;
+  /** DOD-M15-RELAYSLOTS-1: see `SESSION_CAP_PER_PAIR`. */
+  readonly #sessionCapPerPair: number;
   /** FED-OPTIONB-SETUP-001: consortium directory pubkeys a client-presented assignment may be signed by. */
   readonly #directoryPubkeys: Uint8Array[];
   /** DOD-SEAL-BROKER-1: directory pubkey hex -> multiaddr. Empty in single-directory deployments. */
@@ -529,11 +562,14 @@ export class CelloRelayNode {
 
   constructor(opts: RelayNodeOptions) {
     this.#node = opts.node;
-    this.#directoryPubkey = opts.directoryPubkey;
+    this.#directoryPubkey = opts.directoryPubkey ?? null;
+    this.#sessionCapPerPair = opts.sessionCapPerPair ?? SESSION_CAP_PER_PAIR;
     // FED-OPTIONB-SETUP-001: the consortium set always contains the primary directoryPubkey, plus any
     // additional sovereign nodes. Deduped so a repeated pubkey doesn't cost an extra verify attempt.
+    // DOD-M15-RELAYSLOTS-1: with no primary configured the set starts EMPTY rather than being padded
+    // with a placeholder, so every signature check has nothing to succeed against and refuses.
     this.#directoryEndpointsByPubkey = opts.directoryEndpointsByPubkey ?? {};
-    this.#directoryPubkeys = [opts.directoryPubkey];
+    this.#directoryPubkeys = opts.directoryPubkey ? [opts.directoryPubkey] : [];
     for (const pk of opts.directoryPubkeys ?? []) {
       if (!this.#directoryPubkeys.some((existing) => Buffer.from(existing).equals(Buffer.from(pk)))) {
         this.#directoryPubkeys.push(pk);
@@ -608,6 +644,12 @@ export class CelloRelayNode {
     this.#node.onPeerDisconnect((disconnectedPeerId) => {
       const short = truncId(disconnectedPeerId);
       protocolLog("RELAY", `Peer disconnected: ${short}`);
+      /**
+       * DOD-M15-RELAYSLOTS-1: free the slot the moment the peer goes, rather than carrying it until
+       * the reservation TTL runs out. The delay was never neutral — it is how an agent that
+       * restarts a handful of times exhausts its own per-agent cap while holding nothing at all.
+       */
+      this.#connectionGater?.recordDisconnect(disconnectedPeerId);
     });
   }
 
@@ -647,6 +689,22 @@ export class CelloRelayNode {
         if (k !== "directory_signature") bodyObj[k] = v;
       }
       const bodyBytes = CBOR_ENC.encode(bodyObj) as Uint8Array;
+
+      /**
+       * DOD-M15-RELAYSLOTS-1: no configured directory key means nothing can authenticate as the
+       * directory. Refused, and said out loud — an operator staring at a relay that ignores every
+       * admin frame needs the cause, and the cause is one missing environment variable.
+       */
+      if (!this.#directoryPubkey) {
+        this.#logger.error("relay.directory.admin.no_directory_key", {
+          impact: "a directory admin frame arrived but this relay holds NO directory public key, so " +
+            "its signature cannot be checked and the frame is refused. Every admin operation will " +
+            "fail this way until CELLO_DIRECTORY_PUBKEY is set and the relay restarted.",
+        });
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "auth_invalid" })));
+        await stream.close();
+        return;
+      }
 
       if (!verify(this.#directoryPubkey, bodyBytes, directory_signature)) {
         stream.send(lp.encode.single(CBOR_ENC.encode({ type: "auth_invalid" })));
@@ -787,10 +845,17 @@ export class CelloRelayNode {
     // Verification failed (directory_signature_invalid) or a non-idempotent store failure: fail LOUD so
     // a forged/non-consortium assignment is diagnosable, never silently accepted (any-directory teeth).
     this.#logger.warn("relay.assignment.rejected", { sessionId: truncHex(sidHex), source: "client", reason: result.reason });
-    await this.#sendFrame(stream, CBOR_ENC.encode({ type: "assignment_invalid", reason: result.reason }) as Uint8Array);
+    await this.#sendFrame(stream, CBOR_ENC.encode({
+      type: "assignment_invalid",
+      reason: result.reason,
+      // Review M2: carry the tuple counts the same way `slots_held`/`slot_cap` ride relay_auth_failed,
+      // so the client can turn this into something the operator can act on.
+      ...(result.concurrent !== undefined ? { concurrent_sessions: result.concurrent } : {}),
+      ...(result.cap !== undefined ? { session_cap: result.cap } : {}),
+    }) as Uint8Array);
   }
 
-  recordAssignment(assignment: SessionAssignment): { ok: true } | { ok: false; reason: string } {
+  recordAssignment(assignment: SessionAssignment): { ok: true } | { ok: false; reason: string; concurrent?: number; cap?: number } {
     // Verify directory signature over canonical CBOR of
     //   [session_id, participant_a, participant_b, session_timestamp]
     // plus, when both session Peer IDs are present (M-4),
@@ -823,6 +888,40 @@ export class CelloRelayNode {
     if (!signer) {
       return { ok: false, reason: "directory_signature_invalid" };
     }
+    /**
+     * DOD-M15-RELAYSLOTS-1 — **THE TUPLE CAP.** Nothing bounded how many sessions two identities
+     * could hold at once, and that is the second door into the reservation table: register two
+     * agents you own, open four thousand sessions between them, put one message down each, and you
+     * hold the whole relay with slots every "is this in use" test correctly calls busy. The
+     * per-agent cap does not catch it on its own — the attacker simply uses more agents — but
+     * together the two make the attack cost real registered identities per handful of slots.
+     *
+     * Checked BEFORE `recordSession` so a refused session leaves no trace to clean up. Counted from
+     * live participant tracking, which `#cleanupSessionTracking` maintains, so sealed and swept
+     * sessions do not hold the count down.
+     *
+     * No legitimate pair of agents needs five concurrent conversations with each other.
+     */
+    const aHexForCap = Buffer.from(assignment.participant_a).toString("hex");
+    const bHexForCap = Buffer.from(assignment.participant_b).toString("hex");
+    const concurrent = this.#concurrentSessionsBetween(aHexForCap, bHexForCap);
+    if (concurrent >= this.#sessionCapPerPair) {
+      this.#logger.warn("relay.session.tuple_cap_exceeded", {
+        participantA: truncHex(aHexForCap),
+        participantB: truncHex(bHexForCap),
+        concurrent,
+        cap: this.#sessionCapPerPair,
+        impact: "these two identities already hold the most concurrent sessions one pair may hold " +
+          "on this relay. Refused. For a real operator this means conversations with one " +
+          "counterparty that were never closed — the count says how many, so they can go and close some.",
+      });
+      // Review M2: the counts ride the refusal. "You already have N conversations open with this
+      // counterparty; close some" is actionable; `assignment_invalid` in a log is not — and this is
+      // the refusal most likely to reach a real person, for the reason the order gives: nobody knows
+      // what sessions they have open.
+      return { ok: false, reason: "session_tuple_cap_exceeded", concurrent, cap: this.#sessionCapPerPair };
+    }
+
     const genesisRoot = computeGenesisPrevRoot(
       assignment.participant_a,
       assignment.participant_b,
@@ -1004,6 +1103,70 @@ export class CelloRelayNode {
     }
   }
 
+  /**
+   * DOD-M15-RELAYSLOTS-1 — verify the directory-issued online token on an auth response.
+   *
+   * Returns the refusal reason, or `null` when the caller is a registered agent and may proceed.
+   *
+   * `authedPubkeyHex` is the key whose signature has ALREADY verified on this stream. That ordering
+   * is the whole reason the pubkey-binding check has teeth: the token names a key, and the caller has
+   * separately proven possession of the key it presented, so requiring the two to match means a token
+   * lifted from a log or a shared machine is worthless without the private key it was issued to.
+   */
+  #checkOnlineToken(
+    resp: RelayAuthResponse,
+    authedPubkeyHex: string,
+    remotePeerId?: string,
+  ): AuthFailedReason | null {
+    if (!resp.online_token) {
+      this.#logger.warn("relay.auth.online_token.missing", {
+        remotePeerId: remotePeerId ?? "(none)",
+        pubkey: truncHex(authedPubkeyHex),
+        impact: "this auth was refused because it carried no directory-issued online token. The " +
+          "caller proved it holds this key, which is free to generate — the token is what says the " +
+          "key belongs to a registered agent. A current client obtains one when its directory marks " +
+          "it online, so the usual cause is a client that has not reached a directory yet.",
+      });
+      return "online_token_required";
+    }
+
+    const verification = verifyOnlineToken(resp.online_token, this.#directoryPubkeys, Date.now());
+    if (!verification.ok) {
+      this.#logger.warn("relay.auth.online_token.rejected", {
+        remotePeerId: remotePeerId ?? "(none)",
+        pubkey: truncHex(authedPubkeyHex),
+        reason: verification.reason,
+        directoryKeyCount: this.#directoryPubkeys.length,
+        impact: verification.reason === "online_token_no_directory_key"
+          ? "this relay holds NO directory public key, so it cannot verify any token and is refusing " +
+            "every agent. This is a relay misconfiguration, not a caller problem — set " +
+            "CELLO_DIRECTORY_PUBKEY. Refusing is deliberate: a relay that cannot verify and admits " +
+            "the caller anyway leaves the reservation table open to exactly the flood this check exists to stop."
+          : "this auth was refused because the directory-issued online token did not check out. " +
+            "directoryKeyCount is how many directory keys this relay would have accepted a signature " +
+            "from — a signature_invalid against a plausible count usually means the token came from a " +
+            "directory this relay was never told about.",
+      });
+      return verification.reason;
+    }
+
+    const tokenPubkeyHex = Buffer.from(verification.agentPubkey).toString("hex");
+    if (tokenPubkeyHex !== authedPubkeyHex) {
+      this.#logger.warn("relay.auth.online_token.pubkey_mismatch", {
+        remotePeerId: remotePeerId ?? "(none)",
+        authedPubkey: truncHex(authedPubkeyHex),
+        tokenPubkey: truncHex(tokenPubkeyHex),
+        impact: "a VALID, unexpired directory token was presented by a key it does not name. That is " +
+          "what a lifted token looks like: the holder of the token is not the holder of the key. " +
+          "Refused — without this comparison one leaked token would authorise every throwaway key an " +
+          "attacker cares to generate.",
+      });
+      return "online_token_pubkey_mismatch";
+    }
+
+    return null;
+  }
+
   async #handleRelayStream(stream: Stream, remotePeerId?: string): Promise<void> {
     /**
      * DOD-M15-RELAYABUSE-1 review F4 — **THE LIMIT NOW GUARDS THE EXPENSIVE PART, INSTEAD OF SITTING
@@ -1146,6 +1309,64 @@ export class CelloRelayNode {
             });
             await this.#refuseAuth(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "rate_limited", retry_after_ms: pubkeyLimit.retryAfterMs }), "rate_limited"); return;
           }
+          /**
+           * DOD-M15-RELAYSLOTS-1 — **THE REGISTRATION CHECK.** Everything above this line proves the
+           * caller holds the private half of `resp.pubkey`. That is not worth much on its own:
+           * generating a keypair is free, so an attacker mints one per reservation slot and takes the
+           * whole table while every request looks perfectly well-formed.
+           *
+           * The fact that separates a registered agent from a minted key lives in the DIRECTORY, and
+           * this token is how it gets here — signed by a sovereign directory node when it marked the
+           * agent online, bound to that agent's public key, short-lived.
+           *
+           * Placed HERE, after the signature and before `recordAuthenticated`, for two reasons that
+           * are both load-bearing:
+           *  - the pubkey the token must name is only trustworthy once the signature has verified, so
+           *    checking earlier would be comparing the token against an unverified assertion;
+           *  - `recordAuthenticated` is what cancels this peer's reservation-revoke timer, i.e. it is
+           *    the act of KEEPING A SLOT. Nothing may reach it without a token.
+           */
+          const tokenRefusal = this.#checkOnlineToken(resp, authedPubkeyHex, remotePeerId);
+          if (tokenRefusal) {
+            await this.#refuseAuth(
+              stream,
+              encodeAuthFailed({ type: "relay_auth_failed", reason: tokenRefusal }),
+              tokenRefusal,
+            );
+            return;
+          }
+
+          /**
+           * DOD-M15-RELAYSLOTS-1 — attribute the slot, and decide whether this agent may keep it.
+           *
+           * The token above proved WHO this is. This asks whether they already hold more of this
+           * relay's reservation table than one agent may. The ledger reclaims the agent's own idle
+           * slots before it consults the cap, so a refusal here means every slot they hold has
+           * actually carried traffic.
+           *
+           * On a refusal the revoke timer is deliberately LEFT RUNNING: the reservation was already
+           * granted by the time we got here (it has to be — a relay cannot deny at grant time
+           * without stranding every brand-new agent's first reservation), so the grace window is
+           * what reclaims it. The caller is told why in the same breath.
+           */
+          if (remotePeerId) {
+            const admission = this.#connectionGater?.admitSlot(remotePeerId, authedPubkeyHex);
+            if (admission && !admission.ok) {
+              await this.#refuseAuth(
+                stream,
+                encodeAuthFailed({
+                  type: "relay_auth_failed",
+                  reason: admission.reason,
+                  ...(admission.reason === "slot_cap_exceeded"
+                    ? { slots_held: admission.held, slot_cap: admission.cap }
+                    : {}),
+                }),
+                admission.reason,
+              );
+              return;
+            }
+          }
+
           // DOD-M15-RELAYAUTH-1: this proves Ed25519 key POSSESSION, not participation in any
           // session — cancels this peer's reservation-revoke grace timer if one is running (see
           // relay-connection-gater.ts). Does NOT vouch the pubkey; that still requires a real
@@ -1372,6 +1593,17 @@ export class CelloRelayNode {
           continue;
         }
         if (parsed.type === "hash_submit") {
+          /**
+           * DOD-M15-RELAYSLOTS-1: a submit is traffic, and traffic is what marks a slot in use.
+           *
+           * Recorded HERE, on the relay's own carrying path, because that is the one place that
+           * cannot be wrong about it — and it is a sound signal precisely because nothing can be
+           * submitted until a directory-signed assignment was presented. Recorded BEFORE the submit
+           * is processed, so a submit that is refused downstream still counts: the slot is plainly
+           * in use either way, and treating an ambiguous slot as idle is the one direction this
+           * unit must never be wrong in.
+           */
+          if (remotePeerId) this.#connectionGater?.recordActivity(remotePeerId);
           await this.#processHashSubmit(stream, authedPubkeyHex!, parsed, remotePeerId);
         } else if (parsed.type === "session_liveness_query") {
           await this.#processSessionLivenessQuery(stream, authedPubkeyHex!, parsed);
@@ -2167,6 +2399,15 @@ export class CelloRelayNode {
       // is already destroyed by sweepIdleSessions, so #cleanupSessionTracking must
       // be store-independent (it is) to avoid leaking participant/timer entries.
       for (const key of swept) this.#cleanupSessionTracking(key);
+      /**
+       * DOD-M15-RELAYSLOTS-1: and reclaim reservation slots if the table is under pressure.
+       *
+       * It rides this sweep rather than getting a timer of its own because the two are the same
+       * job at two levels — freeing capacity that nothing is using — and one fewer interval is one
+       * fewer thing to remember to stop at shutdown. The reaper is a no-op below the pressure line,
+       * so on an ordinary relay this costs a map scan an hour.
+       */
+      this.#reapSlots();
     };
 
     // Run first sweep immediately to catch sessions that were idle before the relay process started.
@@ -2178,6 +2419,39 @@ export class CelloRelayNode {
 
     // Schedule recurring sweeps
     this.#idleSweepInterval = setInterval(sweep, intervalMs);
+  }
+
+  /**
+   * DOD-M15-RELAYSLOTS-1 — reclaim idle reservation slots, and **TELL WHOEVER LOST ONE.**
+   *
+   * The notice is the half that is easy to skip, and skipping it is how "my agent just stopped
+   * working" happens: the relay is the only party that knows this occurred, and from the agent's
+   * side an unexplained hangup is indistinguishable from the network failing. So every agent that
+   * held a reaped slot AND has an authenticated stream here is sent a frame naming the cause and
+   * what to do about it.
+   *
+   * ⚠️ Not every reaped holder has a stream to be told on, and that limit is stated rather than
+   * papered over. A bare standing receiver proves its reservation and closes the stream — there is
+   * nothing open to write to. For those the hangup IS the signal, and the client's own reservation
+   * watchdog rebuilds the receiver; what they lose is the explanation, not the recovery.
+   */
+  #reapSlots(): void {
+    // Review H3: the notice is sent from INSIDE the reap, before the peer is hung up. Sending it
+    // afterwards raced the disconnect it was announcing.
+    this.#connectionGater?.reapIdleSlots((slot) => {
+      for (const agentHex of slot.agents) {
+        const stream = this.#streams.get(agentHex);
+        if (!stream) continue;
+        void this.#sendFrame(stream, CBOR_ENC.encode({
+          type: "relay_slot_reclaimed",
+          reason: "idle_capacity_reclaimed",
+          idle_ms: slot.idleMs,
+          detail: "This relay reclaimed your circuit reservation to free capacity. It had carried " +
+            "no traffic for longer than the relay's activity floor. Your agent stays online — " +
+            "reconnect to this relay, or start a new session, and a fresh reservation is taken.",
+        }) as Uint8Array).catch(() => { /* the peer is going away; the reap log is the durable record */ });
+      }
+    });
   }
 
   /**
@@ -2254,6 +2528,24 @@ export class CelloRelayNode {
    * entries for swept sessions. SI-003 is preserved — this only deletes the
    * binding, it never exposes Peer ID values.
    */
+  /**
+   * DOD-M15-RELAYSLOTS-1: how many LIVE sessions this relay currently holds between these two
+   * identities. The intersection of the two participants' live session sets — the same tracking
+   * `#cleanupSessionTracking` tears down, so a sealed or swept session stops counting immediately.
+   */
+  #concurrentSessionsBetween(aHex: string, bHex: string): number {
+    const a = this.#participantSessions.get(aHex);
+    const b = this.#participantSessions.get(bHex);
+    if (!a || !b) return 0;
+    // Iterate the smaller set — a relay carrying a busy agent should not pay for that here.
+    const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+    let n = 0;
+    for (const sessionIdHex of small) {
+      if (large.has(sessionIdHex)) n++;
+    }
+    return n;
+  }
+
   #cleanupSessionTracking(sessionIdHex: string): void {
     // Clear idle timer
     const timer = this.#sessionIdleTimers.get(sessionIdHex);
@@ -2474,7 +2766,8 @@ export class CelloRelayNode {
 
 export interface CreateRelayNodeOptions {
   listenAddresses?: string[];
-  directoryPubkey: Uint8Array;
+  /** See `RelayNodeOptions.directoryPubkey` — absent means this relay can verify nothing and refuses. */
+  directoryPubkey?: Uint8Array;
   /** DOD-M15-RELAYABUSE-1: per-depositor park-deposit rate limit. Forwarded to the park handler. */
   depositRateLimit?: DepositRateLimitConfig;
   /** DOD-M15-RELAYABUSE-1: per-peer AND per-claimed-pubkey relay-authentication rate limit. */
@@ -2499,6 +2792,10 @@ export interface CreateRelayNodeOptions {
   connectionGater?: RelayConnectionGater;
   /** DOD-M15-RELAYAUTH-1: see `DEFAULT_RESERVATION_GRACE_MS` in relay-connection-gater.ts. */
   reservationGraceMs?: number;
+  /** DOD-M15-RELAYSLOTS-1: see `SLOT_CAP_PER_AGENT` in relay-connection-gater.ts. */
+  slotCapPerAgent?: number;
+  /** DOD-M15-RELAYSLOTS-1: see `SESSION_CAP_PER_PAIR`. */
+  sessionCapPerPair?: number;
   /** DOD-M15-RELAYAUTH-1 review H2: durable vouching — see `RelayNodeOptions.vouchedKeyStore`. */
   vouchedKeyStore?: VouchedKeyStore;
   /** FED-OPTIONB-SETUP-001: consortium directory pubkeys (any-directory). Falls back to [directoryPubkey]. */
@@ -2596,6 +2893,7 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
   const connectionGater = opts.connectionGater ?? new RelayConnectionGater({
     logger: relayLogger,
     reservationGraceMs: opts.reservationGraceMs,
+    slotCapPerAgent: opts.slotCapPerAgent,
   });
   const node = await createNode({
     keyProvider,
@@ -2627,7 +2925,11 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     relayServer: {
       enabled: true,
       reservations: {
-        maxReservations: 4096,
+        // DOD-M15-RELAYSLOTS-1: ONE source for this number. The reaper's pressure line is a
+        // fraction of the ceiling, so a ceiling that drifted from what libp2p actually enforces
+        // would give a reaper that either never fires or fires constantly — and both look like the
+        // reaper working.
+        maxReservations: DEFAULT_SLOT_CEILING,
         applyDefaultLimit: true,
         defaultDurationLimit: opts.circuitDurationLimitMs ?? DEFAULT_CIRCUIT_DURATION_LIMIT_MS,
         defaultDataLimit: opts.circuitDataLimitBytes ?? DEFAULT_CIRCUIT_DATA_LIMIT_BYTES,
@@ -2657,6 +2959,7 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     node,
     connectionGater,
     directoryPubkey: opts.directoryPubkey,
+    sessionCapPerPair: opts.sessionCapPerPair,
     directoryPubkeys: opts.directoryPubkeys,
     // This factory copies options FIELD BY FIELD, so a new option that is not listed here is
     // dropped in silence — the env parses, the resolver runs, and the value is simply never there.

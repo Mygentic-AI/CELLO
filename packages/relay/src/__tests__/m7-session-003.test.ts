@@ -41,6 +41,7 @@ import type { Logger } from "@cello-protocol/interfaces";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
 import { InMemoryRelayStore } from "../relay-store.js";
 import type { SessionAssignment } from "../relay-types.js";
+import { testOnlineToken } from "./helpers/online-token.js";
 
 setupV3Tests();
 
@@ -103,7 +104,8 @@ function sendFrame(stream: Stream, data: Uint8Array): void {
   stream.send(lp.encode.single(data));
 }
 
-async function performAuth(reader: StreamReader, stream: Stream, kp: ReturnType<typeof generateKeypair>): Promise<void> {
+// DOD-M15-RELAYSLOTS-1: the relay refuses an auth carrying no directory-issued online token.
+async function performAuth(reader: StreamReader, stream: Stream, kp: ReturnType<typeof generateKeypair>, dirKp: ReturnType<typeof generateKeypair>): Promise<void> {
   const challenge = await reader.readDecoded();
   expect(challenge["type"]).toBe("relay_auth_challenge");
   const nonce = challenge["nonce"] instanceof Uint8Array
@@ -114,7 +116,12 @@ async function performAuth(reader: StreamReader, stream: Stream, kp: ReturnType<
   const authMsg = new Uint8Array(Buffer.concat([domain, nonce, pubkey]));
   const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
   const signature = await kp.sign(msgHash);
-  sendFrame(stream, CBOR_ENC.encode({ type: "relay_auth_response", pubkey, signature }));
+  sendFrame(stream, CBOR_ENC.encode({
+    type: "relay_auth_response",
+    pubkey,
+    signature,
+    online_token: await testOnlineToken(dirKp, kp),
+  }));
   const ack = await reader.readDecoded();
   if (ack["type"] === "relay_auth_failed") throw new Error(`relay_auth_failed: ${String(ack["reason"])}`);
   expect(ack["type"]).toBe("relay_auth_ok");
@@ -174,7 +181,7 @@ describe("AC-001: relay tracks session-path liveness alive→gone with events", 
 
     const pubkeyHex = Buffer.from(cB.pubkey).toString("hex");
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     // alive recorded + INFO event
     await waitUntil(() => fix.store.getRecipientLiveness(pubkeyHex).liveness === "alive", 3000);
@@ -215,8 +222,8 @@ describe("AC-002: session_liveness_query over a real relay stream", () => {
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     const queryFor = (pub: Uint8Array) =>
       CBOR_ENC.encode({ type: "session_liveness_query", session_id: sessionId, counterparty_pubkey: pub }) as Uint8Array;
@@ -278,7 +285,7 @@ describe("AC-003: 'gone' is not sticky across a genuine reconnect", () => {
 
     const pubkeyHex = Buffer.from(cB.pubkey).toString("hex");
     const { stream: sB1, reader: rB1 } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rB1, sB1, cB.kp);
+    await performAuth(rB1, sB1, cB.kp, fix.dirKp);
     await waitUntil(() => fix.store.getRecipientLiveness(pubkeyHex).liveness === "alive", 3000);
 
     sB1.abort(new Error("test_disconnect"));
@@ -286,7 +293,7 @@ describe("AC-003: 'gone' is not sticky across a genuine reconnect", () => {
 
     // reconnect on a fresh stream (same pubkey)
     const { stream: sB2, reader: rB2 } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rB2, sB2, cB.kp);
+    await performAuth(rB2, sB2, cB.kp, fix.dirKp);
     await waitUntil(() => fix.store.getRecipientLiveness(pubkeyHex).liveness === "alive", 3000);
     expect(fix.store.getRecipientLiveness(pubkeyHex).liveness).toBe("alive");
 

@@ -41,6 +41,7 @@ import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID, DIRECTORY_RELAY_PROTOCOL_ID } from "../relay-node.js";
 import type { SessionAssignment } from "../relay-types.js";
+import { testOnlineToken } from "./helpers/online-token.js";
 
 setupV3Tests();
 
@@ -144,10 +145,13 @@ async function openDirRelayStream(
 
 // ─── Relay auth helpers (for /cello/relay/1.0.0 client streams) ───────────────
 
+// DOD-M15-RELAYSLOTS-1: `dirKp` is the directory keypair the relay under test was built with — the
+// relay now refuses any auth that does not carry a token it signed.
 async function performRelayAuth(
   reader: StreamReader,
   stream: Stream,
-  kp: ReturnType<typeof generateKeypair>
+  kp: ReturnType<typeof generateKeypair>,
+  dirKp: ReturnType<typeof generateKeypair>
 ): Promise<void> {
   const challenge = await reader.readDecoded();
   expect(challenge["type"]).toBe("relay_auth_challenge");
@@ -159,7 +163,12 @@ async function performRelayAuth(
   const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
   const signature = await kp.sign(msgHash);
 
-  sendFrame(stream, CBOR_ENC.encode({ type: "relay_auth_response", pubkey, signature }));
+  sendFrame(stream, CBOR_ENC.encode({
+    type: "relay_auth_response",
+    pubkey,
+    signature,
+    online_token: await testOnlineToken(dirKp, kp),
+  }));
 
   const ack = await reader.readDecoded();
   if (ack["type"] === "relay_auth_failed") {
@@ -261,7 +270,7 @@ describe("AC-002: discard_session → discard_ok; hash_submit returns session_no
 
     const streamA = await clientNodeA.newStream(fix.relayPeerId, RELAY_PROTOCOL_ID);
     const readerA = new StreamReader(streamA);
-    await performRelayAuth(readerA, streamA, clientKpA);
+    await performRelayAuth(readerA, streamA, clientKpA, fix.dirKp);
 
     const contentHash = new Uint8Array(randomBytes(32));
     const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, contentHash, clientKpA, 0);
@@ -337,7 +346,7 @@ describe("AC-006 / SI-001: invalid directory signature → auth_invalid, no stat
 
     const streamA = await clientNodeA.newStream(fix.relayPeerId, RELAY_PROTOCOL_ID);
     const readerA = new StreamReader(streamA);
-    await performRelayAuth(readerA, streamA, clientKpA);
+    await performRelayAuth(readerA, streamA, clientKpA, fix.dirKp);
 
     const contentHash = new Uint8Array(randomBytes(32));
     const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, contentHash, clientKpA, 0);
@@ -409,7 +418,7 @@ describe("SI-002: hash_submit before record_assignment → session_not_found (no
 
     const streamA = await clientNodeA.newStream(fix.relayPeerId, RELAY_PROTOCOL_ID);
     const readerA = new StreamReader(streamA);
-    await performRelayAuth(readerA, streamA, clientKpA);
+    await performRelayAuth(readerA, streamA, clientKpA, fix.dirKp);
 
     const contentHash = new Uint8Array(randomBytes(32));
     const { structure1_cbor, sender_signature } = await makeStructure1(unregisteredSessionId, contentHash, clientKpA, 0);
@@ -479,14 +488,19 @@ describe("FED-OPTIONB-SETUP-001: client_record_assignment — any-directory veri
     return { relay, node, relayPeerId: node.getPeerId(), relayAddr: node.listenAddresses()[0]!, node0Kp, node1Kp };
   }
 
-  async function authedClientStream(relayPeerId: string, relayAddr: string, kp: ReturnType<typeof generateKeypair>) {
+  async function authedClientStream(
+    relayPeerId: string,
+    relayAddr: string,
+    kp: ReturnType<typeof generateKeypair>,
+    dirKp: ReturnType<typeof generateKeypair>,
+  ) {
     const cn = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await cn.start();
     scope.addCleanup(async () => { await cn.stop(); });
     await cn.dial(relayAddr);
     const stream = await cn.newStream(relayPeerId, RELAY_PROTOCOL_ID);
     const reader = new StreamReader(stream);
-    await performRelayAuth(reader, stream, kp);
+    await performRelayAuth(reader, stream, kp, dirKp);
     return { stream, reader };
   }
 
@@ -495,7 +509,7 @@ describe("FED-OPTIONB-SETUP-001: client_record_assignment — any-directory veri
     const clientKp = generateKeypair();
     const pubA = await clientKp.getPublicKey();
     const pubB = await generateKeypair().getPublicKey();
-    const { stream, reader } = await authedClientStream(fix.relayPeerId, fix.relayAddr, clientKp);
+    const { stream, reader } = await authedClientStream(fix.relayPeerId, fix.relayAddr, clientKp, fix.node0Kp);
 
     const sessionId = new Uint8Array(randomBytes(16));
     // Signed by node1 — NOT the primary directoryPubkey. The old single-pubkey relay would reject this.
@@ -512,7 +526,7 @@ describe("FED-OPTIONB-SETUP-001: client_record_assignment — any-directory veri
     const clientKp = generateKeypair();
     const pubA = await clientKp.getPublicKey();
     const pubB = await generateKeypair().getPublicKey();
-    const { stream, reader } = await authedClientStream(fix.relayPeerId, fix.relayAddr, clientKp);
+    const { stream, reader } = await authedClientStream(fix.relayPeerId, fix.relayAddr, clientKp, fix.node0Kp);
 
     const sessionId = new Uint8Array(randomBytes(16));
     // Signed by an OUTSIDER key that is in neither directoryPubkey nor directoryPubkeys.
@@ -537,7 +551,7 @@ describe("FED-OPTIONB-SETUP-001: client_record_assignment — any-directory veri
     const strangerKp = generateKeypair(); // authenticates as itself, is named by nothing
     const pubA = await generateKeypair().getPublicKey();
     const pubB = await generateKeypair().getPublicKey();
-    const { stream, reader } = await authedClientStream(fix.relayPeerId, fix.relayAddr, strangerKp);
+    const { stream, reader } = await authedClientStream(fix.relayPeerId, fix.relayAddr, strangerKp, fix.node0Kp);
 
     const sessionId = new Uint8Array(randomBytes(16));
     // Signed by a REAL consortium directory — the signature is not the problem here.
@@ -555,7 +569,7 @@ describe("FED-OPTIONB-SETUP-001: client_record_assignment — any-directory veri
     const clientKp = generateKeypair();
     const pubA = await clientKp.getPublicKey();
     const pubB = await generateKeypair().getPublicKey();
-    const { stream, reader } = await authedClientStream(fix.relayPeerId, fix.relayAddr, clientKp);
+    const { stream, reader } = await authedClientStream(fix.relayPeerId, fix.relayAddr, clientKp, fix.node0Kp);
 
     const sessionId = new Uint8Array(randomBytes(16));
     sendFrame(stream, await makeClientRecordAssignmentFrame(sessionId, pubA, pubB, Date.now(), fix.node1Kp));

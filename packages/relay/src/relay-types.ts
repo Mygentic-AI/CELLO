@@ -64,6 +64,17 @@ export interface RelayAuthResponse {
    * session; with it, the replacement proves itself and leaves delivery alone.
    */
   purpose?: "reservation";
+  /**
+   * DOD-M15-RELAYSLOTS-1: the directory-issued proof that `pubkey` belongs to a REGISTERED agent,
+   * minted when the directory marked that agent online. Opaque bytes to the client, which carries
+   * them from its signaling auth acknowledgement to here without reading them.
+   *
+   * ⚠️ Optional on the TYPE, required by the relay. It is optional here because an older client
+   * simply does not send the field, and the relay must be able to decode that frame in order to
+   * refuse it with a reason the operator can act on — a decode failure would abort the stream and
+   * tell them nothing. See `online_token_required` below.
+   */
+  online_token?: Uint8Array;
 }
 
 export type AuthFailedReason =
@@ -72,7 +83,44 @@ export type AuthFailedReason =
   | "nonce_reused"
   | "signature_invalid"
   /** DOD-M15-RELAYABUSE-1: per-peer or per-claimed-pubkey auth attempt rate exceeded. */
-  | "rate_limited";
+  | "rate_limited"
+  /**
+   * DOD-M15-RELAYSLOTS-1 — the online-token refusals.
+   *
+   * Signing the relay's challenge proves possession of a keypair, and keypairs are free: without
+   * this check an attacker mints one per slot and takes the whole reservation table while every
+   * request looks well-formed. These reasons travel back to the operator AND are branched on by the
+   * daemon deciding whether another relay would do any better, so they are enumerated rather than
+   * collapsed into one code.
+   */
+  /** No `online_token` at all. A pre-token client, or a keypair that never registered. */
+  | "online_token_required"
+  /** Not the right length. Refused before anything is read out of it. */
+  | "online_token_malformed"
+  /** Well-formed, but no directory key this relay holds signed it. */
+  | "online_token_signature_invalid"
+  /** Signed, but past its expiry. The client refreshes over its directory stream and retries. */
+  | "online_token_expired"
+  /** Signed and unexpired, claiming a lifetime beyond what this relay will honour. */
+  | "online_token_lifetime_too_long"
+  /**
+   * The token names a DIFFERENT key from the one that just completed the challenge. This is the
+   * refusal that stops a lifted token being a bearer pass for any throwaway key.
+   */
+  | "online_token_pubkey_mismatch"
+  /**
+   * This relay holds no directory public key, so it cannot verify anything and refuses everyone.
+   * A relay-side fault, not the caller's: the daemon should try a different relay.
+   */
+  | "online_token_no_directory_key"
+  /**
+   * DOD-M15-RELAYSLOTS-1: this agent already holds the most reservation slots one agent may hold
+   * here, and none of them was idle enough to reclaim. Carries `slots_held` and `slot_cap`.
+   *
+   * A different relay WOULD grant this — but doing that quietly papers over leaked sessions and the
+   * same wall arrives on the next relay, so the daemon surfaces it rather than spreading it.
+   */
+  | "slot_cap_exceeded";
 
 export interface RelayAuthFailed {
   type: "relay_auth_failed";
@@ -83,6 +131,18 @@ export interface RelayAuthFailed {
    * than leaving the caller to guess a retry interval.
    */
   retry_after_ms?: number;
+  /**
+   * DOD-M15-RELAYSLOTS-1: how many reservation slots this agent currently holds on this relay, and
+   * the most one agent may hold. Present only when `reason` is `slot_cap_exceeded`.
+   *
+   * ⚠️ These two numbers ARE the affordance, and without them the refusal is a dead end. People do
+   * not know what sessions they have open — sessions fall apart and sit there, idle and unreachable
+   * and still counted — so anyone who hits this cap will believe they have nothing open. A bare
+   * reason code tells them the product is broken; "you hold 32 of a maximum 32" tells them what to
+   * go and close.
+   */
+  slots_held?: number;
+  slot_cap?: number;
 }
 
 export interface RelayAuthOk {

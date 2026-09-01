@@ -47,6 +47,7 @@ import type { DirectoryAdapter } from "../relay-node.js";
 import type { RelayPubkeyLookup } from "../relay-types.js";
 import { NetworkDirectoryAdapter } from "../network-directory-adapter.js";
 import { createRelayHealthServer } from "../relay-service-lifecycle.js";
+import { testOnlineToken } from "./helpers/online-token.js";
 
 const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
@@ -398,7 +399,13 @@ describe("FEDERATION-003 AC-005/AC-006/SI-002: predecessor relay ACK verificatio
       const authMsg = new Uint8Array(Buffer.concat([domain, nonce, pubA]));
       const authHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
       const authSig = await sessionKpA.sign(authHash);
-      stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_auth_response", pubkey: pubA, signature: authSig })));
+      stream.send(lp.encode.single(CBOR_ENC.encode({
+        type: "relay_auth_response",
+        pubkey: pubA,
+        signature: authSig,
+        // DOD-M15-RELAYSLOTS-1: the relay refuses an auth with no directory-issued online token.
+        online_token: await testOnlineToken(directoryKp, sessionKpA),
+      })));
 
       // Read relay_auth_ok
       const { value: ackRaw } = await iter.next();
@@ -502,7 +509,13 @@ describe("FEDERATION-003 AC-005/AC-006/SI-002: predecessor relay ACK verificatio
       const authMsg = new Uint8Array(Buffer.concat([domain, nonce, pubA]));
       const authHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
       const authSig = await sessionKpA.sign(authHash);
-      stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_auth_response", pubkey: pubA, signature: authSig })));
+      stream.send(lp.encode.single(CBOR_ENC.encode({
+        type: "relay_auth_response",
+        pubkey: pubA,
+        signature: authSig,
+        // DOD-M15-RELAYSLOTS-1: the relay refuses an auth with no directory-issued online token.
+        online_token: await testOnlineToken(directoryKp, sessionKpA),
+      })));
 
       const { value: ackRaw } = await iter.next();
       const ackBytes = ackRaw instanceof Uint8Array ? ackRaw : (ackRaw as unknown as { slice(): Uint8Array }).slice();
@@ -606,7 +619,13 @@ describe("FEDERATION-003 AC-005/AC-006/SI-002: predecessor relay ACK verificatio
       const nonce = challenge.nonce instanceof Uint8Array ? challenge.nonce : new Uint8Array(challenge.nonce as unknown as ArrayBuffer);
       const authMsg = new Uint8Array(Buffer.concat([Buffer.from("CELLO-RELAY-AUTH-v1", "utf8"), nonce, pubA]));
       const authSig = await sessionKpA.sign(new Uint8Array(createHash("sha256").update(authMsg).digest()));
-      stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_auth_response", pubkey: pubA, signature: authSig })));
+      stream.send(lp.encode.single(CBOR_ENC.encode({
+        type: "relay_auth_response",
+        pubkey: pubA,
+        signature: authSig,
+        // DOD-M15-RELAYSLOTS-1: the relay refuses an auth with no directory-issued online token.
+        online_token: await testOnlineToken(directoryKp, sessionKpA),
+      })));
       const { value: ackRaw } = await iter.next();
       const ackBytes = ackRaw instanceof Uint8Array ? ackRaw : (ackRaw as unknown as { slice(): Uint8Array }).slice();
       expect((decode(ackBytes) as { type: string }).type).toBe("relay_auth_ok");
@@ -717,7 +736,13 @@ describe("FEDERATION-003 AC-005/AC-006/SI-002: predecessor relay ACK verificatio
       const authMsg = new Uint8Array(Buffer.concat([domain, nonce, pubA]));
       const authHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
       const authSig = await sessionKpA.sign(authHash);
-      stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_auth_response", pubkey: pubA, signature: authSig })));
+      stream.send(lp.encode.single(CBOR_ENC.encode({
+        type: "relay_auth_response",
+        pubkey: pubA,
+        signature: authSig,
+        // DOD-M15-RELAYSLOTS-1: the relay refuses an auth with no directory-issued online token.
+        online_token: await testOnlineToken(directoryKp, sessionKpA),
+      })));
 
       const { value: ackRaw } = await iter.next();
       const ackBytes = ackRaw instanceof Uint8Array ? ackRaw : (ackRaw as unknown as { slice(): Uint8Array }).slice();
