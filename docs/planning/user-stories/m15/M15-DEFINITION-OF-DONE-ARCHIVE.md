@@ -3949,3 +3949,87 @@ lifetime. Client-side, small, standalone.
   The directory-ADMIN frame path still authenticates against the single `directoryPubkey` only."*
   So a session brokered by directory 1 or 2 cannot be driven through this stream by the node that
   brokered it. That is the redundancy invariant inverted, and it is now evidenced rather than asked.
+
+---
+
+### `DOD-M15-RELAYAUTH-1` — ✅ No relay service without a directory-issued assignment
+**Closed 2026-09-01** by `micro/002-RELAY-requires-an-assignment.md`, with its third work item
+completed by `micro/008-RELAY-reservation-slot-flooding.md`. → Entry S15.
+
+**Depended on `DOD-M15-ASSIGN-1`** — the client must be presenting a verified assignment before the
+relay can require one. Decision 3(b): the relay **verifies a credential the caller presents** and
+learns nothing itself; it does not query the directory. This preserves extractability — a private
+enterprise relay stays a signature-verifier rather than becoming a directory client. **008's
+directory-issued token respects 3(b)**: it is a signed credential the caller presents, so the relay
+still never becomes a directory client.
+
+**The three work items, and where each landed:**
+
+1. ✅ **Relay service requires an assignment naming the caller as a participant** — including
+   collecting parked content, where the original session's assignment is the credential the caller
+   already holds. (002)
+2. ✅ **The relay verifies that an authenticating key is a registered agent**, rather than accepting
+   any Ed25519 keypair. **Not done in 002 and explicitly not counted as done there** — it moved to
+   008, which solves it with a directory-issued token bound to the agent's public key rather than
+   with a session assignment, because an assignment only exists *after* a session and a brand-new
+   agent has none at the moment it first needs one.
+3. ✅ **A connection gater on the relay, including the reservation-dial hook.** Reservations were
+   granted to any peer up to 4096 and the hook restricting who may dial *through* to a reservation
+   holder was never installed, so an agent's circuit address was dialable by anyone who learned it.
+   This is the relay-side twin of the receiver gate; without it that gate closed the direct route
+   while the circuit route stayed open. (002)
+
+**The liveness query is scoped.** It had no participant check and no session check — it carried a
+session id the handler never looked at and answered from a **global** map, so anyone with a list of
+pubkeys could build a live map of who was active and when. It now requires the caller to be a named
+participant and answers only for that session, collapsing no-session / not-a-participant /
+wrong-subject into one anti-enumeration reply.
+
+**Enforcer:** stranger, on the circuit path as well as the direct one.
+
+#### Review — TWO passes, and pass 2 refused the merge
+
+Pass 1 (Opus): three HIGH, all fixed and revert-tested before pass 2 — the replacement standing
+receiver stole the live session's delivery stream; the assignment was presented only to the
+directory-picked witness relay rather than the relay that actually gates the dial; a content-park
+pull refusal was flattened at the client. **Pass 2 then found the identical third defect still
+standing on the CONFIRM path in the same file.**
+
+> *"**Merge recommendation: do not merge as-is.** H1 and T1 are blocking; H2 is blocking unless Andre
+> rules the post-restart mailbox gap acceptable for launch … this diff touches persistence,
+> crypto-adjacent auth, notification/queue and registration-shaped state, and I did **not** come out
+> clean — the two findings I would most expect to have missed (a gate that denies the legitimate
+> case, and a durable store gated on volatile state) are both here and both real."*
+> — `cello-unit-reviewer` (Opus, 2026-08-31)
+
+- **H1 — the gate denied the LEGITIMATE first dial, on a race the code usually loses.** Both parties
+  get the assignment independently. A dials B's circuit address after ~2 RTT; B presents the
+  assignment to its own reservation relay — unawaited — after ~3–4 RTT. A arrived first more often
+  than not and the relay answered `PERMISSION_DENIED`. For every session where B is NAT'd and B's
+  reservation relay ≠ the witness relay (**the diff's own comment calls that "the ordinary case, not
+  a corner"**), the relayed link never formed — while `cello_initiate_session` still returned
+  `{ok:true, transportMode:"relay"}` and every message for the life of that conversation silently
+  fell to the park backstop. Fixed by having the dialler present the same assignment to B's
+  reservation relay and **await** it before dialling; it is a named participant and the assignment is
+  self-authenticating, so presenting it more widely grants nothing and the ordering becomes local to
+  one thread.
+- **H2 — parked mail became uncollectable after any relay restart.** The pull/confirm gate was
+  enforced against an in-process, never-persisted vouched set while the content store is durable.
+  Roll the relay and the recipient was *notified* mail was waiting, then refused `not_a_participant`
+  on the pull.
+- **T1 — the HIGH-1 fix had NO relay-side test.** Deleting the whole dispatch block left the entire
+  relay suite green; the client-side assertion ran against a fake relay defined in the test file.
+
+**Lesson that generalises.** Both of pass 2's blocking findings are the same shape: a **gate that
+refuses the legitimate case** rather than one that admits the illegitimate one. This unit's own trap
+list opened with *"refusing too eagerly is the failure mode here"* and the unit did it anyway.
+`connection.remotePeer` is Noise-authenticated so the source peer id cannot be spoofed; the hooks
+were checked against the installed `@libp2p/circuit-relay-v2@4.2.3`; `purpose` is additive and
+outside every signed TBS, so bilateral order held.
+
+**Left standing, and carried:** a bare authenticated keypair still occupies a standing-receiver slot
+(resource occupancy, not access — it cannot be dialled through to, cannot pull parked content and
+cannot submit to any session); the vouched-pubkey set is never pruned (deliberate and not
+attacker-inflatable, but unbounded over a relay's lifetime, unlike every other map in the relay);
+and `denyInboundRelayedConnection` — the reservation-holder's own side — is still uninstalled,
+defense-in-depth that belongs with the daemon's gater rather than the relay's.

@@ -645,28 +645,11 @@ one could ship safely. **Neither of these is visible to `sealReadiness` today.**
 ### `DOD-M15-RESPONDER-VERIFY-1` — ✅ The responder stops trusting a key it never checked
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RESPONDER-VERIFY-1`.
 
-### `DOD-M15-RELAYAUTH-1` — ❌ No relay service without a directory-issued assignment
-**Depends on `DOD-M15-ASSIGN-1`** — the client must be presenting a verified assignment before the
-relay can require one. Decision 3(b): the relay **verifies a credential the caller presents** and
-learns nothing itself; it does not query the directory. This preserves extractability — a private
-enterprise relay stays a signature-verifier rather than becoming a directory client.
-- Relay service requires an assignment naming the caller as a participant — **including collecting
-  parked content**, where the original session's assignment is the credential the caller already
-  holds.
-- **The liveness query is scoped.** Today it has no participant check and no session check: it
-  carries a session id the handler never looks at and answers from a **global** map, so anyone with
-  a list of pubkeys can build a live map of who is active and when. Requires the caller to be a
-  named participant, and answers only for that session.
-- **The relay verifies that an authenticating key is a registered agent**, rather than accepting any
-  Ed25519 keypair.
-
-> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
-- **A connection gater on the relay, including the reservation-dial hook.** Reservations are granted
-  to any peer up to 4096, and the hook restricting who may dial *through* to a reservation holder is
-  never installed — so an agent's circuit address is dialable by anyone who learns it. **This is the
-  relay-side twin of the receiver gate**; without it that gate closes the direct route while the
-  circuit route stays open.
-- **Enforcer:** stranger, on the circuit path as well as the direct one.
+### `DOD-M15-RELAYAUTH-1` — ✅ No relay service without a directory-issued assignment
+> **Closed 2026-09-01** (`002-RELAY`, with its third work item completed by `008-RELAY`). Two review
+> passes; pass 2 refused the merge on a gate that denied the LEGITIMATE first dial. Full entry —
+> verdicts, findings and what the fixes cost — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under
+> `DOD-M15-RELAYAUTH-1`. → Entry S15.
 
 ### `DOD-M15-SWEEP-1` — 🅿️ The checked-then-ignored class is hunted, not patched
 **Trigger: after `DOD-M15-FRAME-1` and Tier 4's seal change**, so the sweep hunts the unknown
