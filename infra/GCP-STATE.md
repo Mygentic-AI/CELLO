@@ -146,6 +146,22 @@ alert reads as coverage:
 > not installed on this machine (it stops to ask). The `alpha` form is verified working; `curl`
 > against `v3/projects/cello-infra/notificationChannels` needs no component at all.
 
+> ### 🔔 WHAT IS **NOT** PROVEN: NO NOTIFICATION HAS EVER BEEN DELIVERED THROUGH THIS CHANNEL
+> Stated plainly because everything else here is green and this is the gap. What IS proven: both
+> policies exist and are enabled with the intended thresholds; the metrics behind them are arriving;
+> and real historical data crossed the CPU threshold for 3,090 consecutive minutes, so the condition
+> demonstrably can evaluate true. What is NOT proven is the last hop — **that an incident on this
+> channel actually lands in a mailbox.** A channel that accepts creation and silently drops mail
+> looks identical to a healthy one from every check above.
+>
+> It was not forced, deliberately: firing it means either a throwaway policy created by hand (this
+> file's rule is that nothing exists outside Terraform) or an hour of synthetic load on a production
+> node, and either way it emails at 1am for a drill.
+>
+> **The cheap way to close it is a human one-click:** Cloud Console → Monitoring → Alerting →
+> Notification channels → the `CELLO operator — node health` row → **Send test notification**. Until
+> someone does that, treat node-health alerting as wired-and-plausible rather than proven.
+
 > ### 📏 THE MEMORY METRIC READS IN 50 MB STEPS, AND SLIGHTLY HIGH
 > Verified after the apply: the metric returns **3 series, one per `node_id`** (which is what proves
 > the label extractor works), and all three reported the same `306688 KB` while the raw log lines
