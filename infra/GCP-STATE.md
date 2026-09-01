@@ -1261,13 +1261,43 @@ capability, and this Telegram bot is the ONLY thing that issues one to a human �
 
 | | |
 |---|---|
-| Cloud Run | `cello-ops-agent`, us-east1, `INGRESS_TRAFFIC_INTERNAL_ONLY`, image **`ops-01b5fd5e`** (built 2026-08-09; revision **`cello-ops-agent-00017-7v6`** since 2026-08-31 — same image, env-only change, see the outage below) |
+| Cloud Run | `cello-ops-agent`, us-east1, `INGRESS_TRAFFIC_INTERNAL_ONLY`, image **`ops-11941353`** (built 2026-09-01, Cloud Build `320f17d9`; revision **`cello-ops-agent-00018-bjv`**) |
 | Scaling | **min = max = 1, `cpu_idle = false`** — the Telegram adapter long-polls, so it needs a process between requests; two instances would race for the same update; a throttled poll loop goes deaf while looking healthy |
 | Directory | `http://10.10.0.35:8081` (gcp-use1 internal) + that node's own internal API key |
 | Database | `cello-ops-agent-database-url` → gcp-use1 Cloud SQL over PSC as **`cello_ops_agent`** (V26's least-privilege role — never the `postgres` owner, never `cello_service`). **No cross-cloud DB connection** |
 | Migration version | **63** as of 2026-08-31 (was 62; the .tf default was bumped to 63 on 2026-08-22 but never applied — that gap is the outage below). Set by `ops_agent_expected_migration_version` in `infra/terraform/ops-agent.tf`, asserted at startup as an EXACT match |
 | Per-node health | `DIRECTORY_HEALTH_URLS` → all three nodes' `/health` on 9090, **every 5 minutes**, after the port opens. Verified live: `3/3 nodes at schema 57`, and it caught both a real transient (`unreachable: 10.10.1.25 (timeout after 5000ms)` during a node roll) and its recovery |
 | Verified | `ops_agent.started`, `ops_agent.telegram.connected`, `telegram.polling.started`, `ops_agent.health_server.started` |
+
+### 2026-09-01 — deployed `ops-11941353`: the re-prompt loop that sent one user 57 messages overnight
+
+**Image:** `ops-11941353` (Cloud Build `320f17d9-b76b-4986-91ed-94f60a26f251`), revision
+`cello-ops-agent-00018-bjv`. **No migration, no node roll** — the fix stores its state in the
+existing `state_data` JSONB column specifically so that ending a message loop would not require
+rolling three sovereign nodes. Schema stays 63 and `ops_agent_expected_migration_version` is
+unchanged.
+
+**What it carries.**
+- `DOD-M15-CONTACTNAG-1` — the point of the deploy. The AWAITING_CONTACT sweep re-prompted every
+  stuck registration every ten minutes with no cap and no terminating condition, and
+  `resendContactPrompt` reset `expires_at` to `now + 7 days` on every prompt, so the expiry sweep
+  could never retire the record. Andre received **57 identical messages** between 20:16 and 05:49.
+  Now: two reminders per cycle (+10 min, +70 min) then silence, the cycle restarting only when the
+  user speaks; reminders no longer touch `expires_at`; every reminder is logged
+  (`registration.contact_prompt.resent`). The counter is durable because the engine reloads all
+  active records at startup — an in-memory one would reset on every Cloud Run recycle.
+- `DOD-M15-SIGNUP-1` and `DOD-M15-SIGNUP-DURABLE-1` — the per-requester signup throttle and its
+  durable backing, undeployed since 2026-08-22. These are what V63's `otp_send_log` exists for, so
+  the running code and the schema are finally the same generation. Bundled deliberately, with Andre
+  choosing the bundle over a divergent build.
+
+**Handover note:** both revisions long-poll `getUpdates` during the swap, so
+`telegram.poller.conflict.transient` appears on BOTH for ~20 seconds until the old revision logs
+`ops_agent.shutting_down`. That is the documented backoff working, not a fault.
+
+**Verified after the roll:** `cello-ops-agent-00018-bjv` is `latestReady` and holds 100% traffic;
+`ops_agent.started`, `ops_agent.telegram.connected`, `registration.state.recovered` and
+`ops_agent.nodes.ok — 3/3 nodes at schema 63` all logged at 06:08:03Z; no `ops_agent.startup.failed`.
 
 ### 2026-08-31 — the registration bot was down for 5 days, and the trap above sprang exactly as written
 
