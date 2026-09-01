@@ -2,7 +2,7 @@
 name: 004-RELAY — Three admin frame types with no sender
 type: micro-work-order
 date: 2026-08-24
-status: open
+status: complete
 description: >
   The directory→relay admin stream accepts four frame types. Only one has a caller. Delete the two
   that provably have none, and check the deployed fleet before touching the third. Source:
@@ -189,6 +189,11 @@ triage: all five, no live coverage orphaned.
    with all three handlers restored — the deletion was not self-defending. Now covered on both sides,
    and revert-tested: restoring the `confirm_seal` handler reddens the new test with *"promise
    resolved { type: confirm_ok } instead of rejecting"* while the other eight stay green.
+
+**✅ CLOSED 2026-09-01.** Deletion complete and merged. Re-reviewed on Opus (the only unit in this
+milestone still resting on a Sonnet verdict); all four findings fixed and revert-tested.
+
+---
 
 ## Newly discovered
 

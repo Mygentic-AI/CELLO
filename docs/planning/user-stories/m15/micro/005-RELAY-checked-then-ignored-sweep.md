@@ -2,7 +2,7 @@
 name: 005-RELAY — The checked-then-ignored sweep, RELAY PACKAGE ONLY
 type: micro-work-order
 date: 2026-08-24
-status: open
+status: complete
 description: >
   Six times this milestone found a security check that runs, gets the right answer, and is then
   ignored. This sweeps every frame handler and every verification call IN THE RELAY PACKAGE for the
@@ -247,6 +247,12 @@ assignment TBS branch cannot be played in either direction; `hash_submit` and
 though the sweep's stated REASON for that was wrong (it cited a `content.park.deposit.unattributed`
 warn that, if no production path can produce an absent peer id, can never fire in production; the
 branch is safe because of the libp2p `StreamHandler` type, full stop).
+
+---
+
+**✅ CLOSED 2026-09-01.** Sweep complete and merged; the security conclusion was independently
+confirmed on re-review, and all four re-review items are done — three record corrections and one
+code fix (`7d1040c0`).
 
 ---
 
