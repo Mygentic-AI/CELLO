@@ -314,6 +314,40 @@ describe("DOD-M15-RELAYSLOTS-1 clause 0: an attacker cannot hold reservation slo
     expect(warned[0]?.fields["asksWithoutProving"]).toBe(2);
   });
 
+  it("★★★ the proof bookkeeping does not grow forever on ordinary traffic", () => {
+    vi.useFakeTimers();
+    try {
+      const { gater, reserve, connected } = makeGater();
+
+      /**
+       * Two populations, neither of which ever comes back to reserve — and each used to leave an
+       * entry behind permanently.
+       *
+       * Session nodes: a delivery auth used to write a proof. A session node dials in, submits a
+       * leaf, and is gone; it never asks for a reservation, so nothing ever read or removed that
+       * entry. No attacker required — this is what a busy relay does all day.
+       *
+       * Refused strangers: each one leaves a refusal counter.
+       */
+      for (let i = 0; i < 200; i++) {
+        connected.add(`session-node-${String(i)}`);
+        gater.admitSlot(`session-node-${String(i)}`, "aa".repeat(32), false);
+      }
+      for (let i = 0; i < 200; i++) reserve(`stranger-${String(i)}`);
+
+      vi.advanceTimersByTime(PROVEN_PEER_MEMORY_MS + 1);
+      gater.reapIdleSlots(); // what the relay's idle sweep calls
+
+      expect(
+        gater.proofBookkeepingSize(),
+        "unbounded growth has no behaviour to assert against — the relay goes on working correctly " +
+          "while its memory climbs, which is why deleting the sweep left every other test green.",
+      ).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("one agent's cap is not spent by another's slots", () => {
     const { gater, connected } = makeGater();
     for (let i = 0; i < SLOT_CAP_PER_AGENT; i++) {

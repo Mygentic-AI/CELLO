@@ -287,6 +287,19 @@ export class RelayConnectionGater implements ConnectionGater {
   }
 
   /**
+   * How many entries the proof bookkeeping is carrying.
+   *
+   * ⚠️ This exists because the alternative was an unobservable defect. Both maps behind it leaked —
+   * written on every authentication, removed only if that same peer came back to reserve, which a
+   * session node never does — and unbounded growth has no behaviour to assert against: the relay
+   * keeps working, correctly, while its memory climbs. Deleting the sweep left every test green.
+   * A number that can be read is what turns "it grows forever" into something a test can fail on.
+   */
+  proofBookkeepingSize(): number {
+    return this.#provenPeers.size + this.#unprovenAsks.size;
+  }
+
+  /**
    * Traffic flowed over this peer's slot. Called from the relay's own submit path, which is the one
    * place that cannot be mistaken about it.
    */
