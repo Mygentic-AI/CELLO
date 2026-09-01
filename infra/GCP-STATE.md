@@ -118,9 +118,18 @@ alert reads as coverage:
 > **2 destroys and 6 changes against the relay**, none of them from this work — that is the in-flight
 > roll's drift, and sweeping it in is how a monitoring change becomes a relay outage.
 >
-> The email channel also needs **one manual confirmation click** — GCP sends a verification mail to
-> `alert_operator_email` and an unverified channel silently delivers nothing, which is this file's
-> favourite failure mode wearing a green badge.
+> **Then check the channel is VERIFIED, and do not assume it.** Monitoring reports a
+> `verification_status` on every channel, and the API's own words are that `UNVERIFIED` means the
+> channel is **non-functioning** — it delivers nothing while the policy above it looks perfectly
+> healthy, which is this file's favourite failure mode wearing a green badge. An email channel may
+> need a confirmation click on a mail GCP sends to the address. One command settles it:
+>
+> ```bash
+> gcloud beta monitoring channels list --project cello-infra \
+>   --format='value(type,displayName,verificationStatus)'
+> ```
+>
+> A status other than `VERIFIED` on a type that requires it means both alerts are wired to nothing.
 
 **What was verified before each policy was written** (the work order's central instruction — a
 policy against a metric that never arrives is indistinguishable from a healthy fleet):

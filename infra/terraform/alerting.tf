@@ -269,6 +269,12 @@ variable "alert_operator_email" {
   description = "Where node-health alerts are delivered. Same person as ops_dashboard_operator_email, kept as its own variable because the two are unrelated concerns and overloading one would hide a change to either."
 }
 
+# ⚠️ A CHANNEL THAT EXISTS IS NOT A CHANNEL THAT DELIVERS. Monitoring's own description of
+# `verification_status` is that UNVERIFIED means the channel is NON-FUNCTIONING — it delivers
+# nothing, while every policy pointing at it still reads as configured. After the first apply,
+# confirm it rather than assuming:
+#   gcloud beta monitoring channels list --project cello-infra \
+#     --format='value(type,displayName,verificationStatus)'
 resource "google_monitoring_notification_channel" "operator_email" {
   display_name = "CELLO operator — node health"
   type         = "email"
