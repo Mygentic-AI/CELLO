@@ -101,10 +101,21 @@ What would actually work, and the tradeoff each carries:
 1. **Implement 002's clause 2** — require the authenticating key to be one a directory-signed
    assignment names. This removes the attack at its root: throwaway keypairs stop being admissible.
    It is the real fix, and it is a bigger change than this order.
-2. **Cap reservations held by peers that have NOT yet proven key possession** (say, a quarter of the
-   table), so proven agents always have slots. Effective and local to the gater. **But it denies a
-   legitimate brand-new agent whenever the unproven pool is saturated** — exactly the failure mode
-   the gater header warns about, softened but not eliminated.
+2. ~~**Cap reservations held by peers that have NOT yet proven key possession.**~~ **WITHDRAWN
+   2026-09-01 — this does not work, and the earlier note calling it "effective" was wrong.** Proving
+   key possession only means holding *a* keypair, and the attacker's throwaway keys are real keys, so
+   they authenticate successfully, cancel their own revoke timer, and leave the unproven pool
+   immediately. Capping that pool therefore bounds nothing except a burst inside the ~15s grace
+   window — and those reservations were already being reclaimed. It would have added a real risk of
+   denying brand-new agents in exchange for stopping an attack nobody would run.
+2b. **Cap reservations held by peers that are not VOUCHED** — named by a directory-signed assignment
+   this relay has recorded — rather than merely authenticated. This is the version that bites, because
+   vouching is the thing an attacker cannot mint. It is also newly cheap: `DOD-M15-RELAYAUTH-1` built
+   a durable vouched-key store for the content-park gate, so the data already exists and survives
+   restarts. **The cost is real and must not be glossed:** an agent that has never yet held a session
+   is legitimately un-vouched, so it competes in the capped pool. It degrades (slower to become
+   reachable under flood) rather than failing outright, but a first-run agent is exactly the user
+   least able to diagnose it.
 3. **Limit by IP or subnet** — the standard answer, because addresses are the one thing an attacker
    cannot vary for free. Needs the remote multiaddr, which the reservation hook does not currently
    receive, so it is a new plumb.
