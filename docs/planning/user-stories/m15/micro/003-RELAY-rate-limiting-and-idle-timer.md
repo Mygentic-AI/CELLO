@@ -225,6 +225,73 @@ rather than waiting out the TTL. Refuse only at the absolute ceiling.
 > counting mistake costs an idle slot; refusing first means it costs a real agent its front door.
 > When unsure whether a slot is in use, treat it as in use.
 
+### 🔴 TWO NON-NEGOTIABLES — these govern everything below (Andre, 2026-09-01)
+
+**1. EVERY refusal names its cause, and that cause reaches the human and the LM.** Not a log line on
+the relay. Not `relay_unavailable`. The reason must survive every hop back to the operator, so that
+someone who runs `cello_use_agent` and gets rebuked learns *why* they were rebuked.
+
+**And every refusal carries an affordance — what to DO about it — chosen for that specific cause.**
+Refused because you already hold an unused standing receiver? Perhaps restart the daemon. Refused
+because you have too many sessions open with one counterparty? Then say how many, and which, so they
+can close some.
+
+> **The reason this matters more here than it looks: people do not know what sessions they have
+> open.** Sessions fall apart and sit there — idle, unreachable, still counted. Every cap on this
+> list will therefore be hit by someone who believes they have nothing open. A refusal that does not
+> show them the state it is refusing on is a dead end, and they will read it as the product being
+> broken. Affordances are not polish here; they are what makes these caps usable at all.
+
+**2. The reaper NEVER touches a session with activity in the last SIX HOURS.** That is a floor, not a
+tuning parameter. Under pressure the reaper takes the quietest slots first and stops at that line —
+if everything is inside six hours, it refuses at the ceiling instead of reaping a live conversation.
+
+**And a reaped party must be TOLD.** Silent teardown is how "my agent just stopped working" happens.
+The notice says the session was closed to reclaim capacity, and what to do — reconnect, or start a
+new session.
+
+---
+
+### Build checklist
+
+**State the relay must hold per slot** — none of this exists today:
+the agent's public key from the token (without this nothing else here is countable); whether traffic
+has ever flowed and when it last did; whether an assignment naming this slot's node was presented;
+granted-at time.
+
+**Indexes:** slots per agent key; unused slots per agent key; concurrent sessions per identity pair;
+total in use against the ceiling.
+
+**Checks at slot-grant time:** token signature verifies against configured directory keys; token
+names the same key completing the challenge-response; token not expired; **refuse outright if no
+directory key is configured**; per-agent cap not exceeded; if the agent already holds an unused slot,
+release or reuse it rather than granting a second.
+
+**Check at session-record time:** tuple cap not exceeded for this identity pair.
+
+**Every path that must free a slot:** session sealed; idle timeout fires; **client disconnects** —
+today the slot is held for its full TTL regardless; agent re-reserves while holding an unused slot;
+reaper fires under pressure; and every other way a session ends, which is what the audit in part 2 is
+for.
+
+**Caps, starting values:** unused slots per agent 1; total slots per agent per relay 32; concurrent
+sessions per identity pair 5; reaper threshold some fraction of the ceiling; hard ceiling 4096,
+refusing only there.
+
+**Guards that must not be violated:** never refuse before reaping; never treat an ambiguous slot as
+idle — when unsure, in use; never fail open when verification is impossible; never leave a slot
+permanently exempt from counting, so every "in use" needs a demotion path.
+
+**Client changes:** present the token when reserving; refresh it over the existing signaling stream;
+**re-present the session assignment as part of reconnecting**, not as a reaction to a failed submit —
+that is what removes the cold-start ambiguity after a relay restart.
+
+**Directory change:** issue a short-lived token bound to the agent's public key when it marks the
+agent online.
+
+**Observability:** every refusal logged with reason and agent key; every reap logged with what was
+freed and why; slot-table occupancy exposed with an alarm before the ceiling.
+
 **⚠️ A PROPOSAL, not work for this order.** It touches directory, client and relay, so it needs its
 own work order to build. 003 carries the decision, not the implementation.
 
