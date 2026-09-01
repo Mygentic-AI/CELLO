@@ -92,6 +92,18 @@ export interface SignalingAuthOk {
    * Absent on pre-NAT-REACHABILITY directories and when no relay is known.
    */
   relay_endpoints?: Array<{ peer_id: string; multiaddrs: string[] }>;
+  /**
+   * DOD-M15-RELAYSLOTS-1: the credential the relays listed above now require before they will let
+   * this agent hold a circuit reservation slot. Signed by this node's own key over the agent's
+   * public key and an expiry; the client stores the bytes and presents them verbatim when it
+   * authenticates to a relay, without ever parsing them.
+   *
+   * ⚠️ Present ONLY for a key with an agent profile on this node. Completing the signaling handshake
+   * proves key possession and nothing more — the same thing a relay can already check for itself —
+   * so issuing on authentication alone would make the token worthless. Absent means "not known here
+   * to be a registered agent", which is also what a pre-token directory looks like.
+   */
+  online_token?: Uint8Array;
 }
 
 /** M7-MANIFEST-002: Client requests a fresh manifest from the directory. */

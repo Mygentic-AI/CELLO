@@ -78,6 +78,12 @@ export function encodeSignalingAuthOk(frame: SignalingAuthOk): Uint8Array {
   if (frame.relay_endpoints !== undefined && frame.relay_endpoints.length > 0) {
     obj["relay_endpoints"] = frame.relay_endpoints;
   }
+  // DOD-M15-RELAYSLOTS-1: omitted when this key is not a registered agent here — see the field's
+  // note on SignalingAuthOk. An omitted field and an empty one must not be confused: the client
+  // treats absence as "no slot for me", and a zero-length token would be a malformed one.
+  if (frame.online_token !== undefined && frame.online_token.length > 0) {
+    obj["online_token"] = frame.online_token;
+  }
   return ENC.encode(obj);
 }
 
