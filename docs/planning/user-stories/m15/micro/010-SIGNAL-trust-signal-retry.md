@@ -15,8 +15,10 @@ description: >
 
 > ## THE RULES OF A MICRO WORK ORDER
 >
-> 1. **This file is the whole world.** Do not read or write `M15-DEFINITION-OF-DONE.md`,
->    `M15-BUILD-JOURNAL.md`, or any other milestone document. Everything you need is here.
+> 1. **Read [[M15-PROCEDURE]] IN FULL before you start.** It is the working discipline for this
+>    milestone and it binds you — the gate, the review dispatch, the invariants, how tests are run.
+>    **Do not read `M15-DEFINITION-OF-DONE.md` or `M15-BUILD-JOURNAL.md`**; this order carries
+>    everything you need from them.
 > 2. **MICRO means small.** One mission. Follow it to its end. **Never grow the mission.**
 > 3. **Found something else?** Write it under *Newly discovered* at the foot of this file and
 >    **keep going**. Do not fix it. Do not open a line for it. Do not investigate it.
@@ -24,17 +26,6 @@ description: >
 > 5. **Standard procedure still applies:** implement → review (`cello-unit-reviewer`) → fix every
 >    finding → commit. Commit per fix, push after every commit.
 > 6. **Done is done.** When the Definition of Done below is met, stop. Do not look for more.
-
-> ## 🔋 MACHINE BUDGET — READ THIS BEFORE YOU RUN ANYTHING
->
-> **This laptop is shared with other sessions and its battery was driven flat once tonight by too
-> many processes at once.**
->
-> - **Never run the spine/e2e suite** (`test:spine`, anything under `packages/e2e-tests`). It spawns
->   directory clusters, relays and multiple daemons as real OS processes. Not yours to run.
-> - **Smallest scope that answers the question:** `npx vitest run core/daemon/src/__tests__/<file>`.
-> - **One test run at a time.** A hook enforces it. Capture a run to a file and READ the file rather
->   than re-running to recover a failure name.
 
 ---
 
