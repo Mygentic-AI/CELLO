@@ -291,6 +291,24 @@ reported exit 0 against a test calling methods that did not exist, because the f
 daemon's typecheck allowlist. A deliberate `const x: number = "not a number"` in the same file also
 reported exit 0 — which is what proved the gate could not see the file at all.
 
+## Revert proofs — Part 2 (slot accounting)
+
+Same discipline: one mutation at a time, typechecked and linted before running, then restored.
+`git diff` empty in both repos afterwards, verified.
+
+| Mutation | What reddened | Reason it gave |
+|---|---|---|
+| Per-agent cap never refuses | 2 — the ledger test and the over-the-wire one | `expected true to be false` on the cap; `relay_auth_ok` where a refusal was due |
+| Reaper's six-hour activity floor removed | 2 — the floor test and the never-used-slot test | `expected [ { peerId: 'peer-0' } ] to deeply equal []` |
+| Tuple cap never refuses | 4 of 5 tuple tests | `{ ok: true }` where a refusal was due |
+| Every refusal fails over to another relay | 3 — including the slot-cap and unknown-reason defaults | `expected true to be false` |
+| **Reclaim floor removed** | 2 — the ledger test AND the pre-existing reservation-purpose test | `expected 'timeout' to be 'leaf_deliver'` |
+
+**The last one is the one to read.** Removing the five-minute reclaim floor does not merely fail an
+assertion — it reproduces the production symptom exactly: a live receiver waits for its
+counterparty's message and it never arrives, because the ledger hung its slot up. That mutation is
+also how the fault was found in the first place, by an existing test written for something else.
+
 ## Review
 
 *(Reviewer verdict. One quote. Not a transcript.)*
