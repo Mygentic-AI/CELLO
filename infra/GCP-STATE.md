@@ -145,6 +145,34 @@ alert reads as coverage:
 > **`alpha`, not `beta`** — there is no GA `gcloud monitoring channels`, and the `beta` component is
 > not installed on this machine (it stops to ask). The `alpha` form is verified working; `curl`
 > against `v3/projects/cello-infra/notificationChannels` needs no component at all.
+>
+> ⚠️ **That command prints the status column BLANK, and a blank is ambiguous to a skimmer.** It is
+> blank because the field is absent, which here means "type does not require verification" — but a
+> blank is what you would also see if you had simply not looked properly. If you need to tell the
+> two apart, read the raw object, where an absent key and an `UNVERIFIED` value are plainly
+> different things:
+> ```bash
+> curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+>   https://monitoring.googleapis.com/v3/projects/cello-infra/notificationChannels \
+>   | python3 -c 'import json,sys;[print(c["type"], "verificationStatus" in c, c.get("verificationStatus")) for c in json.load(sys.stdin)["notificationChannels"]]'
+> ```
+
+> ### 🔕 A DEAD DIRECTORY PROCESS USED TO SILENCE BOTH ALERTS — closed 2026-09-01
+> Worth knowing because the fix is one attribute and the failure was total. Monitoring defaults to
+> `EVALUATION_MISSING_DATA_INACTIVE` — no data means not violating. The sampler is
+> `PID=$(pgrep -f 'node .*directory'); [ -z "$PID" ] && exit 0`, so a directory process that has died
+> or is crash-looping emits **no** memory samples and the series disappears rather than climbing;
+> and a dead process burns no CPU, so `COMPARISON_GT` on cores never trips either. **Both alerts went
+> quiet together on a node that is not running.**
+>
+> The memory condition now carries `evaluation_missing_data = "EVALUATION_MISSING_DATA_ACTIVE"`, so
+> 30 minutes of silence from a node raises the same email. **Only the memory one**, deliberately: it
+> groups by `node_id` which survives instance replacement, whereas the CPU condition is per instance
+> and instances legitimately vanish on every roll — ACTIVE there would email once per replaced
+> instance, every deploy. Verified live: memory `ACTIVE`, CPU unset.
+>
+> **Accepted cost:** a node genuinely down for over 30 minutes now emails. During a capacity-stalled
+> roll that will happen, and it is the intended behaviour — a node down half an hour is news.
 
 > ### 🔔 WHAT IS **NOT** PROVEN: NO NOTIFICATION HAS EVER BEEN DELIVERED THROUGH THIS CHANNEL
 > Stated plainly because everything else here is green and this is the gap. What IS proven: both
