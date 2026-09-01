@@ -128,11 +128,9 @@ What would actually work, and the tradeoff each carries:
 
 ### ⭐ PROPOSAL — the online token (Andre, 2026-09-01)
 
-**A rule was overruled to get here.** 002-RELAY carries "the relay verifies a credential the caller
-presents, it does NOT query the directory" as settled. Andre overruled it: the relay already
-registers with the directory, submits seals to it, and asks it for other relays' public keys, so
-"never talks to the directory" was never true of the code. **The rule is now: prefer not to talk to
-the directory, but for security or expediency it is allowed.**
+Note: 002-RELAY's "the relay does not query the directory" is a preference for keeping that unit
+focused, not a prohibition — the relay already talks to the directory for several things. Prefer not
+to, but it's fine where it helps.
 
 **What this rests on: the directory already knows you started, one step before you need it to.**
 Startup order is — daemon opens a persistent signaling stream to the directory → directory
