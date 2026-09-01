@@ -1,22 +1,22 @@
 ---
-name: M15 relay micro orders closed; 006-RELAY slot flooding is next — follow-through
+name: M15 relay micro orders closed; 008-RELAY slot flooding is next — follow-through
 type: discussion
 date: 2026-09-01
 status: current
 topics: [m15, relay, micro-work-orders, reservations, slot-flooding, relayauth, relayabuse, compaction, follow-through]
 description: >
   All four M15 relay micro orders (002/003/004/005) are closed and merged. The next unit is
-  006-RELAY, an agent cannot flood a relay's reservation slots, whose full design was worked out in
+  008-RELAY, an agent cannot flood a relay's reservation slots, whose full design was worked out in
   conversation on 2026-09-01 and written into the order. This carries the exact state, the design
   decisions and why the rejected options were rejected, and the one filing problem to resolve first.
 ---
 
-# M15 relay orders closed; 006-RELAY is next (2026-09-01)
+# M15 relay orders closed; 008-RELAY is next (2026-09-01)
 
 ## Read these first, in this order
 
 1. `docs/planning/user-stories/m15/M15-PROCEDURE.md` — the SOP. Still governs.
-2. **`docs/planning/user-stories/m15/micro/006-RELAY-reservation-slot-flooding.md`** — the next unit.
+2. **`docs/planning/user-stories/m15/micro/008-RELAY-reservation-slot-flooding.md`** — the next unit.
    It is self-contained: both attacks, the token, the slot accounting, two non-negotiables, a build
    checklist, and its own DoD.
 3. This document, for what spans the orders and for the reasoning that did not fit in 006.
@@ -28,10 +28,12 @@ description: >
 
 | Repo | Branch | HEAD |
 |---|---|---|
-| trustless-cello | `main` | `257f33a1` |
+| trustless-cello | `main` | `5ad6ad58` (this document's own commit) |
 | cello-client | `main` | `9d1ee85` |
 
-Both trees clean, both level with origin. **No open branches** — every M15 relay branch is merged.
+Both level with origin. **No open branches** — every M15 relay branch is merged. cello-client's tree
+is clean; trustless-cello's carries the OTHER LANE's uncommitted `packages/operations-agent/` work,
+so commit by explicit path and never `git add -A`.
 
 | Order | Status |
 |---|---|
@@ -39,17 +41,15 @@ Both trees clean, both level with origin. **No open branches** — every M15 rel
 | `003-RELAY-rate-limiting-and-idle-timer.md` | **complete** |
 | `004-RELAY-admin-dead-frames.md` | **complete** |
 | `005-RELAY-checked-then-ignored-sweep.md` | **complete** |
-| `006-RELAY-reservation-slot-flooding.md` | **open — this is the next unit** |
+| `008-RELAY-reservation-slot-flooding.md` | **open — this is the next unit** |
 
-## 🔴 Resolve this before starting: the order number collides
+## ✅ The order number collision is RESOLVED — it is `008-RELAY`
 
-**There are two 006s.** `006-CRYPTO-close-out-our-own-encryption.md` already existed when
-`006-RELAY-reservation-slot-flooding.md` was created, and `007-CRYPTO` exists too. So "start 006" is
-ambiguous, and the next free number in a single sequence is **008**.
-
-I created the collision and did not catch it until after Andre had already adopted the name "006".
-**Ask him whether to rename it to `008-RELAY` or keep per-lane numbering**, and do that before any
-work, because renaming later breaks every reference. Nothing else depends on the answer.
+It was created as `006-RELAY` while `006-CRYPTO-close-out-our-own-encryption.md` already existed (and
+`007-CRYPTO` after it), so "start 006" was ambiguous. **Andre ruled on 2026-09-01: one flat sequence
+across all lanes, so it is renamed to `008-RELAY-reservation-slot-flooding.md`.** References in this
+document and in 002/003 were updated in the same commit. If you see "006" for slot flooding anywhere,
+it predates the rename.
 
 ## What is DONE (all merged to `main` in both repos)
 
@@ -72,7 +72,7 @@ Gate at close: **2350 passing** (trustless-cello, `CELLO_ENV=local` with Postgre
 ## 002's second work item was MOVED, not done
 
 002's work section had three items. **Item 2 — "verify the authenticating key is a registered agent"
-— was never implemented.** It is now Part 1 of 006-RELAY. Closing 002 did not close that work.
+— was never implemented.** It is now Part 1 of 008-RELAY. Closing 002 did not close that work.
 
 **How it went missing is the reusable lesson: 002's Definition of Done had no clause for it.** All
 six clauses passed and all six were about something else, so the order read as fully done while a

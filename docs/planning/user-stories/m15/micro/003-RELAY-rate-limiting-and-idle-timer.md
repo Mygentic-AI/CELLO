@@ -120,15 +120,15 @@ What would actually work, and the tradeoff each carries:
    cannot vary for free. Needs the remote multiaddr, which the reservation hook does not currently
    receive, so it is a new plumb.
 
-4. **⭐ RECOMMENDED — an online token, issued at agent start. Now `006-RELAY`.**
+4. **⭐ RECOMMENDED — an online token, issued at agent start. Now `008-RELAY`.**
 
 **Recommendation as of 2026-09-01: option 4.**
 
 ---
 
-**The full design is extracted to `006-RELAY-reservation-slot-flooding.md`** — it outgrew this order
+**The full design is extracted to `008-RELAY-reservation-slot-flooding.md`** — it outgrew this order
 and is not this order's mission: it changes the directory, the client and the relay. 003 carries the
-decision; 006 carries the design and the work.
+decision; 008 carries the design and the work.
 
 In one paragraph: a directory-signed token, issued when the directory marks an agent online and bound
 to that agent's public key, is presented when asking for a slot. That stops minted keys. It is not
@@ -189,7 +189,7 @@ infrastructure-level flood protection, anything in the directory or the client.
 **✅ CLOSED 2026-09-01.** All seven clauses met; all eight findings from the Opus re-review fixed and
 revert-tested. Work item 4 (reservation rate limiting), which was added to this order's mission on
 2026-08-31, is **not** unfinished business here — it outgrew a relay-only order and was extracted to
-`006-RELAY-reservation-slot-flooding.md`, which carries the design and the work. The decision trail
+`008-RELAY-reservation-slot-flooding.md`, which carries the design and the work. The decision trail
 for it stays above, so the options that do not work are not re-derived.
 
 ---

@@ -56,11 +56,11 @@ a participant.
   messages belong to — the caller already holds it. This is not an exemption, it is a credential
   they already have.
 
-### 2. Verify the authenticating key is a registered agent — ⛔ NOT DONE HERE, MOVED TO `006-RELAY`
+### 2. Verify the authenticating key is a registered agent — ⛔ NOT DONE HERE, MOVED TO `008-RELAY`
 Today any Ed25519 keypair authenticates. It must be a key the presented assignment names.
 
 **This was never implemented in this order, and the Opus re-review caught it.** It is now Part 1 of
-`006-RELAY-reservation-slot-flooding.md`, which solves it with a directory-issued token bound to the
+`008-RELAY-reservation-slot-flooding.md`, which solves it with a directory-issued token bound to the
 agent's public key rather than with a session assignment — because an assignment only exists after a
 session, so a brand-new agent has none at the moment it first needs one.
 
@@ -157,8 +157,8 @@ directory. **Client-side scope was widened by Andre mid-unit** (see above) — t
 
 **✅ CLOSED 2026-09-01.** Work items 1 and 3 are done, merged, and re-reviewed; every finding from
 both review passes is fixed and revert-tested. **Work item 2 is NOT done and is not counted as
-done** — it moved to `006-RELAY`, which carries it as Part 1. Closing this order does not close that
-work; 006 does.
+done** — it moved to `008-RELAY`, which carries it as Part 1. Closing this order does not close that
+work; 008 does.
 
 ---
 

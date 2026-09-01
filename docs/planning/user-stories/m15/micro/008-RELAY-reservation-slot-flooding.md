@@ -1,5 +1,5 @@
 ---
-name: 006-RELAY — An agent cannot flood a relay's reservation slots
+name: 008-RELAY — An agent cannot flood a relay's reservation slots
 type: micro-work-order
 date: 2026-09-01
 status: open
@@ -10,7 +10,7 @@ description: >
   for slots per agent and per identity pair. Extracted from 003-RELAY, which carries the decision.
 ---
 
-# **<ins>MICRO</ins>** WORK ORDER 006-RELAY — An agent cannot flood the reservation slots
+# **<ins>MICRO</ins>** WORK ORDER 008-RELAY — An agent cannot flood the reservation slots
 
 > ## THE RULES OF A MICRO WORK ORDER
 >
