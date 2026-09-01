@@ -50,49 +50,7 @@ import type { CelloNode } from "@cello-protocol/transport";
 import type { Logger } from "@cello-protocol/interfaces";
 import { truncId } from "./protocol-log.js";
 
-/**
- * Default grace window for an unproven reservation holder. Generous relative to how fast a
- * well-behaved client authenticates (it does so as its very next action after reserving — no
- * user-perceptible delay), tight enough that a relay does not carry dead-weight reservations for
- * long. A judgement call; overridable per deployment.
- */
-export const DEFAULT_RESERVATION_GRACE_MS = 15_000;
-
-/**
- * DOD-M15-RELAYSLOTS-1 — the most reservation slots one registered agent may hold on one relay.
- *
- * An agent legitimately holds roughly one slot per live conversation plus one waiting: the receiver
- * promoted into a session, and the replacement built behind it. Thirty-two is generous against that
- * and still bounds the flood: filling a 4096-slot table would take about 128 registered agents, and
- * registration is email-gated and involves a threshold ceremony, so they are not free the way
- * keypairs are.
- *
- * The number is a judgement call and is meant to be revisited with real occupancy data. What is NOT
- * a judgement call is that reclaiming happens before refusing — see `admitSlot`.
- */
 export const SLOT_CAP_PER_AGENT = 32;
-
-/**
- * DOD-M15-RELAYSLOTS-1 — the minimum age before a traffic-free slot may be reclaimed.
- *
- * ⚠️ **THIS IS THE WEAKER HALF OF THE GUARD AND MUST NOT BE RELIED ON ALONE.** It shipped first as
- * the *whole* guard and review measured that it does not do the job.
- *
- * The story is worth keeping because the rule read as obviously correct twice. Reclaiming any
- * traffic-free slot on sight hung up a LIVE session's receiver: an agent promoted into a session
- * builds a replacement standing receiver immediately, and at that instant the promoted one has
- * carried nothing yet. So a five-minute floor was added — and it does not help, because the clock
- * starts when the receiver RESERVED, not when it was promoted. A receiver that waited more than
- * five minutes for its first caller, which is the ordinary case, clears the floor and is hung up
- * the moment its replacement authenticates. The test that named the case said "promoted MOMENTS
- * ago" and only ever exercised the sub-five-minute window.
- *
- * The real guard is `#isPeerConnected` below. This age check stays as a cheap second condition —
- * it costs nothing and narrows the window further — but the question that actually distinguishes
- * "stranded leftover" from "receiver patiently waiting for a caller" is whether the peer is still
- * there, not how long it has been quiet.
- */
-export const SLOT_RECLAIM_MIN_IDLE_MS = 5 * 60 * 1000;
 
 /**
  * DOD-M15-RELAYSLOTS-1 — **THE FLOOR. NOT A TUNING PARAMETER.**
@@ -116,60 +74,6 @@ export const SLOT_REAP_ACTIVITY_FLOOR_MS = 6 * 60 * 60 * 1000;
 export const DEFAULT_SLOT_CEILING = 4096;
 
 /**
- * DOD-M15-RELAYSLOTS-1 — **THE BOUND THAT ACTUALLY STOPS THE FLOOD**, and the reason it is here
- * rather than on the token check.
- *
- * libp2p hands `denyInboundRelayReservation` a peer id and nothing else. There is nowhere to put a
- * directory token, and the client has not sent one yet — it rides CELLO's own auth stream, which
- * happens afterwards. So the first version of this unit granted the slot unconditionally and checked
- * the token later, and an attacker who simply never opened an auth stream never met the check: 4096
- * throwaway keys, reserve, hold for the grace window, reconnect. Every refusal the relay logged was
- * correct and the attacker held the whole table.
- *
- * What CAN be decided at reservation time is how many UNPROVEN reservations one source already
- * holds. That is the bound, and it works precisely BECAUSE of the token: a key that cannot obtain
- * one can never authenticate, so it can never leave the unproven pool. Without the token this cap
- * was rightly rejected — a throwaway key would simply authenticate and free its own budget within
- * seconds. The token is what makes it bite.
- *
- * Sixteen is far above what an honest host needs: a real client authenticates within milliseconds
- * of reserving, so its reservations are unproven for about the length of a handshake. A host would
- * have to restart more than sixteen agents in the same instant to notice, and those retry.
- */
-export const UNPROVEN_RESERVATIONS_PER_SOURCE = 16;
-
-/**
- * DOD-M15-RELAYSLOTS-1 — the youngest a slot may be and still be evictable.
- *
- * An honest agent authenticates about one round trip after reserving; to a relay in another region
- * that is 300-600ms on a good day. Anything younger than this floor is plausibly a handshake still
- * in flight, so it is not a candidate at all — which is what stops the eviction rule from preferring
- * exactly the caller it is supposed to protect.
- *
- * ⚠️ TEN SECONDS, NOT TWO — Andre's call, on network variability, and he is right. A round trip is
- * 300-600ms when things are healthy; it is seconds on a congested mobile link or a saturated uplink,
- * and those are the connections that most need a relay in the first place. Two seconds protected an
- * agent on a good network and quietly abandoned one on a bad one.
- *
- * The cost is bounded and worth naming: a longer floor widens the window in which a purely
- * DISTRIBUTED flood — one reservation per address, arriving faster than a handshake completes — can
- * overshoot the budget, because none of its slots is old enough to evict. It does NOT weaken the
- * bound against a concentrated flood at all, since the floor deliberately does not apply to a source
- * holding more than one unproven reservation.
- */
-export const SLOT_EVICT_MIN_AGE_MS = 10_000;
-
-/**
- * The same bound globally, as a backstop against a flood spread across many addresses — where every
- * attempt is the first from its own source and the per-source cap alone does nothing.
- *
- * 512 of 4096 leaves seven eighths of the table for real agents while a distributed flood is
- * running. It is deliberately generous: unproven reservations are supposed to be rare and brief, so
- * a relay legitimately holding hundreds at once is already a relay under a stampede.
- */
-export const UNPROVEN_RESERVATIONS_TOTAL = 512;
-
-/**
  * How full the table must be before the reaper does anything at all.
  *
  * Below this line there is capacity to spare and reclaiming would cost some agent its front door to
@@ -189,7 +93,11 @@ export interface ReapedSlot {
 
 export interface RelayConnectionGaterOptions {
   logger: Logger;
-  /** See `DEFAULT_RESERVATION_GRACE_MS`. */
+  /**
+   * DOD-M15-RELAYSLOTS-1: accepted and ignored. The grace window time-boxed an UNPROVEN reservation
+   * holder, and nothing unproven can hold one any more — the gate refuses it outright. Kept on the
+   * options type only so an existing caller does not fail to compile; remove it when they are gone.
+   */
   reservationGraceMs?: number;
   /** See `SLOT_CAP_PER_AGENT`. Overridable per deployment and for tests. */
   slotCapPerAgent?: number;
@@ -197,10 +105,6 @@ export interface RelayConnectionGaterOptions {
   slotCeiling?: number;
   /** See `DEFAULT_REAP_PRESSURE_FRACTION`. */
   reapPressureFraction?: number;
-  /** See `UNPROVEN_RESERVATIONS_PER_SOURCE`. Lowered in tests so a real over-the-wire case is cheap. */
-  unprovenReservationsPerSource?: number;
-  /** See `UNPROVEN_RESERVATIONS_TOTAL`. */
-  unprovenReservationsTotal?: number;
 }
 
 /**
@@ -221,12 +125,6 @@ interface SlotRecord {
    * full. Set by `denyInboundRelayReservation`, which is the only place a reservation is granted.
    */
   reserved: boolean;
-  /**
-   * The IP this peer reserved from, or null when the connection list could not tell us. Recorded so
-   * the per-source bound below can be counted without re-walking libp2p's connection list, and so it
-   * survives the connection going away.
-   */
-  remoteIp: string | null;
   /**
    * The registered agents reachable through this reservation. Empty between the grant and the first
    * authentication — a real state, not a transient one: an unproven holder sits there until its
@@ -260,13 +158,10 @@ export type SlotAdmission = { ok: true } | SlotRefusal;
 
 export class RelayConnectionGater implements ConnectionGater {
   readonly #logger: Logger;
-  readonly #graceMs: number;
   #node: CelloNode | null = null;
 
   /** Transport peer ids (libp2p PeerId, stringified) that have completed relay_auth. */
   readonly #authenticatedPeers = new Set<string>();
-  /** Transport peer id → pending revoke timer, for a reservation granted before auth completed. */
-  readonly #pendingRevoke = new Map<string, NodeJS.Timeout>();
   /** session_id_hex → the two EPHEMERAL SESSION peer ids a recorded assignment names. */
   readonly #sessionBindings = new Map<string, { initiator: string; counterparty: string }>();
   /**
@@ -288,17 +183,12 @@ export class RelayConnectionGater implements ConnectionGater {
   readonly #slotCap: number;
   readonly #slotCeiling: number;
   readonly #reapPressureFraction: number;
-  readonly #unprovenPerSource: number;
-  readonly #unprovenTotal: number;
 
   constructor(opts: RelayConnectionGaterOptions) {
     this.#logger = opts.logger;
-    this.#graceMs = opts.reservationGraceMs ?? DEFAULT_RESERVATION_GRACE_MS;
     this.#slotCap = opts.slotCapPerAgent ?? SLOT_CAP_PER_AGENT;
     this.#slotCeiling = opts.slotCeiling ?? DEFAULT_SLOT_CEILING;
     this.#reapPressureFraction = opts.reapPressureFraction ?? DEFAULT_REAP_PRESSURE_FRACTION;
-    this.#unprovenPerSource = opts.unprovenReservationsPerSource ?? UNPROVEN_RESERVATIONS_PER_SOURCE;
-    this.#unprovenTotal = opts.unprovenReservationsTotal ?? UNPROVEN_RESERVATIONS_TOTAL;
   }
 
   /**
@@ -313,11 +203,6 @@ export class RelayConnectionGater implements ConnectionGater {
   /** Call on every successful `relay_auth_ok` — cancels this peer's pending revoke, if any. */
   recordAuthenticated(peerId: string): void {
     this.#authenticatedPeers.add(peerId);
-    const timer = this.#pendingRevoke.get(peerId);
-    if (timer) {
-      clearTimeout(timer);
-      this.#pendingRevoke.delete(peerId);
-    }
   }
 
   /** Call from `recordAssignment()` when both session Peer IDs are present on the assignment. */
@@ -328,11 +213,6 @@ export class RelayConnectionGater implements ConnectionGater {
   /** Call from `#cleanupSessionTracking` — a torn-down session no longer authorizes a dial-through. */
   removeSessionBinding(sessionIdHex: string): void {
     this.#sessionBindings.delete(sessionIdHex);
-  }
-
-  /** For tests and an operator surface that wants the number, mirroring other bounded maps here. */
-  pendingRevokeCount(): number {
-    return this.#pendingRevoke.size;
   }
 
   // ─── DOD-M15-RELAYSLOTS-1: the slot ledger ──────────────────────────────────────────────────
@@ -381,11 +261,6 @@ export class RelayConnectionGater implements ConnectionGater {
     this.#slots.delete(peerId);
     this.#reservedAt.delete(peerId);
     this.#authenticatedPeers.delete(peerId);
-    const timer = this.#pendingRevoke.get(peerId);
-    if (timer) {
-      clearTimeout(timer);
-      this.#pendingRevoke.delete(peerId);
-    }
   }
 
   /**
@@ -432,7 +307,6 @@ export class RelayConnectionGater implements ConnectionGater {
       if (id === peerId) continue;
       if (!slot.agents.has(agentPubkeyHex) || slot.agents.size !== 1) continue;
       if (slot.lastActivityAt !== null) continue;
-      if (now - slot.grantedAt < SLOT_RECLAIM_MIN_IDLE_MS) continue;
       if (this.#isPeerConnected(id)) continue;
       reclaimed.push(id);
     }
@@ -481,7 +355,7 @@ export class RelayConnectionGater implements ConnectionGater {
       // No reservation was granted to this peer — it dialled in and authenticated. It still counts
       // against the agent's own cap (it is capacity this agent is using), but NOT against the
       // reservation ceiling the reaper measures.
-      this.#slots.set(peerId, { reserved: false, remoteIp: this.#remoteIpFor(peerId), agents: new Set([agentPubkeyHex]), grantedAt: now, lastActivityAt: null });
+      this.#slots.set(peerId, { reserved: false, agents: new Set([agentPubkeyHex]), grantedAt: now, lastActivityAt: null });
     }
     return { ok: true };
   }
@@ -592,134 +466,6 @@ export class RelayConnectionGater implements ConnectionGater {
   }
 
   /**
-   * Drop the oldest of `candidates` to make room. Never refuses the incoming caller — see the note
-   * in `denyInboundRelayReservation` for why evicting and refusing are not interchangeable.
-   */
-  #evictOldestUnproven(
-    candidates: Array<[string, SlotRecord]>,
-    ctx: { reason: string; remoteIp: string; held: number; cap: number; impact: string },
-  ): void {
-    /**
-     * ⚠️ **"OLDEST" WAS THE WRONG VICTIM, AND REVIEW MEASURED IT RATHER THAN ARGUING IT.**
-     *
-     * An attacker's slots churn — each new reservation evicts their own oldest — so their pool
-     * self-trims to the youngest. An honest agent's slot sits still for one handshake. Once the
-     * pool's age span drops below a round trip, the honest agent is ALWAYS the oldest unproven slot
-     * in the table, and evicting the oldest means evicting it, every time. Measured: an honest
-     * agent survived exactly one rotation of the unproven pool and was then hung up mid-handshake.
-     *
-     * Two changes, and they are both necessary:
-     *
-     *  1. **Never evict anything younger than `SLOT_EVICT_MIN_AGE_MS`.** An in-flight handshake is
-     *     not a candidate at all. If nothing is old enough, admit anyway and let the pool overshoot
-     *     briefly — overshooting for a second is cheap; hanging up a real agent is not.
-     *  2. **Take from the source holding the MOST unproven slots**, oldest first within it. An
-     *     honest agent holds one slot from its address; a flood holds many from theirs. That is
-     *     max-min fair share, and it makes an honest agent unreachable as a victim until every
-     *     source holds exactly one — at which point the attacker needs as many addresses as the
-     *     budget and has no advantage left.
-     */
-    const now = Date.now();
-    const heldBySource = new Map<string, number>();
-    for (const [, slot] of candidates) {
-      const key = slot.remoteIp ?? "(unreadable)";
-      heldBySource.set(key, (heldBySource.get(key) ?? 0) + 1);
-    }
-    /**
-     * The floor protects a SINGLE handshake in flight, which is what an honest agent looks like —
-     * one unproven reservation from its address. It deliberately does NOT protect a source holding
-     * several at once: that is not one client mid-handshake, and exempting it would let a flood buy
-     * immunity simply by being fast. Without this exception the bound loosens to (rate × floor),
-     * which at a few hundred reservations a second is most of the table again.
-     */
-    const evictable = candidates.filter(([, slot]) =>
-      now - slot.grantedAt >= SLOT_EVICT_MIN_AGE_MS ||
-      (heldBySource.get(slot.remoteIp ?? "(unreadable)") ?? 0) > 1);
-    if (evictable.length === 0) {
-      this.#logger.info("relay.reservation.evict.nothing_old_enough", {
-        ...ctx,
-        minAgeMs: SLOT_EVICT_MIN_AGE_MS,
-        impact: "the unproven budget is full but every slot in it is younger than the eviction " +
-          "floor, so they are all plausibly handshakes in flight. This caller is admitted and the " +
-          "pool overshoots for a moment rather than a real agent being hung up mid-handshake.",
-      });
-      return;
-    }
-
-    let oldest: [string, SlotRecord] | undefined;
-    let oldestWeight = -1;
-    for (const entry of evictable) {
-      // Weighted by what the source holds across ALL its unproven slots, not just the evictable
-      // ones — the question is which source is hogging, and a young slot still counts as hogging.
-      const weight = heldBySource.get(entry[1].remoteIp ?? "(unreadable)") ?? 0;
-      if (
-        weight > oldestWeight ||
-        (weight === oldestWeight && oldest !== undefined && entry[1].grantedAt < oldest[1].grantedAt)
-      ) {
-        oldest = entry;
-        oldestWeight = weight;
-      }
-    }
-    if (!oldest) return;
-    this.#logger.warn("relay.reservation.unproven_evicted", {
-      evictedPeerId: truncId(oldest[0]),
-      evictedAgeMs: now - oldest[1].grantedAt,
-      evictedSourceHeld: oldestWeight,
-      ...ctx,
-    });
-    this.#releaseSlot(oldest[0]);
-  }
-
-  /**
-   * Review M1: how many reservations arrived whose source address could not be read.
-   *
-   * Reported so the per-source bound cannot die quietly. `#remoteIpFor` returns null on five
-   * different conditions, and if any of them started happening in production the per-source bound
-   * would simply stop existing — no log, no counter, every test still green. That is the shape this
-   * milestone exists to catch, so the number is surfaced rather than assumed to be zero.
-   */
-  #unreadableSourceCount = 0;
-  unreadableSourceCount(): number {
-    return this.#unreadableSourceCount;
-  }
-
-  /**
-   * The IP this peer is connected from, or null when it cannot be read.
-   *
-   * ⚠️ OBSERVED, never supplied. This comes from our own connection list, so a caller cannot choose
-   * it or suppress it to escape the per-source bound — which is the question to ask of any signal a
-   * guard depends on. When it genuinely cannot be read the caller still counts against the GLOBAL
-   * bound, so an unreadable address is not a way through either.
-   */
-  #remoteIpFor(peerId: string): string | null {
-    if (!this.#node) return null;
-    try {
-      const conn = this.#node.getConnections().find((c) => c.peerId === peerId);
-      const addr = conn?.remoteAddr;
-      if (!addr) return null;
-      // /ip4/1.2.3.4/tcp/4001 and /ip6/::1/tcp/4001 — take the address component after the family.
-      const parts = addr.split("/");
-      const v4 = parts.indexOf("ip4");
-      const v6 = parts.indexOf("ip6");
-      if (v4 !== -1) return parts[v4 + 1] ?? null;
-      if (v6 === -1) return null;
-      const addr6 = parts[v6 + 1];
-      if (addr6 === undefined) return null;
-      /**
-       * Review M2: bucket IPv6 by /64, not by the full /128. A single ordinary allocation is a /64,
-       * so counting whole addresses would give one machine 2^64 "sources" and make the per-source
-       * bound free to walk around. Not live today — this relay listens on IPv4 only — but the cost
-       * of getting it right now is four lines, and the cost of getting it wrong later is that one
-       * host can do what the global bound is there to stop.
-       */
-      const groups = addr6.split(":");
-      return groups.length > 4 ? `${groups.slice(0, 4).join(":")}::/64` : addr6;
-    } catch {
-      return null;
-    }
-  }
-
-  /**
    * Is this peer still connected to us?
    *
    * ⚠️ **UNKNOWN COUNTS AS CONNECTED.** With no node attached — a gater constructed outside the
@@ -786,11 +532,6 @@ export class RelayConnectionGater implements ConnectionGater {
     this.#slots.delete(peerId);
     this.#reservedAt.delete(peerId);
     this.#authenticatedPeers.delete(peerId);
-    const timer = this.#pendingRevoke.get(peerId);
-    if (timer) {
-      clearTimeout(timer);
-      this.#pendingRevoke.delete(peerId);
-    }
     this.#giveBackReservation(peerId);
     this.#node?.hangUp(peerId).catch((err: unknown) => {
       this.#logger.debug("relay.slot.release.hangup_failed", {
@@ -801,130 +542,84 @@ export class RelayConnectionGater implements ConnectionGater {
   }
 
   /**
-   * denyInboundRelayReservation: does not refuse a caller at grant time — denying an unproven peer
-   * per se would strand every brand-new agent's first reservation, which is the outage the class
-   * header describes. It starts the grace-window revoke timer, and when the unproven-reservation
-   * budget is full it EVICTS the oldest unproven holder to make room rather than turning this
-   * caller away. See the note inside for why evicting and refusing are not interchangeable here.
+   * DOD-M15-RELAYSLOTS-1 — **THE GATE. A stranger does not get a slot.**
+   *
+   * Refuses any reservation from a peer that has not already proven, on this connection, that it
+   * belongs to a registered agent — and then applies that agent's slot cap before granting.
+   *
+   * ─── Why this is possible now, and why it was not before ─────────────────────────────────────
+   *
+   * libp2p hands this hook a peer id and nothing else. The token cannot ride the reservation, so
+   * for as long as the client asked for its slot BEFORE saying who it was, this hook had nothing to
+   * decide on: the slot was granted unconditionally and the token checked afterwards, and an
+   * attacker who never opened an auth stream never met the check at all. One machine took the whole
+   * table while every refusal the relay logged was correct.
+   *
+   * Two rounds of compensation followed and both made it worse before better — refusing past an
+   * unproven budget made denying the relay eight times cheaper, and evicting the oldest picked the
+   * honest agent every time. Both were guesses about who LOOKED bad, because an IP address was the
+   * only thing visible here. A botnet walks through guesses.
+   *
+   * The client now dials, authenticates over `/cello/relay/1.0.0`, and only then asks for the slot
+   * (`reserveRelaySlot` in the transport package). By the time this runs, the peer either has a
+   * ledger entry naming a registered agent or it does not — and that is a fact, not a heuristic.
+   *
+   * ⚠️ REFUSING HERE IS SAFE ONLY BECAUSE OF THAT ORDERING. Denying an unproven peer used to strand
+   * every brand-new agent's first reservation, which is the outage the class header describes. It no
+   * longer can: a real client has authenticated before it reaches this point, and one that has not
+   * is told so and retries after authenticating.
    */
   denyInboundRelayReservation(source: PeerId): boolean {
     const id = source.toString();
-    /**
-     * Review M3 (pre-existing): a peer that authenticated FIRST and reserved afterwards short-
-     * circuited here with `reserved` still false, so `slotCount()` undercounted real reservations
-     * and the reaper's pressure line fired later than it should against a table that was fuller
-     * than the relay believed. Marked before the return, not after it.
-     */
-    const already = this.#slots.get(id);
-    if (already) already.reserved = true;
-    if (this.#authenticatedPeers.has(id)) return false;
-    if (this.#pendingRevoke.has(id)) return false; // timer already running from an earlier reservation attempt
+    const slot = this.#slots.get(id);
+
+    if (!slot || slot.agents.size === 0) {
+      this.#logger.warn("relay.reservation.denied", {
+        peerId: truncId(id),
+        reason: "not_authenticated",
+        impact: "a reservation was requested by a peer that has not proved it belongs to a " +
+          "registered agent on this connection. Refused. A current client authenticates first and " +
+          "then asks, so this is either an older client — which should upgrade — or exactly the " +
+          "flood this gate exists to stop.",
+      });
+      return true; // DENY
+    }
 
     /**
-     * DOD-M15-RELAYSLOTS-1 — **THE ONE THING THAT CAN BE DECIDED BEFORE THE SLOT IS HANDED OVER.**
-     *
-     * Everything else in this unit runs after the reservation is already granted, because that is
-     * all libp2p's hook allows: it passes a peer id, the client has sent no token yet, and there is
-     * nowhere in the circuit-relay-v2 reservation to carry one. An attacker who never opens a CELLO
-     * auth stream therefore never meets the token check at all — which is how the first version of
-     * this unit let one machine hold the entire table while refusing correctly the whole time.
-     *
-     * So the reservation path bounds the only thing it can see: how many UNPROVEN reservations a
-     * source already holds. See `UNPROVEN_RESERVATIONS_PER_SOURCE` for why the token is what makes
-     * that bound bite, and why it was rightly rejected before the token existed.
-     *
-     * ⚠️ **IT EVICTS RATHER THAN REFUSES, AND THE SECOND VERSION OF THIS FIX REFUSED.** Review
-     * measured what that cost: once 512 unproven reservations existed, EVERY new reservation was
-     * denied — including every honest agent's, because an agent's reservation is unproven at the
-     * instant it is requested. Denying the whole relay went from needing all 4096 slots to needing
-     * 512, so the fix made the outage EIGHT TIMES CHEAPER to cause while the relay sat 87% empty.
-     *
-     * Evicting inverts it. An unproven reservation is at most one grace window old and carries
-     * nothing, so dropping one costs at most an in-flight handshake and that client retries. Under
-     * a flood the attacker's slots rotate out continuously while an honest agent passes straight
-     * through and is never refused at all. That is this milestone's own "reap, then refuse" rule:
-     * here there is nothing left to refuse.
-     *
-     * ⚠️ WHICH slot is dropped is the part that had to be got right, and the first version got it
-     * wrong — see `#evictOldestUnproven`. "The honest agent authenticates in a round trip so it is
-     * never the one evicted" is FALSE on its own, and was measured to be false: a churning flood
-     * keeps its own pool young, so the slot sitting still is the oldest in the table.
+     * The per-agent cap, enforced AT THE DOOR. It used to run after the fact, because the relay did
+     * not know whose reservation it was granting until later; now it does, so the agent that is
+     * already at its limit is told before a slot is handed over rather than after.
      */
-    const remoteIp = this.#remoteIpFor(id);
-    if (remoteIp === null) this.#unreadableSourceCount++;
-
-    if (remoteIp !== null) {
-      const fromSource = this.#unprovenSlots().filter(([, slot]) => slot.remoteIp === remoteIp);
-      if (fromSource.length >= this.#unprovenPerSource) {
-        this.#evictOldestUnproven(fromSource, {
-          reason: "unproven_reservation_budget_for_this_source_is_full",
-          remoteIp,
-          held: fromSource.length,
-          cap: this.#unprovenPerSource,
-          impact: "this source is at its budget for circuit reservations held WITHOUT having proved " +
-            "they belong to a registered agent, so one of its own was dropped to make room. The " +
-            "victim is chosen from the source holding the MOST unproven reservations and is never a " +
-            "lone handshake still in flight, so a real client bringing up one agent is not what " +
-            "rotates out here — a source holding many at once is.",
+    for (const agent of slot.agents) {
+      const held = this.#reservedSlotsForAgent(agent, id);
+      if (held >= this.#slotCap) {
+        this.#logger.warn("relay.reservation.denied", {
+          peerId: truncId(id),
+          agentPubkey: truncId(agent),
+          held,
+          cap: this.#slotCap,
+          reason: "slot_cap_exceeded",
+          impact: "this agent already holds the most circuit reservations one agent may hold on " +
+            "this relay. For a real operator that usually means sessions that were never closed — " +
+            "the count says how many, so they can go and close some.",
         });
+        return true; // DENY
       }
     }
 
-    const unproven = this.#unprovenSlots();
-    if (unproven.length >= this.#unprovenTotal) {
-      this.#evictOldestUnproven(unproven, {
-        reason: "unproven_reservation_budget_for_this_relay_is_full",
-        remoteIp: remoteIp ?? "(unreadable)",
-        held: unproven.length,
-        cap: this.#unprovenTotal,
-        impact: "this relay is at its budget for unproven circuit reservations across ALL sources — " +
-          "the shape of a flood spread over many addresses — so the oldest was dropped to make room " +
-          "for this one. No agent is refused: agents that authenticate leave this pool immediately " +
-          "and are never counted against it.",
-      });
-    }
-
-    const timer = setTimeout(() => {
-      this.#pendingRevoke.delete(id);
-      if (this.#authenticatedPeers.has(id)) return; // authenticated in the last tick before firing
-      this.#logger.warn("relay.reservation.revoked", {
-        peerId: truncId(id),
-        graceMs: this.#graceMs,
-        reason: "no_relay_auth_within_grace_window",
-        impact: "this reservation is being closed because its holder never proved Ed25519 key " +
-          "possession via relay_auth — it was never usable to reach anyone regardless (dial-through " +
-          "requires a separate, unconditional session-assignment check), so this only reclaims the slot",
-      });
-      // DOD-M15-RELAYSLOTS-1: the slot goes with the reservation. Leaving the ledger entry behind
-      // would count capacity this relay no longer serves, which is the wrong direction to be wrong
-      // in — it would make the reaper refuse while the table was not actually full.
-      this.#slots.delete(id);
-      this.#reservedAt.delete(id);
-      // The grace-window revoke has the same hole every other reclaim path had.
-      this.#giveBackReservation(id);
-      this.#node?.hangUp(id).catch((err: unknown) => {
-        this.#logger.debug("relay.reservation.revoke.hangup_failed", {
-          peerId: truncId(id),
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-    }, this.#graceMs);
-    // Review L1: a pending revoke must not hold the process open. Without unref, a relay asked to
-    // stop sat there for up to the full grace window per reserving peer waiting on timers whose only
-    // job is to hang up connections that are about to be torn down anyway.
-    timer.unref?.();
-    this.#pendingRevoke.set(id, timer);
+    slot.reserved = true;
     this.#reservedAt.set(id, Date.now());
-    // DOD-M15-RELAYSLOTS-1: the slot exists from the moment it is granted, unattributed until the
-    // holder authenticates. Recorded here so the total occupancy the reaper works against counts
-    // reservations nobody has claimed yet — they take capacity exactly like the claimed ones do.
-    const known = this.#slots.get(id);
-    if (known) {
-      known.reserved = true;
-    } else {
-      this.#slots.set(id, { reserved: true, remoteIp, agents: new Set(), grantedAt: Date.now(), lastActivityAt: null });
+    return false; // ALLOW
+  }
+
+  /** RESERVATION-backed slots this agent holds, excluding `exceptPeerId`. */
+  #reservedSlotsForAgent(agentPubkeyHex: string, exceptPeerId: string): number {
+    let n = 0;
+    for (const [peerId, slot] of this.#slots) {
+      if (peerId === exceptPeerId) continue;
+      if (slot.reserved && slot.agents.has(agentPubkeyHex)) n++;
     }
-    return false;
+    return n;
   }
 
   /**
@@ -933,8 +628,6 @@ export class RelayConnectionGater implements ConnectionGater {
    * alive after a clean shutdown.
    */
   stop(): void {
-    for (const timer of this.#pendingRevoke.values()) clearTimeout(timer);
-    this.#pendingRevoke.clear();
   }
 
   /**

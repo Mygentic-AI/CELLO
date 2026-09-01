@@ -22,7 +22,7 @@
  * door. When it cannot tell whether a slot is in use, it treats it as in use.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { RelayConnectionGater, SLOT_CAP_PER_AGENT, SLOT_RECLAIM_MIN_IDLE_MS } from "../relay-connection-gater.js";
+import { RelayConnectionGater, SLOT_CAP_PER_AGENT } from "../relay-connection-gater.js";
 import type { Logger } from "@cello-protocol/interfaces";
 
 const silentLogger: Logger = { debug() {}, info() {}, warn() {}, error() {} };
@@ -78,9 +78,12 @@ function takeSlot(
   connected?: Set<string>,
 ): ReturnType<RelayConnectionGater["admitSlot"]> {
   connected?.add(peerId);
-  gater.denyInboundRelayReservation(peer(peerId) as never);
+  // Prove first, THEN reserve — the order the gate requires and a real client now uses.
   const admission = gater.admitSlot(peerId, agent);
-  if (admission.ok) gater.recordAuthenticated(peerId);
+  if (admission.ok) {
+    gater.recordAuthenticated(peerId);
+    gater.denyInboundRelayReservation(peer(peerId) as never);
+  }
   return admission;
 }
 
@@ -98,7 +101,6 @@ describe("DOD-M15-RELAYSLOTS-1: the slot ledger", () => {
   it("★★★ a slot whose peer is GONE is reused rather than held for the full TTL", () => {
     const { gater, hungUp, connected } = makeGater();
     expect(takeSlot(gater, "peer-before-restart", AGENT_A, connected).ok).toBe(true);
-    vi.advanceTimersByTime(SLOT_RECLAIM_MIN_IDLE_MS + 1);
 
     // The daemon restarted and the relay never observed the close — a half-open connection, which
     // is the only case this rule exists for. Its libp2p peer id is regenerated, which is exactly
@@ -186,7 +188,6 @@ describe("DOD-M15-RELAYSLOTS-1: the slot ledger", () => {
       // All but ONE carry traffic.
       if (i !== 3) gater.recordActivity(`peer-${String(i)}`);
     }
-    vi.advanceTimersByTime(SLOT_RECLAIM_MIN_IDLE_MS + 1);
     /**
      * And the quiet one's peer is GONE — a connection the relay never saw close, which is the only
      * thing this rule is for. A quiet peer that is still CONNECTED is a standing receiver waiting
@@ -250,7 +251,6 @@ describe("DOD-M15-RELAYSLOTS-1: the slot ledger", () => {
     expect(gater.slotCountForAgent(AGENT_B)).toBe(1);
 
     // A's new reservation must not release a slot B is also reachable through.
-    vi.advanceTimersByTime(SLOT_RECLAIM_MIN_IDLE_MS + 1);
     expect(takeSlot(gater, "peer-a-new", AGENT_A, connected).ok).toBe(true);
     expect(hungUp, "releasing the shared slot would strand B, which had nothing to do with it").toEqual([]);
   });

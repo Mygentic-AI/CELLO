@@ -2436,28 +2436,13 @@ export class CelloRelayNode {
    * watchdog rebuilds the receiver; what they lose is the explanation, not the recovery.
    */
   #reapSlots(): void {
-    /**
-     * Review M1: report the unreadable-source count from a place production actually runs.
-     *
-     * The counter existed but only tests read it, which does not achieve what M1 asked for — the
-     * per-source reservation bound could still have stopped existing in production with every test
-     * green. `#remoteIpFor` returns null on five different conditions, all silent; this is the one
-     * number that makes that visible. Emitted on the hourly sweep alongside occupancy.
-     */
-    const unreadable = this.#connectionGater?.unreadableSourceCount() ?? 0;
+    // DOD-M15-RELAYSLOTS-1: occupancy against the ceiling, so a relay filling up is visible before
+    // it refuses anyone. The unreadable-source counter that used to ride here went with the
+    // per-address bound it existed to watch — there is no address heuristic left to go quiet.
     this.#logger.info("relay.slot.occupancy", {
       reservedSlots: this.#connectionGater?.slotCount() ?? 0,
       ceiling: DEFAULT_SLOT_CEILING,
-      unreadableSourceCount: unreadable,
-      ...(unreadable > 0 ? {
-        impact: "some reservations arrived whose source address could not be read, so the per-source " +
-          "unproven bound did not apply to them and only the global one did. A number that climbs " +
-          "means that bound is losing its reach — it is not something a caller can cause.",
-      } : {}),
     });
-
-    // Review H3: the notice is sent from INSIDE the reap, before the peer is hung up. Sending it
-    // afterwards raced the disconnect it was announcing.
     this.#connectionGater?.reapIdleSlots((slot) => {
       for (const agentHex of slot.agents) {
         const stream = this.#streams.get(agentHex);

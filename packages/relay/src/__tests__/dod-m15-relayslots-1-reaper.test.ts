@@ -38,24 +38,37 @@ function peer(id: string): { toString(): string } {
 const AGENT = "aa".repeat(32);
 
 /** A gater with a small ceiling so a test can create pressure without ten thousand peers. */
-function makeGater(ceiling: number): { gater: RelayConnectionGater; hungUp: string[] } {
+function makeGater(ceiling: number): { gater: RelayConnectionGater; hungUp: string[]; connected: Set<string> } {
   const hungUp: string[] = [];
+  const connected = new Set<string>();
   const gater = new RelayConnectionGater({
     logger: silentLogger,
     reservationGraceMs: 60_000,
     slotCeiling: ceiling,
   });
   gater.attachNode({
-    hangUp: async (id: string) => { hungUp.push(id); },
+    hangUp: async (id: string) => { hungUp.push(id); connected.delete(id); },
+    // The reclaim backstop frees a traffic-free slot whose peer has gone, so the connection list
+    // has to be honest or it reclaims everything the moment it is created.
+    getConnections: () => [...connected].map((peerId) => ({ peerId })),
+    releaseRelayReservation: () => true,
   } as unknown as Parameters<RelayConnectionGater["attachNode"]>[0]);
-  return { gater, hungUp };
+  return { gater, hungUp, connected };
 }
 
-function takeSlot(gater: RelayConnectionGater, peerId: string, agent = AGENT): void {
-  gater.denyInboundRelayReservation(peer(peerId) as never);
+/**
+ * Prove first, THEN reserve — the order a real client now uses, and the order the relay's gate
+ * requires. Reserving first is refused outright, which is the whole point of the gate.
+ */
+function takeSlot(gater: RelayConnectionGater, peerId: string, agent = AGENT, connected?: Set<string>): void {
+  connected?.add(peerId);
   const admission = gater.admitSlot(peerId, agent);
-  expect(admission.ok, `precondition: ${peerId} must get a slot`).toBe(true);
+  expect(admission.ok, `precondition: ${peerId} must be able to authenticate`).toBe(true);
   gater.recordAuthenticated(peerId);
+  expect(
+    gater.denyInboundRelayReservation(peer(peerId) as never),
+    `precondition: ${peerId} must get a reservation once it has proved itself`,
+  ).toBe(false);
 }
 
 describe("DOD-M15-RELAYSLOTS-1: the reaper", () => {
@@ -63,8 +76,8 @@ describe("DOD-M15-RELAYSLOTS-1: the reaper", () => {
   afterEach(() => { vi.useRealTimers(); });
 
   it("does nothing while the table is not under pressure, however old the slots are", () => {
-    const { gater, hungUp } = makeGater(10);
-    takeSlot(gater, "peer-ancient");
+    const { gater, hungUp, connected } = makeGater(10);
+    takeSlot(gater, "peer-ancient", AGENT, connected);
     vi.advanceTimersByTime(SLOT_REAP_ACTIVITY_FLOOR_MS * 10);
 
     expect(
@@ -77,9 +90,9 @@ describe("DOD-M15-RELAYSLOTS-1: the reaper", () => {
 
   it("★★★ under pressure it frees the quietest slots, oldest first, and stops once there is room", () => {
     // Ceiling 8, so the pressure line sits at 6 and eight slots is genuinely over it.
-    const { gater, hungUp } = makeGater(8);
+    const { gater, hungUp, connected } = makeGater(8);
     for (let i = 0; i < 8; i++) {
-      takeSlot(gater, `peer-${String(i)}`, `${String(i)}`.padStart(2, "0").repeat(32));
+      takeSlot(gater, `peer-${String(i)}`, `${String(i)}`.padStart(2, "0").repeat(32), connected);
       // Staggered, so "quietest first" has something to order by.
       vi.advanceTimersByTime(1_000);
     }
@@ -105,8 +118,8 @@ describe("DOD-M15-RELAYSLOTS-1: the reaper", () => {
   });
 
   it("★★★ NEVER reaps a slot with activity inside the floor, even with the table completely full", () => {
-    const { gater, hungUp } = makeGater(4);
-    for (let i = 0; i < 4; i++) takeSlot(gater, `peer-${String(i)}`, `${String(i)}`.padStart(2, "0").repeat(32));
+    const { gater, hungUp, connected } = makeGater(4);
+    for (let i = 0; i < 4; i++) takeSlot(gater, `peer-${String(i)}`, `${String(i)}`.padStart(2, "0").repeat(32), connected);
 
     // Every slot has been silent for just under the floor. The table is 100% full.
     vi.advanceTimersByTime(SLOT_REAP_ACTIVITY_FLOOR_MS - 60_000);
@@ -123,8 +136,8 @@ describe("DOD-M15-RELAYSLOTS-1: the reaper", () => {
   });
 
   it("treats a never-used slot's grant time as its activity, so a fresh receiver is not reaped", () => {
-    const { gater, hungUp } = makeGater(4);
-    for (let i = 0; i < 4; i++) takeSlot(gater, `peer-${String(i)}`, `${String(i)}`.padStart(2, "0").repeat(32));
+    const { gater, hungUp, connected } = makeGater(4);
+    for (let i = 0; i < 4; i++) takeSlot(gater, `peer-${String(i)}`, `${String(i)}`.padStart(2, "0").repeat(32), connected);
 
     // Full table, nothing has ever carried traffic — but every slot was granted moments ago.
     expect(
@@ -136,9 +149,9 @@ describe("DOD-M15-RELAYSLOTS-1: the reaper", () => {
   });
 
   it("names who was reaped so the relay can tell them, rather than tearing down in silence", () => {
-    const { gater } = makeGater(2);
-    takeSlot(gater, "peer-quiet", AGENT);
-    takeSlot(gater, "peer-busy", "bb".repeat(32));
+    const { gater, connected } = makeGater(2);
+    takeSlot(gater, "peer-quiet", AGENT, connected);
+    takeSlot(gater, "peer-busy", "bb".repeat(32), connected);
     vi.advanceTimersByTime(SLOT_REAP_ACTIVITY_FLOOR_MS + 1);
     gater.recordActivity("peer-busy");
 
@@ -156,10 +169,10 @@ describe("DOD-M15-RELAYSLOTS-1: the reaper", () => {
   });
 
   it("★★★ a peer that authenticated WITHOUT a reservation does not create pressure", () => {
-    const { gater, hungUp } = makeGater(4);
+    const { gater, hungUp, connected } = makeGater(4);
     // One real reservation, then three peers that merely dialled in and authenticated — a session
     // node submitting leaves does exactly this and holds no circuit reservation at all.
-    takeSlot(gater, "peer-reserved", AGENT);
+    takeSlot(gater, "peer-reserved", AGENT, connected);
     for (let i = 0; i < 3; i++) {
       const admission = gater.admitSlot(`peer-dialed-${String(i)}`, `${String(i)}`.padStart(2, "0").repeat(32));
       expect(admission.ok).toBe(true);

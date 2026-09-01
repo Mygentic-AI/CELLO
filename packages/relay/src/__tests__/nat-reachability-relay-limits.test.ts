@@ -19,6 +19,7 @@ import { Encoder } from "cbor-x";
 import { createNode } from "@cello-protocol/transport";
 import { generateKeypair } from "@cello-protocol/crypto";
 import { createRelayNode } from "../relay-node.js";
+import { RelayConnectionGater } from "../relay-connection-gater.js";
 
 setupV3Tests();
 
@@ -92,13 +93,22 @@ describe("DOD-M15-RELAYABUSE-1: relayed connections carry a REAL duration and by
   /** Stand up a relay via the PRODUCTION factory (createRelayNode), with the given circuit overrides. */
   async function makeRelay(opts: { circuitDurationLimitMs?: number; circuitDataLimitBytes?: bigint }) {
     const dirKp = generateKeypair();
+    /**
+     * DOD-M15-RELAYSLOTS-1: the gater is constructed here so `makeReceiver` can mark its peer as a
+     * proven agent — the same reason `vouchCircuitPeers` below exists for the dial-through gate.
+     * The relay now REFUSES a reservation from a peer that has not authenticated, and these tests
+     * are about the duration and byte caps, so without this every one of them would be (correctly)
+     * refused a reservation long before a cap was ever exercised.
+     */
+    const gater = new RelayConnectionGater({ logger: { debug() {}, info() {}, warn() {}, error() {} } });
     const { relay, node, stop } = await createRelayNode({
       directoryPubkey: await dirKp.getPublicKey(),
       listenAddresses: ["/ip4/127.0.0.1/tcp/0"],
+      connectionGater: gater,
       ...opts,
     });
     scope.addCleanup(stop);
-    return { relay, node, dirKp };
+    return { relay, node, dirKp, gater };
   }
 
   /**
@@ -135,13 +145,27 @@ describe("DOD-M15-RELAYABUSE-1: relayed connections carry a REAL duration and by
   }
 
   /** A's standing receiver: reserves with the relay and serves ECHO_PROTOCOL. */
-  async function makeReceiver(relayAddr: string) {
+  async function makeReceiver(relayAddr: string, gater?: RelayConnectionGater) {
     const node = await createNode({
       keyProvider: generateKeypair(),
       listenAddresses: ["/ip4/127.0.0.1/tcp/0", `${relayAddr}/p2p-circuit`],
       nodeType: "standing_receiver",
     });
     scope.addCleanup(async () => { try { await node.stop(); } catch { /* cleanup */ } });
+    /**
+     * Stand in for the CELLO authentication a real client now performs BEFORE it asks for a slot,
+     * and it has to happen BEFORE `start()` — the reservation is requested as the node begins
+     * listening, and a denied one is NOT retried by libp2p. That was measured here: vouching after
+     * start left the receiver with no circuit address for the full thirty-second wait.
+     *
+     * Worth carrying forward, because it is what the DoD's "recoverable" clause actually rests on:
+     * recovery after a refusal comes from OUR watchdog rebuilding the receiver, not from libp2p
+     * asking again.
+     */
+    if (gater) {
+      gater.admitSlot(node.getPeerId(), "cc".repeat(32));
+      gater.recordAuthenticated(node.getPeerId());
+    }
     await node.start();
     await node.handle(ECHO_PROTOCOL, () => { /* swallow — this test only cares whether the LINK survives */ });
     const deadline = Date.now() + 30_000;
@@ -195,9 +219,9 @@ describe("DOD-M15-RELAYABUSE-1: relayed connections carry a REAL duration and by
   }
 
   it("L2a: a tiny circuitDurationLimitMs closes the relayed link once it elapses", async () => {
-    const { relay, node, dirKp } = await makeRelay({ circuitDurationLimitMs: 400 });
+    const { relay, node, dirKp, gater } = await makeRelay({ circuitDurationLimitMs: 400 });
     const relayAddr = node.listenAddresses().find((a) => a.includes("/p2p/"))!;
-    const { circuitAddr } = await makeReceiver(relayAddr);
+    const { circuitAddr } = await makeReceiver(relayAddr, gater);
     const receiverPeerId = circuitAddr.split("/p2p/").pop()!;
 
     const { node: dialer } = await connectThroughCircuitVouched(relay, dirKp, circuitAddr, receiverPeerId);
@@ -213,7 +237,7 @@ describe("DOD-M15-RELAYABUSE-1: relayed connections carry a REAL duration and by
   }, 20_000);
 
   it("L2b: a tiny circuitDataLimitBytes closes the relayed link once exceeded", async () => {
-    const { relay, node, dirKp } = await makeRelay({
+    const { relay, node, dirKp, gater } = await makeRelay({
       circuitDurationLimitMs: 60_000, // generous — this test is about BYTES, not time
       // 4 KiB: small enough to trip with one application-level send, large enough that the
       // multistream-select + protocol negotiation overhead of ESTABLISHING the circuit stream
@@ -222,7 +246,7 @@ describe("DOD-M15-RELAYABUSE-1: relayed connections carry a REAL duration and by
       circuitDataLimitBytes: 4096n,
     });
     const relayAddr = node.listenAddresses().find((a) => a.includes("/p2p/"))!;
-    const { circuitAddr } = await makeReceiver(relayAddr);
+    const { circuitAddr } = await makeReceiver(relayAddr, gater);
     const receiverPeerId = circuitAddr.split("/p2p/").pop()!;
 
     const { node: dialer, stream } = await connectThroughCircuitVouched(relay, dirKp, circuitAddr, receiverPeerId);
@@ -260,9 +284,9 @@ describe("DOD-M15-RELAYABUSE-1: relayed connections carry a REAL duration and by
    * see this file's own history). These two tests make that the explicit, named subject.
    */
   it("DOD-M15-RELAYAUTH-1: a stranger with NO session assignment cannot dial through to a reservation holder", async () => {
-    const { node } = await makeRelay({});
+    const { node, gater } = await makeRelay({});
     const relayAddr = node.listenAddresses().find((a) => a.includes("/p2p/"))!;
-    const { circuitAddr } = await makeReceiver(relayAddr);
+    const { circuitAddr } = await makeReceiver(relayAddr, gater);
     const receiverPeerId = circuitAddr.split("/p2p/").pop()!;
 
     // No vouchCircuitPeers call — this dialer and the receiver share no recorded assignment.
@@ -270,9 +294,9 @@ describe("DOD-M15-RELAYABUSE-1: relayed connections carry a REAL duration and by
   }, 20_000);
 
   it("DOD-M15-RELAYAUTH-1: the counterparty a real assignment names CAN dial through", async () => {
-    const { relay, node, dirKp } = await makeRelay({});
+    const { relay, node, dirKp, gater } = await makeRelay({});
     const relayAddr = node.listenAddresses().find((a) => a.includes("/p2p/"))!;
-    const { circuitAddr } = await makeReceiver(relayAddr);
+    const { circuitAddr } = await makeReceiver(relayAddr, gater);
     const receiverPeerId = circuitAddr.split("/p2p/").pop()!;
 
     const { stream } = await connectThroughCircuitVouched(relay, dirKp, circuitAddr, receiverPeerId);
