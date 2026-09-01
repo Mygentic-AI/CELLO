@@ -2436,8 +2436,13 @@ export class CelloRelayNode {
    * watchdog rebuilds the receiver; what they lose is the explanation, not the recovery.
    */
   #reapSlots(): void {
-    // Review H3: the notice is sent from INSIDE the reap, before the peer is hung up. Sending it
-    // afterwards raced the disconnect it was announcing.
+    // DOD-M15-RELAYSLOTS-1: occupancy against the ceiling, so a relay filling up is visible before
+    // it refuses anyone. The unreadable-source counter that used to ride here went with the
+    // per-address bound it existed to watch — there is no address heuristic left to go quiet.
+    this.#logger.info("relay.slot.occupancy", {
+      reservedSlots: this.#connectionGater?.slotCount() ?? 0,
+      ceiling: DEFAULT_SLOT_CEILING,
+    });
     this.#connectionGater?.reapIdleSlots((slot) => {
       for (const agentHex of slot.agents) {
         const stream = this.#streams.get(agentHex);
@@ -2930,6 +2935,30 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
         // would give a reaper that either never fires or fires constantly — and both look like the
         // reaper working.
         maxReservations: DEFAULT_SLOT_CEILING,
+        /**
+         * DOD-M15-RELAYSLOTS-1 — a BACKSTOP, not the mechanism, and the number is a judgement call
+         * Andre made after I got it wrong once.
+         *
+         * libp2p frees a reservation only when this timer aborts: there is no disconnect listener in
+         * its relay server, so anything the relay fails to release explicitly is held for exactly
+         * this long. The default is TWO HOURS, which meant one missed release cost a slot for two
+         * hours. That default only makes sense if something frees a reservation when its holder
+         * leaves — and nothing does, which is the defect `releaseRelayReservation` exists to fix.
+         *
+         * ⚠️ **THE COST IS NOT CHATTER, IT IS BLIP TOLERANCE — measured, having first shipped this
+         * number without measuring it.** libp2p's client refreshes five minutes before expiry
+         * (`transport/reservation-store.js`, REFRESH_TIMEOUT), so this value minus five minutes is
+         * how long an agent's connection can be broken before it loses its reservation and goes
+         * unreachable until its receiver rebuilds. At the two-hour default that tolerance is nearly
+         * two hours. At the ten minutes I first set, it is FIVE, which would drop a real agent on a
+         * bad connection — and I chose ten minutes to limit damage from abandoned slots without
+         * noticing that the explicit release above had already closed that hole.
+         *
+         * Thirty minutes: twenty-five minutes of tolerance for a network outage, a refresh every
+         * twenty-five minutes rather than every five, and an abandoned slot still reclaimed four
+         * times faster than libp2p would.
+         */
+        reservationTtl: 30 * 60 * 1000,
         applyDefaultLimit: true,
         defaultDurationLimit: opts.circuitDurationLimitMs ?? DEFAULT_CIRCUIT_DURATION_LIMIT_MS,
         defaultDataLimit: opts.circuitDataLimitBytes ?? DEFAULT_CIRCUIT_DATA_LIMIT_BYTES,
