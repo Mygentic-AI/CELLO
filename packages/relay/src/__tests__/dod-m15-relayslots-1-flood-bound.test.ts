@@ -21,6 +21,13 @@
  *
  * A test that counts refusals cannot see this defect: every refusal was correct. The only assertion
  * that can is "after the attack, how much of the table does the attacker hold?"
+ *
+ * ⚠️ AND THE SECOND VERSION REFUSED, WHICH WAS WORSE. Bounding by DENYING meant that once the
+ * unproven budget was full every new reservation was refused — including every honest agent's,
+ * since an agent's reservation is unproven at the instant it is made. Denying the whole relay went
+ * from needing 4096 slots to needing 512. So the bound now EVICTS the oldest unproven holder and
+ * admits the caller, and these tests assert BOTH halves: the attacker stays bounded, and an honest
+ * agent is never turned away.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
@@ -85,11 +92,15 @@ describe("DOD-M15-RELAYSLOTS-1: the flood is BOUNDED, measured by what the attac
 
     expect(
       granted,
+      "every reservation is admitted — refusing is what made the outage cheaper to cause. The bound " +
+        "shows up in what is HELD, not in what was turned away.",
+    ).toBe(4096);
+    expect(
+      gater.slotCount(),
       "this is the assertion the first version of this unit could not make. Every refusal it " +
         "checked was correct and the attacker still held every slot, because the slot was handed " +
         "out before anything was checked.",
     ).toBe(UNPROVEN_RESERVATIONS_PER_SOURCE);
-    expect(gater.slotCount()).toBe(UNPROVEN_RESERVATIONS_PER_SOURCE);
   });
 
   it("★★★ a distributed flood is bounded too — a new source per key is not a way around it", () => {
@@ -102,12 +113,12 @@ describe("DOD-M15-RELAYSLOTS-1: the flood is BOUNDED, measured by what the attac
       if (reserve(`bot-${String(i)}`, `198.51.${String(Math.floor(i / 250))}.${String(i % 250)}`)) granted++;
     }
 
+    expect(granted, "again: admitted, then bounded by eviction").toBe(4096);
     expect(
-      granted,
+      gater.slotCount(),
       "without a global bound on unproven reservations, spreading across addresses restores the " +
         "original attack in full.",
     ).toBe(UNPROVEN_RESERVATIONS_TOTAL);
-    expect(gater.slotCount()).toBeLessThan(4096);
   });
 
   it("★★★ an agent that AUTHENTICATES is never counted against the flood bound", () => {
@@ -138,30 +149,86 @@ describe("DOD-M15-RELAYSLOTS-1: the flood is BOUNDED, measured by what the attac
     for (let i = 0; i < UNPROVEN_RESERVATIONS_PER_SOURCE; i++) {
       expect(reserve(`local-${String(i)}`, HOST)).toBe(true);
     }
-    expect(reserve("local-overflow", HOST), "at the cap, the next one waits").toBe(false);
-
-    // They authenticate, as a real client does within milliseconds of reserving.
+    // They authenticate, as a real client does about a round trip after reserving, and leave the
+    // unproven pool entirely.
     for (let i = 0; i < UNPROVEN_RESERVATIONS_PER_SOURCE; i++) {
-      gater.admitSlot(`local-${String(i)}`, "aa".repeat(32));
+      expect(gater.admitSlot(`local-${String(i)}`, "aa".repeat(32)).ok).toBe(true);
       gater.recordAuthenticated(`local-${String(i)}`);
     }
 
+    // The same host brings up a second wave. Nothing is evicted, because the budget is about
+    // UNPROVEN reservations and this host is holding none.
+    for (let i = 0; i < UNPROVEN_RESERVATIONS_PER_SOURCE; i++) {
+      expect(reserve(`second-wave-${String(i)}`, HOST)).toBe(true);
+    }
+
     expect(
-      reserve("local-after-auth", HOST),
-      "an unproven reservation lasts about as long as a handshake. If the budget did not free on " +
-        "authentication, one busy host would be permanently capped at sixteen agents.",
+      gater.slotCount(),
+      "if the budget did not free on authentication, one busy host would be permanently capped at " +
+        "sixteen agents no matter how long it had been running.",
+    ).toBe(UNPROVEN_RESERVATIONS_PER_SOURCE * 2);
+  });
+
+  it("★★★ at the budget the caller is ADMITTED and the oldest unproven one is dropped", () => {
+    const { gater, reserve } = makeGater();
+    const HOST = "203.0.113.9";
+
+    for (let i = 0; i < UNPROVEN_RESERVATIONS_PER_SOURCE; i++) {
+      expect(reserve(`squatter-${String(i)}`, HOST)).toBe(true);
+      vi.advanceTimersByTime(10); // so "oldest" is unambiguous
+    }
+    expect(
+      reserve("newcomer", HOST),
+      "refusing here is precisely what made the previous version worse than the defect it fixed.",
     ).toBe(true);
+
+    expect(gater.slotCount(), "the budget holds").toBe(UNPROVEN_RESERVATIONS_PER_SOURCE);
+    // The newcomer is in; the oldest squatter is gone. Proven by giving the newcomer a token —
+    // a slot that was evicted would have no ledger entry to attribute.
+    expect(gater.admitSlot("newcomer", "bb".repeat(32)).ok).toBe(true);
+    expect(gater.slotCountForAgent("bb".repeat(32))).toBe(1);
   });
 
   it("a peer whose address cannot be read still counts against the GLOBAL bound", () => {
     const { gater } = makeGater();
     // No entry in `addressOf`, so the connection list has no address for it — our own blind spot,
     // not something a caller can choose. It must not become a way through.
-    let granted = 0;
     for (let i = 0; i < UNPROVEN_RESERVATIONS_TOTAL + 50; i++) {
-      if (gater.denyInboundRelayReservation(peer(`unknown-${String(i)}`) as never) === false) granted++;
+      expect(gater.denyInboundRelayReservation(peer(`unknown-${String(i)}`) as never)).toBe(false);
     }
-    expect(granted).toBe(UNPROVEN_RESERVATIONS_TOTAL);
+    expect(gater.slotCount()).toBe(UNPROVEN_RESERVATIONS_TOTAL);
+    expect(
+      gater.unreadableSourceCount(),
+      "review M1: an unreadable source must be COUNTED, not silently absorbed — otherwise the " +
+        "per-source bound could stop existing in production with every test still green.",
+    ).toBe(UNPROVEN_RESERVATIONS_TOTAL + 50);
+  });
+
+  it("★★★ an honest agent is NEVER refused, however hard the flood is running", () => {
+    const { gater, reserve } = makeGater();
+
+    // A flood far past the global budget, from many sources, none of which will authenticate.
+    for (let i = 0; i < UNPROVEN_RESERVATIONS_TOTAL * 3; i++) {
+      reserve(`flood-${String(i)}`, `198.51.${String(Math.floor(i / 250))}.${String(i % 250)}`);
+    }
+
+    // One real agent arrives from its own address, mid-flood, and does what a real client does.
+    expect(
+      reserve("honest", "192.0.2.99"),
+      "this is the regression that made the previous fix worse than the defect: with a REFUSING " +
+        "bound, an attacker holding 512 unproven slots denied every honest agent on a relay that " +
+        "was 87% empty, and the operator was told PERMISSION_DENIED.",
+    ).toBe(true);
+    expect(gater.admitSlot("honest", "ee".repeat(32)).ok).toBe(true);
+    gater.recordAuthenticated("honest");
+
+    // And it keeps its slot: proven slots are never evicted to make room for the flood.
+    for (let i = 0; i < 500; i++) reserve(`flood-late-${String(i)}`, `203.0.113.${String(i % 250)}`);
+    expect(
+      gater.slotCountForAgent("ee".repeat(32)),
+      "an agent that has authenticated is out of the unproven pool entirely, so no amount of " +
+        "flooding can take its reservation.",
+    ).toBe(1);
   });
 
   it("the bounds are the values the relay actually runs with", () => {
