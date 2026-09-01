@@ -1023,6 +1023,14 @@ Split from `DOD-M15-RELAYADMIN-1` once its deletion premise was disproved and th
 > is `DOD-M15-RELAYSLOTS-1` ✅. Full entry in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under
 > `DOD-M15-RELAYABUSE-1`. → Entry S15.
 
+### `DOD-M15-RELAYSLOTS-1` — ✅ An agent cannot flood a relay's reservation slots
+> **Opened and closed 2026-09-01** (`008-RELAY`). **This line did not exist while the work was done**
+> — it was extracted from `DOD-M15-RELAYABUSE-1` (the slot accounting) and `DOD-M15-RELAYAUTH-1` (work
+> item 2, the registered-agent check), and given its own line on Andre's ruling rather than folded
+> back, because 002 had already recorded what folding costs: *"a work item with no DoD clause is
+> invisible to the gate that is supposed to catch exactly this."* Eight review findings, all fixed.
+> Full entry in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYSLOTS-1`. → Entry S15.
+
 ### `DOD-M15-MULTIRELAY-1` — ❌ An agent's reachability does not rest on one relay
 **Scoped by `DOD-M15-SPIKE-1(c)` → Entry 1. This line is AVAILABILITY ONLY.** The client already
 requests reservations with every known relay (`reservationsRequested: 2`) — the audit's "reserves

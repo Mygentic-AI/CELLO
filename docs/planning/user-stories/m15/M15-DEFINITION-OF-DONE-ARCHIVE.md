@@ -4234,3 +4234,133 @@ all. It now reads the default off the running binary with no env var set.
 hears is not a limit — the refusal existed, was correct, and reached a log line. And a second
 reviewer on a stronger model overturned a clean verdict on a unit whose code was fine: the defect
 was never in the limiter, it was in the six inches between the refusal and the operator.
+
+---
+
+### `DOD-M15-RELAYSLOTS-1` — ✅ An agent cannot flood a relay's reservation slots
+**Opened and closed 2026-09-01** by `micro/008-RELAY-reservation-slot-flooding.md`. → Entry S15.
+
+**This line did not exist while the work was done.** It was extracted from `DOD-M15-RELAYABUSE-1`
+(the slot accounting, which outgrew a relay-only order) and `DOD-M15-RELAYAUTH-1` (work item 2, the
+registered-agent check, which 002 explicitly did not count as done). Given its own line on Andre's
+ruling of 2026-09-01 rather than folded back into either parent, because 002 had already recorded
+what folding costs: *"A work item with no DoD clause is invisible to the gate that is supposed to
+catch exactly this."* Unlike its parents, **this one is not relay-only** — it changes the directory,
+the client and the relay.
+
+#### The problem, plainly
+
+A relay holds 4096 circuit reservation slots — the standing invitations that make an agent behind NAT
+reachable at all. **It granted them to anyone who asked and counted nothing.** Generating a keypair
+is free and the only test to keep a slot was signing a challenge, which proves you hold *a* key and
+nothing more. Mint 4096 keys, take every slot, and no real agent is reachable by anyone. Close that,
+and a second door stayed open: nothing bounded how many sessions two agents may hold, so open 4096
+sessions between two agents you own, put one message down each, and take the table again.
+
+**What that costs an operator:** their agent comes up, reports itself online, and is reachable by
+nobody. The relay looks healthy. **Nothing in the logs says an attack happened, because every
+individual request was well-formed and legitimate.**
+
+*(The 4096 ceiling is ours, not a default. libp2p ships 15, which caused a real outage — every agent
+needs a slot and every daemon restart mints a fresh peer id that takes a NEW one instead of reusing
+its own. Raising it fixed that outage and is not to be reverted.)*
+
+#### Part 1 — the token: only registered agents get slots
+
+**It rests on the directory already knowing you started, one step before you need it to.** Startup
+order is: daemon opens a persistent signaling stream to the directory → directory authenticates it
+and marks the agent **online** → *then* the standing receiver asks a relay for a slot. When it marks
+an agent online the directory now issues a short-lived signed token — *this public key is a
+registered agent, valid until T* — which the client presents when asking for a slot and the relay
+verifies against directory keys it already holds. **Minting 4096 keypairs takes seconds; minting
+4096 registered agents does not** — registration is email-gated and involves a threshold ceremony.
+
+**Two requirements that were not open questions, because without either the check has no teeth:**
+the token names the pubkey and the relay checks it against the key doing the challenge-response
+(otherwise it is a bearer pass — lift one from a log and present it with your own throwaway key);
+and **a relay with no directory public key configured REFUSES rather than waving callers through**
+(this is how a check like this quietly becomes decorative — the natural default is to allow, and the
+flood then works exactly as if the feature had never shipped).
+
+Settled with it: lifetime ~1 hour, refreshed over the signaling stream the daemon already holds open,
+so no new channel; any consortium directory may issue it, since the relay already accepts signatures
+from the whole set; the short lifetime does revocation's work; and an unreachable directory **fails
+closed**, which costs nothing because an agent that cannot reach a directory cannot be offered a
+session anyway — offers arrive on that same stream.
+
+#### Part 2 — the token alone is not enough: slot accounting
+
+**The token is also what makes the rest possible.** The relay previously knew only transport peer
+ids, which change on every daemon restart — which is *why* a restart consumed a fresh slot instead of
+reclaiming its old one. Once a slot is attributable to a directory-signed agent key, "this agent
+already holds an unused slot" and "this agent holds too many" become answerable questions. Shipped:
+reuse-or-release of an unused slot, a per-agent cap (32), a tuple cap on concurrent sessions between
+the same two identities (5, which is what makes the two-agents-you-own attack pointless), and a
+reaper that frees inactive slots **before** anyone is refused.
+
+> **Reaper-then-refusal is the safety property, not a nicety.** Every outage in this area came from
+> refusing too eagerly, and the relay's view of what is "in use" is imperfect. Reaping first means a
+> counting mistake costs an idle slot; refusing first means it costs a real agent its front door.
+
+**Every refusal names its cause and carries an affordance**, machine-readable as well as human-
+readable because the daemon is the second consumer and must decide whether to fail over to another
+relay — which depends on the reason, so it branches on a code rather than parsing prose. The reason
+this mattered more than it looks: **people do not know what sessions they have open.** Sessions fall
+apart and sit there, idle and still counted, so every cap here gets hit by someone who believes they
+have nothing open.
+
+#### Review — eight findings, all fixed
+
+> *"SPEC: DEVIATIONS FOUND — clause 8 (no consumer for the reaped-party notice) and clause 9 (no
+> failover branch) are un-journaled and [blocking]. … SILENT FALLBACKS FOUND — H1 is [blocking]: the
+> reclaim rule hangs up a live promoted receiver and the test that names the case only covers a
+> 5-minute window. … ERROR SUBSTITUTION FOUND … HOLLOW TESTS FOUND … REMOVALS PROVEN."*
+> — `cello-unit-reviewer`
+
+**H1** the reclaim floor did not prevent what it was written to prevent; **H2** clause 9 was a flag
+nothing branched on; **H3** the reaped-party notice had no consumer and raced its own disconnect;
+**M1** one refusal label for three different causes; **M2** the tuple cap never reached the operator;
+**M3** the ledger counted connections against a reservation ceiling; **L1** a refusal reason with no
+producer; **L2** a stale refusal survived a transport failure.
+
+The reviewer confirmed the parts that hold: **the token check cannot be bypassed** — one call site
+for `recordAuthenticated`, strictly after the token check, and the binding compares against the
+already-verified key; omitted-vs-empty is consistent across directory, wire and relay; the
+registration-lookup premise is correct; the three fail-open candidates all point the safe way; and
+the fourteen pre-existing relay test files were changed **additively only — confirmed by diffing
+every removed assertion, not asserted.**
+
+**Revert proofs, both parts.** Each mutation applied ALONE, compiled and linted before running (a
+mutant that fails the gate proves nothing — the red came from the mutation, not a broken build), then
+restored with `git diff` verified empty. The client's red was captured before any implementation
+existed, as a typecheck failure naming each missing API — **and that needed a positive control to be
+worth anything:** the root typecheck first reported exit 0 against a test calling methods that did
+not exist, because the file was outside the daemon's typecheck allowlist. A deliberate
+`const x: number = "not a number"` in the same file also reported exit 0, which is what proved the
+gate could not see the file at all.
+
+#### Clause 4 — a deviation, stated rather than left implicit
+
+> *"An agent asking for a slot while holding an unused one does not consume a second."*
+
+**As built, it consumes a second unless the old slot's peer has GONE.** That is deliberate, and it is
+the fix for the defect review found: **a "spare" slot and a standing receiver waiting for its first
+caller are the same thing until someone calls**, so releasing on idleness alone hangs up the receiver
+carrying a conversation that has just started. Reclaim is therefore a backstop for a disconnect the
+relay never observed; the ordinary case — a daemon restart — is handled by the disconnect path, which
+frees the slot at once. The clause's purpose (a restart must not strand a slot for its full TTL) is
+met; its literal wording is not.
+
+#### Carried out of this line
+
+- **⚠️ Deploy ordering is enforced by nothing, and it is not classified yet.** Publish the client
+  before deploying the relays: an old relay ignores the extra field, but **an enforcing relay in
+  front of clients that send no token refuses every agent.** Awaiting Andre's §0z.1 classification —
+  see Entry S15.
+- `relay_slot_reclaimed` reaches only an agent with an open delivery stream. A bare standing receiver
+  proves its reservation and closes the stream, so for the case the notice was written for there is
+  nothing to write to and the hangup is the only signal. It recovers either way; what it loses is the
+  explanation.
+- **The three caps are judgement calls with no occupancy data behind them** — 32 slots per agent, 5
+  sessions per identity pair, reaper at 80% of the ceiling. Worth revisiting once a relay has run
+  with real traffic. The six-hour activity floor is not in this category; it is a floor.
