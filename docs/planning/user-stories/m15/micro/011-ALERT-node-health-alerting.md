@@ -241,12 +241,17 @@ silent — which was the order's central fear, and it is answered."*
 
 *(One or two lines each. Do not act on them.)*
 
-1. **If the memory sampler stops, the alert goes silent and that reads exactly like health.** The
-   log-based metric produces no time series when no lines arrive, and neither policy has an
-   absence/heartbeat condition — so a sampler that dies (a failed unit, a lowered `SyslogLevel`, a
-   node that boots without the timer) removes the alarm rather than raising one. Same shape for CPU
-   if an instance stops reporting. Adding absence detection is a third policy and a design decision,
-   so it is recorded, not built.
+> **Item 1 was CLOSED inside this unit, not deferred.** I first filed "if the sampler stops the
+> alert goes silent and that reads like health" here and left it. The reviewer showed it was worse
+> than filed — a dead directory process silences BOTH policies — and that it had a one-attribute
+> fix. It is struck rather than deleted because the misjudgement is the useful part: the thing I
+> classified as a future design decision was the failure the unit exists to catch.
+
+1. ~~**If the memory sampler stops, the alert goes silent and that reads exactly like health.**~~
+   **CLOSED** — `evaluation_missing_data = "EVALUATION_MISSING_DATA_ACTIVE"` on the memory
+   condition, applied and verified live. What remains open by design: the CPU condition is per
+   instance and instances legitimately vanish on every roll, so it stays `INACTIVE`. The memory
+   condition covers the node-down case for both.
 
 2. **`node-relay.tf` fails `terraform fmt -check`** (exit 3, a misaligned `templatefile` argument
    block). Pre-existing — it fails identically on `main` — so repo-scope `terraform fmt` has been red
