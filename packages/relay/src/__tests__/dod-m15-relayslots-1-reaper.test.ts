@@ -43,7 +43,6 @@ function makeGater(ceiling: number): { gater: RelayConnectionGater; hungUp: stri
   const connected = new Set<string>();
   const gater = new RelayConnectionGater({
     logger: silentLogger,
-    reservationGraceMs: 60_000,
     slotCeiling: ceiling,
   });
   gater.attachNode({
@@ -62,9 +61,8 @@ function makeGater(ceiling: number): { gater: RelayConnectionGater; hungUp: stri
  */
 function takeSlot(gater: RelayConnectionGater, peerId: string, agent = AGENT, connected?: Set<string>): void {
   connected?.add(peerId);
-  const admission = gater.admitSlot(peerId, agent);
+  const admission = gater.admitSlot(peerId, agent, true);
   expect(admission.ok, `precondition: ${peerId} must be able to authenticate`).toBe(true);
-  gater.recordAuthenticated(peerId);
   expect(
     gater.denyInboundRelayReservation(peer(peerId) as never),
     `precondition: ${peerId} must get a reservation once it has proved itself`,
@@ -174,7 +172,8 @@ describe("DOD-M15-RELAYSLOTS-1: the reaper", () => {
     // node submitting leaves does exactly this and holds no circuit reservation at all.
     takeSlot(gater, "peer-reserved", AGENT, connected);
     for (let i = 0; i < 3; i++) {
-      const admission = gater.admitSlot(`peer-dialed-${String(i)}`, `${String(i)}`.padStart(2, "0").repeat(32));
+      // `false` — a delivery auth. It is registered and attributed and it holds no reservation.
+      const admission = gater.admitSlot(`peer-dialed-${String(i)}`, `${String(i)}`.padStart(2, "0").repeat(32), false);
       expect(admission.ok).toBe(true);
     }
     vi.advanceTimersByTime(SLOT_REAP_ACTIVITY_FLOOR_MS + 1);

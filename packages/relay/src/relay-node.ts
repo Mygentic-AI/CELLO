@@ -178,6 +178,28 @@ const MAX_LOGGED_FRAME_TYPE = 64;
 const DEFAULT_AUTH_RATE_LIMIT: DepositRateLimitConfig = { maxPerWindow: 20, windowMs: 60_000 };
 
 /**
+ * DOD-M15-RELAYSLOTS-1 — **RESERVATION PROOFS GET THEIR OWN BUDGET, and they have to.**
+ *
+ * Review finding 5. This order put a reservation behind an authentication, which quietly moved the
+ * auth rate limiter onto the path to a front door. It had never been there: before, a rate-limited
+ * auth cost only the post-hoc check, and the slot was granted regardless.
+ *
+ * The pubkey bucket is shared across everything one agent does here, and delivery auths are by far
+ * the more numerous — a daemon reviving ten parked sessions spends ten of them at once. On one
+ * shared bucket of 20/minute, the receiver built after that burst is refused `rate_limited`, never
+ * proves, never reserves, and silently falls back to a receiver with no circuit address. The agent
+ * reports online and is reachable by nobody, because it was busy.
+ *
+ * So the two are counted separately. This bucket is sized for what a client legitimately does:
+ * one proof per relay candidate per receiver build, a watchdog that rebuilds every 30 seconds, and
+ * a revival that proves once per candidate. Thirty a minute covers that with room; it still bounds
+ * a caller trying to spend the relay's signature verification at line rate, which is what the
+ * limiter is for. The same speed-bump caveat applies: a fresh keypair gets a fresh bucket, and the
+ * gate — not this — is what stops the flood.
+ */
+const DEFAULT_RESERVATION_PROOF_RATE_LIMIT: DepositRateLimitConfig = { maxPerWindow: 30, windowMs: 60_000 };
+
+/**
  * DOD-M15-RELAYABUSE-1: default per-key limit on hash_submit, applied post-authentication.
  *
  * Sized for real conversational traffic, not the deposit path's occasional message: 120/minute
@@ -530,6 +552,8 @@ export class CelloRelayNode {
   readonly #authPeerLimiter: DepositRateLimiter;
   /** DOD-M15-RELAYABUSE-1: auth-attempt rate limit, keyed on the CLAIMED (pre-verification) pubkey. */
   readonly #authPubkeyLimiter: DepositRateLimiter;
+  /** See `DEFAULT_RESERVATION_PROOF_RATE_LIMIT` — a reservation proof must not be starved by delivery auths. */
+  readonly #reservationProofLimiter: DepositRateLimiter;
   /** DOD-M15-RELAYABUSE-1: hash_submit rate limit, keyed on the Noise-authenticated peer id. */
   readonly #hashSubmitPeerLimiter: DepositRateLimiter;
   /** DOD-M15-RELAYABUSE-1: hash_submit rate limit, keyed on the AUTHENTICATED sender pubkey. */
@@ -611,6 +635,9 @@ export class CelloRelayNode {
     this.#sessionIdleTimeoutMs = opts.sessionIdleTimeoutMs;
     this.#authPeerLimiter = new DepositRateLimiter(opts.authRateLimit ?? DEFAULT_AUTH_RATE_LIMIT);
     this.#authPubkeyLimiter = new DepositRateLimiter(opts.authRateLimit ?? DEFAULT_AUTH_RATE_LIMIT);
+    this.#reservationProofLimiter = new DepositRateLimiter(
+      opts.authRateLimit ?? DEFAULT_RESERVATION_PROOF_RATE_LIMIT,
+    );
     this.#hashSubmitPeerLimiter = new DepositRateLimiter(opts.hashSubmitRateLimit ?? DEFAULT_HASH_SUBMIT_RATE_LIMIT);
     this.#hashSubmitPubkeyLimiter = new DepositRateLimiter(opts.hashSubmitRateLimit ?? DEFAULT_HASH_SUBMIT_RATE_LIMIT);
   }
@@ -1297,15 +1324,30 @@ export class CelloRelayNode {
           // caller has just PROVEN ownership of this key, so this bucket cannot be spent on a
           // victim's behalf by anyone who does not hold their private key.
           authedPubkeyHex = Buffer.from(resp.pubkey).toString("hex");
-          const pubkeyLimit = this.#authPubkeyLimiter.check(authedPubkeyHex);
+          /**
+           * Two buckets, chosen by what this authentication is FOR — see
+           * `DEFAULT_RESERVATION_PROOF_RATE_LIMIT`. A configured `authRateLimit` still governs both,
+           * so an operator (or a test) tightening the limit tightens it everywhere rather than
+           * leaving a second bucket at a default they did not choose.
+           */
+          const isReservationProof = resp.purpose === "reservation";
+          const pubkeyLimit = isReservationProof
+            ? this.#reservationProofLimiter.check(authedPubkeyHex)
+            : this.#authPubkeyLimiter.check(authedPubkeyHex);
           if (!pubkeyLimit.allowed) {
             this.#logger.warn("relay.auth.rate_limited", {
               remotePeerId: remotePeerId ?? "(none)",
               claimedPubkey: truncHex(authedPubkeyHex),
               peerLimited: false,
               pubkeyLimited: true,
+              purpose: resp.purpose ?? "delivery",
               retryAfterMs: pubkeyLimit.retryAfterMs,
-              impact: "this auth attempt was refused after a VALID signature — this key has authenticated too often too fast; the caller may retry after the window",
+              impact: isReservationProof
+                ? "a RESERVATION PROOF was refused after a VALID signature — this key has proved " +
+                  "itself too often too fast. Until it gets through, this agent cannot take a " +
+                  "circuit reservation on this relay, so it has no front door here and its client " +
+                  "will fall back to another relay or to a receiver nobody can dial."
+                : "this auth attempt was refused after a VALID signature — this key has authenticated too often too fast; the caller may retry after the window",
             });
             await this.#refuseAuth(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "rate_limited", retry_after_ms: pubkeyLimit.retryAfterMs }), "rate_limited"); return;
           }
@@ -1319,12 +1361,13 @@ export class CelloRelayNode {
            * this token is how it gets here — signed by a sovereign directory node when it marked the
            * agent online, bound to that agent's public key, short-lived.
            *
-           * Placed HERE, after the signature and before `recordAuthenticated`, for two reasons that
-           * are both load-bearing:
+           * Placed HERE, after the signature and before `admitSlot`, for two reasons that are both
+           * load-bearing:
            *  - the pubkey the token must name is only trustworthy once the signature has verified, so
            *    checking earlier would be comparing the token against an unverified assertion;
-           *  - `recordAuthenticated` is what cancels this peer's reservation-revoke timer, i.e. it is
-           *    the act of KEEPING A SLOT. Nothing may reach it without a token.
+           *  - `admitSlot` is the act of BECOMING ABLE TO HOLD A SLOT: it writes the ledger entry and
+           *    the proof that `denyInboundRelayReservation` grants on. Nothing may reach it without a
+           *    token, or the gate is back to granting to strangers.
            */
           const tokenRefusal = this.#checkOnlineToken(resp, authedPubkeyHex, remotePeerId);
           if (tokenRefusal) {
@@ -1344,13 +1387,16 @@ export class CelloRelayNode {
            * slots before it consults the cap, so a refusal here means every slot they hold has
            * actually carried traffic.
            *
-           * On a refusal the revoke timer is deliberately LEFT RUNNING: the reservation was already
-           * granted by the time we got here (it has to be — a relay cannot deny at grant time
-           * without stranding every brand-new agent's first reservation), so the grace window is
-           * what reclaims it. The caller is told why in the same breath.
+           * A refusal here also means no reservation: the gate in `denyInboundRelayReservation`
+           * grants only to a peer with a ledger entry naming a registered agent, and this refusal
+           * is what stops that entry existing.
            */
           if (remotePeerId) {
-            const admission = this.#connectionGater?.admitSlot(remotePeerId, authedPubkeyHex);
+            const admission = this.#connectionGater?.admitSlot(
+              remotePeerId,
+              authedPubkeyHex,
+              resp.purpose === "reservation",
+            );
             if (admission && !admission.ok) {
               await this.#refuseAuth(
                 stream,
@@ -1367,12 +1413,6 @@ export class CelloRelayNode {
             }
           }
 
-          // DOD-M15-RELAYAUTH-1: this proves Ed25519 key POSSESSION, not participation in any
-          // session — cancels this peer's reservation-revoke grace timer if one is running (see
-          // relay-connection-gater.ts). Does NOT vouch the pubkey; that still requires a real
-          // directory-signed assignment (recordAssignment(), below).
-          if (remotePeerId) this.#connectionGater?.recordAuthenticated(remotePeerId);
-
           /**
            * DOD-M15-RELAYAUTH-1 review HIGH-1 — **A RESERVATION PROOF MUST NOT CLAIM THE DELIVERY
            * STREAM.** An agent legitimately runs several nodes against one relay: the node promoted
@@ -1381,8 +1421,8 @@ export class CelloRelayNode {
            * keyed by PUBKEY, so a second full auth from the same agent overwrites the live session's
            * delivery target and its counterparty's leaves start arriving at a node with no handler.
            *
-           * So a `purpose: "reservation"` auth stops here: possession is proven (recorded above,
-           * which is the whole point), and nothing else is touched — no delivery registration, no
+           * So a `purpose: "reservation"` auth stops here: the proof is recorded in the slot ledger
+           * above, which is the whole point, and nothing else is touched — no delivery registration, no
            * liveness flip, no idle-timer reset, no queued-delivery drain, no park notify. The stream
            * is closed rather than kept, because there is nothing further to say on it.
            */
@@ -2439,10 +2479,11 @@ export class CelloRelayNode {
     // DOD-M15-RELAYSLOTS-1: occupancy against the ceiling, so a relay filling up is visible before
     // it refuses anyone. The unreadable-source counter that used to ride here went with the
     // per-address bound it existed to watch — there is no address heuristic left to go quiet.
-    this.#logger.info("relay.slot.occupancy", {
-      reservedSlots: this.#connectionGater?.slotCount() ?? 0,
-      ceiling: DEFAULT_SLOT_CEILING,
-    });
+    // Review L2: the CONFIGURED ceiling, not the default — a deployment that overrides it was
+    // getting a log line comparing a real number against a fictional one.
+    const held = this.#connectionGater?.slotCount() ?? 0;
+    const ceiling = this.#connectionGater?.slotCeiling() ?? DEFAULT_SLOT_CEILING;
+    this.#logger.info("relay.slot.occupancy", { reservedSlots: held, ceiling });
     this.#connectionGater?.reapIdleSlots((slot) => {
       for (const agentHex of slot.agents) {
         const stream = this.#streams.get(agentHex);
@@ -2791,12 +2832,9 @@ export interface CreateRelayNodeOptions {
   circuitDataLimitBytes?: bigint;
   /**
    * DOD-M15-RELAYAUTH-1: override the connection gater entirely (mainly for tests that need to
-   * inspect its state directly, e.g. `pendingRevokeCount()`). Normal callers should leave this
-   * unset and use `reservationGraceMs` to tune the one thing worth tuning.
+   * inspect its state directly, e.g. `slotCount()`). Normal callers should leave this unset.
    */
   connectionGater?: RelayConnectionGater;
-  /** DOD-M15-RELAYAUTH-1: see `DEFAULT_RESERVATION_GRACE_MS` in relay-connection-gater.ts. */
-  reservationGraceMs?: number;
   /** DOD-M15-RELAYSLOTS-1: see `SLOT_CAP_PER_AGENT` in relay-connection-gater.ts. */
   slotCapPerAgent?: number;
   /** DOD-M15-RELAYSLOTS-1: see `SESSION_CAP_PER_PAIR`. */
@@ -2897,7 +2935,6 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
   const relayLogger = opts.logger ?? { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
   const connectionGater = opts.connectionGater ?? new RelayConnectionGater({
     logger: relayLogger,
-    reservationGraceMs: opts.reservationGraceMs,
     slotCapPerAgent: opts.slotCapPerAgent,
   });
   const node = await createNode({
@@ -3019,9 +3056,10 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     stop: async () => {
       relay.stopIdleSweep();
       relay.stopContentSweep();
-      // Review L1: the gater's pending-revoke timers were the one set of handles this shutdown did
-      // NOT clear, so a stopped relay could still be held open by them for up to the grace window.
-      connectionGater.stop();
+      // The gater holds no timers of its own — its bookkeeping is swept from the idle sweep above,
+      // so stopping that sweep is what stops it. It had a `stop()` once, for the grace-window
+      // revoke timers this order deleted; an empty method kept here would read as a handle being
+      // cleared and would be the reason nobody noticed if one were ever added back.
       await node.stop();
     },
   };
