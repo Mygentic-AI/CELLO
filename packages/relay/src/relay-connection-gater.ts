@@ -71,19 +71,24 @@ export const DEFAULT_RESERVATION_GRACE_MS = 15_000;
 export const SLOT_CAP_PER_AGENT = 32;
 
 /**
- * DOD-M15-RELAYSLOTS-1 — how long a slot must have carried NO traffic before the ledger will
- * reclaim it to make room for the same agent's new reservation.
+ * DOD-M15-RELAYSLOTS-1 — the minimum age before a traffic-free slot may be reclaimed.
  *
- * ⚠️ THIS FLOOR EXISTS BECAUSE THE RULE WITHOUT IT BROKE A LIVE SESSION, and the failure is worth
- * keeping written down because it is the shape this whole unit is meant to avoid. Reclaiming any
- * traffic-free slot on sight looks obviously safe, and it is not: an agent promoted into a session
- * builds a REPLACEMENT standing receiver immediately, and at that instant the promoted receiver has
- * carried nothing yet. The reclaim hung it up, and its counterparty's messages were then delivered
- * to a node no longer connected. An existing test caught it; nothing about the rule looked wrong.
+ * ⚠️ **THIS IS THE WEAKER HALF OF THE GUARD AND MUST NOT BE RELIED ON ALONE.** It shipped first as
+ * the *whole* guard and review measured that it does not do the job.
  *
- * Five minutes is far beyond the seconds a promotion takes and far below the hours a stranded
- * connection lingers. It is also only a BACKSTOP: the common case — a daemon restart — is handled
- * by the disconnect path, which frees the slot at once.
+ * The story is worth keeping because the rule read as obviously correct twice. Reclaiming any
+ * traffic-free slot on sight hung up a LIVE session's receiver: an agent promoted into a session
+ * builds a replacement standing receiver immediately, and at that instant the promoted one has
+ * carried nothing yet. So a five-minute floor was added — and it does not help, because the clock
+ * starts when the receiver RESERVED, not when it was promoted. A receiver that waited more than
+ * five minutes for its first caller, which is the ordinary case, clears the floor and is hung up
+ * the moment its replacement authenticates. The test that named the case said "promoted MOMENTS
+ * ago" and only ever exercised the sub-five-minute window.
+ *
+ * The real guard is `#isPeerConnected` below. This age check stays as a cheap second condition —
+ * it costs nothing and narrows the window further — but the question that actually distinguishes
+ * "stranded leftover" from "receiver patiently waiting for a caller" is whether the peer is still
+ * there, not how long it has been quiet.
  */
 export const SLOT_RECLAIM_MIN_IDLE_MS = 5 * 60 * 1000;
 
@@ -145,6 +150,17 @@ export interface RelayConnectionGaterOptions {
  * state, not a transient one: an unproven holder sits there until its grace timer revokes it.
  */
 interface SlotRecord {
+  /**
+   * DOD-M15-RELAYSLOTS-1: does a circuit RESERVATION back this entry, or is it merely a peer that
+   * authenticated?
+   *
+   * The two are different populations and conflating them was a real defect: a session node that
+   * dials the relay only to submit leaves holds no reservation, yet was being counted against the
+   * ceiling that libp2p enforces on RESERVATIONS. The reaper's pressure line is a fraction of that
+   * ceiling, so it could fire — and hang peers up — while the reservation table was nowhere near
+   * full. Set by `denyInboundRelayReservation`, which is the only place a reservation is granted.
+   */
+  reserved: boolean;
   /**
    * The registered agents reachable through this reservation. Empty between the grant and the first
    * authentication — a real state, not a transient one: an unproven holder sits there until its
@@ -260,9 +276,19 @@ export class RelayConnectionGater implements ConnectionGater {
     return n;
   }
 
-  /** Total slots held, attributed or not — the number that approaches the relay's ceiling. */
+  /**
+   * RESERVATION-backed slots held, attributed or not — the number that approaches the relay's
+   * ceiling, and the one the reaper measures pressure against.
+   *
+   * ⚠️ Deliberately NOT `#slots.size`. A peer that dialled in and authenticated without ever taking
+   * a reservation holds a ledger entry but occupies nothing in libp2p's reservation table, and
+   * counting it here made the reaper's pressure line fire against a table that was not full — which
+   * would hang up peers to free capacity that was never scarce.
+   */
   slotCount(): number {
-    return this.#slots.size;
+    let n = 0;
+    for (const slot of this.#slots.values()) if (slot.reserved) n++;
+    return n;
   }
 
   /**
@@ -316,14 +342,18 @@ export class RelayConnectionGater implements ConnectionGater {
     const now = Date.now();
 
     /**
-     * Reclaim first (see above). Four conditions, and every one of them is load-bearing:
+     * Reclaim first (see above). Five conditions, and every one of them is load-bearing:
      *  - not this peer's own slot;
      *  - this agent is the ONLY one reachable through it, so releasing it cannot strand a
      *    co-tenant agent that has nothing to do with this reservation;
      *  - it has never carried traffic;
-     *  - and it has been that way for longer than a promotion takes — see
-     *    `SLOT_RECLAIM_MIN_IDLE_MS`, which exists because omitting it hung up a live session's
-     *    receiver at the exact moment its replacement authenticated.
+     *  - it is at least `SLOT_RECLAIM_MIN_IDLE_MS` old — cheap, and narrows the window;
+     *  - **and its peer is GONE.** That last one is the guard that actually works. This rule exists
+     *    to clean up a connection the relay never saw close; a peer that is still connected is by
+     *    definition not that. Without it, an agent's own promoted receiver — silent because it has
+     *    not submitted anything yet, and older than any age floor because it waited for its caller
+     *    — is hung up the instant its replacement authenticates, killing the conversation that has
+     *    just started.
      */
     const reclaimed: string[] = [];
     for (const [id, slot] of this.#slots) {
@@ -331,6 +361,7 @@ export class RelayConnectionGater implements ConnectionGater {
       if (!slot.agents.has(agentPubkeyHex) || slot.agents.size !== 1) continue;
       if (slot.lastActivityAt !== null) continue;
       if (now - slot.grantedAt < SLOT_RECLAIM_MIN_IDLE_MS) continue;
+      if (this.#isPeerConnected(id)) continue;
       reclaimed.push(id);
     }
     for (const id of reclaimed) {
@@ -375,7 +406,10 @@ export class RelayConnectionGater implements ConnectionGater {
     if (existing) {
       existing.agents.add(agentPubkeyHex);
     } else {
-      this.#slots.set(peerId, { agents: new Set([agentPubkeyHex]), grantedAt: now, lastActivityAt: null });
+      // No reservation was granted to this peer — it dialled in and authenticated. It still counts
+      // against the agent's own cap (it is capacity this agent is using), but NOT against the
+      // reservation ceiling the reaper measures.
+      this.#slots.set(peerId, { reserved: false, agents: new Set([agentPubkeyHex]), grantedAt: now, lastActivityAt: null });
     }
     return { ok: true };
   }
@@ -400,11 +434,16 @@ export class RelayConnectionGater implements ConnectionGater {
    */
   reapIdleSlots(): ReapedSlot[] {
     const pressureLine = Math.floor(this.#slotCeiling * this.#reapPressureFraction);
-    if (this.#slots.size <= pressureLine) return [];
+    // RESERVATION-backed only, on both sides of the comparison and in the target below. The ceiling
+    // is libp2p's reservation limit, so measuring a population that includes plain authenticated
+    // dial-ins would fire the reaper against a table that is not full.
+    const reservedHeld = this.slotCount();
+    if (reservedHeld <= pressureLine) return [];
 
     const now = Date.now();
     const candidates: Array<{ peerId: string; idleMs: number; agents: string[] }> = [];
     for (const [peerId, slot] of this.#slots) {
+      if (!slot.reserved) continue; // frees nothing in the table this pressure is measured against
       const since = slot.lastActivityAt ?? slot.grantedAt;
       const idleMs = now - since;
       if (idleMs <= SLOT_REAP_ACTIVITY_FLOOR_MS) continue;
@@ -412,7 +451,7 @@ export class RelayConnectionGater implements ConnectionGater {
     }
     if (candidates.length === 0) {
       this.#logger.warn("relay.slot.reap.nothing_to_free", {
-        held: this.#slots.size,
+        held: reservedHeld,
         ceiling: this.#slotCeiling,
         floorHours: SLOT_REAP_ACTIVITY_FLOOR_MS / 3_600_000,
         impact: "the reservation table is under pressure and every slot in it has carried traffic " +
@@ -424,7 +463,7 @@ export class RelayConnectionGater implements ConnectionGater {
     }
 
     candidates.sort((a, b) => b.idleMs - a.idleMs); // quietest first
-    const target = this.#slots.size - pressureLine;
+    const target = reservedHeld - pressureLine;
     const reaped: ReapedSlot[] = [];
     for (const c of candidates) {
       if (reaped.length >= target) break;
@@ -432,7 +471,7 @@ export class RelayConnectionGater implements ConnectionGater {
         peerId: truncId(c.peerId),
         agents: c.agents.map((a) => truncId(a)),
         idleHours: Math.round(c.idleMs / 3_600_000),
-        held: this.#slots.size,
+        held: reservedHeld,
         ceiling: this.#slotCeiling,
         impact: "this reservation was reclaimed to free capacity on a relay under pressure. It had " +
           "carried no traffic for longer than the activity floor. The agent's client rebuilds its " +
@@ -443,6 +482,25 @@ export class RelayConnectionGater implements ConnectionGater {
       reaped.push({ peerId: c.peerId, agents: c.agents, idleMs: c.idleMs });
     }
     return reaped;
+  }
+
+  /**
+   * Is this peer still connected to us?
+   *
+   * ⚠️ **UNKNOWN COUNTS AS CONNECTED.** With no node attached — a gater constructed outside the
+   * production wiring — this returns true, so the reclaim rule declines to act rather than acting
+   * blind. When unsure whether a slot is in use, treat it as in use: that is the whole ordering
+   * this unit rests on, and here it is the difference between leaving an idle slot alone and
+   * hanging up a live conversation.
+   */
+  #isPeerConnected(peerId: string): boolean {
+    if (!this.#node) return true;
+    try {
+      return this.#node.getConnections().some((c) => c.peerId === peerId);
+    } catch {
+      // A transport that cannot answer is not evidence the peer is gone.
+      return true;
+    }
   }
 
   /** Hang the peer up and drop its ledger entry. */
@@ -503,8 +561,11 @@ export class RelayConnectionGater implements ConnectionGater {
     // DOD-M15-RELAYSLOTS-1: the slot exists from the moment it is granted, unattributed until the
     // holder authenticates. Recorded here so the total occupancy the reaper works against counts
     // reservations nobody has claimed yet — they take capacity exactly like the claimed ones do.
-    if (!this.#slots.has(id)) {
-      this.#slots.set(id, { agents: new Set(), grantedAt: Date.now(), lastActivityAt: null });
+    const known = this.#slots.get(id);
+    if (known) {
+      known.reserved = true;
+    } else {
+      this.#slots.set(id, { reserved: true, agents: new Set(), grantedAt: Date.now(), lastActivityAt: null });
     }
     return false;
   }

@@ -32,22 +32,34 @@ function peer(id: string): { toString(): string } {
   return { toString: () => id };
 }
 
+/** Far past any age floor — the ordinary life of a standing receiver waiting for its first call. */
+const SLOT_REAP_HOURS_LATER_MS = 8 * 60 * 60 * 1000;
+
 const AGENT_A = "aa".repeat(32);
 const AGENT_B = "bb".repeat(32);
 
-function makeGater(opts: { hangUp?: (id: string) => Promise<void> } = {}): {
+/**
+ * `connected` is the set of peers the relay's libp2p node still holds a connection to. It is not
+ * decoration: review measured that the reclaim rule's age floor cannot tell a stranded leftover from
+ * a receiver that simply waited a long time for its first caller, and connectedness is the question
+ * that can. A gater whose node reports no connections is a gater that thinks every peer has gone.
+ */
+function makeGater(opts: { connected?: Set<string> } = {}): {
   gater: RelayConnectionGater;
   hungUp: string[];
+  connected: Set<string>;
 } {
   const hungUp: string[] = [];
+  const connected = opts.connected ?? new Set<string>();
   const gater = new RelayConnectionGater({ logger: silentLogger, reservationGraceMs: 60_000 });
   gater.attachNode({
     hangUp: async (id: string) => {
       hungUp.push(id);
-      await opts.hangUp?.(id);
+      connected.delete(id);
     },
+    getConnections: () => [...connected].map((peerId) => ({ peerId })),
   } as unknown as Parameters<RelayConnectionGater["attachNode"]>[0]);
-  return { gater, hungUp };
+  return { gater, hungUp, connected };
 }
 
 /**
@@ -59,7 +71,13 @@ function makeGater(opts: { hangUp?: (id: string) => Promise<void> } = {}): {
  * rule under test. Two assertions here failed that way first, and the reported cause — thirty-two
  * slots released instead of one — pointed at the ledger, not at the fixture.
  */
-function takeSlot(gater: RelayConnectionGater, peerId: string, agent: string): ReturnType<RelayConnectionGater["admitSlot"]> {
+function takeSlot(
+  gater: RelayConnectionGater,
+  peerId: string,
+  agent: string,
+  connected?: Set<string>,
+): ReturnType<RelayConnectionGater["admitSlot"]> {
+  connected?.add(peerId);
   gater.denyInboundRelayReservation(peer(peerId) as never);
   const admission = gater.admitSlot(peerId, agent);
   if (admission.ok) gater.recordAuthenticated(peerId);
@@ -71,56 +89,65 @@ describe("DOD-M15-RELAYSLOTS-1: the slot ledger", () => {
   afterEach(() => { vi.useRealTimers(); });
 
   it("attributes a slot to the agent key the token named, not to the transport peer id", () => {
-    const { gater } = makeGater();
-    expect(takeSlot(gater, "peer-1", AGENT_A).ok).toBe(true);
+    const { gater, connected } = makeGater();
+    expect(takeSlot(gater, "peer-1", AGENT_A, connected).ok).toBe(true);
     expect(gater.slotCountForAgent(AGENT_A)).toBe(1);
     expect(gater.slotCountForAgent(AGENT_B)).toBe(0);
   });
 
-  it("★★★ a long-stranded slot is REUSED rather than held for the full TTL", () => {
-    const { gater, hungUp } = makeGater();
-    expect(takeSlot(gater, "peer-before-restart", AGENT_A).ok).toBe(true);
-
-    // Long enough that this cannot be a receiver the same agent created moments ago — the
-    // distinction `SLOT_RECLAIM_MIN_IDLE_MS` exists to draw.
+  it("★★★ a slot whose peer is GONE is reused rather than held for the full TTL", () => {
+    const { gater, hungUp, connected } = makeGater();
+    expect(takeSlot(gater, "peer-before-restart", AGENT_A, connected).ok).toBe(true);
     vi.advanceTimersByTime(SLOT_RECLAIM_MIN_IDLE_MS + 1);
 
-    // The daemon restarted and its half-open connection was never torn down, so the disconnect path
-    // never fired. Its libp2p peer id is regenerated, which is exactly why — before the token — the
-    // relay could not tell this was the same agent.
-    expect(takeSlot(gater, "peer-after-restart", AGENT_A).ok).toBe(true);
+    // The daemon restarted and the relay never observed the close — a half-open connection, which
+    // is the only case this rule exists for. Its libp2p peer id is regenerated, which is exactly
+    // why, before the token, the relay could not tell this was the same agent.
+    connected.delete("peer-before-restart");
+    expect(takeSlot(gater, "peer-after-restart", AGENT_A, connected).ok).toBe(true);
 
     expect(
       gater.slotCountForAgent(AGENT_A),
-      "the old slot had never carried a byte of traffic and its holder is long gone. Holding it for " +
-        "its full TTL is what made fifteen slots vanish in normal use and caused a real outage.",
+      "the old slot had never carried a byte of traffic and its holder is gone. Holding it for its " +
+        "full TTL is what made fifteen slots vanish in normal use and caused a real outage.",
     ).toBe(1);
     expect(hungUp).toEqual(["peer-before-restart"]);
   });
 
-  it("★★★ a receiver promoted MOMENTS ago is NOT reclaimed when its replacement authenticates", () => {
-    const { gater, hungUp } = makeGater();
-    expect(takeSlot(gater, "peer-promoted", AGENT_A).ok).toBe(true);
+  it("★★★ a receiver that WAITED HOURS for its first caller is not reclaimed when promoted", () => {
+    const { gater, hungUp, connected } = makeGater();
+    expect(takeSlot(gater, "peer-promoted", AGENT_A, connected).ok).toBe(true);
 
-    // The client builds a replacement standing receiver the instant the first one is promoted into
-    // a session. At this point the promoted one has carried nothing yet — it is about to.
-    expect(takeSlot(gater, "peer-replacement", AGENT_A).ok).toBe(true);
+    /**
+     * ⚠️ THE PRODUCTION SEQUENCE, and the one the first version of this test missed.
+     *
+     * It said "promoted MOMENTS ago" and advanced no clock, so it only ever exercised the window
+     * inside the age floor — and passed against a rule that hangs up the promoted receiver in every
+     * ordinary case. A standing receiver normally waits a long time before anyone calls: it is
+     * older than any age floor, and it has still carried nothing, because being promoted is not
+     * traffic. Review measured this; the fix is that the guard asks whether the peer is still
+     * CONNECTED, which it plainly is.
+     */
+    vi.advanceTimersByTime(SLOT_REAP_HOURS_LATER_MS);
+
+    // Someone finally calls. The client promotes this receiver and immediately builds a replacement
+    // behind it, which authenticates to the same relay.
+    expect(takeSlot(gater, "peer-replacement", AGENT_A, connected).ok).toBe(true);
 
     expect(
       hungUp,
-      "reclaiming on 'never carried traffic' alone hung up the promoted receiver here, and its " +
-        "counterparty's messages were then delivered to a node that was no longer connected. " +
-        "Nothing about that rule looked wrong; an existing test is what caught it.",
+      "hanging up here kills the conversation that has just started, and from the agent's side it " +
+        "is indistinguishable from the network dropping.",
     ).toEqual([]);
     expect(gater.slotCountForAgent(AGENT_A)).toBe(2);
   });
 
   it("does NOT reclaim a slot that has carried traffic — a live conversation is not spare capacity", () => {
-    const { gater, hungUp } = makeGater();
-    expect(takeSlot(gater, "peer-live", AGENT_A).ok).toBe(true);
+    const { gater, hungUp, connected } = makeGater();
+    expect(takeSlot(gater, "peer-live", AGENT_A, connected).ok).toBe(true);
     gater.recordActivity("peer-live");
 
-    expect(takeSlot(gater, "peer-replacement", AGENT_A).ok).toBe(true);
+    expect(takeSlot(gater, "peer-replacement", AGENT_A, connected).ok).toBe(true);
 
     expect(
       gater.slotCountForAgent(AGENT_A),
@@ -131,15 +158,15 @@ describe("DOD-M15-RELAYSLOTS-1: the slot ledger", () => {
   });
 
   it("★★★ refuses past the per-agent cap, and says which cap and what is being held", () => {
-    const { gater } = makeGater();
+    const { gater, connected } = makeGater();
     for (let i = 0; i < SLOT_CAP_PER_AGENT; i++) {
-      const r = takeSlot(gater, `peer-${String(i)}`, AGENT_A);
+      const r = takeSlot(gater, `peer-${String(i)}`, AGENT_A, connected);
       expect(r.ok, `slot ${String(i)} must be granted — the cap is ${String(SLOT_CAP_PER_AGENT)}`).toBe(true);
       // Traffic on every one, so none is reclaimable and the cap is what does the refusing.
       gater.recordActivity(`peer-${String(i)}`);
     }
 
-    const refused = takeSlot(gater, "peer-one-too-many", AGENT_A);
+    const refused = takeSlot(gater, "peer-one-too-many", AGENT_A, connected);
     expect(refused.ok).toBe(false);
     if (refused.ok || refused.reason !== "slot_cap_exceeded") {
       expect.fail(`expected slot_cap_exceeded, got ${refused.ok ? "ok" : refused.reason}`);
@@ -153,17 +180,21 @@ describe("DOD-M15-RELAYSLOTS-1: the slot ledger", () => {
   });
 
   it("★★★ reclaims before it refuses — an idle slot is freed rather than the caller being turned away", () => {
-    const { gater, hungUp } = makeGater();
+    const { gater, hungUp, connected } = makeGater();
     for (let i = 0; i < SLOT_CAP_PER_AGENT; i++) {
-      expect(takeSlot(gater, `peer-${String(i)}`, AGENT_A).ok).toBe(true);
-      // All but ONE carry traffic. The quiet one is reclaimable.
+      expect(takeSlot(gater, `peer-${String(i)}`, AGENT_A, connected).ok).toBe(true);
+      // All but ONE carry traffic.
       if (i !== 3) gater.recordActivity(`peer-${String(i)}`);
     }
-    // Past the reclaim floor, so the quiet slot is old enough to be someone's leftover rather than
-    // a receiver this agent created seconds ago.
     vi.advanceTimersByTime(SLOT_RECLAIM_MIN_IDLE_MS + 1);
+    /**
+     * And the quiet one's peer is GONE — a connection the relay never saw close, which is the only
+     * thing this rule is for. A quiet peer that is still CONNECTED is a standing receiver waiting
+     * for a caller, and reclaiming that is what killed a live conversation before review caught it.
+     */
+    connected.delete("peer-3");
 
-    const admitted = takeSlot(gater, "peer-new", AGENT_A);
+    const admitted = takeSlot(gater, "peer-new", AGENT_A, connected);
     expect(
       admitted.ok,
       "refusing here would cost a real agent its front door to save a slot nothing was using. " +
@@ -174,17 +205,17 @@ describe("DOD-M15-RELAYSLOTS-1: the slot ledger", () => {
   });
 
   it("one agent's cap is not spent by another's slots", () => {
-    const { gater } = makeGater();
+    const { gater, connected } = makeGater();
     for (let i = 0; i < SLOT_CAP_PER_AGENT; i++) {
-      expect(takeSlot(gater, `a-${String(i)}`, AGENT_A).ok).toBe(true);
+      expect(takeSlot(gater, `a-${String(i)}`, AGENT_A, connected).ok).toBe(true);
       gater.recordActivity(`a-${String(i)}`);
     }
-    expect(takeSlot(gater, "b-0", AGENT_B).ok).toBe(true);
+    expect(takeSlot(gater, "b-0", AGENT_B, connected).ok).toBe(true);
   });
 
   it("★★★ a disconnect frees the slot immediately — it is not held for the full TTL", () => {
-    const { gater } = makeGater();
-    expect(takeSlot(gater, "peer-1", AGENT_A).ok).toBe(true);
+    const { gater, connected } = makeGater();
+    expect(takeSlot(gater, "peer-1", AGENT_A, connected).ok).toBe(true);
     gater.recordActivity("peer-1");
     expect(gater.slotCountForAgent(AGENT_A)).toBe(1);
 
@@ -198,16 +229,16 @@ describe("DOD-M15-RELAYSLOTS-1: the slot ledger", () => {
   });
 
   it("re-authenticating on the SAME peer id does not double-count", () => {
-    const { gater } = makeGater();
-    expect(takeSlot(gater, "peer-1", AGENT_A).ok).toBe(true);
+    const { gater, connected } = makeGater();
+    expect(takeSlot(gater, "peer-1", AGENT_A, connected).ok).toBe(true);
     gater.recordActivity("peer-1");
     expect(gater.admitSlot("peer-1", AGENT_A).ok).toBe(true);
     expect(gater.slotCountForAgent(AGENT_A)).toBe(1);
   });
 
   it("two agents over ONE connection are each charged for it, and neither can reclaim it from under the other", () => {
-    const { gater, hungUp } = makeGater();
-    expect(takeSlot(gater, "peer-shared", AGENT_A).ok).toBe(true);
+    const { gater, hungUp, connected } = makeGater();
+    expect(takeSlot(gater, "peer-shared", AGENT_A, connected).ok).toBe(true);
     expect(gater.admitSlot("peer-shared", AGENT_B).ok).toBe(true);
 
     expect(
@@ -220,7 +251,7 @@ describe("DOD-M15-RELAYSLOTS-1: the slot ledger", () => {
 
     // A's new reservation must not release a slot B is also reachable through.
     vi.advanceTimersByTime(SLOT_RECLAIM_MIN_IDLE_MS + 1);
-    expect(takeSlot(gater, "peer-a-new", AGENT_A).ok).toBe(true);
+    expect(takeSlot(gater, "peer-a-new", AGENT_A, connected).ok).toBe(true);
     expect(hungUp, "releasing the shared slot would strand B, which had nothing to do with it").toEqual([]);
   });
 });

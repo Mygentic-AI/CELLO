@@ -120,12 +120,7 @@ export type AuthFailedReason =
    * A different relay WOULD grant this — but doing that quietly papers over leaked sessions and the
    * same wall arrives on the next relay, so the daemon surfaces it rather than spreading it.
    */
-  | "slot_cap_exceeded"
-  /**
-   * A second agent key authenticated over a transport identity already attributed to another agent.
-   * Should be unreachable — one libp2p connection carries one agent.
-   */
-  | "slot_agent_mismatch";
+  | "slot_cap_exceeded";
 
 export interface RelayAuthFailed {
   type: "relay_auth_failed";

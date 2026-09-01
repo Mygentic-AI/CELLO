@@ -155,6 +155,30 @@ describe("DOD-M15-RELAYSLOTS-1: the reaper", () => {
     );
   });
 
+  it("★★★ a peer that authenticated WITHOUT a reservation does not create pressure", () => {
+    const { gater, hungUp } = makeGater(4);
+    // One real reservation, then three peers that merely dialled in and authenticated — a session
+    // node submitting leaves does exactly this and holds no circuit reservation at all.
+    takeSlot(gater, "peer-reserved", AGENT);
+    for (let i = 0; i < 3; i++) {
+      const admission = gater.admitSlot(`peer-dialed-${String(i)}`, `${String(i)}`.padStart(2, "0").repeat(32));
+      expect(admission.ok).toBe(true);
+    }
+    vi.advanceTimersByTime(SLOT_REAP_ACTIVITY_FLOOR_MS + 1);
+
+    expect(
+      gater.slotCount(),
+      "the reaper measures pressure against libp2p's RESERVATION ceiling. Counting connections that " +
+        "hold no reservation made a table of one look like a table of four.",
+    ).toBe(1);
+    expect(
+      gater.reapIdleSlots(),
+      "one reservation out of four is not pressure. Counting the dial-ins would have fired the " +
+        "reaper here and hung up a peer to free capacity that was never scarce.",
+    ).toEqual([]);
+    expect(hungUp).toEqual([]);
+  });
+
   it("the pressure line and the ceiling have the values the relay actually runs with", () => {
     expect(
       DEFAULT_SLOT_CEILING,
