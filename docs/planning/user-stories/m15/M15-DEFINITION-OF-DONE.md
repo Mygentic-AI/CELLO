@@ -805,16 +805,34 @@ argument: a wire and schema change is cheapest against an empty database and nev
 consumes.
 
 ### `DOD-M15-KEYAGREE-1` — 🟡 CELLO owns its own confidentiality guarantee
-> **The LOCAL half is done and reviewed** (`006-CRYPTO`, closed 2026-09-01; one Opus pass, six
-> findings, three blocking, all fixed; 17 mutants each run alone and each confirmed to compile
-> first). A throwaway keypair is minted per session, held in memory only, and destroyed at teardown
-> and shutdown. **The tag stays 🟡 because the FEATURE is not real: nothing exchanges the public
-> halves, so no message body is encrypted yet.** `007-CRYPTO` owns the wire half and is open — see
-> `DOD-M15-EPHEMERAL-AUTH-1`. → Entry S15.
+> **BOTH halves are now written and reviewed.** `006-CRYPTO` (local: mint per session, memory only,
+> destroyed at teardown and shutdown — one Opus pass, six findings, three blocking, all fixed, 17
+> mutants) and `007-CRYPTO` (wire: exchange, sign, verify, encrypt the body — one Opus pass, fourteen
+> findings, five blocking a publish, all addressed, 13 mutants). **The tag stays 🟡 for evidence and
+> shipping, not for code** — see `DOD-M15-EPHEMERAL-AUTH-1` for the two things standing. → Entry S15.
 >
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
-### `DOD-M15-EPHEMERAL-AUTH-1` — ❌ The session ephemeral is bound to the agent's identity
+### `DOD-M15-EPHEMERAL-AUTH-1` — 🟡 The session ephemeral is bound to the agent's identity
+> **Written and reviewed** (`007-CRYPTO`, 2026-09-01 — one Opus pass, fourteen findings, five
+> blocking a publish, all addressed). The throwaway key is signed with the agent's Ed25519 identity,
+> the peer's is verified **before** anything derives, missing/malformed/mismatched all take one
+> hard-fail path, and the message body is encrypted with the agreed secret. **The active-relay MITM
+> this line exists for is closed in code.**
+>
+> **NOT ✅, and the two reasons are precise:**
+> 1. **The clause the order itself calls "the clause that makes the feature real" was proven with two
+>    managers in ONE process** — real libp2p, real identities, real signatures, nothing seeded, but
+>    one process. This file's own rule is that Vitest green is necessary and never sufficient. The
+>    process-boundary version belongs in the spine harness, which `007` did not touch.
+> 2. **Clause 14 — publish, receiver first — is outstanding and is ANDRE'S.** Until it runs, the fix
+>    exists and protects nobody: no operator is running it.
+>
+> ⚠️ **And the code is not on `main`.** 14 commits sit on `m15/007-crypto-ephemeral-auth` in
+> cello-client. §2 step 11 — *a reviewed-green unit does not sit on a branch* — and this is a
+> bilateral wire change touching 63 fixtures, so every day it stays there the merge gets worse.
+> → Entry S15.
+>
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 Split from `DOD-M15-KEYAGREE-1` (review F6). The key agreement defeats a PASSIVE recorder — the
 harvest-now threat the line names — and NOT an active on-path relay.
