@@ -157,10 +157,26 @@ slot. The relay verifies one signature against directory keys it already holds.
 **Why it stops the attack:** minting 4096 keypairs takes seconds. Minting 4096 *registered agents*
 does not — registration is email-gated and involves a threshold ceremony.
 
-**Settle when built, not now:** token lifetime and what happens when it expires mid-session; which
-of the N directories issues it and whether any consortium member's token is accepted; whether an
-unreachable directory blocks a restart from reserving; revocation of a retired agent's unexpired
-token.
+**Two requirements, NOT open questions — without either, this check has no teeth:**
+
+1. **The token must name the pubkey, and the relay must check it against the key doing the
+   challenge-response.** A token that only says "some registered agent" is a bearer pass: lift one
+   from anywhere — a log, a shared machine, a modified peer — and present it with your own throwaway
+   key. Binding it to the key means a stolen token is useless without the private key it names, which
+   the existing challenge-response already proves.
+2. **A relay with no directory public key configured must REFUSE, not wave callers through.** This is
+   how a check like this quietly becomes decorative: a misconfigured relay cannot verify anything,
+   the natural default is to allow, and the flood works exactly as if the feature had never shipped.
+   Verification is not optional at the composition root.
+
+Neither is about the signature verification itself — the relay is already configured with the
+directory pubkey and the consortium set, and already verifies directory signatures on admin frames
+and on session assignments. The token rides existing machinery. A modified daemon can present
+anything, but cannot produce a valid signature over its own key without the directory's private key.
+
+**Settle when built:** token lifetime and what happens when it expires mid-session; which of the N
+directories issues it and whether any consortium member's token is accepted; whether an unreachable
+directory blocks a restart from reserving; revocation of a retired agent's unexpired token.
 
 **⚠️ A PROPOSAL, not work for this order.** It touches directory, client and relay, so it needs its
 own work order to build. 003 carries the decision, not the implementation.
