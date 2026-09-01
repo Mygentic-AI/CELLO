@@ -164,6 +164,16 @@ decoupled them, which removed the objection.
   that too, but **do not remove the existing refusal** without proving the signature covers the same
   case — it is enforcing a separate ruled requirement.
 - **Do not weaken an existing assertion to make a new test pass.**
+- 🚨 **ENCRYPT THE COPY THAT GOES ON THE WIRE, NOT THE ONE HELD FOR THE PARK BACKSTOP.** A live send
+  keeps the PLAINTEXT in the awaiting-ack tracker, and when delivery times out that plaintext is what
+  gets sealed into the relay mailbox. Encrypt `content` in place and the backstop seals ciphertext
+  locked under a session key that is about to be destroyed — the recipient opens the outer seal and
+  finds bytes nothing can read. **It passes every live-delivery test and only fails when a message
+  parks**, which is the case nobody runs by hand.
+- **Parked messages are untouched by a restart, and that is deliberate** — they are sealed to the
+  long-term identity key, never to the session key, precisely because a recipient may be offline for
+  days and restart several times before collecting. Nothing needs removing or resending. Do not
+  "fix" the parked path onto the session key.
 
 ---
 
