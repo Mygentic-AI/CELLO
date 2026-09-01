@@ -96,13 +96,14 @@ does not move them.
 | Size | What a reader would find | Line |
 |---|---|---|
 | **S** ✅ | A direct session permanently reveals the operator's IP, with no gate and no remedy — and the shipped docs said nothing. **All four bullets shipped 2026-08-24 in BOTH copies of `SKILL.md`, and `RELAYONLY-1` closed as the feature half.** | `DOD-M15-DISCLOSE-1` |
-| **M–L** | The relay's reservation-dial hook is not installed, so an agent's circuit address is dialable by anyone who learns it. The direct path was closed this week; this is the same door, other route. | `DOD-M15-RELAYAUTH-1` (gater bullet only) |
+| **M–L** ✅ | ~~The relay's reservation-dial hook is not installed, so an agent's circuit address is dialable by anyone who learns it.~~ **CLOSED 2026-09-01.** The gater is installed, including the reservation-dial hook, and the relay now requires a directory-signed assignment. Pass 2 refused the merge first: the new gate denied the LEGITIMATE first dial for every session where the receiver is NAT'd and its reservation relay is not the witness relay. | `DOD-M15-RELAYAUTH-1` |
 | **S** ✅ | An empty `CELLO_DIRECTORY_PUBKEYS` degrades silently instead of failing startup. Config is correct today; the failure mode that would hide it going wrong is not. | `DOD-M15-RELAYPUBKEYS-1` |
-| **S** ✅ | ~~The directory-admin push handler has no caller; deleting it is cheaper and safer.~~ **FALSE — measured 2026-08-24. Its caller is the production directory (`discard_session`), and deleting it would have broken session teardown.** Kept and justified. The real, smaller finding is that THREE of its four frame types have no sender. | `DOD-M15-RELAYADMIN-1` → `DOD-M15-RELAYADMIN-DEAD-FRAMES-1` ❌ |
+| **S** ✅ | ~~The directory-admin push handler has no caller; deleting it is cheaper and safer.~~ **FALSE — measured 2026-08-24. Its caller is the production directory (`discard_session`), and deleting it would have broken session teardown.** Kept and justified. The real, smaller finding is that THREE of its four frame types have no sender — **deleted, and CLOSED 2026-09-01**, though the unit shipped only half a deletion and left three apparently-working senders behind. | `DOD-M15-RELAYADMIN-1` → `DOD-M15-RELAYADMIN-DEAD-FRAMES-1` ✅ |
 | **S** ✅→ | Directory authentication is skipped when the URL is not a byte match. **The "make the skip LOUD" half is DONE** (`DIRAUTH-1` #5: `directory.auth.skipped` at WARN, once per directory, plus `cello_status` in both directions). **What remains is the byte-match itself**, which is an endpoint-identity change. | `DOD-M15-STEP6-REPLAY-1` |
 | **M** | The session ephemeral is not bound to the agent's identity, so the new encryption defeats a passive recorder and **not an active relay — and we run the relays.** The module's own docstring says so. | `DOD-M15-EPHEMERAL-AUTH-1` |
 | **M** ✅ | The content-park store is unauthenticated by design and unbounded per depositor: 4 MiB frames, 256 MB store, no rate limit. Fillable for every user at once. | `DOD-M15-RELAYPARK-1` |
-| **L** 🟡 | The relay had **no rate limiting of any kind** — authentication, hash submission, gap-fill, the liveness query, park deposit. **The park deposit path now has a per-peer limiter (both halves, reviewed) and the liveness query is scoped to a named participant.** The other three paths still have none. | `DOD-M15-RELAYABUSE-1` |
+| **L** ✅ | The relay had **no rate limiting of any kind** — authentication, hash submission, gap-fill, the liveness query, park deposit. **CLOSED 2026-09-01: every path is limited** (gap-fill vacuously — its wire handler was already deleted), the idle timer is armed at 24 h, and the circuit caps are enforced. The Sonnet pass called it faithful; the Opus re-review found both new refusals reached a log line and nothing else. | `DOD-M15-RELAYABUSE-1` |
+| **L** ✅ | A relay granted circuit reservation slots to anyone holding any keypair and **counted nothing** — mint 4096 keys and no real agent is reachable by anybody, while the relay looks healthy and every request was individually legitimate. **CLOSED 2026-09-01**: directory-issued token bound to the agent key, per-agent and per-identity-pair caps, reaper before refusal. | `DOD-M15-RELAYSLOTS-1` |
 
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 | **L** | The semantic screener has **never run against real weights** — `installModel` has no caller, no command, and the dependency is not even declared optional. One of the three things the launch intent names as core value. | `DOD-M15-SCREENINSTALL-1` |
@@ -804,6 +805,13 @@ argument: a wire and schema change is cheapest against an empty database and nev
 consumes.
 
 ### `DOD-M15-KEYAGREE-1` — 🟡 CELLO owns its own confidentiality guarantee
+> **The LOCAL half is done and reviewed** (`006-CRYPTO`, closed 2026-09-01; one Opus pass, six
+> findings, three blocking, all fixed; 17 mutants each run alone and each confirmed to compile
+> first). A throwaway keypair is minted per session, held in memory only, and destroyed at teardown
+> and shutdown. **The tag stays 🟡 because the FEATURE is not real: nothing exchanges the public
+> halves, so no message body is encrypted yet.** `007-CRYPTO` owns the wire half and is open — see
+> `DOD-M15-EPHEMERAL-AUTH-1`. → Entry S15.
+>
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
 ### `DOD-M15-EPHEMERAL-AUTH-1` — ❌ The session ephemeral is bound to the agent's identity
