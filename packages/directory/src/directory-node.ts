@@ -2032,7 +2032,9 @@ export class CelloDirectoryNode {
            * pool above tells the agent WHERE to ask for a reservation slot; this is what lets it
            * keep one. See `#issueOnlineToken`.
            */
-          const onlineToken = await this.#issueOnlineToken(authedPubkeyHex, nonceHex);
+          const online = await this.#issueOnlineToken(authedPubkeyHex, nonceHex);
+          const onlineToken = online.token;
+          const onlineTokenAbsentReason = online.absentReason;
           if (this.#directoryKeyProvider) {
             const nodeId = this.#directoryKeyProvider.getNodeId();
             const isoTimestamp = new Date(this.#clock.now()).toISOString();
@@ -2059,6 +2061,7 @@ export class CelloDirectoryNode {
                 timestamp: isoTimestamp,
                 relay_endpoints: relayEndpointsForAuthOk,
                 online_token: onlineToken,
+                ...(onlineTokenAbsentReason ? { online_token_absent_reason: onlineTokenAbsentReason } : {}),
               }));
             } catch (err) {
               this.#logger?.warn("directory.auth.challenge.sign.failed", {
@@ -2074,6 +2077,7 @@ export class CelloDirectoryNode {
                 type: "signaling_auth_ok",
                 relay_endpoints: relayEndpointsForAuthOk,
                 online_token: onlineToken,
+                ...(onlineTokenAbsentReason ? { online_token_absent_reason: onlineTokenAbsentReason } : {}),
               }));
             }
           } else {
@@ -2081,6 +2085,7 @@ export class CelloDirectoryNode {
               type: "signaling_auth_ok",
               relay_endpoints: relayEndpointsForAuthOk,
               online_token: onlineToken,
+              ...(onlineTokenAbsentReason ? { online_token_absent_reason: onlineTokenAbsentReason } : {}),
             }));
           }
 
@@ -6001,7 +6006,10 @@ export class CelloDirectoryNode {
    * verifies both against one set of consortium directory pubkeys, so signing with anything else
    * would produce a token no relay could check — a failure that would surface far from its cause.
    */
-  async #issueOnlineToken(agentPubkeyHex: string, correlationId: string): Promise<Uint8Array | undefined> {
+  async #issueOnlineToken(
+    agentPubkeyHex: string,
+    correlationId: string,
+  ): Promise<{ token?: Uint8Array; absentReason?: "not_registered_here" | "issue_failed" }> {
     try {
       const profile = await this.#store.getProfileWithReadThrough(agentPubkeyHex, correlationId);
       if (!profile) {
@@ -6014,13 +6022,16 @@ export class CelloDirectoryNode {
             "the intended outcome for an unregistered key; for a real agent it means its profile has " +
             "not replicated to this node yet.",
         });
-        return undefined;
+        // Review M1: say WHICH absence. The client cannot tell "no profile here" from "the lookup
+        // threw" from the absence of a field, and its advice for the generic case sends the operator
+        // to check a directory connection that is working perfectly.
+        return { absentReason: "not_registered_here" };
       }
-      return await mintOnlineToken({
+      return { token: await mintOnlineToken({
         agentPubkey: new Uint8Array(Buffer.from(agentPubkeyHex, "hex")),
         expiresAtMs: this.#clock.now() + ONLINE_TOKEN_ISSUE_LIFETIME_MS,
         sign: async (tbs) => new Uint8Array(await this.#keyProvider.sign(tbs)),
-      });
+      }) };
     } catch (err) {
       /**
        * The lookup or the signing failed. The agent still authenticates — breaking signaling over
@@ -6037,7 +6048,7 @@ export class CelloDirectoryNode {
           "a reservation slot and it will be unreachable through any relay until this succeeds. " +
           "Signaling itself is unaffected — session offers still arrive on this stream.",
       });
-      return undefined;
+      return { absentReason: "issue_failed" };
     }
   }
 

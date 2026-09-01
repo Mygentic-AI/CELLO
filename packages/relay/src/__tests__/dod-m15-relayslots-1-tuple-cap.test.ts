@@ -86,7 +86,7 @@ describe("DOD-M15-RELAYSLOTS-1: concurrent sessions between one pair are capped"
       relay.recordAssignment(await assignment(dirKp, pubA, pubB)),
       "unbounded sessions between two identities you own is how the table gets taken with slots " +
         "that are correctly in use by every measure the relay has.",
-    ).toEqual({ ok: false, reason: "session_tuple_cap_exceeded" });
+    ).toEqual({ ok: false, reason: "session_tuple_cap_exceeded", concurrent: SESSION_CAP_PER_PAIR, cap: SESSION_CAP_PER_PAIR });
   }, 30_000);
 
   it("the cap is per PAIR — a different counterparty is unaffected", async () => {
@@ -116,7 +116,7 @@ describe("DOD-M15-RELAYSLOTS-1: concurrent sessions between one pair are capped"
       relay.recordAssignment(await assignment(dirKp, pubB, pubA)),
       "counting by ordered pair would let an attacker double the cap by simply taking turns " +
         "initiating — the count is over the two participants' live sessions, so order is irrelevant.",
-    ).toEqual({ ok: false, reason: "session_tuple_cap_exceeded" });
+    ).toEqual({ ok: false, reason: "session_tuple_cap_exceeded", concurrent: SESSION_CAP_PER_PAIR, cap: SESSION_CAP_PER_PAIR });
   }, 30_000);
 
   it("★★★ a CLOSED session stops counting — the cap bounds what is live, not what ever happened", async () => {
@@ -129,7 +129,7 @@ describe("DOD-M15-RELAYSLOTS-1: concurrent sessions between one pair are capped"
       sessions.push(a.session_id);
     }
     expect(relay.recordAssignment(await assignment(dirKp, pubA, pubB))).toEqual({
-      ok: false, reason: "session_tuple_cap_exceeded",
+      ok: false, reason: "session_tuple_cap_exceeded", concurrent: SESSION_CAP_PER_PAIR, cap: SESSION_CAP_PER_PAIR,
     });
 
     // One conversation ends the ordinary way.
@@ -156,7 +156,7 @@ describe("DOD-M15-RELAYSLOTS-1: concurrent sessions between one pair are capped"
     // the pair would now be counted at cap+3 and no amount of closing would ever let them talk again.
     for (let i = 0; i < 3; i++) {
       expect(relay.recordAssignment(await assignment(dirKp, pubA, pubB))).toEqual({
-        ok: false, reason: "session_tuple_cap_exceeded",
+        ok: false, reason: "session_tuple_cap_exceeded", concurrent: SESSION_CAP_PER_PAIR, cap: SESSION_CAP_PER_PAIR,
       });
     }
 
@@ -169,6 +169,6 @@ describe("DOD-M15-RELAYSLOTS-1: concurrent sessions between one pair are capped"
     expect(
       relay.recordAssignment(await assignment(dirKp, pubA, pubB)),
       "and only one — the pair is back at the cap, not below it",
-    ).toEqual({ ok: false, reason: "session_tuple_cap_exceeded" });
+    ).toEqual({ ok: false, reason: "session_tuple_cap_exceeded", concurrent: SESSION_CAP_PER_PAIR, cap: SESSION_CAP_PER_PAIR });
   }, 30_000);
 });

@@ -432,7 +432,7 @@ export class RelayConnectionGater implements ConnectionGater {
    *  3. **Quietest first, and stop as soon as there is room.** Freeing more than the table needs is
    *     just a slower version of refusing too eagerly.
    */
-  reapIdleSlots(): ReapedSlot[] {
+  reapIdleSlots(notify?: (slot: ReapedSlot) => void): ReapedSlot[] {
     const pressureLine = Math.floor(this.#slotCeiling * this.#reapPressureFraction);
     // RESERVATION-backed only, on both sides of the comparison and in the target below. The ceiling
     // is libp2p's reservation limit, so measuring a population that includes plain authenticated
@@ -478,8 +478,22 @@ export class RelayConnectionGater implements ConnectionGater {
           "standing receiver on losing a reservation, so this is recoverable — but it is a real " +
           "interruption and the holder is told.",
       });
+      /**
+       * Review H3: **TELL THEM BEFORE HANGING THEM UP.** `#releaseSlot` disconnects the peer, and
+       * the notice was being sent afterwards on an unawaited promise — so it raced the very
+       * disconnect it was announcing, and on the loopback that race is usually lost quietly.
+       */
+      const entry: ReapedSlot = { peerId: c.peerId, agents: c.agents, idleMs: c.idleMs };
+      try {
+        notify?.(entry);
+      } catch (err: unknown) {
+        this.#logger.debug("relay.slot.reap.notify_failed", {
+          peerId: truncId(c.peerId),
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       this.#releaseSlot(c.peerId);
-      reaped.push({ peerId: c.peerId, agents: c.agents, idleMs: c.idleMs });
+      reaped.push(entry);
     }
     return reaped;
   }

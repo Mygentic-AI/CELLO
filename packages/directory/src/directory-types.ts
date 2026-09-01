@@ -104,6 +104,16 @@ export interface SignalingAuthOk {
    * to be a registered agent", which is also what a pre-token directory looks like.
    */
   online_token?: Uint8Array;
+  /**
+   * DOD-M15-RELAYSLOTS-1 review M1: WHY no token was issued, when none was.
+   *
+   * The directory knows exactly which of three things happened — this key has no agent profile
+   * here, or the lookup/signing failed — and encoding all of them as the absence of a field made
+   * the client report `online_token_required`, whose advice sends the operator to check their
+   * directory CONNECTION. For the not-registered-here case the connection is fine and the answer is
+   * elsewhere entirely: a payload fact wearing a connectivity-flavoured name.
+   */
+  online_token_absent_reason?: "not_registered_here" | "issue_failed";
 }
 
 /** M7-MANIFEST-002: Client requests a fresh manifest from the directory. */

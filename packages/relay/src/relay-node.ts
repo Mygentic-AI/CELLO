@@ -845,10 +845,17 @@ export class CelloRelayNode {
     // Verification failed (directory_signature_invalid) or a non-idempotent store failure: fail LOUD so
     // a forged/non-consortium assignment is diagnosable, never silently accepted (any-directory teeth).
     this.#logger.warn("relay.assignment.rejected", { sessionId: truncHex(sidHex), source: "client", reason: result.reason });
-    await this.#sendFrame(stream, CBOR_ENC.encode({ type: "assignment_invalid", reason: result.reason }) as Uint8Array);
+    await this.#sendFrame(stream, CBOR_ENC.encode({
+      type: "assignment_invalid",
+      reason: result.reason,
+      // Review M2: carry the tuple counts the same way `slots_held`/`slot_cap` ride relay_auth_failed,
+      // so the client can turn this into something the operator can act on.
+      ...(result.concurrent !== undefined ? { concurrent_sessions: result.concurrent } : {}),
+      ...(result.cap !== undefined ? { session_cap: result.cap } : {}),
+    }) as Uint8Array);
   }
 
-  recordAssignment(assignment: SessionAssignment): { ok: true } | { ok: false; reason: string } {
+  recordAssignment(assignment: SessionAssignment): { ok: true } | { ok: false; reason: string; concurrent?: number; cap?: number } {
     // Verify directory signature over canonical CBOR of
     //   [session_id, participant_a, participant_b, session_timestamp]
     // plus, when both session Peer IDs are present (M-4),
@@ -908,7 +915,11 @@ export class CelloRelayNode {
           "on this relay. Refused. For a real operator this means conversations with one " +
           "counterparty that were never closed — the count says how many, so they can go and close some.",
       });
-      return { ok: false, reason: "session_tuple_cap_exceeded" };
+      // Review M2: the counts ride the refusal. "You already have N conversations open with this
+      // counterparty; close some" is actionable; `assignment_invalid` in a log is not — and this is
+      // the refusal most likely to reach a real person, for the reason the order gives: nobody knows
+      // what sessions they have open.
+      return { ok: false, reason: "session_tuple_cap_exceeded", concurrent, cap: this.#sessionCapPerPair };
     }
 
     const genesisRoot = computeGenesisPrevRoot(
@@ -2425,8 +2436,9 @@ export class CelloRelayNode {
    * watchdog rebuilds the receiver; what they lose is the explanation, not the recovery.
    */
   #reapSlots(): void {
-    const reaped = this.#connectionGater?.reapIdleSlots() ?? [];
-    for (const slot of reaped) {
+    // Review H3: the notice is sent from INSIDE the reap, before the peer is hung up. Sending it
+    // afterwards raced the disconnect it was announcing.
+    this.#connectionGater?.reapIdleSlots((slot) => {
       for (const agentHex of slot.agents) {
         const stream = this.#streams.get(agentHex);
         if (!stream) continue;
@@ -2439,7 +2451,7 @@ export class CelloRelayNode {
             "reconnect to this relay, or start a new session, and a fresh reservation is taken.",
         }) as Uint8Array).catch(() => { /* the peer is going away; the reap log is the durable record */ });
       }
-    }
+    });
   }
 
   /**
