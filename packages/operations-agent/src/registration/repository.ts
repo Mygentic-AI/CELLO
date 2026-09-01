@@ -488,10 +488,27 @@ export class RegistrationRepository {
   }
 
   /**
-   * Refresh updatedAt and expiresAt for a record without changing state.
-   * Used for AWAITING_CONTACT re-prompts to prevent 7-day expiry.
+   * Record where an AWAITING_CONTACT record sits in its reminder cycle, durably.
+   *
+   * `count` is how many automated reminders have been sent in the CURRENT cycle (reset to 0 when
+   * the user speaks again); `lastAt` is what the next delay is measured from.
+   *
+   * IT DELIBERATELY DOES NOT TOUCH `expires_at`, and that omission is the fix.
+   *
+   * Its predecessor, `touchTimestamps`, set `expires_at = now + 7 days` on every single re-prompt,
+   * with the comment "Refreshes updatedAt to prevent 7-day expiry". The consequence was that the
+   * expiry sweep — the only mechanism that could ever retire a stalled record — could never see
+   * one: the record grew ten minutes younger every ten minutes. The ten-minute re-prompt was
+   * therefore unbounded, and it sent 57 identical messages overnight before anyone noticed
+   * (DOD-M15-CONTACTNAG-1).
+   *
+   * The expiry clock is the last backstop underneath the reminder bound. A nudge the bot sends
+   * itself must never wind it forward; only the user's own progress may.
+   *
+   * The state stays in `state_data` rather than a new column precisely so this needs no migration:
+   * a schema bump would mean rolling all three sovereign nodes to fix a message loop.
    */
-  async touchTimestamps(id: string, newExpiresAt: Date): Promise<void> {
+  async recordContactPrompt(id: string, count: number, lastAt: Date): Promise<void> {
     const prevResult = await this.#pool.query<RegistrationRow>(
       `SELECT chain_hash, state FROM registrations WHERE id = $1`,
       [id],
@@ -501,9 +518,42 @@ export class RegistrationRepository {
     const now = new Date();
     const newChainHash = computeTransitionChainHash(prevChainHash, id, state, now);
     await this.#pool.query(
-      `UPDATE registrations SET updated_at = $1, expires_at = $2, chain_hash = $3 WHERE id = $4`,
-      [now, newExpiresAt, newChainHash, id],
+      `UPDATE registrations
+         SET state_data = state_data || jsonb_build_object(
+               'contactPrompt', jsonb_build_object('count', $1::int, 'lastAt', $2::text)),
+             updated_at = $3,
+             chain_hash = $4
+       WHERE id = $5`,
+      [count, lastAt.toISOString(), now, newChainHash, id],
     );
+  }
+
+  /**
+   * Read the reminder-cycle position for a record.
+   *
+   * A record with no `contactPrompt` key has never been through this code — every registration that
+   * existed before DOD-M15-CONTACTNAG-1 shipped, including the ones mid-flight at deploy time. Those
+   * fall back to `updated_at`, so an in-flight registration gets its first reminder measured from
+   * its last activity rather than from the epoch (which would fire both reminders instantly).
+   */
+  async getContactPromptProgress(id: string): Promise<{ count: number; lastAt: Date }> {
+    const result = await this.#pool.query<{
+      count: number | null;
+      last_at: string | null;
+      updated_at: Date;
+    }>(
+      `SELECT (state_data->'contactPrompt'->>'count')::int AS count,
+              state_data->'contactPrompt'->>'lastAt'      AS last_at,
+              updated_at
+       FROM registrations WHERE id = $1`,
+      [id],
+    );
+    if (result.rows.length === 0) return { count: 0, lastAt: new Date(0) };
+    const row = result.rows[0];
+    return {
+      count: row.count ?? 0,
+      lastAt: row.last_at ? new Date(row.last_at) : row.updated_at,
+    };
   }
 
   /**

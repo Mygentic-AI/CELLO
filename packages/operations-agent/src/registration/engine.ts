@@ -36,8 +36,46 @@ import { hashPhone, normalizePhone } from "./phone.js";
 import type { RegistrationRecord } from "@cello-protocol/interfaces";
 import pg from "pg";
 
-/** How often to check for records stuck in AWAITING_CONTACT (10 minutes) */
+/** How often to CHECK whether a reminder is due (10 minutes). Not how often one is sent. */
 const CONTACT_PROMPT_INTERVAL_MS = 10 * 60 * 1_000;
+
+/**
+ * The bounded reminder schedule for a registration stuck at "share your phone number"
+ * (DOD-M15-CONTACTNAG-1).
+ *
+ * TWO reminders per cycle, then silence. A cycle starts when the record enters AWAITING_CONTACT and
+ * restarts whenever the user sends another message without sharing contact — so the bot stops
+ * chasing, but never stops listening. The phone number itself stays mandatory; only the nudging is
+ * capped.
+ *
+ * Before this, the sweep re-prompted on every tick with no terminating condition: 6 messages an
+ * hour, 144 a day, and 57 of them landed on one person overnight.
+ */
+const MAX_CONTACT_REMINDERS = 2;
+
+/** Wait after the cycle starts before the FIRST reminder. */
+const FIRST_REMINDER_DELAY_MS = 10 * 60 * 1_000;
+
+/** Wait after the first reminder before the SECOND — deliberately much longer. */
+const SECOND_REMINDER_DELAY_MS = 60 * 60 * 1_000;
+
+/**
+ * Which reminder, if any, is due now — the single decision the sweep makes.
+ *
+ * Returns 1 or 2 for the reminder to send, or null for "say nothing". Pure and total: it reads only
+ * durable state and the clock, so a restart mid-cycle reaches the same answer as the process that
+ * started it. That is the property that matters — the counter lives in the database precisely
+ * because an in-memory one would reset on every deploy and restart the loop forever.
+ */
+export function dueReminderNumber(
+  progress: { count: number; lastAt: Date },
+  now: number,
+): number | null {
+  if (progress.count >= MAX_CONTACT_REMINDERS) return null;
+  const required = progress.count === 0 ? FIRST_REMINDER_DELAY_MS : SECOND_REMINDER_DELAY_MS;
+  const waited = now - progress.lastAt.getTime();
+  return waited >= required ? progress.count + 1 : null;
+}
 
 /** How often to sweep for expired registrations (1 hour) */
 const EXPIRY_SWEEP_INTERVAL_MS = 60 * 60 * 1_000;
@@ -322,21 +360,33 @@ export class RegistrationEngine {
 
   // ─── Periodic sweeps ───────────────────────────────────────────────────────
 
+  /**
+   * Send whichever reminder is DUE to each record stuck in AWAITING_CONTACT — at most two per
+   * cycle, and nothing at all once the budget is spent.
+   *
+   * This used to re-prompt every AWAITING_CONTACT record on every tick, unconditionally and
+   * forever. One user received 57 identical messages overnight (DOD-M15-CONTACTNAG-1). The tick is
+   * now only a clock: what to send, and whether to send anything, is decided per record from
+   * durable state.
+   */
   async #runContactPromptSweep(): Promise<void> {
-    // Re-prompt all records stuck in AWAITING_CONTACT for > contactInterval.
-    // Refresh the in-memory map entry after each re-prompt so that the updated
-    // expiresAt is reflected — otherwise the expiry check in #handleInboundMessage
-    // would see the stale (pre-touch) value and falsely expire valid registrations.
     for (const [userId, record] of this.#activeRecords) {
-      if (record.state === "AWAITING_CONTACT") {
-        await this.#stateMachine.resendContactPrompt(record);
-        const refreshed = await this.#repository.findActiveByChannelUser(
-          this.#opts.channelType,
-          userId,
-        );
-        if (refreshed) {
-          this.#activeRecords.set(userId, refreshed);
-        }
+      if (record.state !== "AWAITING_CONTACT") continue;
+
+      const progress = await this.#repository.getContactPromptProgress(record.id);
+      const due = dueReminderNumber(progress, Date.now());
+      if (due === null) continue;
+
+      await this.#stateMachine.resendContactPrompt(record, due);
+
+      // Refresh the in-memory entry so the expiry check in #handleInboundMessage sees current
+      // timestamps rather than the pre-write ones.
+      const refreshed = await this.#repository.findActiveByChannelUser(
+        this.#opts.channelType,
+        userId,
+      );
+      if (refreshed) {
+        this.#activeRecords.set(userId, refreshed);
       }
     }
   }

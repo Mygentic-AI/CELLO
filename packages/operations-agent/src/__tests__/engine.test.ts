@@ -5,7 +5,8 @@
  *
  * AC-001: New message → RegistrationRecord created with state=AWAITING_CONTACT.
  * AC-002: Contact event → PHONE_CONFIRMED → AWAITING_EMAIL; phone_stub_hash stored.
- * AC-002b: 10-min timeout → contact prompt re-sent; state stays AWAITING_CONTACT.
+ * AC-002b: a DUE reminder is re-sent; state stays AWAITING_CONTACT; the expiry clock does NOT move.
+ *   Bounded at two reminders per cycle by DOD-M15-CONTACTNAG-1 — see dod-m15-contactnag-1.test.ts.
  * AC-003: Valid email → OTP sent, AWAITING_EMAIL_OTP; otpHash stored (not plaintext).
  * AC-004: Correct OTP → EMAIL_CONFIRMED → PRE_AUTH_TOKEN_ISSUED, token delivered.
  * AC-005: 3 wrong OTPs → OTP invalidated; state transitions to AWAITING_EMAIL; new OTP cycle possible.
@@ -205,7 +206,7 @@ describeIntegration("RegistrationEngine integration", () => {
 
   // ─── AC-002b ─────────────────────────────────────────────────────────────────
 
-  it("AC-002b: contact prompt re-sent when AWAITING_CONTACT sweep runs; state stays AWAITING_CONTACT; updatedAt refreshed", async () => {
+  it("AC-002b: a DUE reminder is re-sent; state stays AWAITING_CONTACT; the expiry clock does NOT move", async () => {
     await channelState.injectMessage(userId, "hello");
 
     const repo = new RegistrationRepository(pool);
@@ -214,10 +215,10 @@ describeIntegration("RegistrationEngine integration", () => {
     const originalExpiresAt = beforeRecord!.expiresAt;
     const sentBefore = channelState.sent.length;
 
-    // Small delay to ensure updated_at changes
-    await new Promise((r) => setTimeout(r, 10));
+    // Age the cycle past the 10-minute first-reminder delay. The sweep is now a clock, not a
+    // trigger: without this the correct behaviour is to stay silent.
+    await repo.recordContactPrompt(beforeRecord!.id, 0, new Date(Date.now() - 11 * 60_000));
 
-    // Trigger contact prompt sweep manually
     await engine.triggerContactPromptSweep();
 
     const sentAfter = channelState.sent.length;
@@ -227,9 +228,15 @@ describeIntegration("RegistrationEngine integration", () => {
     const record = await repo.findActiveByChannelUser("cli", userId);
     expect(record?.state).toBe("AWAITING_CONTACT");
 
-    // updatedAt and expiresAt must be refreshed in DB (AC-002b explicit requirement)
+    // updatedAt still moves — a reminder IS an event on the record.
     expect(record!.updatedAt.getTime()).toBeGreaterThan(originalUpdatedAt.getTime());
-    expect(record!.expiresAt.getTime()).toBeGreaterThan(originalExpiresAt.getTime());
+
+    // But expiresAt must NOT. THIS ASSERTION IS INVERTED FROM WHAT IT USED TO BE, on purpose.
+    // AC-002b previously REQUIRED the re-prompt to push expiry forward ("prevent 7-day expiry"),
+    // and that requirement is what made the loop unkillable: the only clock that could retire a
+    // stalled record was reset by the very messages that should have stopped. A test asserting the
+    // defect is worse than no test, because it defends it (DOD-M15-CONTACTNAG-1).
+    expect(record!.expiresAt.getTime()).toBe(originalExpiresAt.getTime());
   });
 
   // ─── AC-003 ─────────────────────────────────────────────────────────────────

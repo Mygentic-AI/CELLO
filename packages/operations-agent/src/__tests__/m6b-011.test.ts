@@ -224,7 +224,11 @@ describe("AC-001: pre-auth failure sends honest error message", () => {
       })),
       transitionOnOtpLockout: vi.fn(),
       incrementOtpAttempt: vi.fn(),
-      touchTimestamps: vi.fn(),
+      // `touchTimestamps` was removed by DOD-M15-CONTACTNAG-1; these are its replacements.
+      // The fake drifted silently because it is injected as `mockRepo as never` — the cast
+      // switches off every check that would have caught a method that no longer exists.
+      recordContactPrompt: vi.fn(async () => {}),
+      getContactPromptProgress: vi.fn(async () => ({ count: 0, lastAt: new Date() })),
       getOtpSalt: vi.fn(async () => "test-salt"),
       getStateDataField: vi.fn(async () => null),
       getEmailStubHash: vi.fn(async () => null),
@@ -311,7 +315,11 @@ describe("AC-001: pre-auth failure sends honest error message", () => {
       })),
       transitionOnOtpLockout: vi.fn(),
       incrementOtpAttempt: vi.fn(),
-      touchTimestamps: vi.fn(),
+      // `touchTimestamps` was removed by DOD-M15-CONTACTNAG-1; these are its replacements.
+      // The fake drifted silently because it is injected as `mockRepo as never` — the cast
+      // switches off every check that would have caught a method that no longer exists.
+      recordContactPrompt: vi.fn(async () => {}),
+      getContactPromptProgress: vi.fn(async () => ({ count: 0, lastAt: new Date() })),
       getOtpSalt: vi.fn(async () => null),
       getStateDataField: vi.fn(async () => null),
       getEmailStubHash: vi.fn(async () => null),

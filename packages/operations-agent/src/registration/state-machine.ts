@@ -111,6 +111,21 @@ const REGISTRATION_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 export { CONTACT_PROMPT_PREFIX };
 
 /**
+ * The wording of each automated reminder. The prefix is what makes the adapter attach the
+ * "Share Phone Number" button, so every reminder carries the button that ends it.
+ *
+ * The second one does not promise "I won't ask again", which the approved draft said: a later
+ * message from the user restarts the cycle, so that promise would be false the moment they replied.
+ * It says what is actually true — the bot stops chasing, and the door stays open.
+ */
+function contactReminderText(reminderNumber: number): string {
+  return reminderNumber === 1
+    ? `${CONTACT_PROMPT_PREFIX}Still waiting on your phone number — tap the button below.`
+    : `${CONTACT_PROMPT_PREFIX}Last reminder: tap below when you're ready. I won't keep nudging — ` +
+        `message me any time to pick up where you left off.`;
+}
+
+/**
  * Max OTP sends ONE REQUESTER may cause per hour.
  *
  * DOD-M15-SIGNUP-1 — THE KEY IS THE REQUESTER, and the two wrong answers are both instructive.
@@ -611,17 +626,27 @@ export class RegistrationStateMachine {
   }
 
   /**
-   * Re-send the contact sharing prompt for AWAITING_CONTACT (10-min re-prompt, AC-002b).
-   * Refreshes updatedAt to prevent 7-day expiry.
+   * Send one automated reminder to a record stuck in AWAITING_CONTACT, and spend it from the
+   * bounded budget (DOD-M15-CONTACTNAG-1).
+   *
+   * `reminderNumber` is 1 or 2. There is no third: after the second the bot goes quiet until the
+   * user says something, which restarts the cycle. Sharing the phone number remains MANDATORY —
+   * silence is not a cancellation, and the record stays completable until it expires.
+   *
+   * THE BUDGET IS SPENT BEFORE THE MESSAGE GOES OUT, deliberately. If the write succeeds and the
+   * send fails, the user misses one reminder. If the send succeeded and the write failed, the
+   * reminder would be re-sent on the next sweep — which is the unbounded loop this exists to end.
+   * Between under-nudging and nudging forever, under-nudging is the failure to choose.
    */
-  async resendContactPrompt(record: RegistrationRecord): Promise<void> {
-    const { repository, channel } = this.#deps;
-    const newExpiresAt = new Date(Date.now() + REGISTRATION_TTL_MS);
-    await repository.touchTimestamps(record.id, newExpiresAt);
-    await channel.send(
-      record.channelUserId,
-      `${CONTACT_PROMPT_PREFIX}Please share your phone number using the button below to continue registration.`,
-    );
+  async resendContactPrompt(record: RegistrationRecord, reminderNumber: number): Promise<void> {
+    const { repository, channel, logger } = this.#deps;
+    await repository.recordContactPrompt(record.id, reminderNumber, new Date());
+    await channel.send(record.channelUserId, contactReminderText(reminderNumber));
+    logger.info("registration.contact_prompt.resent", {
+      registrationId: record.id,
+      reminderNumber,
+      channel: record.channel,
+    });
   }
 
   // ─── Private state handlers ────────────────────────────────────────────────
@@ -886,7 +911,13 @@ export class RegistrationStateMachine {
       return awaitingEmail;
     }
 
-    // Not a contact event — re-prompt
+    // Not a contact event — re-prompt, and RESTART the reminder cycle.
+    //
+    // The user is present and engaging, they have just not pressed the button. Restoring the
+    // two-reminder budget here is what keeps the bound from becoming a one-way door: someone who
+    // asks a question a week later gets chased again, from zero. The count is what the sweep reads,
+    // so resetting it is the whole mechanism (DOD-M15-CONTACTNAG-1).
+    await repository.recordContactPrompt(record.id, 0, new Date());
     await channel.send(from, `${CONTACT_PROMPT_PREFIX}Please share your phone number using the button below.`);
     return record;
   }
