@@ -651,16 +651,39 @@ one could ship safely. **Neither of these is visible to `sealReadiness` today.**
 > verdicts, findings and what the fixes cost — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under
 > `DOD-M15-RELAYAUTH-1`. → Entry S15.
 
-### `DOD-M15-SWEEP-1` — 🅿️ The checked-then-ignored class is hunted, not patched
-**Trigger: after `DOD-M15-FRAME-1` and Tier 4's seal change**, so the sweep hunts the unknown
-seventh instance rather than rediscovering the six already on this list. Parked only for sequencing —
-it is inside the gate.
-- For **every** frame handler and **every** verification call in daemon, directory and relay, answer
+> ### 📐 `DOD-M15-SWEEP-1` WAS SPLIT 2026-09-01 (Andre) — the relay third is done, the rest is not
+> `005-RELAY` swept the relay package and deliberately excluded the daemon and directory. **No tag in
+> the four-tag vocabulary means "a third done"** — ✅ would claim a sweep that never happened, ❌ or 🟡
+> would send the next lane to re-sweep the relay. Split on the precedent already in this file
+> (`RELAYADMIN-1` → `RELAYADMIN-DEAD-FRAMES-1`, `KEYAGREE-1` → `EPHEMERAL-AUTH-1`).
+>
+> **The park trigger had already fired.** `SWEEP-1` was parked *"after `DOD-M15-FRAME-1` and Tier 4's
+> seal change"*; `FRAME-1` is ✅ and `SEALWIRE-1` — which self-describes as *"one protocol change, not
+> six"* — is ✅. 🅿️ was wrong on the line's own terms, independently of the split. → Entry S15.
+
+### `DOD-M15-SWEEP-RELAY-1` — ✅ The checked-then-ignored sweep, RELAY PACKAGE
+> **Closed 2026-09-01** (`005-RELAY`). Zero security hits, and the "zero hits" conclusion was
+> independently re-derived on Opus; one real defect found in the coverage the sweep had missed. Full
+> entry in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-SWEEP-RELAY-1`. → Entry S15.
+
+### `DOD-M15-SWEEP-DAEMON-DIR-1` — ❌ The checked-then-ignored sweep, DAEMON AND DIRECTORY
+**The two thirds `005-RELAY` did not touch**, and the reason it did not is that the order was scoped
+to one package on purpose. Inside the gate: this is the discoverability filter's exact shape — a
+check that runs, gets the right answer, and is then ignored is what a coding agent pointed at the
+public repo surfaces in an afternoon.
+- For **every** frame handler and **every** verification call in the daemon and the directory, answer
   two questions: does a failed check take a hard-fail path, and does a **missing or malformed** proof
   take the same path as a mismatched one?
 - Fix every hit. **Rewrite — do not delete — every nearby comment asserting a property the code does
   not enforce.**
-- Unknown scope by construction. It takes as long as it takes (§0z).
+- **⚠️ OPEN CALL FOR ANDRE — this line is unbounded as written** (*"unknown scope by construction"*,
+  §0z), and it is now a visible open row rather than a parked one. Worth bounding at pull time to the
+  handlers a stranger can actually reach, rather than every verification call in both packages. Not
+  narrowed here: quietly shrinking a gate line is not a coder's call.
+- **Start from what the relay sweep learned:** its one real hit was a bare `catch { return undefined }`
+  whose caller turned every transport failure into a specific protocol refusal, telling the operator a
+  relay was unregistered when the real fault was a dead link to the directory. The class is
+  *error substitution at the catch site*, not a missing check.
 
 ---
 

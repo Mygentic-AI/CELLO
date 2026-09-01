@@ -4033,3 +4033,55 @@ cannot submit to any session); the vouched-pubkey set is never pruned (deliberat
 attacker-inflatable, but unbounded over a relay's lifetime, unlike every other map in the relay);
 and `denyInboundRelayedConnection` — the reservation-holder's own side — is still uninstalled,
 defense-in-depth that belongs with the daemon's gater rather than the relay's.
+
+---
+
+### `DOD-M15-SWEEP-RELAY-1` — ✅ The checked-then-ignored sweep, RELAY PACKAGE
+**Closed 2026-09-01** by `micro/005-RELAY-checked-then-ignored-sweep.md`. **Split from
+`DOD-M15-SWEEP-1` on 2026-09-01 (Andre)** — the daemon and directory two-thirds are open as
+`DOD-M15-SWEEP-DAEMON-DIR-1`. → Entry S15.
+
+Six times this milestone found a security check that runs, gets the right answer, and is then
+ignored. This swept every frame handler and every verification call **in the relay package** for the
+seventh, asking two questions of each: does a failed check take a hard-fail path, and does a
+**missing or malformed** proof take the same path as a mismatched one?
+
+**Result: zero security hits.** That is a deliverable whose entire content is "nothing found", which
+is exactly the kind of verdict that needs an independent re-derivation to be worth anything.
+
+#### Review — the security conclusion HELD, the coverage claim did NOT
+
+Pass 1 (Sonnet) re-walked the package and could not find a counterexample. It also re-derived the
+deposit-rate-limiter's central claim from the transport source rather than taking it on faith:
+`remotePeerId` comes from libp2p's Noise-authenticated `connection.remotePeer`, passed by libp2p's
+own `StreamHandler` callback, **not from anything a client's frame bytes can set** — so a real
+attacker cannot dial in with an absent peer id to duck the rate limit.
+
+Pass 2 was commissioned by Andre because the unit and its first review had both run on Sonnet:
+
+> *"The 'zero hits' conclusion survives independent scrutiny on the security question, and fails on
+> the coverage question. I re-walked `packages/relay/src` myself before reading the sweep's table and
+> could not construct a counterexample … What the sweep did **not** do is walk
+> `network-directory-adapter.ts`, which handles three inbound frame types and contains the package's
+> one bare `catch { return undefined }` — in `getRelayPublicKey`, whose caller turns every transport
+> failure into `RELAY_PREDECESSOR_UNKNOWN`, telling the operator a relay is unregistered when the
+> real fault is a dead link to the directory. … **Net: keep the security conclusion, do not retire
+> the suspicion for `network-directory-adapter.ts`, and correct three verdicts in the table.**"*
+> — `cello-unit-reviewer` (Opus, 2026-08-31)
+
+**All four items done.** Items 2–4 were record corrections: a table row, a false mechanism, and an
+over-stated "exemplary" verdict on the predecessor-ACK gate — which fails closed and gives a client
+nothing either way, but verifies a `seq`/`ts` pair used only to build the TBS and read nowhere
+afterwards. **A value that is checked and then discarded is this order's own opening sentence,
+sitting inside its own fence.** Item 1 was fixed in code (`7d1040c0`): `getRelayPublicKey` returns a
+discriminated result, only `not_registered` means the directory actually answered, and an
+unreachable directory now gets its own error-level event. The refusal itself is unchanged — SI-002
+still forbids accepting an unverified ACK — so **only the diagnosis moved**. Revert-tested.
+
+**Lesson that generalises, and it is the reason this line was worth its cost.** The class is not
+"a missing check". It is **error substitution at the catch site**: a check that runs correctly, and a
+`catch` one layer out that converts "I could not ask" into "I asked and the answer was no". The
+security property survives; the operator's picture of why does not. Worth keeping alongside it: the
+type change made the compiler find four test doubles, three of which returned a shape that would now
+crash the caller and none of which is exercised today — **a convention would have found none of
+them.**
