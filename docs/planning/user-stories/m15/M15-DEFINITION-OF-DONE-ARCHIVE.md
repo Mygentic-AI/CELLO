@@ -4157,3 +4157,80 @@ Deleted-test triage: all five, no live coverage orphaned.
 Removing a receiver without removing its sender does not shrink the abandoned surface — it converts
 a matched pair into a sender that lies. And a deletion that no test defends will be silently undone
 by the next person who thinks the handler looks useful.
+
+---
+
+### `DOD-M15-RELAYABUSE-1` — ✅ The relay has rate limiting, and its idle timer is on in production
+**Closed 2026-09-01** by `micro/003-RELAY-rate-limiting-and-idle-timer.md`, all seven clauses.
+→ Entry S15.
+
+**Reservation-slot limiting is NOT unfinished business on this line.** It was added to this order's
+mission on 2026-08-31, outgrew a relay-only order (it changes the directory, the client and the
+relay) and was extracted to `DOD-M15-RELAYSLOTS-1` ✅. The decision trail for it stayed with 003 so
+the options that do not work are not re-derived.
+
+**This line was the parent of four others, all now closed on their own entries** — it carried them as
+bullets until each grew big enough to stand alone: the content-park store bounded per depositor
+(`DOD-M15-RELAYPARK-1`), the directory-admin push handler (`DOD-M15-RELAYADMIN-1`, kept rather than
+deleted once its caller was measured, with the real finding split to
+`DOD-M15-RELAYADMIN-DEAD-FRAMES-1`), and an empty `CELLO_DIRECTORY_PUBKEYS` failing startup loudly
+(`DOD-M15-RELAYPUBKEYS-1` — the deployed config was correct, so what was fixed is the failure mode
+that would have hidden it going wrong: with one key the relay silently accepts assignments from one
+directory and sessions brokered by the other two are unusable, surfacing as random per-directory
+session failures rather than as a config gap).
+
+**What shipped:**
+
+1. **Rate limiting per peer and per pubkey** on authentication and hash submission, each refusing
+   **over the wire** with a NAMED reason — never a log-only refusal — and carrying `retry_after_ms`
+   sourced from the relay's own limiter rather than guessed client-side. Content-park deposit and the
+   liveness query were already done and were re-checked against their "already done" descriptions
+   rather than trusted. **Gap-fill had no wire handler left to limit**: its frame type was deleted
+   from the dispatch by `SEALWIRE-1` bullet 7, confirmed by reading the dispatch site and grepping
+   the frame module — no decode path exists, so the clause is satisfied vacuously.
+2. **The per-session idle timer, armed in the production binary at 24 hours**, proven from the
+   BINARY rather than the config: a test spawns the compiled `dist/bin/relay.js`, records a real
+   client-presented assignment over the wire, and asserts the relay tears the session down on its
+   own.
+3. **Duration and byte caps restored on relayed connections** — 7 days / 1 GiB, **not** libp2p's
+   2-min/128-KiB defaults, which is what broke NAT reachability originally — and proven ENFORCED
+   rather than merely configured, by establishing a real relayed circuit through the production
+   factory and watching it close once a tiny test-configured limit is crossed.
+
+#### Review — "SPEC: FAITHFUL" did not survive a second look
+
+Pass 1 (Sonnet) returned SPEC: FAITHFUL on all seven clauses with one HIGH finding, which was itself
+important: **the unit's own new limiter created a new attack surface.** The auth path's
+pre-verification, pubkey-keyed limiter let any third party who merely knows an agent's public key —
+information CELLO agents are *meant* to share to be reachable — lock that agent out of a specific
+relay at zero cost, with no proof of key possession, by claiming its pubkey with a garbage signature
+20+ times a minute. Fixed by moving the pubkey-keyed check strictly after Ed25519 verification, with
+a regression test revert-tested against the vulnerable ordering: it reddens with the forger's second
+attempt returning `rate_limited` instead of `signature_invalid` — **direct proof the victim's bucket
+had been spent by an unverified claim.**
+
+Pass 2 was commissioned by Andre because the unit and its first review had both run on Sonnet:
+
+> *"The security fix … is correct and complete … **The prior verdict of 'SPEC: FAITHFUL' does not
+> survive a second look.** This unit's two new refusals are never heard: the daemon collapses
+> `relay_auth_failed` into `auth_rejected` and reads neither the reason nor `retry_after_ms`, and a
+> rate-limited `hash_submit` is written to a log line and then discarded, after which `cello_send`
+> returns `{ok: true, delivered: true}` — and in the parked branch tells the operator the message is
+> 'sealed, witnessed and on its way' when the relay just refused to witness it. … Separately, turning
+> the idle timer on at a one-hour default is a live regression rather than a hardening …
+> **Blocking before this closes: surface both refusals to the caller with their retry window, and get
+> Andre's decision on the idle-timer default — that number is a product call, not a coder's.**"*
+> — `cello-unit-reviewer` (Opus, 2026-08-31)
+
+**The idle timer, ruled by Andre 2026-08-31: 24 hours — a RECLAIMER, not a conversation timeout.**
+It shipped at 1 hour and that was a regression, not a hardening: it destroyed the sessions of agents
+who had merely gone quiet, which is Andre's own working pattern; the `session_interrupted{timeout}`
+frame was dropped by a client watcher with no production caller; the daemon still showed the session
+active; and the next send failed `session_not_found`. **The test that was supposed to protect the
+default could not**: it set the value explicitly, so it would have stayed green for any default at
+all. It now reads the default off the running binary with no env var set.
+
+**Lesson that generalises, and it is the one this whole batch keeps re-proving.** A limit nobody
+hears is not a limit — the refusal existed, was correct, and reached a log line. And a second
+reviewer on a stronger model overturned a clean verdict on a unit whose code was fine: the defect
+was never in the limiter, it was in the six inches between the refusal and the operator.

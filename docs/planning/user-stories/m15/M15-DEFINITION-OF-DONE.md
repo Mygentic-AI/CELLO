@@ -1014,41 +1014,14 @@ Split from `DOD-M15-RELAYADMIN-1` once its deletion premise was disproved and th
 ### 🔒 CLAIM — park deposit rate limiting, **CELLO_Support**, 2026-08-24, before code
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
-### `DOD-M15-RELAYABUSE-1` — ❌ The relay has rate limiting, and its idle timer is on in production
-> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
-
-> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
-- **Rate limiting per peer and per pubkey** on authentication, hash submission, gap-fill, the
-  liveness query, and content-park deposit. There is **none of any kind** today.
-- ~~**Re-enable the per-session idle timer in the production binary.**~~ **⚠️ MEASURED 2026-08-24
-  (CELLO_Support) AND THIS BULLET IS DANGEROUS AS WRITTEN — do not do what it says.** The premise is
-  correct: `sessionIdleTimeoutMs` appears **nowhere** in `bin/relay.ts`, so the per-session timer is
-  never armed. **What the bullet does not say is what arming it would DO.** When that timer fires it
-  is **terminal**: `#cleanupSessionTracking(...)` plus `#store.destroySession(...)` — the session
-  stops being served as active, so it can no longer be recorded, confirmed or sealed through that
-  relay. A CELLO conversation is legitimately idle for hours (a counterparty offline, two agents
-  talking occasionally), so **enabling this with any short value destroys live conversations and the
-  receipts they were earning.**
-  **And the bounding it is supposed to provide ALREADY RUNS.** `bin/relay.ts:718` calls
-  `startIdleSweep(1 h, 24 h)`, whose sweep performs the *same* terminal teardown via
-  `sweepIdleSessions` + `#cleanupSessionTracking`. So this is not a missing control — it is a
-  **second, shorter deadline for the same destruction**, and the only thing enabling it changes is
-  how soon a quiet session dies.
-  **What is actually open here is a NUMBER, not a wiring job**, and the DoD's own rule for exactly
-  this shape applies (`DOD-M15-IDLE-CONNS-1`): *"Do not guess the caps… a cap set without measurement
-  breaks reachability — the one property this milestone must not trade away."* Measure how long real
-  sessions sit idle before deciding the 24 h sweep is wrong.
-- **Restore duration and byte caps on relayed connections**, which are deliberately disabled. (The
-  half of the original bullet that stands unchanged.)
-- ~~Bound the content-park store per depositor.~~ → **`DOD-M15-RELAYPARK-1` ✅**
-- ~~Delete the directory-admin push handler.~~ → **`DOD-M15-RELAYADMIN-1` ❌ — unclaimed quick win.**
-- ~~An empty `CELLO_DIRECTORY_PUBKEYS` fails startup loudly.~~ → **`DOD-M15-RELAYPUBKEYS-1` ✅.** The
-  deployed config is correct today — both relays log `count=3, anyDirectory=True`
-  (`DOD-M15-SPIKE-1(b)`, Entry 1) — so this is not a live fault. What is unfixed is the failure mode
-  that would hide it becoming wrong: with one key the relay silently accepts assignments from one
-  directory and sessions brokered by the other two are unusable, which surfaces as random
-  per-directory session failures rather than as a config gap. The startup log already makes it
-  visible; make it fatal.
+### `DOD-M15-RELAYABUSE-1` — ✅ The relay has rate limiting, and its idle timer is on in production
+> **Closed 2026-09-01** (`003-RELAY`), all seven clauses. The Sonnet pass returned "SPEC: FAITHFUL"
+> and **the Opus re-review did not** — the two new refusals were never heard, and `cello_send` told
+> the operator a message was *"sealed, witnessed and on its way"* when the relay had just refused to
+> witness it. Idle timer ruled to **24 hours** by Andre: a reclaimer, not a conversation timeout.
+> Reservation-slot limiting is **not** unfinished business here — it outgrew a relay-only order and
+> is `DOD-M15-RELAYSLOTS-1` ✅. Full entry in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under
+> `DOD-M15-RELAYABUSE-1`. → Entry S15.
 
 ### `DOD-M15-MULTIRELAY-1` — ❌ An agent's reachability does not rest on one relay
 **Scoped by `DOD-M15-SPIKE-1(c)` → Entry 1. This line is AVAILABILITY ONLY.** The client already
