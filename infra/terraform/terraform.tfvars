@@ -4,7 +4,7 @@
 environment = "dev"
 
 # Immutable commit-SHA tag built by Cloud Build. Never a moving tag — see infra/cloudbuild/*.yaml.
-directory_image_tag = "e0aae57a62b4229204ddfff53f94844afa33606c"
+directory_image_tag = "7befcc9534d7830c9883797d0b208abdb0e8ede5"
 
 # One node = one region = one independent deployment. The map key is the region, which makes two
 # nodes in one region unrepresentable rather than merely discouraged.
@@ -14,10 +14,28 @@ directory_image_tag = "e0aae57a62b4229204ddfff53f94844afa33606c"
 # (N. Virginia), so a regional event does not take both.
 directory_nodes = {
   us-east1 = {
-    node_id      = "gcp-use1"
-    zone         = "us-east1-b"
+    node_id = "gcp-use1"
+    # ⚠️ MOVED -b → -c 2026-09-01 during the 7befcc95 roll. `us-east1-b` hit
+    # ZONE_RESOURCE_POOL_EXHAUSTED and stayed there for ~10 minutes of retries with the node DOWN,
+    # while a throwaway probe of the SAME (zone, type) pair succeeded — capacity there is flickering
+    # in and out, and the MIG kept landing on the empty moments. Probed `-c` and `-d` directly, per
+    # the playbook: both had capacity. Zone changes are safe within a region (the external IP is a
+    # regional google_compute_address, so the published manifest stays valid); a REGION change would
+    # not be. Revert only with a fresh probe, never on assumption.
+    zone         = "us-east1-c"
     subnet_index = 0
-    machine_type = "e2-standard-2"
+    # ⚠️ UPSIZED e2-standard-2 → c3-standard-4 2026-09-01, same reason and same answer as usc1 on
+    # 2026-08-10: us-east1 had no 2-vCPU standard capacity in `-b` OR `-c`, the node sat DOWN for
+    # ~20 minutes of MIG retries, and the playbook's lesson is that the MACHINE TYPE is the variable,
+    # not the zone. `c3-standard-4` is what had capacity when everything smaller was exhausted there.
+    # NOT a downsize to e2-medium: heap_mb=4096 gives V8 a ~4,288 MB ceiling, so 4 GB of RAM would be
+    # OOM-killed by the kernel — worse than the stall it was raised to fix.
+    # `c3-standard-4` was tried FIRST and also hit ZONE_RESOURCE_POOL_EXHAUSTED — us-east1 was short
+    # across e2 AND c3 on this day. `n2-standard-2` is used because it is the one pair that was
+    # DIRECTLY PROBED SUCCESSFUL in this zone (12:09 UTC-7), not because it was the next guess. Same
+    # 8 GB as the original e2-standard-2, so the heap ceiling is unchanged; different capacity pool,
+    # which is the entire point. N2_CPUS quota is 200. Revert only with a fresh probe.
+    machine_type = "n2-standard-2"
     db_tier      = "db-custom-1-3840"
     hostname     = "directory-gcp-use1.cello.mygentic.ai"
     # No TLS terminator in front of this node yet — it listens on 8080 itself.
@@ -96,7 +114,7 @@ relay_primary_directory = "gcp-use1"
 # DOD-RELAY-KEEPALIVE-1 / DOD-GCP-RELAY-DRIFT-1. Built by Cloud Build 8eaddd07 from the GitHub
 # repository resource at this exact revision — not from a local tree — and verified to resolve
 # @cello-protocol/transport@0.0.44, the version below which this relay refuses to start.
-relay_image_tag = "e0aae57a62b4229204ddfff53f94844afa33606c"
+relay_image_tag = "7befcc9534d7830c9883797d0b208abdb0e8ede5"
 
 relay_nodes = {
   us-east1 = {

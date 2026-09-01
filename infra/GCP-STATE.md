@@ -378,6 +378,73 @@ probe.
 The relay logs the redial and the seal still fails, and `relay.directory.dial.failed` has **never**
 appeared — so the dial does not throw, yet nothing is repaired. That is the gap `7838bbeb` measures.
 
+## 🔴 IN PROGRESS — roll onto `7befcc95` (008-RELAY gate), STALLED ON us-east1 CAPACITY (2026-09-01)
+
+**Where it stopped: `gcp-use1` is DOWN, the other two directories and both relays are UNTOUCHED and
+serving.** Threshold holds (2 of 3). Nothing about 008 is half-live: the relays still run
+`e0aae57a`, so no relay is enforcing a gate that clients cannot yet satisfy.
+
+**Images built and verified in Artifact Registry** — both from GitHub at the revision, not
+`builds submit .`:
+- `directory:7befcc9534d7830c9883797d0b208abdb0e8ede5` → `sha256:b972055f…`
+- `relay:7befcc9534d7830c9883797d0b208abdb0e8ede5` → `sha256:2cf3494f…`
+
+**What is applied:** `directory_image_tag` and `relay_image_tag` both moved to `7befcc95` in
+`terraform.tfvars`, and the `us-east1` directory template + MIG were `-target` applied. usc1, euw1
+and both relays have NOT been applied — their templates still point at `e0aae57a`.
+
+**⚠️ `terraform.tfvars` now carries TWO deviations for `us-east1`, both taken during this incident
+and both marked in place:** `zone` `us-east1-b` → **`us-east1-c`**, and `machine_type`
+`e2-standard-2` → **`n2-standard-2`**.
+
+### The capacity failure, and what was actually established
+
+`us-east1` had no capacity for the directory's shape for ~35 minutes, in this order:
+
+| tried | zone | result |
+|---|---|---|
+| `e2-standard-2` | us-east1-b | `ZONE_RESOURCE_POOL_EXHAUSTED`, ~10 min of MIG retries |
+| `e2-standard-2` | us-east1-c | same |
+| `c3-standard-4` | us-east1-c | same — the type that rescued usc1 on 2026-08-10 did NOT help here |
+| `n2-standard-2` | us-east1-c | same |
+
+**Quota was ruled out first, per the playbook:** `CPUS 3/200`, `E2_CPUS 0/24`, `C3_CPUS 0/24`,
+`N2_CPUS 0/200`. Google's capacity, not ours.
+
+> **⚠️ A THROWAWAY PROBE SUCCEEDING DOES NOT MEAN THE MIG WILL SUCCEED, and that cost three config
+> changes.** `e2-standard-2` in `-b`, `-c`, `-d` and `n2-standard-2` in `-c` all provisioned as
+> single hand-made probes MINUTES BEFORE the MIG failed on the same (zone, type) pair. Capacity was
+> flickering: one small create wins a transient slot; a MIG retrying steadily keeps landing on the
+> empty moments. The playbook says to probe the pair — that is still right — but **a successful
+> probe is evidence the pair is plausible, NOT that the roll will land.** Do not change zone or
+> machine type more than once on the strength of one.
+
+> **⚠️ `lastAttempt.errors` on a managed instance can be STALE, and reading it as current sent me
+> toward the wrong conclusion.** Three different machine types all showed `PROVISIONING → STOPPING`,
+> which looks exactly like a boot failure and would have implicated the new image. It was not:
+> querying the INSTANCE'S OWN insert operations
+> (`gcloud compute operations list --filter="targetLink~<instance>"`) showed `ZONE_RESOURCE_POOL_EXHAUSTED`
+> on each. GCP accepts the insert, starts provisioning, fails placement, and the MIG cleans up —
+> that is what the STOPPING is. **Use the operation, not `lastAttempt`.**
+
+**Autohealing was ruled out:** `initialDelaySec = 300`, so it cannot be what removes an instance
+seconds after it provisions.
+
+### To resume
+
+The MIG retries on its own and will take capacity when it exists — no action is required for
+`gcp-use1` to recover. Then, per `infra/CLAUDE.md` §2, one node at a time with `-target`, confirming
+serving between each:
+
+1. `gcp-use1` — waiting on capacity (this section)
+2. `gcp-usc1`, then `gcp-euw1` — directory
+3. `gcp-relay-use1`, then `gcp-relay-euw1` — relay, LAST (the gate refuses clients that cannot prove,
+   and every client must be on `connect@0.0.158`/`cli@0.0.190` first)
+
+A full untargeted `terraform plan` should be run at the end: every `-target` apply printed
+`Applied changes may be incomplete`, which is expected but means nothing has verified global
+consistency yet.
+
 ## 🟢 CURRENT — node heap ceiling raised + memory sampler, ALL 3 ROLLED (2026-08-16)
 
 **No image change** — this is a cloud-init/instance-template change only. Directory stays on
