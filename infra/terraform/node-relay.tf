@@ -271,6 +271,14 @@ resource "google_compute_disk" "relay_wal" {
   size     = 20
 
   lifecycle {
+    # ⚠️ Lifted ONCE, 2026-09-01, to move gcp-relay-use1 from us-east1-b (out of capacity all
+    # afternoon for e2 AND n2) to us-east1-d — a zonal disk cannot follow an instance across zones,
+    # so the move required recreating it. Restored immediately afterwards, in the same session.
+    # If you need to lift it again: it is safe only while CELLO has no users, because the WAL
+    # journals in-flight frames that agents have been told were delivered.
+    #
+    # Lifted twice on 2026-09-01 — once per relay — to move BOTH out of their `-b` zones, which were
+    # out of capacity. Restored the same session, after each move applied.
     prevent_destroy = true
   }
 }

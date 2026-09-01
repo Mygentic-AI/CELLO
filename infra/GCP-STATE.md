@@ -378,20 +378,36 @@ probe.
 The relay logs the redial and the seal still fails, and `relay.directory.dial.failed` has **never**
 appeared — so the dial does not throw, yet nothing is repaired. That is the gap `7838bbeb` measures.
 
-## 🟡 IN PROGRESS — roll onto `7befcc95` (008-RELAY gate) — ALL 3 DIRECTORIES DONE, RELAYS PENDING (2026-09-01)
+## 🟢 CURRENT — WHOLE FLEET ON `7befcc95` (008-RELAY gate), ALL 5 ROLLED (2026-09-01)
 
-**Directory half COMPLETE.** All three confirmed on `directory:7befcc95…` **read off the running
-instances**, not the templates, and all three producing 12 anti-entropy rounds per 3 minutes:
+**Every node confirmed by reading the RUNNING instance, not the template.** Three directory zones
+and both relays reporting healthy in a rolling 2-minute window at the end of the roll.
 
-| node | instance | zone NOW | machine type NOW |
-|---|---|---|---|
-| `gcp-use1` | `cello-gcp-use1-4cgj` | **`us-east1-d`** (was `-b`) | **`n2-standard-2`** (was `e2-standard-2`) |
-| `gcp-usc1` | `cello-gcp-usc1-wzhk` | `us-central1-a` (unchanged) | `e2-standard-2` (unchanged) |
-| `gcp-euw1` | `cello-gcp-euw1-6n5v` | **`europe-west1-c`** (was `-b`) | `e2-standard-2` (unchanged) |
+| node | instance | zone NOW | machine type NOW | image |
+|---|---|---|---|---|
+| `gcp-use1` | `cello-gcp-use1-4cgj` | **`us-east1-d`** (was `-b`) | **`n2-standard-2`** (was `e2-standard-2`) | `directory:7befcc95` |
+| `gcp-usc1` | `cello-gcp-usc1-wzhk` | `us-central1-a` | `e2-standard-2` | `directory:7befcc95` |
+| `gcp-euw1` | `cello-gcp-euw1-6n5v` | **`europe-west1-c`** (was `-b`) | `e2-standard-2` | `directory:7befcc95` |
+| `gcp-relay-use1` | `cello-gcp-relay-use1-l9r8` | **`us-east1-d`** (was `-b`) | **`n2-standard-2`** (was `e2-small`) | `relay:7befcc95` |
+| `gcp-relay-euw1` | `cello-gcp-relay-euw1-hw5h` | **`europe-west1-c`** (was `-b`) | `e2-small` | `relay:7befcc95` |
 
-**Relays are NEXT and are still on `e0aae57a`** — deliberately. The gate refuses any client that
-cannot prove itself, so no relay may enforce it until every client is on
-`connect@0.0.158` / `cli@0.0.190`, which are on npm `latest` as of today.
+**Order held: all three directories first, then the relays.** The relay gate refuses any client that
+cannot prove itself, so no relay could enforce it until every directory was issuing online tokens
+and every client was on `connect@0.0.158` / `cli@0.0.190` (npm `latest`, same day).
+
+> ### ⚠️ FOUR OF FIVE NODES LEFT ZONE `-b` TODAY, ALL ON CAPACITY
+> `us-east1-b` and `europe-west1-b` were exhausted for **every type tried** — `e2-standard-2`,
+> `c3-standard-4`, `n2-standard-2`, `e2-small` — each failing on the new instance's OWN insert
+> operation. `us-east1-d` and `europe-west1-c` each took it on the FIRST attempt. Only `gcp-usc1`
+> never moved. Treat as one day's weather, but move zone EARLY next time rather than grinding.
+
+> ### ⚠️ A RELAY IS NOT A DIRECTORY: THE ZONE IS NOT A FREE LEVER
+> Each relay owns a **zonal** WAL persistent disk (`google_compute_disk.relay_wal`, attached by
+> name, `prevent_destroy = true`) holding in-flight session frames. A zonal disk cannot follow an
+> instance across zones, so moving a relay's zone REQUIRES recreating that disk and dropping
+> whatever it journalled. Done twice today, guard lifted and **restored in the same session both
+> times** — acceptable only because CELLO has no users. For a directory, a zone move is free; for a
+> relay it is not. Try the machine type first (it did not rescue `use1`, but it costs nothing).
 
 > ### ⚠️ TWO OF THREE DIRECTORIES LEFT ZONE `-b` TODAY, BOTH ON CAPACITY
 > `us-east1-b` and `europe-west1-b` each returned `ZONE_RESOURCE_POOL_EXHAUSTED` on the new

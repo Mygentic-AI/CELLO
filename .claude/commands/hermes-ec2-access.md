@@ -12,10 +12,20 @@ Hermes-side daemon state directly instead of trusting a relayed summary).
 ## SSH
 
 ```bash
-ssh -i ~/.ssh/cello-hermes-key.pem ubuntu@54.234.44.162
+ssh -i ~/.ssh/cello-hermes-key.pem ubuntu@18.207.197.56
 ```
 
 - Instance ID: `i-06db70df6b3e32207`, region `us-east-1`
+
+> ⚠️ **THE IP ABOVE IS NOT STABLE — it has already gone stale once.** This box has no Elastic IP, so
+> every stop/start gives it a new public address. It was `54.234.44.162` until a relaunch on
+> 2026-08-19; on 2026-09-01 an SSH attempt to that address timed out and looked exactly like an
+> allowlist problem — the security-group rule was already present and the real cause was the address.
+> **The instance ID is the stable handle. Look the address up rather than trusting this line:**
+> ```bash
+> aws ec2 describe-instances --region us-east-1 --instance-ids i-06db70df6b3e32207 \
+>   --query 'Reservations[0].Instances[0].PublicIpAddress' --output text
+> ```
 - IAM profile: `cello-ec2-build-role`
 
 If you get a connection timeout, your current IP is not allowlisted. Add it first:
@@ -84,7 +94,7 @@ ssh … "cello -v"        # → "command not found" — WRONG CONCLUSION
 Export the path first. Every cello command over SSH needs this prefix:
 
 ```bash
-ssh -i ~/.ssh/cello-hermes-key.pem ubuntu@54.234.44.162 \
+ssh -i ~/.ssh/cello-hermes-key.pem ubuntu@18.207.197.56 \
   'export PATH=$HOME/.npm-global/bin:$PATH; cello -v'
 ```
 
@@ -120,7 +130,7 @@ debugging discipline as any other producer/consumer trace: verify at the source,
 second-hand description.
 
 ```bash
-ssh -i ~/.ssh/cello-hermes-key.pem ubuntu@54.234.44.162 \
+ssh -i ~/.ssh/cello-hermes-key.pem ubuntu@18.207.197.56 \
   "cello sessions --all --agent <agent-name>"
 ```
 
@@ -138,7 +148,7 @@ No browser round-trip, and it is the one to prefer for anything unattended.
 3. Then on EC2:
 
 ```bash
-ssh -i ~/.ssh/cello-hermes-key.pem ubuntu@54.234.44.162
+ssh -i ~/.ssh/cello-hermes-key.pem ubuntu@18.207.197.56
 echo "YOUR_TOKEN_HERE" | gh auth login --with-token
 gh auth status   # verify
 ```
@@ -146,7 +156,7 @@ gh auth status   # verify
 ### Option B — Interactive web login over SSH
 
 ```bash
-ssh -i ~/.ssh/cello-hermes-key.pem ubuntu@54.234.44.162
+ssh -i ~/.ssh/cello-hermes-key.pem ubuntu@18.207.197.56
 gh auth login
 # Choose: GitHub.com → HTTPS → Login with a web browser
 # Copy the one-time code, open the URL on your Mac, paste it in

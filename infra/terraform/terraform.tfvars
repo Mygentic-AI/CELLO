@@ -123,15 +123,34 @@ relay_image_tag = "7befcc9534d7830c9883797d0b208abdb0e8ede5"
 
 relay_nodes = {
   us-east1 = {
-    node_id      = "gcp-relay-use1"
-    zone         = "us-east1-b"
+    node_id = "gcp-relay-use1"
+    # ⚠️ MOVED -b → -d 2026-09-01. us-east1-b was out of capacity for e2-small AND n2-standard-2;
+    # changing machine type alone did not rescue it, unlike the directory. The WAL disk moves with
+    # it (recreated empty) — acceptable only because there are no users and the WAL journals
+    # in-flight frames rather than durable state.
+    zone         = "us-east1-d"
     subnet_index = 0
-    machine_type = "e2-small"
+    # ⚠️ e2-small → n2-standard-2, 2026-09-01, during the 7befcc95 roll. us-east1-b was out of e2
+    # capacity all afternoon (it took the DIRECTORY out of this zone entirely).
+    #
+    # THE ZONE IS NOT THE LEVER FOR A RELAY, and this is the difference from a directory: the relay
+    # has a ZONAL WAL persistent disk (`google_compute_disk.relay_wal`) attached by name, holding
+    # in-flight session frames. A zonal disk cannot follow the instance to another zone, so moving
+    # zone means recreating the disk and dropping frames agents believe were delivered. Change the
+    # machine type instead and leave the disk where it is.
+    #
+    # Oversized for a relay (it journals and forwards; it does not compute), taken because n2 had
+    # capacity in this region today when e2 did not. Revert only with a fresh probe.
+    machine_type = "n2-standard-2"
     hostname     = "relay-gcp-use1.cello.mygentic.ai"
   }
   europe-west1 = {
-    node_id      = "gcp-relay-euw1"
-    zone         = "europe-west1-b"
+    node_id = "gcp-relay-euw1"
+    # ⚠️ MOVED -b → -c 2026-09-01, same as this region's DIRECTORY an hour earlier and for the same
+    # reason: europe-west1-b returned ZONE_RESOURCE_POOL_EXHAUSTED. The WAL disk is recreated in -c
+    # (zonal disks cannot follow an instance), which costs in-flight frames — acceptable only
+    # because there are no users.
+    zone         = "europe-west1-c"
     subnet_index = 2
     machine_type = "e2-small"
     hostname     = "relay-gcp-euw1.cello.mygentic.ai"

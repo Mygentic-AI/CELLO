@@ -5,11 +5,11 @@ description: Upload local OBS recordings and metadata to the remote Hermes EC2 i
 
 # OBS Footage Uploader (Local to Cloud)
 
-Use this command when the user records video clips locally (e.g., in OBS) and wants to upload them to the remote Hermes EC2 instance (`54.234.44.162`) for assembly, transcription, and rendering via Remotion.
+Use this command when the user records video clips locally (e.g., in OBS) and wants to upload them to the remote Hermes EC2 instance (`18.207.197.56`) for assembly, transcription, and rendering via Remotion.
 
 ## SSH & Host Access
 
-- **Target Host:** `54.234.44.162` (`ubuntu` user)
+- **Target Host:** `18.207.197.56` (`ubuntu` user)
 - **SSH Key:** `~/.ssh/cello-hermes-key.pem`
 - **Destination Folder:** `/home/ubuntu/raw_footage/`
 
@@ -41,7 +41,7 @@ Write a JSON file (e.g., `2026-08-11_17-13-50_meta.json`) in the same local dire
 Before executing `rsync`, verify or create the target directory on the EC2 instance:
 
 ```bash
-ssh -o StrictHostKeyChecking=no -i ~/.ssh/cello-hermes-key.pem ubuntu@54.234.44.162 "mkdir -p /home/ubuntu/raw_footage"
+ssh -o StrictHostKeyChecking=no -i ~/.ssh/cello-hermes-key.pem ubuntu@18.207.197.56 "mkdir -p /home/ubuntu/raw_footage"
 ```
 
 ## Step 3: Upload via Rsync
@@ -51,7 +51,7 @@ Use `rsync` with the specified SSH identity key to transfer both the video file 
 ```bash
 rsync -avP -e "ssh -o StrictHostKeyChecking=no -i ~/.ssh/cello-hermes-key.pem" \
   /path/to/local/video.mp4 /path/to/local/video_meta.json \
-  ubuntu@54.234.44.162:/home/ubuntu/raw_footage/
+  ubuntu@18.207.197.56:/home/ubuntu/raw_footage/
 ```
 
 ## Step 4: Handoff Confirmation
