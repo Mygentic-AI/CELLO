@@ -2,12 +2,12 @@
 name: 006-CRYPTO — Close out our own encryption layer
 type: micro-work-order
 date: 2026-08-24
-status: in-progress
+status: complete
 description: >
-  The per-session key agreement is written but has never been reviewed. The REVIEW is done and
-  closed — six findings, all fixed, revert proofs recorded. The ORDER is not: this file is called
-  "close out our own encryption layer" and the layer is not in the data path, so nothing it
-  describes protects a message yet. Source: DOD-M15-KEYAGREE-1.
+  DONE: the key agreement was reviewed (six findings, all fixed) and given a caller — a throwaway
+  keypair is now minted per session, held in memory only, and destroyed at teardown and shutdown.
+  NOT DONE, and 007-CRYPTO owns it: nothing exchanges the public halves, so no message body is
+  encrypted yet. The title describes the feature, not this order. Source: DOD-M15-KEYAGREE-1.
 ---
 
 # **<ins>MICRO</ins>** WORK ORDER 006-CRYPTO — Close out our own encryption
@@ -27,25 +27,35 @@ description: >
 
 ---
 
-## ⚠️ WHERE THIS STANDS (Andre, 2026-09-01)
+## ⚠️ THIS ORDER IS DONE. THE FEATURE IS NOT. (2026-09-01)
 
-**The review half is CLOSED. Do not run it again.** Six findings, all fixed, revert proofs recorded,
-merged. See *Review* below.
+**Read this before believing the `complete` in the frontmatter.** It means *this order's* Definition
+of Done is met. It does **not** mean the thing the title describes is delivered: **no message body is
+encrypted by CELLO yet**, and every word of *The problem, plainly* below is still true today.
+`007-CRYPTO` is what changes that.
 
-**The order was marked `complete` in error.** The maths is written and correct; **nothing calls it**,
-so no message is encrypted and *The problem, plainly* below is still true today.
+That distinction is the whole reason this banner exists. The order was briefly marked `complete`
+when only the review was done, which told the next reader the encryption layer was closed out when
+nothing called it at all.
+
+**What this order delivered, in two parts, both merged:**
+- **Part 1 — the review.** Six findings, three blocking, all fixed, revert proofs recorded.
+- **Part 2 — the lifecycle.** The key agreement now has a caller: a throwaway keypair is minted once
+  per session on all three activation paths, held in memory only, destroyed everywhere a session's
+  entry is dropped and at shutdown, and a revived session re-keys. The session says on its own status
+  that CELLO is not encrypting its content, so no reader has to infer it from silence again.
 
 **The feature is 006 + 007 together, and it was scoped with a hole in the middle.** The whole
 journey, and who owns each step:
 
 | # | Step | Owner |
 |---|---|---|
-| 1 | Each side mints a throwaway key when a session opens | **006 — was missing, now below** |
+| 1 | Each side mints a throwaway key when a session opens | 006 ✅ done |
 | 2 | The two sides send each other the public halves | **007 — was missing** |
 | 3 | Each verifies the half really came from its counterparty | 007 (already scoped) |
 | 4 | Both compute the same shared secret | 006 ✅ done |
 | 5 | The message body is encrypted with it, and decrypted on arrival | **007 — was missing** |
-| 6 | The keys are destroyed when the session closes | **006 — was missing, now below** |
+| 6 | The keys are destroyed when the session closes | 006 ✅ done |
 
 Steps 2, 3 and 5 are ONE wire format and must ship together — split them and a half-upgraded pair
 cannot talk. Steps 1 and 6 are purely local and can land first, which is why they stay here.
@@ -88,7 +98,7 @@ later does not protect what already went over the wire.
    tests, confirm it reddens, confirm it reddens for the reason you expect. A test that stays green
    when you break the code is not a test.
 
-**Part 2 — the key's LIFECYCLE in the daemon. Local only; nothing here changes the wire.**
+**Part 2 — the key's LIFECYCLE in the daemon. ✅ DONE. Local only; nothing here changed the wire.**
 
 4. **Mint a throwaway keypair when a session opens**, once per session, alongside the salt half that
    is already minted there. Same rule as the salt: minted ONCE, not per reconnect — a fresh key on
@@ -106,13 +116,13 @@ later does not protect what already went over the wire.
 
 1. Review pass complete, every finding fixed, verdict quoted below. ✅
 2. Every test covering this code has a recorded revert proof. ✅
-3. `pnpm run test`, `pnpm run lint`, `pnpm run typecheck` pass.
-4. Opening a session mints exactly one throwaway keypair, and reconnecting does **not** mint another.
-5. The secret is in memory only: a test asserts it is absent from the database after a session opens.
-6. Closing a session zeroes the secret, and it happens after the seal, not before.
+3. `pnpm run test`, `pnpm run lint`, `pnpm run typecheck` pass. ✅
+4. Opening a session mints exactly one throwaway keypair, and reconnecting does **not** mint another. ✅
+5. The secret is in memory only: a test asserts it is absent from the database after a session opens. ✅
+6. Closing a session zeroes the secret, and it happens after the seal, not before. ✅
 7. A session with no agreed key reports that fact with a named reason, on the surface the agent
-   reads — not only in the log.
-8. Each of 4–7 has a test that has been made to fail on purpose.
+   reads — not only in the log. ✅
+8. Each of 4–7 has a test that has been made to fail on purpose. ✅
 
 **Not in scope:** anything that crosses the wire — the exchange, the signature, and encrypting the
 message body are **007-CRYPTO**, and they are one format that ships together. Also not in scope:
@@ -175,6 +185,36 @@ fails typecheck is not caught), each checked against the test it was aimed at:
 **DoD 3 — gate.** `lint` ✓ · `typecheck` ✓ (this is the build) · `test` **4599 passed, 1 failed** —
 `mcp-001-agent-lifecycle` AC-002, the known pre-existing failure, unrelated: `cello_start_agent` now
 returns a `guidance` field that its exact-match assertion predates.
+
+---
+
+## Review — part 2, the lifecycle
+
+One pass, `cello-unit-reviewer` on Opus. **Ten findings — five blocking, all ten fixed.** Two were
+real holes in the work, and both were on the path sessions ordinarily take rather than a corner.
+
+> "SPEC: DEVIATIONS FOUND — clause 6 is unmet on the terminal path an interrupted session actually
+> takes; clause 7 has no test at all; Decisions Carried #5 is not implemented on the real revive
+> path. SILENT FALLBACKS FOUND — the idempotence guard silently preserves a stale secret on revive
+> instead of re-keying, and nothing says so."
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | The agent-facing half had **no test** — mine asserted the daemon record under a docblock claiming otherwise. Deleting the whole whitelist entry left every test green. Fourth instance of this defect in this codebase, inside the fix for it. | `f6cfe1a` |
+| 2 | **An interrupted session never zeroed its key.** The destroy rode cache eviction; the relay-blip teardown deliberately does not evict, and the later seal returned early — so the secret stayed resident until the process exited. | `f6cfe1a` |
+| 3 | **A revived session kept the old key.** Follows from 2: the idempotence guard found the stale secret and silently preserved it, on the one path where re-keying was explicitly decided. Three comments asserted it re-keyed. | `f6cfe1a` |
+| 4 | The "destroy after the seal" test asserted **two adjacent log lines**. Moving the destroy before the ceremony passed it. | `f6cfe1a` |
+| 5 | The crypto header had been corrected into the **opposite** false claim — "nothing mints an ephemeral" — which this order made two thirds untrue the same day. | `f6cfe1a` |
+| 6–10 | Two activation paths untested; shutdown left secrets in memory; an unreachable branch claimed a database provenance it lacks; the disk tripwire would false-positive on `content_salt`; events carried no correlationId. | `f6cfe1a`, `f19e8bb` |
+
+**Revert proofs.** 8 mutants for this part, each run alone and confirmed to COMPILE first. **Three
+survived on the first attempt and each got a real test rather than an excuse:** the idempotence guard
+(the test only ever opened a session once), the shutdown zeroing (the map was empty either way, so
+presence proved nothing — only a reference the test owns can tell dropping from overwriting), and the
+agent-facing whitelist. All three now die.
+
+**Gate.** `lint` ✅ · `typecheck` ✅ · `test` **4626 passed, 1 failed** — `mcp-001` AC-002, the known
+pre-existing failure, unrelated.
 
 ---
 
