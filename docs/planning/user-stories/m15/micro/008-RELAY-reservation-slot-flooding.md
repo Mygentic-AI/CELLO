@@ -2,7 +2,7 @@
 name: 008-RELAY — An agent cannot flood a relay's reservation slots
 type: micro-work-order
 date: 2026-09-01
-status: open
+status: complete
 description: >
   A relay grants circuit reservation slots to anyone holding any keypair, and counts nothing. Mint
   keys and take the table; or, once that is closed, open thousands of sessions between two agents you
@@ -309,12 +309,59 @@ assertion — it reproduces the production symptom exactly: a live receiver wait
 counterparty's message and it never arrives, because the ledger hung its slot up. That mutation is
 also how the fault was found in the first place, by an existing test written for something else.
 
+## Revert proofs — the review fixes
+
+| Mutation | What reddened | Reason it gave |
+|---|---|---|
+| Reclaim's peer-liveness guard removed | 1 — the waited-hours promotion test | `expected [ 'peer-promoted' ] to deeply equal []` |
+| Operator surface never written | 2 of the client's 6 | the surface reads null where a refusal was due |
+| Failover branch removed | exactly 1 — the quarantine test | `expected false to be true` |
+
+## Clause 4 — a deviation, stated rather than left implicit
+
+> *"An agent asking for a slot while holding an unused one does not consume a second."*
+
+**As built, it consumes a second unless the old slot's peer has GONE.** That is deliberate and it
+is the fix for the defect review found: a "spare" slot and a standing receiver waiting for its first
+caller are the same thing until someone calls, so releasing on idleness alone hangs up the receiver
+carrying a conversation that has just started. Reclaim is therefore a backstop for a disconnect the
+relay never observed; the ordinary case — a daemon restart — is handled by the disconnect path,
+which frees the slot at once. The clause's purpose (a restart must not strand a slot for its full
+TTL) is met; its literal wording is not.
+
 ## Review
 
-*(Reviewer verdict. One quote. Not a transcript.)*
+**One pass, per the rules. Verdict, in the reviewer's own words:**
+
+> *SPEC: DEVIATIONS FOUND* — clause 8 (no consumer for the reaped-party notice) and clause 9 (no
+> failover branch) are un-journaled and [blocking]. … *SILENT FALLBACKS FOUND* — H1 is [blocking]:
+> the reclaim rule hangs up a live promoted receiver and the test that names the case only covers a
+> 5-minute window. … *ERROR SUBSTITUTION FOUND* … *HOLLOW TESTS FOUND* … *REMOVALS PROVEN.*
+
+Eight findings, all fixed: **H1** the reclaim floor did not prevent what it was written to prevent;
+**H2** clause 9 was a flag nothing branched on; **H3** the reaped-party notice had no consumer and
+raced its own disconnect; **M1** one refusal label for three different causes; **M2** the tuple cap
+never reached the operator; **M3** the ledger counted connections against a reservation ceiling;
+**L1** a refusal reason with no producer; **L2** a stale refusal survived a transport failure.
+
+The reviewer also confirmed the parts that hold: the token check cannot be bypassed (one call site
+for `recordAuthenticated`, strictly after the token check, and the binding compares against the
+already-verified key); omitted-vs-empty is consistent across directory, wire and relay; the
+registration-lookup premise is correct; the three fail-open candidates all point the safe way; and
+the fourteen pre-existing relay test files were changed **additively only — confirmed by diffing
+every removed assertion, not asserted.**
 
 ---
 
 ## Newly discovered
 
-*(One or two lines each. Do not act on them.)*
+- **`relay_slot_reclaimed` reaches only an agent with an open delivery stream.** A bare standing
+  receiver proves its reservation and closes the stream, so for the case the notice was written for
+  there is nothing to write to and the hangup is the only signal. It recovers either way; what it
+  loses is the explanation.
+- **The three caps are judgement calls with no occupancy data behind them** — 32 slots per agent, 5
+  sessions per identity pair, reaper at 80% of the ceiling. Worth revisiting once a relay has run
+  with real traffic. The six-hour activity floor is not in this category; it is a floor.
+- **Deploy ordering is not enforced by anything.** Publish the client before deploying the relays: an
+  old relay ignores the extra field, but an enforcing relay in front of clients that send no token
+  refuses every agent.
