@@ -2,7 +2,7 @@
 name: 003-RELAY — Relay rate limiting, and the idle timer that is off in production
 type: micro-work-order
 date: 2026-08-24
-status: open
+status: complete
 description: >
   Three relay paths still have no rate limiting of any kind, and the per-session idle timer exists
   but the production binary never passes it. Add per-peer and per-pubkey limits to the three
@@ -157,9 +157,13 @@ affordance.
 3. ✅ Proven from the BINARY, not the config: `dod-m15-relayabuse-1-idle-timer-binary.test.ts` spawns
    the compiled `dist/bin/relay.js`, records a real client-presented session assignment over the
    wire, and asserts the relay sends `session_interrupted`/`timeout` and tears the session down on
-   its own — no `hash_submit` needed to trigger it, the timer starts at `recordAssignment`. Chosen
-   default: `RELAY_SESSION_IDLE_TIMEOUT_MS` = 1 hour (an order of magnitude tighter than the 24h
-   sweep it complements; a judgement call, tunable without a code change).
+   its own — no `hash_submit` needed to trigger it, the timer starts at `recordAssignment`. Shipped
+   default: `RELAY_SESSION_IDLE_TIMEOUT_MS` = **24 hours**. It shipped at 1 hour and that was a
+   regression — it destroyed the sessions of agents who had merely gone quiet, which is Andre's own
+   working pattern, and the teardown was not surfaced to them. **Andre ruled 24h: this timer is a
+   reclaimer, not a conversation timeout.** Fixed in `f659866a`, with a test that reads the default
+   off the running binary with NO env var set — the original test set the value explicitly, so it
+   would have stayed green for any default at all.
 4. ✅ Relayed connections carry both caps, restored (not reinstating libp2p's 2-min/128-KiB toy
    defaults, which is what broke NAT reachability originally) but bounded: 7 days / 1 GiB by
    default (`RELAY_CIRCUIT_DURATION_LIMIT_MS` / `RELAY_CIRCUIT_DATA_LIMIT_BYTES`), proven ENFORCED
@@ -181,6 +185,12 @@ affordance.
 
 **Not in scope:** requiring an assignment (002-RELAY), the admin frame types (004-RELAY),
 infrastructure-level flood protection, anything in the directory or the client.
+
+**✅ CLOSED 2026-09-01.** All seven clauses met; all eight findings from the Opus re-review fixed and
+revert-tested. Work item 4 (reservation rate limiting), which was added to this order's mission on
+2026-08-31, is **not** unfinished business here — it outgrew a relay-only order and was extracted to
+`006-RELAY-reservation-slot-flooding.md`, which carries the design and the work. The decision trail
+for it stays above, so the options that do not work are not re-derived.
 
 ---
 
