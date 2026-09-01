@@ -118,9 +118,15 @@ later does not protect what already went over the wire.
 message body are **007-CRYPTO**, and they are one format that ships together. Also not in scope:
 anything touching the seal, anything touching the relay.
 
-⚠️ **Re-keying a revived session is ruled out of the gate — and that leaves a hole 007 must close.**
-The salt survives a daemon restart because it is persisted; this secret deliberately cannot. So a
-session revived after a restart has no key and no way to get one. **See 007's open question.**
+⚠️ **A revived session RE-KEYS — Decisions Carried #5, and the exchange is 007's.** This secret is
+deliberately never persisted, so a session that comes back after a restart mints a fresh keypair and
+agrees a new secret, exactly as a new session does. Minting on revival is therefore part of clause 4
+above, not an exception to it.
+
+An earlier version of this line said re-keying was ruled out of the gate. That was stale: re-keying
+was only ever a problem because the salt used to be derived from this same secret, so a new key meant
+a new salt and a transcript half-verifiable under each. This unit decoupled them, which removed the
+objection — `session-key-agreement.ts` has said so since.
 
 ---
 

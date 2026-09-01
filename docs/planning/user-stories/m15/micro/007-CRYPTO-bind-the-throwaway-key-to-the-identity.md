@@ -113,32 +113,43 @@ feature real.** When it is done, and only then, our own encryption is actually p
    named reason on the agent-facing surface — no silent plaintext.
 8. A message that fails live delivery still parks and is still readable by the recipient, under the
    scheme that path already uses.
-9. Each of 1–8 has a test, and **each test has been made to fail on purpose** — revert the fix,
+9. **One side is restarted mid-conversation and the session keeps working**: both sides re-key on
+   reconnect and the next message is sent, received and readable. Asserted across a real restart, not
+   by clearing a map — the whole point is that the secret did not survive.
+10. Each of 1–9 has a test, and **each test has been made to fail on purpose** — revert the fix,
    confirm it reddens, confirm it reddens for the reason you expect.
-10. The docstring is rewritten to match reality.
-11. `pnpm run test`, `pnpm run lint`, `pnpm run typecheck` pass.
-12. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below.
-13. Published, **receiver first**, and the two repos re-pinned.
+11. The docstring is rewritten to match reality.
+12. `pnpm run test`, `pnpm run lint`, `pnpm run typecheck` pass.
+13. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below.
+14. Published, **receiver first**, and the two repos re-pinned.
 
 **Not in scope:** post-quantum algorithms, the session salt, anything in the seal beyond keeping it
 working, anything in the relay.
 
 ---
 
-## 🚨 OPEN QUESTION — Andre's call, and it blocks a correct answer
+## A REVIVED SESSION RE-KEYS — settled (Andre, 2026-09-01), do not re-open
 
-**What happens to a session whose daemon restarted?** The salt survives a restart because it is
-persisted. The throwaway secret deliberately is not — that is what forward secrecy means, and it is
-ruled. So a revived session has no key and no way to agree a new one, because re-keying a revived
-session is currently ruled out of the gate.
+The throwaway secret is never persisted, so a daemon that restarts has lost its half. **Both sides
+mint fresh keys and agree a new secret, exactly as they would for a new session.** Nothing about a
+revived conversation is special.
 
-Left unanswered, restarting a daemon mid-conversation means messages stop being readable. Three
-possible answers, and the third is the one to avoid:
+This is Decisions Carried #5 and `session-key-agreement.ts` already states it. An earlier version of
+these two orders said re-keying was "ruled out of the gate" — stale, and the contradiction should
+have been caught rather than carried. Re-keying was only ever a problem while the salt was derived
+from this same secret: a new key meant a new salt, and a transcript half-verifiable under each. 006
+decoupled them, which removed the objection.
 
-1. **Re-key on revival** — bring re-keying back into scope for this order.
-2. **The revived session finishes unencrypted**, visibly, with a named reason and no silent
-   downgrade.
-3. **Say nothing and discover it in production.**
+**What it costs and what it does not:**
+
+- **Nothing already delivered is affected.** Decrypted messages are plaintext in the local
+  transcript.
+- **Nothing parked is affected.** Mailbox content is sealed to the long-term identity key, which
+  survives a restart, and never used this secret.
+- **The cost is one round trip on reconnect**, and it is not new machinery: the salt already
+  re-announces on every reconnect and this rides the same moment.
+- **Forward secrecy improves.** A conversation that spans a restart ends up with two short-lived
+  keys instead of one long one.
 
 ---
 
