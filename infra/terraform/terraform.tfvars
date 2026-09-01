@@ -22,7 +22,7 @@ directory_nodes = {
     # the playbook: both had capacity. Zone changes are safe within a region (the external IP is a
     # regional google_compute_address, so the published manifest stays valid); a REGION change would
     # not be. Revert only with a fresh probe, never on assumption.
-    zone         = "us-east1-c"
+    zone         = "us-east1-d"
     subnet_index = 0
     # ⚠️ UPSIZED e2-standard-2 → c3-standard-4 2026-09-01, same reason and same answer as usc1 on
     # 2026-08-10: us-east1 had no 2-vCPU standard capacity in `-b` OR `-c`, the node sat DOWN for
@@ -76,7 +76,12 @@ directory_nodes = {
   # take the consortium below threshold.
   europe-west1 = {
     node_id          = "gcp-euw1"
-    zone             = "europe-west1-b"
+    # ⚠️ MOVED -b → -c 2026-09-01 during the 7befcc95 roll, same failure and same remedy as use1
+    # earlier the same hour: `europe-west1-b` returned ZONE_RESOURCE_POOL_EXHAUSTED on this
+    # instance's OWN insert operations (twice), leaving the node down. Zone changes are safe within
+    # a region — the external IP is a regional google_compute_address, so the published consortium
+    # manifest stays valid. Revert only with a fresh probe, never on assumption.
+    zone             = "europe-west1-c"
     subnet_index     = 2
     machine_type     = "e2-standard-2"
     db_tier          = "db-custom-1-3840"

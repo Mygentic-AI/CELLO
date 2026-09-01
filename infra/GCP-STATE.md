@@ -378,11 +378,26 @@ probe.
 The relay logs the redial and the seal still fails, and `relay.directory.dial.failed` has **never**
 appeared — so the dial does not throw, yet nothing is repaired. That is the gap `7838bbeb` measures.
 
-## 🔴 IN PROGRESS — roll onto `7befcc95` (008-RELAY gate), STALLED ON us-east1 CAPACITY (2026-09-01)
+## 🟡 IN PROGRESS — roll onto `7befcc95` (008-RELAY gate) — ALL 3 DIRECTORIES DONE, RELAYS PENDING (2026-09-01)
 
-**Where it stopped: `gcp-use1` is DOWN, the other two directories and both relays are UNTOUCHED and
-serving.** Threshold holds (2 of 3). Nothing about 008 is half-live: the relays still run
-`e0aae57a`, so no relay is enforcing a gate that clients cannot yet satisfy.
+**Directory half COMPLETE.** All three confirmed on `directory:7befcc95…` **read off the running
+instances**, not the templates, and all three producing 12 anti-entropy rounds per 3 minutes:
+
+| node | instance | zone NOW | machine type NOW |
+|---|---|---|---|
+| `gcp-use1` | `cello-gcp-use1-4cgj` | **`us-east1-d`** (was `-b`) | **`n2-standard-2`** (was `e2-standard-2`) |
+| `gcp-usc1` | `cello-gcp-usc1-wzhk` | `us-central1-a` (unchanged) | `e2-standard-2` (unchanged) |
+| `gcp-euw1` | `cello-gcp-euw1-6n5v` | **`europe-west1-c`** (was `-b`) | `e2-standard-2` (unchanged) |
+
+**Relays are NEXT and are still on `e0aae57a`** — deliberately. The gate refuses any client that
+cannot prove itself, so no relay may enforce it until every client is on
+`connect@0.0.158` / `cli@0.0.190`, which are on npm `latest` as of today.
+
+> ### ⚠️ TWO OF THREE DIRECTORIES LEFT ZONE `-b` TODAY, BOTH ON CAPACITY
+> `us-east1-b` and `europe-west1-b` each returned `ZONE_RESOURCE_POOL_EXHAUSTED` on the new
+> instance's OWN insert operations, leaving the node down. `us-east1-d` and `europe-west1-c` each
+> took it on the FIRST attempt with no error. If a future roll stalls in a `-b` zone, move zone
+> early rather than grinding — but re-probe, because this was one day's weather, not a rule.
 
 **Images built and verified in Artifact Registry** — both from GitHub at the revision, not
 `builds submit .`:
