@@ -282,6 +282,14 @@ afterwards, verified.
 | Relay: skip the token→challenge key comparison | exactly 1 — the lifted-token test | same, and only that one, so the binding is isolated by one assertion |
 | Directory: issue a token without reading the profile | exactly 1 — the unregistered-key test | `expected Uint8Array[…] to be undefined` |
 | Verifier: treat an empty directory key set as valid | 2 — the unit test AND the over-the-wire test | `expected { ok: true } to deeply equal { ok: false }` |
+| Client: never attach the token to the auth frame | 2 of 3 | `expected null to be 'a5a5a5…'` |
+| Client: snapshot the token at construction instead of reading it fresh | exactly 1 — the refresh test | `expected '1111…' to be '2222…'`, i.e. the mutation produces the real symptom (a stale token), not merely a failure |
+
+The client's red was also captured before any implementation existed, as a typecheck failure naming
+each missing API. **That needed a positive control to be worth anything:** the root typecheck first
+reported exit 0 against a test calling methods that did not exist, because the file was outside the
+daemon's typecheck allowlist. A deliberate `const x: number = "not a number"` in the same file also
+reported exit 0 — which is what proved the gate could not see the file at all.
 
 ## Review
 
