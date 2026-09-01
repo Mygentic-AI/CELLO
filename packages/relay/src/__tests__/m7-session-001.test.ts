@@ -37,6 +37,7 @@ import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
 import { encodeSessionInterrupted } from "../relay-frames.js";
 import { InMemoryRelayStore } from "../relay-store.js";
 import type { SessionAssignment } from "../relay-types.js";
+import { testOnlineToken } from "./helpers/online-token.js";
 
 setupV3Tests();
 
@@ -85,10 +86,12 @@ function sendFrame(stream: Stream, data: Uint8Array): void {
   stream.send(lp.encode.single(data));
 }
 
+// DOD-M15-RELAYSLOTS-1: the relay refuses an auth carrying no directory-issued online token.
 async function performAuth(
   reader: StreamReader,
   stream: Stream,
   kp: ReturnType<typeof generateKeypair>,
+  dirKp: ReturnType<typeof generateKeypair>,
 ): Promise<void> {
   const challenge = await reader.readDecoded();
   expect(challenge["type"]).toBe("relay_auth_challenge");
@@ -104,7 +107,12 @@ async function performAuth(
   const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
   const signature = await kp.sign(msgHash);
 
-  sendFrame(stream, CBOR_ENC.encode({ type: "relay_auth_response", pubkey, signature }));
+  sendFrame(stream, CBOR_ENC.encode({
+    type: "relay_auth_response",
+    pubkey,
+    signature,
+    online_token: await testOnlineToken(dirKp, kp),
+  }));
 
   const ack = await reader.readDecoded();
   if (ack["type"] === "relay_auth_failed") {
@@ -195,8 +203,8 @@ describe("AC-001: relay emits session_interrupted on peer disconnect", () => {
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     // B disconnects — abort B's stream
     sB.abort(new Error("test_disconnect"));
@@ -234,8 +242,8 @@ describe("AC-001: relay emits session_interrupted on peer disconnect", () => {
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     sB.abort(new Error("test_disconnect"));
 
@@ -269,7 +277,7 @@ describe("AC-001: relay emits session_interrupted on peer disconnect", () => {
     );
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
 
     // A disconnects — B is not connected; relay tries best-effort, must not throw.
     sA.abort(new Error("test_disconnect"));
@@ -309,8 +317,8 @@ describe("AC-002: relay emits session_interrupted on idle timeout", () => {
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     /**
      * No hash submitted — session idles. Timer fires after 100ms.
@@ -572,8 +580,8 @@ describe("M-2: session teardown clears every tracking map", () => {
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     // B disconnects → relay emits session_interrupted to A as a notification, but
     // the session is NOT destroyed: B can reconnect and resume.

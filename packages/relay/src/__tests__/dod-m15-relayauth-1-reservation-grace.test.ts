@@ -14,6 +14,7 @@ import { generateKeypair } from "@cello-protocol/crypto";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
+import { testOnlineToken } from "./helpers/online-token.js";
 
 setupV3Tests();
 
@@ -35,7 +36,9 @@ class StreamReader {
   }
 }
 
-async function completeRelayAuth(node: Awaited<ReturnType<typeof createNode>>, relayPeerId: string, kp: ReturnType<typeof generateKeypair>): Promise<void> {
+// DOD-M15-RELAYSLOTS-1: keeping a reservation now takes more than proving key possession — the auth
+// must also carry the directory's token saying this key belongs to a registered agent.
+async function completeRelayAuth(node: Awaited<ReturnType<typeof createNode>>, relayPeerId: string, kp: ReturnType<typeof generateKeypair>, dirKp: ReturnType<typeof generateKeypair>): Promise<void> {
   const stream = await node.newStream(relayPeerId, RELAY_PROTOCOL_ID);
   const reader = new StreamReader(stream);
   const challenge = await reader.readDecoded();
@@ -44,7 +47,12 @@ async function completeRelayAuth(node: Awaited<ReturnType<typeof createNode>>, r
   const authMsg = new Uint8Array(Buffer.concat([Buffer.from(AUTH_DOMAIN, "utf8"), nonce, pubkey]));
   const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
   const signature = await kp.sign(msgHash);
-  stream.send(lp.encode.single(CBOR_ENC.encode({ type: "relay_auth_response", pubkey, signature })));
+  stream.send(lp.encode.single(CBOR_ENC.encode({
+    type: "relay_auth_response",
+    pubkey,
+    signature,
+    online_token: await testOnlineToken(dirKp, kp),
+  })));
   const ack = await reader.readDecoded();
   if (ack["type"] !== "relay_auth_ok") throw new Error(`expected relay_auth_ok, got ${String(ack["type"])}`);
 }
@@ -129,7 +137,7 @@ describe("DOD-M15-RELAYAUTH-1: reservation grants are time-boxed on proving key 
 
     // Proactively authenticate — mirrors the client-side fix (session-node-manager.ts now does
     // this immediately after securing a reservation, instead of waiting for a session to exist).
-    await completeRelayAuth(receiver, relayPeerId, receiverKp);
+    await completeRelayAuth(receiver, relayPeerId, receiverKp, dirKp);
 
     const disconnected = await awaitDisconnect(receiver, relayPeerId, 3_000);
     expect(disconnected, "an authenticated holder's reservation must survive the grace window").toBe(false);

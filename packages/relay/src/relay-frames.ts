@@ -190,7 +190,23 @@ export function decodeInboundFrame(bytes: Uint8Array): InboundRelayFrame | null 
      * failure mode of guessing wrong here is refusing a legitimate agent.
      */
     const purpose = o["purpose"] === "reservation" ? ("reservation" as const) : undefined;
-    return { type: "relay_auth_response", pubkey, signature, ...(purpose ? { purpose } : {}) };
+    /**
+     * DOD-M15-RELAYSLOTS-1: the directory-issued registration proof, carried through verbatim.
+     *
+     * A missing or non-binary field decodes to `undefined` rather than failing the whole frame, on
+     * purpose: the relay then refuses with `online_token_required`, which reaches the operator and
+     * says what to do. Failing the decode would abort the stream and leave them with a dead
+     * connection and no reason — and it is the OMISSION case that an unmodified older client
+     * produces, so it is the one that most needs to be explainable rather than silent.
+     */
+    const online_token = toUint8Array(o["online_token"]) ?? undefined;
+    return {
+      type: "relay_auth_response",
+      pubkey,
+      signature,
+      ...(purpose ? { purpose } : {}),
+      ...(online_token ? { online_token } : {}),
+    };
   }
 
   if (o["type"] === "hash_submit") {

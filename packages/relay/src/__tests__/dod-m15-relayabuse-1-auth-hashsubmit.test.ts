@@ -28,6 +28,7 @@ import { generateKeypair } from "@cello-protocol/crypto";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
+import { testOnlineToken } from "./helpers/online-token.js";
 
 setupV3Tests();
 
@@ -64,6 +65,10 @@ async function attemptAuth(
   node: Awaited<ReturnType<typeof createNode>>,
   relayPeerId: string,
   kp: ReturnType<typeof generateKeypair>,
+  // DOD-M15-RELAYSLOTS-1: the relay refuses an auth with no directory-issued token, so these tests
+  // mint a real one — otherwise every assertion below would pass for the wrong reason (a token
+  // refusal, not the rate limit they are written about).
+  dirKp: ReturnType<typeof generateKeypair>,
 ): Promise<Record<string, unknown>> {
   const stream = await node.newStream(relayPeerId, RELAY_PROTOCOL_ID);
   const reader = new StreamReader(stream);
@@ -75,7 +80,12 @@ async function attemptAuth(
   const authMsg = new Uint8Array(Buffer.concat([domain, nonce, pubkey]));
   const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
   const signature = await kp.sign(msgHash);
-  sendFrame(stream, CBOR_ENC.encode({ type: "relay_auth_response", pubkey, signature }));
+  sendFrame(stream, CBOR_ENC.encode({
+    type: "relay_auth_response",
+    pubkey,
+    signature,
+    online_token: await testOnlineToken(dirKp, kp),
+  }));
   const verdict = await reader.readDecoded();
   stream.close().catch(() => {});
   return verdict;
@@ -85,6 +95,7 @@ async function authedStream(
   node: Awaited<ReturnType<typeof createNode>>,
   relayPeerId: string,
   kp: ReturnType<typeof generateKeypair>,
+  dirKp: ReturnType<typeof generateKeypair>,
 ): Promise<{ stream: Stream; reader: StreamReader }> {
   const stream = await node.newStream(relayPeerId, RELAY_PROTOCOL_ID);
   const reader = new StreamReader(stream);
@@ -96,7 +107,12 @@ async function authedStream(
   const authMsg = new Uint8Array(Buffer.concat([domain, nonce, pubkey]));
   const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
   const signature = await kp.sign(msgHash);
-  sendFrame(stream, CBOR_ENC.encode({ type: "relay_auth_response", pubkey, signature }));
+  sendFrame(stream, CBOR_ENC.encode({
+    type: "relay_auth_response",
+    pubkey,
+    signature,
+    online_token: await testOnlineToken(dirKp, kp),
+  }));
   const ack = await reader.readDecoded();
   expect(ack["type"]).toBe("relay_auth_ok");
   return { stream, reader };
@@ -137,12 +153,12 @@ describe("DOD-M15-RELAYABUSE-1 — relay authentication is rate limited, per pee
 
     // Three attempts, three DIFFERENT claimed keys — so this exercises the PEER-keyed limit, not
     // the pubkey-keyed one (each key is authentic, so each attempt succeeds cryptographically).
-    const v1 = await attemptAuth(clientNode, relayPeerId, generateKeypair());
+    const v1 = await attemptAuth(clientNode, relayPeerId, generateKeypair(), dirKp);
     expect(v1["type"]).toBe("relay_auth_ok");
-    const v2 = await attemptAuth(clientNode, relayPeerId, generateKeypair());
+    const v2 = await attemptAuth(clientNode, relayPeerId, generateKeypair(), dirKp);
     expect(v2["type"]).toBe("relay_auth_ok");
 
-    const v3 = await attemptAuth(clientNode, relayPeerId, generateKeypair());
+    const v3 = await attemptAuth(clientNode, relayPeerId, generateKeypair(), dirKp);
     expect(v3["type"]).toBe("relay_auth_failed");
     expect(v3["reason"]).toBe("rate_limited");
     expect(v3["retry_after_ms"], "the relay must say WHEN, not just no").toBeGreaterThan(0);
@@ -216,12 +232,12 @@ describe("DOD-M15-RELAYABUSE-1 — relay authentication is rate limited, per pee
     scope.addCleanup(async () => { await nodeB.stop(); });
     await nodeB.dial(relayAddr);
 
-    const v1 = await attemptAuth(nodeA, relayPeerId, targetKp);
+    const v1 = await attemptAuth(nodeA, relayPeerId, targetKp, dirKp);
     expect(v1["type"]).toBe("relay_auth_ok");
 
     // Different TRANSPORT PEER (nodeB), same CLAIMED identity (targetKp) — the pubkey-keyed limit
     // must catch this even though the peer-keyed one would not (nodeB has never authed before).
-    const v2 = await attemptAuth(nodeB, relayPeerId, targetKp);
+    const v2 = await attemptAuth(nodeB, relayPeerId, targetKp, dirKp);
     expect(v2["type"]).toBe("relay_auth_failed");
     expect(v2["reason"]).toBe("rate_limited");
   }, 20_000);
@@ -240,15 +256,15 @@ describe("DOD-M15-RELAYABUSE-1 — relay authentication is rate limited, per pee
     await floodNode.start();
     scope.addCleanup(async () => { await floodNode.stop(); });
     await floodNode.dial(relayAddr);
-    await attemptAuth(floodNode, relayPeerId, generateKeypair());
-    const floodedOut = await attemptAuth(floodNode, relayPeerId, generateKeypair());
+    await attemptAuth(floodNode, relayPeerId, generateKeypair(), dirKp);
+    const floodedOut = await attemptAuth(floodNode, relayPeerId, generateKeypair(), dirKp);
     expect(floodedOut["type"]).toBe("relay_auth_failed");
 
     const honestNode = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await honestNode.start();
     scope.addCleanup(async () => { await honestNode.stop(); });
     await honestNode.dial(relayAddr);
-    const honestResult = await attemptAuth(honestNode, relayPeerId, generateKeypair());
+    const honestResult = await attemptAuth(honestNode, relayPeerId, generateKeypair(), dirKp);
     expect(honestResult["type"], "one peer's flood must never lock out another").toBe("relay_auth_ok");
   }, 20_000);
 
@@ -298,7 +314,7 @@ describe("DOD-M15-RELAYABUSE-1 — relay authentication is rate limited, per pee
     await victimNode.start();
     scope.addCleanup(async () => { await victimNode.stop(); });
     await victimNode.dial(relayAddr);
-    const victimResult = await attemptAuth(victimNode, relayPeerId, victimKp);
+    const victimResult = await attemptAuth(victimNode, relayPeerId, victimKp, dirKp);
     expect(victimResult["type"], "the real key-holder must not be locked out by a forger who never proved anything").toBe("relay_auth_ok");
   }, 20_000);
 });
@@ -335,7 +351,7 @@ describe("DOD-M15-RELAYABUSE-1 — hash_submit is rate limited, per peer AND per
     await clientNode.start();
     scope.addCleanup(async () => { await clientNode.stop(); });
     await clientNode.dial(relayAddr);
-    const { stream, reader } = await authedStream(clientNode, relayPeerId, clientKp);
+    const { stream, reader } = await authedStream(clientNode, relayPeerId, clientKp, dirKp);
 
     for (let i = 0; i < 2; i++) {
       const contentHash = new Uint8Array(randomBytes(32));
@@ -384,7 +400,7 @@ describe("DOD-M15-RELAYABUSE-1 — hash_submit is rate limited, per peer AND per
     await nodeA.start();
     scope.addCleanup(async () => { await nodeA.stop(); });
     await nodeA.dial(relayAddr);
-    const { stream: streamA, reader: readerA } = await authedStream(nodeA, relayPeerId, kpA);
+    const { stream: streamA, reader: readerA } = await authedStream(nodeA, relayPeerId, kpA, dirKp);
 
     const { structure1_cbor: s1a, sender_signature: sig1a } = await makeStructure1(sessionId1, new Uint8Array(randomBytes(32)), kpA, 0);
     sendFrame(streamA, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId1, leaf_kind: 0x00, structure1_cbor: s1a, sender_signature: sig1a }));
@@ -408,7 +424,7 @@ describe("DOD-M15-RELAYABUSE-1 — hash_submit is rate limited, per peer AND per
     await nodeC.start();
     scope.addCleanup(async () => { await nodeC.stop(); });
     await nodeC.dial(relayAddr);
-    const { stream: streamC, reader: readerC } = await authedStream(nodeC, relayPeerId, kpC);
+    const { stream: streamC, reader: readerC } = await authedStream(nodeC, relayPeerId, kpC, dirKp);
     const { structure1_cbor: s1c, sender_signature: sig1c } = await makeStructure1(sessionId2, new Uint8Array(randomBytes(32)), kpC, 0);
     sendFrame(streamC, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId2, leaf_kind: 0x00, structure1_cbor: s1c, sender_signature: sig1c }));
     expect((await readerC.readDecoded())["type"], "one sender's flood must never refuse another's submit").toBe("hash_submit_ack");
@@ -457,12 +473,12 @@ describe("DOD-M15-RELAYABUSE-1 — hash_submit is rate limited, per peer AND per
     scope.addCleanup(async () => { await node.stop(); });
     await node.dial(relayAddr);
 
-    const a = await authedStream(node, relayPeerId, kp1);
+    const a = await authedStream(node, relayPeerId, kp1, dirKp);
     const { structure1_cbor: s1, sender_signature: sig1 } = await makeStructure1(sessions[0]!, new Uint8Array(randomBytes(32)), kp1, 0);
     sendFrame(a.stream, CBOR_ENC.encode({ type: "hash_submit", session_id: sessions[0]!, leaf_kind: 0x00, structure1_cbor: s1, sender_signature: sig1 }));
     expect((await a.reader.readDecoded())["type"], "the first submit is under the limit").toBe("hash_submit_ack");
 
-    const b = await authedStream(node, relayPeerId, kp2);
+    const b = await authedStream(node, relayPeerId, kp2, dirKp);
     const { structure1_cbor: s2, sender_signature: sig2 } = await makeStructure1(sessions[1]!, new Uint8Array(randomBytes(32)), kp2, 0);
     sendFrame(b.stream, CBOR_ENC.encode({ type: "hash_submit", session_id: sessions[1]!, leaf_kind: 0x00, structure1_cbor: s2, sender_signature: sig2 }));
     const verdict = await b.reader.readDecoded();
@@ -504,12 +520,12 @@ describe("DOD-M15-RELAYABUSE-1 — hash_submit is rate limited, per peer AND per
     await nodeB.dial(relayAddr);
     expect(nodeA.getPeerId(), "precondition: these must be DIFFERENT transport peers").not.toBe(nodeB.getPeerId());
 
-    const a = await authedStream(nodeA, relayPeerId, senderKp);
+    const a = await authedStream(nodeA, relayPeerId, senderKp, dirKp);
     const { structure1_cbor: s1, sender_signature: sig1 } = await makeStructure1(sessionId, new Uint8Array(randomBytes(32)), senderKp, 0);
     sendFrame(a.stream, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: 0x00, structure1_cbor: s1, sender_signature: sig1 }));
     expect((await a.reader.readDecoded())["type"], "the first submit is under the limit").toBe("hash_submit_ack");
 
-    const b = await authedStream(nodeB, relayPeerId, senderKp);
+    const b = await authedStream(nodeB, relayPeerId, senderKp, dirKp);
     const { structure1_cbor: s2, sender_signature: sig2 } = await makeStructure1(sessionId, new Uint8Array(randomBytes(32)), senderKp, 1);
     sendFrame(b.stream, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: 0x00, structure1_cbor: s2, sender_signature: sig2 }));
     const verdict = await b.reader.readDecoded();

@@ -47,6 +47,7 @@ import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID, CelloRelayNode } from "../relay-node.js";
 import { RELAY_LEAF_KINDS, RELAY_LEAF_HASHERS } from "../relay-types.js";
 import type { SessionAssignment } from "../relay-types.js";
+import { testOnlineToken } from "./helpers/online-token.js";
 
 setupV3Tests();
 
@@ -114,11 +115,14 @@ function sendFrame(stream: Stream, data: Uint8Array): void {
 
 // performAuth reads the challenge, sends the response, and reads relay_auth_ok.
 // The relay always sends relay_auth_ok (or relay_auth_failed) after the response.
+// DOD-M15-RELAYSLOTS-1: `dirKp` replaced a `domainOverride` parameter no caller ever passed. The
+// relay now requires a directory-issued token proving the authenticating key is a registered
+// agent's, so every auth in this file mints one from the fixture's directory keypair.
 async function performAuth(
   reader: StreamReader,
   stream: Stream,
   kp: ReturnType<typeof generateKeypair>,
-  domainOverride?: string
+  dirKp: ReturnType<typeof generateKeypair>
 ): Promise<void> {
   const challenge = await reader.readDecoded();
   expect(challenge["type"]).toBe("relay_auth_challenge");
@@ -126,12 +130,17 @@ async function performAuth(
   expect(nonce.length).toBe(32);
 
   const pubkey = await kp.getPublicKey();
-  const domain = Buffer.from(domainOverride ?? "CELLO-RELAY-AUTH-v1", "utf8");
+  const domain = Buffer.from("CELLO-RELAY-AUTH-v1", "utf8");
   const authMsg = new Uint8Array(Buffer.concat([domain, nonce, pubkey]));
   const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
   const signature = await kp.sign(msgHash);
 
-  sendFrame(stream, CBOR_ENC.encode({ type: "relay_auth_response", pubkey, signature }));
+  sendFrame(stream, CBOR_ENC.encode({
+    type: "relay_auth_response",
+    pubkey,
+    signature,
+    online_token: await testOnlineToken(dirKp, kp),
+  }));
 
   // Read relay_auth_ok or relay_auth_failed confirmation
   const ack = await reader.readDecoded();
@@ -294,8 +303,8 @@ describe("DOD-M15-SEALWIRE-1: a carried SEAL payload reaches the seal data", () 
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     // A MESSAGE leaf first — it must come back carrying nothing, which is what makes the ctrl
     // assertion mean something rather than "every leaf has bytes".
@@ -422,8 +431,8 @@ describe("AC-001: first hash_submit assigns seq=1 using genesis prev_root", () =
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     const contentHash = new Uint8Array(randomBytes(32));
     const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, contentHash, cA.kp, 0);
@@ -468,8 +477,8 @@ describe("AC-002: seq=3 prev_root = Merkle root of leaves 1 and 2", () => {
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     await submitAndAck(rA, sA, sessionId, 0x00, cA.kp, 0);
     const deliver1 = await rB.readDecoded();
@@ -509,7 +518,7 @@ describe("AC-003: sender_mismatch when Structure 1 pubkey != connection pubkey",
     fix.relay.recordAssignment(await makeAssignment(sessionId, cA.pubkey, new Uint8Array(randomBytes(32)), fix.dirKp));
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
 
     // Build Structure 1 signed by K_X (not A) but sent on A's stream
     const kX = generateKeypair();
@@ -542,7 +551,7 @@ describe("AC-004: not_a_participant for client not in session", () => {
     fix.relay.recordAssignment(await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp));
 
     const { stream: sC, reader: rC } = await openStream(cC.node, fix.relayNode.getPeerId());
-    await performAuth(rC, sC, cC.kp);
+    await performAuth(rC, sC, cC.kp, fix.dirKp);
 
     const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, new Uint8Array(randomBytes(32)), cC.kp, 0);
     sendFrame(sC, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: 0x00, structure1_cbor, sender_signature }));
@@ -569,8 +578,8 @@ describe("AC-005: last_seen_seq_ahead when declared seq > current counter", () =
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     // Advance counter to 2
     await submitAndAck(rA, sA, sessionId, 0x00, cA.kp, 0); await rB.readDecoded();
@@ -602,8 +611,8 @@ describe("AC-006: submitForSeal returns all leaves, seq_count, and Merkle root",
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     for (let i = 0; i < 10; i++) {
       await submitAndAck(rA, sA, sessionId, 0x00, cA.kp, i);
@@ -638,8 +647,8 @@ describe("AC-007: session_not_found after confirmSeal destroys state", () => {
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     fix.relay.submitForSeal(sessionId);
     fix.relay.confirmSeal(sessionId);
@@ -655,7 +664,12 @@ describe("AC-007: session_not_found after confirmSeal destroys state", () => {
     const authMsg = new Uint8Array(Buffer.concat([Buffer.from("CELLO-RELAY-AUTH-v1"), nonce, pubA]));
     const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
     const sig = await cA.kp.sign(msgHash);
-    sendFrame(sA2, CBOR_ENC.encode({ type: "relay_auth_response", pubkey: pubA, signature: sig }));
+    sendFrame(sA2, CBOR_ENC.encode({
+      type: "relay_auth_response",
+      pubkey: pubA,
+      signature: sig,
+      online_token: await testOnlineToken(fix.dirKp, cA.kp),
+    }));
 
     // Consume relay_auth_ok before sending hash_submit
     const authOk = await rA2.readDecoded();
@@ -691,7 +705,7 @@ describe("AC-008 (amended, DOD-DOC-LEAF-1): leaf_kind_invalid outside {0x00, 0x0
       fix.relay.recordAssignment(await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp));
 
       const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
-      await performAuth(rA, sA, cA.kp);
+      await performAuth(rA, sA, cA.kp, fix.dirKp);
 
       const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, new Uint8Array(randomBytes(32)), cA.kp, 0);
       sendFrame(sA, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: badKind, structure1_cbor, sender_signature }));
@@ -722,7 +736,7 @@ describe("DOD-DOC-LEAF-1: leaf_kind 0x04 and 0x05 are accepted and witnessed", (
     fix.relay.recordAssignment(await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp));
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
 
     const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, new Uint8Array(randomBytes(32)), cA.kp, 0);
     sendFrame(sA, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: kind, structure1_cbor, sender_signature }));
@@ -751,7 +765,7 @@ describe("DOD-DOC-LEAF-1: leaf_kind 0x04 and 0x05 are accepted and witnessed", (
       const sessionId = new Uint8Array(randomBytes(16));
       fix.relay.recordAssignment(await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp));
       const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
-      await performAuth(rA, sA, cA.kp);
+      await performAuth(rA, sA, cA.kp, fix.dirKp);
       const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, new Uint8Array(randomBytes(32)), cA.kp, 0);
       sendFrame(sA, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: kind, structure1_cbor, sender_signature }));
       const resp = await rA.readDecoded();
@@ -789,7 +803,7 @@ describe("DOD-DOC-LEAF-1: leaf_kind 0x04 and 0x05 are accepted and witnessed", (
     const sessionId = new Uint8Array(randomBytes(16));
     fix.relay.recordAssignment(await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp));
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
 
     // Leaf 1: a document operation.
     // The relay echoes each witnessed leaf back as leaf_deliver, interleaved with the ack, so
@@ -858,8 +872,8 @@ describe("AC-009: 50 rapid submits → strictly monotonic seq 1..50", () => {
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     const seqNums: number[] = [];
     for (let i = 0; i < 50; i++) {
@@ -945,11 +959,11 @@ describe("AC-012: queued leaf_deliver flushed on B reconnect", () => {
     fix.relay.recordAssignment(await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp));
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
 
     // B authenticates then closes its stream
     const { stream: sB1, reader: rB1 } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rB1, sB1, cB.kp);
+    await performAuth(rB1, sB1, cB.kp, fix.dirKp);
     await sB1.close();
 
     await new Promise((r) => setTimeout(r, 200));
@@ -965,7 +979,7 @@ describe("AC-012: queued leaf_deliver flushed on B reconnect", () => {
 
     // B reconnects — reuse cB's keypair on a new stream
     const { stream: sB2, reader: rB2 } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rB2, sB2, cB.kp);
+    await performAuth(rB2, sB2, cB.kp, fix.dirKp);
 
     const deliver = await rB2.readDecoded();
     expect(deliver["type"]).toBe("leaf_deliver");
@@ -1002,8 +1016,8 @@ describe("SI-002: concurrent submits from A and B yield strictly monotonic seq",
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     // Each participant submits 50, skipping leaf_deliver frames from counterparty
     const readAck = async (reader: StreamReader): Promise<number> => {
@@ -1058,7 +1072,7 @@ describe("SI-003: forged Structure 1 signature is rejected as signature_invalid"
     fix.relay.recordAssignment(await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp));
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
 
     // Build TBS with A's pubkey, sign with forge key
     const kForge = generateKeypair();
@@ -1092,9 +1106,9 @@ describe("SI-004: leaf_deliver delivered only to counterparty", () => {
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
     const { stream: sC, reader: rC } = await openStream(cC.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
-    await performAuth(rC, sC, cC.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
+    await performAuth(rC, sC, cC.kp, fix.dirKp);
 
     await submitAndAck(rA, sA, sessionId, 0x00, cA.kp, 0);
     const bFrame = await rB.readDecoded();
@@ -1124,8 +1138,8 @@ describe("SI-005: confirmSeal destroys all per-session state synchronously", () 
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     await submitAndAck(rA, sA, sessionId, 0x00, cA.kp, 0);
     await rB.readDecoded();
@@ -1154,7 +1168,7 @@ describe("DB-001: delivery queue bounded at 256; flushed on reconnect", () => {
     fix.relay.recordAssignment(await makeAssignment(sessionId, cA.pubkey, cB.pubkey, fix.dirKp));
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
 
     // B does NOT connect — all deliveries queue for B's pubkey
     for (let i = 0; i < 10; i++) {
@@ -1163,7 +1177,7 @@ describe("DB-001: delivery queue bounded at 256; flushed on reconnect", () => {
 
     // B reconnects — open a new stream using cB's SAME node (same key)
     const { stream: sB2, reader: rB2 } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rB2, sB2, cB.kp);
+    await performAuth(rB2, sB2, cB.kp, fix.dirKp);
 
     // The relay flushes queued frames immediately after auth
     for (let i = 0; i < 10; i++) {
@@ -1189,8 +1203,8 @@ describe("DB-002: rejectSeal retains state, marks session seal_rejected", () => 
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     await submitAndAck(rA, sA, sessionId, 0x00, cA.kp, 0);
     await rB.readDecoded();
@@ -1279,7 +1293,7 @@ describe("relay-SI-NEW: recordAssignment rejects invalid directory signature", (
     // An unregistered session_id returns session_not_found (SI-001 / AC-010)
     const unregisteredId = new Uint8Array(randomBytes(16));
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
 
     const { structure1_cbor, sender_signature } = await makeStructure1(unregisteredId, new Uint8Array(randomBytes(32)), cA.kp, 0);
     sendFrame(sA, CBOR_ENC.encode({ type: "hash_submit", session_id: unregisteredId, leaf_kind: 0x00, structure1_cbor, sender_signature }));
@@ -1308,8 +1322,8 @@ describe("SESSION-002 AC-002: relay genesis prev_root matches computeGenesisPrev
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     const contentHash = new Uint8Array(randomBytes(32));
     const { structure1_cbor, sender_signature } = await makeStructure1(sessionId, contentHash, cA.kp, 0);
@@ -1342,8 +1356,8 @@ describe("SESSION-003 AC-010: only A submits SEAL ctrl leaf; relay stays active 
 
     const { stream: sA, reader: rA } = await openStream(cA.node, fix.relayNode.getPeerId());
     const { stream: sB, reader: rB } = await openStream(cB.node, fix.relayNode.getPeerId());
-    await performAuth(rA, sA, cA.kp);
-    await performAuth(rB, sB, cB.kp);
+    await performAuth(rA, sA, cA.kp, fix.dirKp);
+    await performAuth(rB, sB, cB.kp, fix.dirKp);
 
     // A submits a msg leaf (seq=1)
     await submitAndAck(rA, sA, sessionId, 0x00, cA.kp, 0);

@@ -40,6 +40,7 @@ import { createHash } from "node:crypto";
 import { decode } from "cbor-x";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
+import { testOnlineToken } from "./helpers/online-token.js";
 
 setupV3Tests();
 
@@ -139,10 +140,12 @@ function sendFrame(stream: Stream, data: Uint8Array): void {
   stream.send(lp.encode.single(data));
 }
 
+// DOD-M15-RELAYSLOTS-1: the relay refuses an auth carrying no directory-issued online token.
 async function performAuth(
   reader: StreamReader,
   stream: Stream,
-  kp: ReturnType<typeof generateKeypair>
+  kp: ReturnType<typeof generateKeypair>,
+  dirKp: ReturnType<typeof generateKeypair>
 ): Promise<void> {
   const challenge = await reader.readDecoded();
   expect(challenge["type"]).toBe("relay_auth_challenge");
@@ -152,7 +155,12 @@ async function performAuth(
   const authMsg = new Uint8Array(Buffer.concat([domain, nonce, pubkey]));
   const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
   const signature = await kp.sign(msgHash);
-  sendFrame(stream, CBOR_ENC.encode({ type: "relay_auth_response", pubkey, signature }));
+  sendFrame(stream, CBOR_ENC.encode({
+    type: "relay_auth_response",
+    pubkey,
+    signature,
+    online_token: await testOnlineToken(dirKp, kp),
+  }));
   const ack = await reader.readDecoded();
   if (ack["type"] === "relay_auth_failed") {
     throw new Error(`relay_auth_failed: ${ack["reason"]}`);
@@ -357,8 +365,8 @@ describe("AC-001 (ctrl leaf): running_root matches reference for session with mi
     const sB = await nodeB.newStream(relayNode.getPeerId(), "/cello/relay/1.0.0");
     const rA = new StreamReader(sA);
     const rB = new StreamReader(sB);
-    await performAuth(rA, sA, kpA);
-    await performAuth(rB, sB, kpB);
+    await performAuth(rA, sA, kpA, dirKp);
+    await performAuth(rB, sB, kpB, dirKp);
 
     // Leaf sequence: msg(0), msg(1), ctrl(2), msg(3), ctrl(4), msg(5)
     // leaf_kind 0x00 = message, leaf_kind 0x02 = control (SEAL-like)
@@ -464,8 +472,8 @@ describe("SI-001: relay incremental stack produces byte-identical prev_root to r
     const sB = await nodeB.newStream(relayNode.getPeerId(), "/cello/relay/1.0.0");
     const rA = new StreamReader(sA);
     const rB = new StreamReader(sB);
-    await performAuth(rA, sA, kpA);
-    await performAuth(rB, sB, kpB);
+    await performAuth(rA, sA, kpA, dirKp);
+    await performAuth(rB, sB, kpB, dirKp);
 
     // Submit 17 leaves, collect all structure2_cbors from B's leaf_deliver frames
     const deliveredS2Cbors: Uint8Array[] = [];

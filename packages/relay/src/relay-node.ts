@@ -80,6 +80,7 @@ import * as transport from "@cello-protocol/transport";
 import type { CelloNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import type { Logger, SessionWal, ContentStore } from "@cello-protocol/interfaces";
+import { verifyOnlineToken } from "@cello-protocol/interfaces";
 import { DepositRateLimiter, type DepositRateLimitConfig } from "./deposit-rate-limiter.js";
 import { ContentParkHandler } from "./content-park.js";
 import { RelayConnectionGater } from "./relay-connection-gater.js";
@@ -93,6 +94,8 @@ import type {
   HashSubmitErrorReason,
   SessionLivenessQuery,
   ClientRecordAssignment,
+  RelayAuthResponse,
+  AuthFailedReason,
 } from "./relay-types.js";
 import type { RelayStore } from "./relay-store.js";
 import { InMemoryRelayStore } from "./relay-store.js";
@@ -340,7 +343,17 @@ export interface DirectoryAdapter {
 
 export interface RelayNodeOptions {
   node: CelloNode;
-  directoryPubkey: Uint8Array;
+  /**
+   * The primary sovereign directory's Ed25519 public key.
+   *
+   * ⚠️ OPTIONAL, and its absence is a real deployment state rather than a test convenience: a relay
+   * started without one holds nothing to verify directory signatures against. It must then REFUSE —
+   * every online token, every admin frame, every assignment — because a verifier that cannot verify
+   * and admits the caller anyway is how a security check ends up installed and decorative
+   * (DOD-M15-RELAYSLOTS-1). `bin/relay.ts` still requires the environment variable in production;
+   * this is what makes the misconfigured case fail loudly instead of open.
+   */
+  directoryPubkey?: Uint8Array;
   /**
    * FED-OPTIONB-SETUP-001 (any-directory): the full set of sovereign consortium directory node
    * pubkeys. Under Option B a client presents a directory-signed session assignment to its chosen
@@ -439,7 +452,8 @@ export interface RelayNodeOptions {
 
 export class CelloRelayNode {
   readonly #node: CelloNode;
-  readonly #directoryPubkey: Uint8Array;
+  /** `null` when no directory key is configured — see `RelayNodeOptions.directoryPubkey`. */
+  readonly #directoryPubkey: Uint8Array | null;
   /** FED-OPTIONB-SETUP-001: consortium directory pubkeys a client-presented assignment may be signed by. */
   readonly #directoryPubkeys: Uint8Array[];
   /** DOD-SEAL-BROKER-1: directory pubkey hex -> multiaddr. Empty in single-directory deployments. */
@@ -529,11 +543,13 @@ export class CelloRelayNode {
 
   constructor(opts: RelayNodeOptions) {
     this.#node = opts.node;
-    this.#directoryPubkey = opts.directoryPubkey;
+    this.#directoryPubkey = opts.directoryPubkey ?? null;
     // FED-OPTIONB-SETUP-001: the consortium set always contains the primary directoryPubkey, plus any
     // additional sovereign nodes. Deduped so a repeated pubkey doesn't cost an extra verify attempt.
+    // DOD-M15-RELAYSLOTS-1: with no primary configured the set starts EMPTY rather than being padded
+    // with a placeholder, so every signature check has nothing to succeed against and refuses.
     this.#directoryEndpointsByPubkey = opts.directoryEndpointsByPubkey ?? {};
-    this.#directoryPubkeys = [opts.directoryPubkey];
+    this.#directoryPubkeys = opts.directoryPubkey ? [opts.directoryPubkey] : [];
     for (const pk of opts.directoryPubkeys ?? []) {
       if (!this.#directoryPubkeys.some((existing) => Buffer.from(existing).equals(Buffer.from(pk)))) {
         this.#directoryPubkeys.push(pk);
@@ -647,6 +663,22 @@ export class CelloRelayNode {
         if (k !== "directory_signature") bodyObj[k] = v;
       }
       const bodyBytes = CBOR_ENC.encode(bodyObj) as Uint8Array;
+
+      /**
+       * DOD-M15-RELAYSLOTS-1: no configured directory key means nothing can authenticate as the
+       * directory. Refused, and said out loud — an operator staring at a relay that ignores every
+       * admin frame needs the cause, and the cause is one missing environment variable.
+       */
+      if (!this.#directoryPubkey) {
+        this.#logger.error("relay.directory.admin.no_directory_key", {
+          impact: "a directory admin frame arrived but this relay holds NO directory public key, so " +
+            "its signature cannot be checked and the frame is refused. Every admin operation will " +
+            "fail this way until CELLO_DIRECTORY_PUBKEY is set and the relay restarted.",
+        });
+        stream.send(lp.encode.single(CBOR_ENC.encode({ type: "auth_invalid" })));
+        await stream.close();
+        return;
+      }
 
       if (!verify(this.#directoryPubkey, bodyBytes, directory_signature)) {
         stream.send(lp.encode.single(CBOR_ENC.encode({ type: "auth_invalid" })));
@@ -1004,6 +1036,70 @@ export class CelloRelayNode {
     }
   }
 
+  /**
+   * DOD-M15-RELAYSLOTS-1 — verify the directory-issued online token on an auth response.
+   *
+   * Returns the refusal reason, or `null` when the caller is a registered agent and may proceed.
+   *
+   * `authedPubkeyHex` is the key whose signature has ALREADY verified on this stream. That ordering
+   * is the whole reason the pubkey-binding check has teeth: the token names a key, and the caller has
+   * separately proven possession of the key it presented, so requiring the two to match means a token
+   * lifted from a log or a shared machine is worthless without the private key it was issued to.
+   */
+  #checkOnlineToken(
+    resp: RelayAuthResponse,
+    authedPubkeyHex: string,
+    remotePeerId?: string,
+  ): AuthFailedReason | null {
+    if (!resp.online_token) {
+      this.#logger.warn("relay.auth.online_token.missing", {
+        remotePeerId: remotePeerId ?? "(none)",
+        pubkey: truncHex(authedPubkeyHex),
+        impact: "this auth was refused because it carried no directory-issued online token. The " +
+          "caller proved it holds this key, which is free to generate — the token is what says the " +
+          "key belongs to a registered agent. A current client obtains one when its directory marks " +
+          "it online, so the usual cause is a client that has not reached a directory yet.",
+      });
+      return "online_token_required";
+    }
+
+    const verification = verifyOnlineToken(resp.online_token, this.#directoryPubkeys, Date.now());
+    if (!verification.ok) {
+      this.#logger.warn("relay.auth.online_token.rejected", {
+        remotePeerId: remotePeerId ?? "(none)",
+        pubkey: truncHex(authedPubkeyHex),
+        reason: verification.reason,
+        directoryKeyCount: this.#directoryPubkeys.length,
+        impact: verification.reason === "online_token_no_directory_key"
+          ? "this relay holds NO directory public key, so it cannot verify any token and is refusing " +
+            "every agent. This is a relay misconfiguration, not a caller problem — set " +
+            "CELLO_DIRECTORY_PUBKEY. Refusing is deliberate: a relay that cannot verify and admits " +
+            "the caller anyway leaves the reservation table open to exactly the flood this check exists to stop."
+          : "this auth was refused because the directory-issued online token did not check out. " +
+            "directoryKeyCount is how many directory keys this relay would have accepted a signature " +
+            "from — a signature_invalid against a plausible count usually means the token came from a " +
+            "directory this relay was never told about.",
+      });
+      return verification.reason;
+    }
+
+    const tokenPubkeyHex = Buffer.from(verification.agentPubkey).toString("hex");
+    if (tokenPubkeyHex !== authedPubkeyHex) {
+      this.#logger.warn("relay.auth.online_token.pubkey_mismatch", {
+        remotePeerId: remotePeerId ?? "(none)",
+        authedPubkey: truncHex(authedPubkeyHex),
+        tokenPubkey: truncHex(tokenPubkeyHex),
+        impact: "a VALID, unexpired directory token was presented by a key it does not name. That is " +
+          "what a lifted token looks like: the holder of the token is not the holder of the key. " +
+          "Refused — without this comparison one leaked token would authorise every throwaway key an " +
+          "attacker cares to generate.",
+      });
+      return "online_token_pubkey_mismatch";
+    }
+
+    return null;
+  }
+
   async #handleRelayStream(stream: Stream, remotePeerId?: string): Promise<void> {
     /**
      * DOD-M15-RELAYABUSE-1 review F4 — **THE LIMIT NOW GUARDS THE EXPENSIVE PART, INSTEAD OF SITTING
@@ -1146,6 +1242,33 @@ export class CelloRelayNode {
             });
             await this.#refuseAuth(stream, encodeAuthFailed({ type: "relay_auth_failed", reason: "rate_limited", retry_after_ms: pubkeyLimit.retryAfterMs }), "rate_limited"); return;
           }
+          /**
+           * DOD-M15-RELAYSLOTS-1 — **THE REGISTRATION CHECK.** Everything above this line proves the
+           * caller holds the private half of `resp.pubkey`. That is not worth much on its own:
+           * generating a keypair is free, so an attacker mints one per reservation slot and takes the
+           * whole table while every request looks perfectly well-formed.
+           *
+           * The fact that separates a registered agent from a minted key lives in the DIRECTORY, and
+           * this token is how it gets here — signed by a sovereign directory node when it marked the
+           * agent online, bound to that agent's public key, short-lived.
+           *
+           * Placed HERE, after the signature and before `recordAuthenticated`, for two reasons that
+           * are both load-bearing:
+           *  - the pubkey the token must name is only trustworthy once the signature has verified, so
+           *    checking earlier would be comparing the token against an unverified assertion;
+           *  - `recordAuthenticated` is what cancels this peer's reservation-revoke timer, i.e. it is
+           *    the act of KEEPING A SLOT. Nothing may reach it without a token.
+           */
+          const tokenRefusal = this.#checkOnlineToken(resp, authedPubkeyHex, remotePeerId);
+          if (tokenRefusal) {
+            await this.#refuseAuth(
+              stream,
+              encodeAuthFailed({ type: "relay_auth_failed", reason: tokenRefusal }),
+              tokenRefusal,
+            );
+            return;
+          }
+
           // DOD-M15-RELAYAUTH-1: this proves Ed25519 key POSSESSION, not participation in any
           // session — cancels this peer's reservation-revoke grace timer if one is running (see
           // relay-connection-gater.ts). Does NOT vouch the pubkey; that still requires a real
@@ -2474,7 +2597,8 @@ export class CelloRelayNode {
 
 export interface CreateRelayNodeOptions {
   listenAddresses?: string[];
-  directoryPubkey: Uint8Array;
+  /** See `RelayNodeOptions.directoryPubkey` — absent means this relay can verify nothing and refuses. */
+  directoryPubkey?: Uint8Array;
   /** DOD-M15-RELAYABUSE-1: per-depositor park-deposit rate limit. Forwarded to the park handler. */
   depositRateLimit?: DepositRateLimitConfig;
   /** DOD-M15-RELAYABUSE-1: per-peer AND per-claimed-pubkey relay-authentication rate limit. */

@@ -29,6 +29,7 @@ import { generateKeypair } from "@cello-protocol/crypto";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { RELAY_PROTOCOL_ID } from "../relay-node.js";
+import { testOnlineToken } from "./helpers/online-token.js";
 
 type RelayChild = ChildProcessByStdio<null, Readable, Readable>;
 
@@ -121,6 +122,9 @@ async function authedStream(
   node: Awaited<ReturnType<typeof createNode>>,
   relayPeerId: string,
   kp: ReturnType<typeof generateKeypair>,
+  // DOD-M15-RELAYSLOTS-1: the production binary under test refuses an auth with no directory-issued
+  // token, so this mints one from the same key the binary was configured with.
+  dirKp: ReturnType<typeof generateKeypair>,
 ): Promise<{ stream: Stream; reader: StreamReader }> {
   const stream = await node.newStream(relayPeerId, RELAY_PROTOCOL_ID);
   const reader = new StreamReader(stream);
@@ -131,7 +135,12 @@ async function authedStream(
   const authMsg = new Uint8Array(Buffer.concat([Buffer.from(AUTH_DOMAIN, "utf8"), nonce, pubkey]));
   const msgHash = new Uint8Array(createHash("sha256").update(authMsg).digest());
   const signature = await kp.sign(msgHash);
-  sendFrame(stream, CBOR_ENC.encode({ type: "relay_auth_response", pubkey, signature }));
+  sendFrame(stream, CBOR_ENC.encode({
+    type: "relay_auth_response",
+    pubkey,
+    signature,
+    online_token: await testOnlineToken(dirKp, kp),
+  }));
   const ack = await reader.readDecoded();
   expect(ack["type"]).toBe("relay_auth_ok");
   return { stream, reader };
@@ -202,7 +211,7 @@ describe("DOD-M15-RELAYABUSE-1 — the production relay BINARY passes the idle t
     activeClientNode = clientNode;
     await clientNode.start();
     await clientNode.dial(addr);
-    const { stream, reader } = await authedStream(clientNode, relayPeerId, clientKp);
+    const { stream, reader } = await authedStream(clientNode, relayPeerId, clientKp, dirKp);
 
     // Record a real session assignment over the wire — the client-presented path (Option B), the
     // one live way a session gets recorded in production.
