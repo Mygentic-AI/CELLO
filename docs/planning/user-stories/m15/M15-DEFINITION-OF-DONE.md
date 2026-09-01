@@ -104,9 +104,9 @@ does not move them.
 | **M** ✅ | The content-park store is unauthenticated by design and unbounded per depositor: 4 MiB frames, 256 MB store, no rate limit. Fillable for every user at once. | `DOD-M15-RELAYPARK-1` |
 | **L** ✅ | The relay had **no rate limiting of any kind** — authentication, hash submission, gap-fill, the liveness query, park deposit. **CLOSED 2026-09-01: every path is limited** (gap-fill vacuously — its wire handler was already deleted), the idle timer is armed at 24 h, and the circuit caps are enforced. The Sonnet pass called it faithful; the Opus re-review found both new refusals reached a log line and nothing else. | `DOD-M15-RELAYABUSE-1` |
 | **L** ✅ | A relay granted circuit reservation slots to anyone holding any keypair and **counted nothing** — mint 4096 keys and no real agent is reachable by anybody, while the relay looks healthy and every request was individually legitimate. **CLOSED 2026-09-01**: directory-issued token bound to the agent key, per-agent and per-identity-pair caps, reaper before refusal. | `DOD-M15-RELAYSLOTS-1` |
+| **L** | The semantic screener has **never run against real weights** — `installModel` has no caller, no command, and the dependency is not even declared optional. One of the three things the launch intent names as core value. | `DOD-M15-SCREENINSTALL-1` |
 
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
-| **L** | The semantic screener has **never run against real weights** — `installModel` has no caller, no command, and the dependency is not even declared optional. One of the three things the launch intent names as core value. | `DOD-M15-SCREENINSTALL-1` |
 
 **The five S items were mostly "wire up something that already exists" or "write down what is true."**
 They are the quick wins and were to be taken first, in a batch, rather than one per unit.
