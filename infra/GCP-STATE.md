@@ -125,9 +125,13 @@ alert reads as coverage:
 > need a confirmation click on a mail GCP sends to the address. One command settles it:
 >
 > ```bash
-> gcloud beta monitoring channels list --project cello-infra \
+> gcloud alpha monitoring channels list --project cello-infra \
 >   --format='value(type,displayName,verificationStatus)'
 > ```
+>
+> **`alpha`, not `beta`** — there is no GA `gcloud monitoring channels`, and the `beta`
+> component is not installed on this machine (it stops to ask). The `alpha` form is verified
+> working; `curl` against `v3/projects/cello-infra/notificationChannels` needs no component at all.
 >
 > A status other than `VERIFIED` on a type that requires it means both alerts are wired to nothing.
 

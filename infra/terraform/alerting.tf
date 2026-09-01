@@ -273,8 +273,9 @@ variable "alert_operator_email" {
 # `verification_status` is that UNVERIFIED means the channel is NON-FUNCTIONING — it delivers
 # nothing, while every policy pointing at it still reads as configured. After the first apply,
 # confirm it rather than assuming:
-#   gcloud beta monitoring channels list --project cello-infra \
+#   gcloud alpha monitoring channels list --project cello-infra \
 #     --format='value(type,displayName,verificationStatus)'
+# `alpha`, not `beta`: there is no GA `gcloud monitoring channels` and `beta` is not installed.
 resource "google_monitoring_notification_channel" "operator_email" {
   display_name = "CELLO operator — node health"
   type         = "email"
