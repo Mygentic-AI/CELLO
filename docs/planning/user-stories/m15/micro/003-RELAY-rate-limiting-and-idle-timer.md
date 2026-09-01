@@ -242,6 +242,20 @@ can close some.
 > show them the state it is refusing on is a dead end, and they will read it as the product being
 > broken. Affordances are not polish here; they are what makes these caps usable at all.
 
+**The reason must be MACHINE-readable as well as human-readable, because the daemon is the second
+consumer.** We run several relays, and the daemon must fail over to another when refused — but *which
+refusals justify that depends on the reason*, so it has to branch on a code, not parse prose:
+
+| Refusal | Daemon's move |
+|---|---|
+| this relay's table is full | try another relay — correct |
+| this relay has no directory key configured | it is broken; try another |
+| token expired or invalid | **do not** try another — every relay refuses identically, and retrying makes a client problem look like a relay outage |
+| you already hold too many slots here | another relay will grant it, but that papers over leaked sessions and it recurs on the next relay — surface it, do not silently spread |
+
+The daemon already walks a candidate list and takes the first relay that grants. What is missing is
+reacting differently by reason rather than simply moving on.
+
 **2. The reaper NEVER touches a session with activity in the last SIX HOURS.** That is a floor, not a
 tuning parameter. Under pressure the reaper takes the quietest slots first and stops at that line —
 if everything is inside six hours, it refuses at the ceiling instead of reaping a live conversation.
