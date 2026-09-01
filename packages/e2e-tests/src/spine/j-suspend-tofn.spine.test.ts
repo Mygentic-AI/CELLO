@@ -81,7 +81,12 @@ function setPaused(node: number, agentId: string, paused: boolean): void {
   );
 }
 
-describe("J-SUSPEND-TOFN — quorum-aware suspension (DOD-SUSPEND-1)", () => {
+// SKIPPED 2026-09-01 (001-SPINE): the kill switch is out of the launch gate (Andre, Ruling C,
+// 2026-08-24). Not a product regression. The coverage gap this test has is already written up as
+// DOD-M15-SUSPEND-UNTESTED-1: the shipped group is 2-of-4, not 2-of-3, so under T=2 both halves of
+// this test give the same outcome and it cannot distinguish threshold-refusal from
+// single-node-refusal — the property it is named for. Do NOT "fix" it by flipping the expectation.
+describe.skip("J-SUSPEND-TOFN — quorum-aware suspension (DOD-SUSPEND-1)", () => {
   it("threshold-refusal ≠ single-node: 2 of 3 directories suspended ⇒ no signature; 1 ⇒ still signs", async () => {
     const celloDir = mkdtempSync(join(tmpdir(), "cello-suspn-"));
     agentDirs.push(celloDir);

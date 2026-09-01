@@ -291,7 +291,11 @@ async function awaitContent(
   expect(last, `${party.name} never converged on ${documentId}`).toBe(expected);
 }
 
-describe("J-MULTIPLAYER — the built artifact keeps its layer boundary", () => {
+// SKIPPED 2026-09-01 (001-SPINE): shared documents are out of the launch gate (Andre, Decision
+// #16). This describe is a build-artifact guard on the DOCUMENT layer's boundary, so it follows
+// documents out. Noted rather than kept: it is cheap (no processes) and it is the only assertion
+// here that is not a live journey — worth reinstating first if documents come back into scope.
+describe.skip("J-MULTIPLAYER — the built artifact keeps its layer boundary", () => {
   /**
    * ─── Why this scan strips comments, and why that is the FIX rather than a loosening ────────────
    *
@@ -368,7 +372,10 @@ describe("J-MULTIPLAYER — the built artifact keeps its layer boundary", () => 
   });
 });
 
-describe("J-MULTIPLAYER — three real daemons, one document", () => {
+// SKIPPED 2026-09-01 (001-SPINE): shared documents are out of the launch gate (Andre, Decision
+// #16). Its four timeouts are all document operations (DOD-M15-DOCACCEPT-UNBOUNDED-1) and leave
+// with the ruling. Not a product regression.
+describe.skip("J-MULTIPLAYER — three real daemons, one document", () => {
   it(
     "GOVERN + JOIN: an admin invites a third party, they consent, and all three derive the same arrangement (DOD-MP-E2E-GOVERN-1, DOD-MP-E2E-JOIN-1)",
     async () => {

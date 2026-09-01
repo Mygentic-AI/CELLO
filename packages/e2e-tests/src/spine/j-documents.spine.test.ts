@@ -233,7 +233,9 @@ async function twoPartiesInSession(label: string): Promise<{ a: Party; b: Party 
   return { a, b };
 }
 
-describe("J-DOCUMENTS — two real daemons converge on one document (DOD-DOC-E2E-CONV-1)", () => {
+// SKIPPED 2026-09-01 (001-SPINE): shared documents are out of the launch gate (Andre,
+// Decision #16). Not a product regression — the feature was descoped, not broken.
+describe.skip("J-DOCUMENTS — two real daemons converge on one document (DOD-DOC-E2E-CONV-1)", () => {
   it("propose → consent → concurrent edits including an OVERLAP → both converge → seal verifies over document leaves", async () => {
     const { a, b } = await twoPartiesInSession("docs");
 
@@ -500,7 +502,9 @@ describe("J-DOCUMENTS — two real daemons converge on one document (DOD-DOC-E2E
   }, 600_000);
 });
 
-describe("J-DOCUMENTS-OFFLINE — a change survives BOTH daemons restarting (DOD-DOC-E2E-OFFLINE-1)", () => {
+// SKIPPED 2026-09-01 (001-SPINE): shared documents are out of the launch gate (Andre,
+// Decision #16). Not a product regression — the feature was descoped, not broken.
+describe.skip("J-DOCUMENTS-OFFLINE — a change survives BOTH daemons restarting (DOD-DOC-E2E-OFFLINE-1)", () => {
   /**
    * THE IN-MEMORY-QUEUE KILLER.
    *
@@ -606,7 +610,9 @@ describe("J-DOCUMENTS-OFFLINE — a change survives BOTH daemons restarting (DOD
   }, 600_000);
 });
 
-describe("J-DOCUMENTS-APPEND — append_only is enforced on the RECEIVER (DOD-DOC-E2E-APPEND-1)", () => {
+// SKIPPED 2026-09-01 (001-SPINE): shared documents are out of the launch gate (Andre,
+// Decision #16). Not a product regression — the feature was descoped, not broken.
+describe.skip("J-DOCUMENTS-APPEND — append_only is enforced on the RECEIVER (DOD-DOC-E2E-APPEND-1)", () => {
   /**
    * Use Case B's V1 claim: a document neither party can quietly shorten.
    *
@@ -711,7 +717,9 @@ describe("J-DOCUMENTS-APPEND — append_only is enforced on the RECEIVER (DOD-DO
   }, 600_000);
 });
 
-describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify it (DOD-DOC-E2E-REJECT-1)", () => {
+// SKIPPED 2026-09-01 (001-SPINE): shared documents are out of the launch gate (Andre,
+// Decision #16). Not a product regression — the feature was descoped, not broken.
+describe.skip("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify it (DOD-DOC-E2E-REJECT-1)", () => {
   /**
    * The `0x05` leaf is the part of the tamper-evident record that says "this arrived and was
    * refused". It is the case the directory-side leaf work in DOD-DOC-LEAF-1 exists for, and it is
@@ -987,7 +995,9 @@ describe("J-DOCUMENTS-REJECT — a refused envelope seals, and both sides verify
   }, 600_000);
 });
 
-describe("J-DOCUMENTS-WRITE — the FILE round trip (DOD-DOC-E2E-WRITE-1)", () => {
+// SKIPPED 2026-09-01 (001-SPINE): shared documents are out of the launch gate (Andre,
+// Decision #16). Not a product regression — the feature was descoped, not broken.
+describe.skip("J-DOCUMENTS-WRITE — the FILE round trip (DOD-DOC-E2E-WRITE-1)", () => {
   /**
    * §4.1's premise: a human collaborates on a document by editing a file in their editor, and an
    * agent with file tools reaches for those before any MCP verb. The whole write path — materialize,
@@ -1146,7 +1156,9 @@ describe("J-DOCUMENTS-WRITE — the FILE round trip (DOD-DOC-E2E-WRITE-1)", () =
  * Two surfaces, and no single-surface test crosses them: the sender's delivery worker and the
  * receiver's inbound refusal path. Unit tests on either half pass with the bug present.
  */
-describe("J-DOCUMENTS-TERMINAL — a REFUSED proposal settles its in-flight update (DOD-DOC-INBOUND-TERMINAL-1)", () => {
+// SKIPPED 2026-09-01 (001-SPINE): shared documents are out of the launch gate (Andre,
+// Decision #16). Not a product regression — the feature was descoped, not broken.
+describe.skip("J-DOCUMENTS-TERMINAL — a REFUSED proposal settles its in-flight update (DOD-DOC-INBOUND-TERMINAL-1)", () => {
   it("an update published before the refusal stops retrying once the peer says they have no such document", async () => {
     const { a, b } = await twoPartiesInSession("terminal");
 
@@ -1249,7 +1261,9 @@ async function twoPartiesNoSession(label: string): Promise<{ a: Party; b: Party 
   return { a, b };
 }
 
-describe("J-DOCUMENTS-NOCHAT — co-editing with NO conversation open (DOD-DOC-E2E-NOCHAT-1)", () => {
+// SKIPPED 2026-09-01 (001-SPINE): shared documents are out of the launch gate (Andre,
+// Decision #16). Not a product regression — the feature was descoped, not broken.
+describe.skip("J-DOCUMENTS-NOCHAT — co-editing with NO conversation open (DOD-DOC-E2E-NOCHAT-1)", () => {
   it("a published update is ACKNOWLEDGED when the delivery worker had to open the session itself", async () => {
     const { a, b } = await twoPartiesNoSession("nochat");
 

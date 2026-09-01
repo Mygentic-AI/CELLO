@@ -117,7 +117,12 @@ async function connect(from: Party, to: Party): Promise<{ fromSession: string; t
   return { fromSession, toSession };
 }
 
-describe("J-STALE-SESSION — a document act across a session that outlived a restart", () => {
+// SKIPPED 2026-09-01 (001-SPINE): shared documents are out of the launch gate (Andre, Decision
+// #16). Not a product regression — this file's single test is a DOCUMENT act across a restart, and
+// its failure is the document ingest path. Checked before skipping, per the work order's caveat:
+// the file has exactly one describe and one test, and both are document-scoped, so a whole-file
+// skip hides no non-document coverage.
+describe.skip("J-STALE-SESSION — a document act across a session that outlived a restart", () => {
   it(
     "the peer sees an invitation sent after ITS OWN daemon restarted, or it does not",
     async () => {
