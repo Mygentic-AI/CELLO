@@ -9333,3 +9333,160 @@ loosening another lane's assertion to green my own gate is the move this milesto
 behind; investigation trails on open lines → this file, under *"DoD trails, moved 2026-08-24"*. The
 DoD's own second paragraph already required that and had stopped honouring it. **An open line keeps
 what it is, why it blocks, its clauses, its enforcer and any live decision — never how we found out.**
+
+---
+
+## Entry S15 (CELLO_Support) — 2026-09-01: seven orders closed into a scoreboard that recorded none of them
+
+**Numbering:** the plain-integer sequence has collided four times (14, 29, 30, 31 each appear twice),
+which is the exact failure the two-lane `S`-prefix convention was written to prevent. Continuing `S`.
+
+### What was wrong
+
+`M15-DEFINITION-OF-DONE.md` was last edited **2026-08-24**. Micro work orders 002, 003, 004, 005,
+006 and 008 all closed **after** that date, and every closing commit touched **only its own file
+under `micro/`**. This journal was frozen on the same day. So the document that calls itself the
+*sole status authority* showed the entire relay-hardening batch as ❌ not started, and 008 — merged,
+reviewed, eight findings fixed — appeared nowhere at all.
+
+**The cost is the one the split note at the head of the DoD already names in writing:** *"a stale row
+read as open sent a lane to redo finished work."* A session picking M15 up from the scoreboard this
+morning would have been pointed straight at relay authentication, relay rate limiting and the admin
+frame deletion — all three finished, merged and reviewed a week earlier.
+
+**How it happened is worth one line, because it is structural rather than careless.** Rule 1 of a
+micro work order is *"This file is the whole world. Do not read or write `M15-DEFINITION-OF-DONE.md`,
+`M15-BUILD-JOURNAL.md`, or any other milestone document."* That rule is what keeps a micro order
+small, and it is correct. But nothing in the procedure owns the transcription **after** the order
+closes, so the write-back was nobody's step. Seven orders ran that way before it was noticed.
+
+### The verdicts, quoted — this is what licenses each flip
+
+Per §2 step 10 and the "review in flight is not a closing state" rule, a tag flips only when the
+reviewer's verdict is quoted here. All six were reviewed by `cello-unit-reviewer`; four of the six
+were **re-reviewed on Opus on 2026-08-31** after Andre observed that the unit and its first review
+had both run on Sonnet. Every re-review found real defects the Sonnet pass had missed, which is the
+generalisable result of this batch.
+
+**002-RELAY → `DOD-M15-RELAYAUTH-1`.** Pass 2 refused the merge outright:
+
+> *"**Merge recommendation: do not merge as-is.** H1 and T1 are blocking … this diff touches
+> persistence, crypto-adjacent auth, notification/queue and registration-shaped state, and I did
+> **not** come out clean — the two findings I would most expect to have missed (a gate that denies
+> the legitimate case, and a durable store gated on volatile state) are both here and both real."*
+> — `cello-unit-reviewer` (Opus)
+
+H1 was a gate that **denied the legitimate first dial** on a race the code usually loses — for every
+session where the receiver is NAT'd and its reservation relay is not the witness relay, the relayed
+link never formed while `cello_initiate_session` still returned `{ok:true}`. H2 stranded parked mail
+after any relay restart. All findings from both passes fixed and revert-tested; closed 2026-09-01.
+**Work item 2 was explicitly NOT counted as done and moved to 008-RELAY.**
+
+**003-RELAY → `DOD-M15-RELAYABUSE-1`.** The Sonnet pass returned "SPEC: FAITHFUL"; the Opus
+re-review did not:
+
+> *"The prior verdict of 'SPEC: FAITHFUL' does not survive a second look. This unit's two new
+> refusals are never heard … after which `cello_send` returns `{ok: true, delivered: true}` — and in
+> the parked branch tells the operator the message is 'sealed, witnessed and on its way' when the
+> relay just refused to witness it. … turning the idle timer on at a one-hour default is a live
+> regression rather than a hardening."* — `cello-unit-reviewer` (Opus)
+
+Both refusals now reach the caller with `retry_after_ms` sourced from the relay's own limiter. The
+idle timer was ruled by Andre to **24 hours** — *a reclaimer, not a conversation timeout* — and the
+default is now read off the running binary with no env var set, because the original test set the
+value explicitly and would have stayed green for any default at all. All seven clauses met.
+
+**004-RELAY → `DOD-M15-RELAYADMIN-DEAD-FRAMES-1`.**
+
+> *"**The deletion itself is sound** — I re-derived the deadness independently and it holds on both
+> the code-path and fleet-dated lens. But the unit left three real problems behind, and one of them
+> is a landmine for the next deletion unit in this same milestone. The Sonnet review missed all
+> four."* — `cello-unit-reviewer` (Opus)
+
+The landmine: the rewritten header asserted `discard_session` was *"the one live directory→relay
+dial"* when the relay handles **three** live frames on that protocol. The next deletion unit reading
+it would have concluded `get_session_liveness` was dead and silently broken the ABSENT attestation.
+All four fixed.
+
+**005-RELAY → `DOD-M15-SWEEP-1` (relay scope only).**
+
+> *"The 'zero hits' conclusion survives independent scrutiny on the security question, and fails on
+> the coverage question. … What the sweep did **not** do is walk `network-directory-adapter.ts` …
+> whose caller turns every transport failure into `RELAY_PREDECESSOR_UNKNOWN`, telling the operator a
+> relay is unregistered when the real fault is a dead link to the directory. … **Net: keep the
+> security conclusion, do not retire the suspicion for `network-directory-adapter.ts`.**"*
+> — `cello-unit-reviewer` (Opus)
+
+All four items done; item 1 fixed in code (`7d1040c0`) — `getRelayPublicKey` returns a discriminated
+result, and only `not_registered` now means the directory actually answered. The refusal is
+unchanged, so only the diagnosis moved. Revert-tested.
+
+**006-CRYPTO → `DOD-M15-KEYAGREE-1` (local half only).** One pass on Opus, six findings, three
+blocking, all six fixed:
+
+> *"I am not rubber-stamping this. The crypto primitives themselves are in good shape … The defects
+> are all one layer out, in the state machine and the wiring: a liveness loop that two honest daemons
+> reach after one ordinary write failure, and two places where a distinction the code went to
+> deliberate trouble to preserve is dropped one call before the person who needs it."*
+> — `cello-unit-reviewer` (Opus)
+
+17 mutants, each run alone and each confirmed to COMPILE first. **The order is closed; the feature is
+not** — nothing exchanges the public halves yet, so no message body is encrypted. `007-CRYPTO` owns
+that and is open.
+
+**008-RELAY → new line, see below.** Eight findings, all fixed:
+
+> *"SPEC: DEVIATIONS FOUND — clause 8 … and clause 9 … are un-journaled and [blocking]. … SILENT
+> FALLBACKS FOUND — H1 is [blocking]: the reclaim rule hangs up a live promoted receiver … ERROR
+> SUBSTITUTION FOUND … HOLLOW TESTS FOUND … REMOVALS PROVEN."* — `cello-unit-reviewer`
+
+The reviewer separately confirmed the token check cannot be bypassed (one call site for
+`recordAuthenticated`, strictly after the token check), that omitted-vs-empty is consistent across
+directory, wire and relay, and that fourteen pre-existing relay test files were changed
+**additively only — confirmed by diffing every removed assertion, not asserted.**
+
+### Two rulings (Andre, 2026-09-01)
+
+**1. `SWEEP-1` is SPLIT, not retagged.** 005 swept the relay package and deliberately excluded the
+daemon, directory and client. No tag in the four-tag vocabulary means "a third done": ✅ would claim
+a sweep that never happened, ❌ or 🟡 would send the next lane to re-sweep the relay. Split following
+the precedent already in this file (`RELAYADMIN-1` → `RELAYADMIN-DEAD-FRAMES-1`, `KEYAGREE-1` →
+`EPHEMERAL-AUTH-1`): `DOD-M15-SWEEP-RELAY-1` ✅ closed, `DOD-M15-SWEEP-DAEMON-DIR-1` ❌ open and in
+the gate.
+
+**The park trigger had already fired and nobody noticed.** `SWEEP-1` was parked *"after
+`DOD-M15-FRAME-1` and Tier 4's seal change"*. `FRAME-1` is ✅ and `SEALWIRE-1` is ✅ — and `SEALWIRE-1`
+self-describes as *"one protocol change, not six. These cannot be split"*, so it is the seal change
+the trigger names. 🅿️ was wrong on the line's own terms, independently of the split.
+
+**2. `008-RELAY` gets its OWN line, ✅.** Folding it into its two parents would reproduce, at larger
+scale, the defect 002 recorded about itself one order earlier: *"A work item with no DoD clause is
+invisible to the gate that is supposed to catch exactly this."* Neither parent fits — `RELAYABUSE-1`
+is closed on seven met clauses and reopening it would un-close a finished line, and both 002 and 003
+fenced *"anything in the directory or the client"* out of scope by name, while 008 changed both.
+Worth recording because it could have gone the other way: **008's token respects Decision 3(b)** —
+the relay verifies a directory-signed credential the caller presents and still never queries the
+directory, so the new line sits alongside `RELAYAUTH-1` rather than contradicting it.
+
+### ⚠️ Unclassified and awaiting Andre — deploy ordering
+
+From 008's own *Newly discovered*, and it currently exists nowhere but a footnote in a closed file:
+
+> **Deploy ordering is not enforced by anything.** Publish the client before deploying the relays —
+> an old relay ignores the extra field, but **an enforcing relay in front of clients that send no
+> token refuses every agent.**
+
+Every user offline, from a step ordering nothing checks. Under §0z.1 this must be classified at
+creation time — tiers or post-launch backlog — and it has not been. **Not classified in this entry
+because that is Andre's call and he ruled on the other two, not this one.** The other two
+newly-discovered items from 008 (the three caps having no occupancy data behind them;
+`relay_slot_reclaimed` not reaching a bare standing receiver, which recovers anyway and loses only
+the explanation) read as post-launch backlog.
+
+### Also found while transcribing, NOT fixed
+
+**`KEYAGREE-1`'s clauses are orphaned in the DoD.** The 2026-08-24 trail-move left its load-bearing
+bullets — Decision 5(b), the harvest-now argument, per-session-ephemeral vs static-static, the PQ
+hook, the "two independent values" correction — sitting **below** `EPHEMERAL-REVIVAL-1`, which is
+⬇️ OUT OF GATE. A reader scanning tier 4 attributes those clauses to an out-of-gate line. Recorded
+rather than fixed: it is a restructure, not a transcription, and this entry's mandate is the latter.
