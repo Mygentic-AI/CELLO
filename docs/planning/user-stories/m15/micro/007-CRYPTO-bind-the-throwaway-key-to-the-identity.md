@@ -4,9 +4,10 @@ type: micro-work-order
 date: 2026-08-24
 status: open
 description: >
-  Nobody signs the per-session throwaway key, so the relay can swap both sides' keys for its own and
-  read everything. Sign it with the agent's identity key and verify the peer's before deriving.
-  Source: DOD-M15-EPHEMERAL-AUTH-1.
+  The WIRE half of our own end-to-end encryption, and the order that makes the feature real: exchange
+  the per-session throwaway keys, sign them so the relay cannot swap in its own and read everything,
+  and encrypt the message body with the agreed secret. One format, ships together, receiver first.
+  006 mints and destroys the key locally and lands first. Source: DOD-M15-EPHEMERAL-AUTH-1.
 ---
 
 # **<ins>MICRO</ins>** WORK ORDER 007-CRYPTO — Bind the throwaway key to the identity
@@ -54,16 +55,45 @@ the public repo finds this in about a minute.
 
 ---
 
+## ⚠️ THIS ORDER CARRIES THE WHOLE WIRE HALF (Andre, 2026-09-01)
+
+It was scoped as "sign the key" and assumed an exchange that **does not exist**. Nothing sends a
+throwaway key today, so there is nothing to sign, and nothing encrypts a message. Signing, exchanging
+and encrypting are ONE format both sides must agree on — split them and a half-upgraded pair cannot
+talk. So they are all here.
+
+006 mints the key and destroys it at close (local, lands first). **This order is what makes the
+feature real.** When it is done, and only then, our own encryption is actually protecting messages.
+
+---
+
 ## The work
 
-1. **Sign the throwaway public key** with the agent's long-term Ed25519 identity key before sending
-   it.
-2. **Verify the peer's signature** against the identity key you already expect for that
+1. **Send your throwaway public key and receive theirs**, once per session, at session open.
+   - 🚨 **On the peer-to-peer content stream ONLY** (`/cello/content/1.0.0`), never on anything a
+     DIRECTORY brokers. The salt contribution follows this exact rule and its header explains why:
+     the directory's signaling stream is the obvious place and it is the forbidden one. A session
+     that shipped it there **cannot be repaired** — the relay already holds what it needs.
+   - Ride the same moment as the salt exchange; it is the same round trip.
+2. **Sign the throwaway public key** with the agent's long-term Ed25519 identity key before sending.
+3. **Verify the peer's signature** against the identity key you already expect for that
    counterparty — **before** deriving anything. Not after. Not alongside.
-3. **A missing, malformed, or mismatched signature all take the same hard-fail path.** An attacker
+4. **A missing, malformed, or mismatched signature all take the same hard-fail path.** An attacker
    evading a mismatch check simply supplies no signature at all, so "we couldn't tell" and "we proved
    it's wrong" must land in the same place.
-4. **Correct the docstring** once the binding is in. Rewrite it to say what the code now does and
+5. **Encrypt the message body with the agreed secret, and decrypt it on arrival.**
+   - This is `content_bytes` on the `content_frame`. **Documents ride the same frame**, so they are
+     covered by the same change — and must be tested, not assumed.
+   - **`content_hash` stays over the PLAINTEXT.** The transcript, the seal and the salted hash all
+     depend on it meaning what it means today. The receiver decrypts first, then verifies the hash.
+6. **Decide what an unencrypted peer gets, and make it visible.** A peer that does not do the
+   exchange must **never** cause a silent fall back to plaintext. Follow the salt's pattern: a named
+   reason, stated once, on the surface the agent reads.
+7. **The parked path already has its own encryption and must keep working.** A send that cannot be
+   delivered live is sealed to the recipient's identity key and left in the relay's mailbox
+   (`sealToRecipient`, live today). So one message takes one of two schemes depending on route. Say
+   which applies when, and make the receiver handle both. **This is the likeliest thing to forget.**
+8. **Correct the docstring** once the binding is in. Rewrite it to say what the code now does and
    what it still does not. **Rewrite, never delete.**
 
 ---
@@ -73,14 +103,42 @@ the public repo finds this in about a minute.
 1. A peer key with no signature is refused, loudly, with a named reason.
 2. A peer key with a signature from the wrong identity is refused, loudly, with a named reason.
 3. A peer key with a valid signature derives normally.
-4. Each of those three has a test, and **each test has been made to fail on purpose** — revert the
-   fix, confirm it reddens, confirm it reddens for the reason you expect.
-5. The docstring is rewritten to match reality.
-6. `pnpm run test`, `pnpm run lint`, `pnpm run typecheck` pass.
-7. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below.
+4. **Two daemons in separate OS processes open a session, exchange keys, and a message sent by one
+   arrives readable at the other** — with the bytes on the wire asserted to be ciphertext, not the
+   plaintext. This is the clause that makes the feature real; the rest are its guards.
+5. A **document** update survives the same round trip, since documents ride the same frame.
+6. The `content_hash` a receiver verifies is over the plaintext, and the existing seal still
+   verifies end to end for an encrypted session.
+7. A peer that never does the exchange leaves the session in a **visibly** unencrypted state with a
+   named reason on the agent-facing surface — no silent plaintext.
+8. A message that fails live delivery still parks and is still readable by the recipient, under the
+   scheme that path already uses.
+9. Each of 1–8 has a test, and **each test has been made to fail on purpose** — revert the fix,
+   confirm it reddens, confirm it reddens for the reason you expect.
+10. The docstring is rewritten to match reality.
+11. `pnpm run test`, `pnpm run lint`, `pnpm run typecheck` pass.
+12. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below.
+13. Published, **receiver first**, and the two repos re-pinned.
 
-**Not in scope:** re-keying a revived session (ruled out of the gate), post-quantum algorithms, the
-session salt, anything in the seal, anything in the relay.
+**Not in scope:** post-quantum algorithms, the session salt, anything in the seal beyond keeping it
+working, anything in the relay.
+
+---
+
+## 🚨 OPEN QUESTION — Andre's call, and it blocks a correct answer
+
+**What happens to a session whose daemon restarted?** The salt survives a restart because it is
+persisted. The throwaway secret deliberately is not — that is what forward secrecy means, and it is
+ruled. So a revived session has no key and no way to agree a new one, because re-keying a revived
+session is currently ruled out of the gate.
+
+Left unanswered, restarting a daemon mid-conversation means messages stop being readable. Three
+possible answers, and the third is the one to avoid:
+
+1. **Re-key on revival** — bring re-keying back into scope for this order.
+2. **The revived session finishes unencrypted**, visibly, with a named reason and no silent
+   downgrade.
+3. **Say nothing and discover it in production.**
 
 ---
 

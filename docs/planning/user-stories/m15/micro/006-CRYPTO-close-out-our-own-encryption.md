@@ -2,11 +2,12 @@
 name: 006-CRYPTO — Close out our own encryption layer
 type: micro-work-order
 date: 2026-08-24
-status: complete
+status: in-progress
 description: >
-  The per-session key agreement is written but has never been reviewed. Review it, fix every
-  finding, close it. Do not extend it — the identity binding is 007-CRYPTO and is deliberately a
-  separate order. Source: DOD-M15-KEYAGREE-1.
+  The per-session key agreement is written but has never been reviewed. The REVIEW is done and
+  closed — six findings, all fixed, revert proofs recorded. The ORDER is not: this file is called
+  "close out our own encryption layer" and the layer is not in the data path, so nothing it
+  describes protects a message yet. Source: DOD-M15-KEYAGREE-1.
 ---
 
 # **<ins>MICRO</ins>** WORK ORDER 006-CRYPTO — Close out our own encryption
@@ -23,6 +24,31 @@ description: >
 > 5. **Standard procedure still applies:** implement → review (`cello-unit-reviewer`) → fix every
 >    finding → commit. Commit per fix, push after every commit.
 > 6. **Done is done.** When the Definition of Done below is met, stop. Do not look for more.
+
+---
+
+## ⚠️ WHERE THIS STANDS (Andre, 2026-09-01)
+
+**The review half is CLOSED. Do not run it again.** Six findings, all fixed, revert proofs recorded,
+merged. See *Review* below.
+
+**The order was marked `complete` in error.** The maths is written and correct; **nothing calls it**,
+so no message is encrypted and *The problem, plainly* below is still true today.
+
+**The feature is 006 + 007 together, and it was scoped with a hole in the middle.** The whole
+journey, and who owns each step:
+
+| # | Step | Owner |
+|---|---|---|
+| 1 | Each side mints a throwaway key when a session opens | **006 — was missing, now below** |
+| 2 | The two sides send each other the public halves | **007 — was missing** |
+| 3 | Each verifies the half really came from its counterparty | 007 (already scoped) |
+| 4 | Both compute the same shared secret | 006 ✅ done |
+| 5 | The message body is encrypted with it, and decrypted on arrival | **007 — was missing** |
+| 6 | The keys are destroyed when the session closes | **006 — was missing, now below** |
+
+Steps 2, 3 and 5 are ONE wire format and must ship together — split them and a half-upgraded pair
+cannot talk. Steps 1 and 6 are purely local and can land first, which is why they stay here.
 
 ---
 
@@ -54,23 +80,47 @@ later does not protect what already went over the wire.
 
 ## The work
 
+**Part 1 — the review. ✅ DONE, do not repeat.**
+
 1. Run `cello-unit-reviewer` over the key agreement as shipped.
 2. Fix every finding.
 3. Confirm the tests are real: **each one has been made to fail on purpose** — revert the thing it
    tests, confirm it reddens, confirm it reddens for the reason you expect. A test that stays green
    when you break the code is not a test.
 
+**Part 2 — the key's LIFECYCLE in the daemon. Local only; nothing here changes the wire.**
+
+4. **Mint a throwaway keypair when a session opens**, once per session, alongside the salt half that
+   is already minted there. Same rule as the salt: minted ONCE, not per reconnect — a fresh key on
+   reconnect would leave the two sides deriving against a moving value.
+5. **Hold the secret in memory only.** It is never written to the database, never in a backup. That
+   is what forward secrecy IS, and it is a ruled decision.
+6. **Destroy it when the session closes** — call `destroySessionEphemeral`, and do it AFTER the seal
+   ceremony has taken what it needs, not before.
+7. **Say what state the session is in**, the way the salt already does: a session whose key never got
+   agreed must be visibly so, with a reason an operator can act on. Never a silent gap.
+
 ---
 
 ## Definition of Done
 
-1. Review pass complete, every finding fixed, verdict quoted below.
-2. Every test covering this code has a recorded revert proof.
+1. Review pass complete, every finding fixed, verdict quoted below. ✅
+2. Every test covering this code has a recorded revert proof. ✅
 3. `pnpm run test`, `pnpm run lint`, `pnpm run typecheck` pass.
+4. Opening a session mints exactly one throwaway keypair, and reconnecting does **not** mint another.
+5. The secret is in memory only: a test asserts it is absent from the database after a session opens.
+6. Closing a session zeroes the secret, and it happens after the seal, not before.
+7. A session with no agreed key reports that fact with a named reason, on the surface the agent
+   reads — not only in the log.
+8. Each of 4–7 has a test that has been made to fail on purpose.
 
-**Not in scope:** binding the throwaway key to the agent's identity — that is **007-CRYPTO** and it
-is a separate order on purpose. Also not in scope: re-keying a revived session (ruled out of the
-gate), anything touching the seal, anything touching the relay.
+**Not in scope:** anything that crosses the wire — the exchange, the signature, and encrypting the
+message body are **007-CRYPTO**, and they are one format that ships together. Also not in scope:
+anything touching the seal, anything touching the relay.
+
+⚠️ **Re-keying a revived session is ruled out of the gate — and that leaves a hole 007 must close.**
+The salt survives a daemon restart because it is persisted; this secret deliberately cannot. So a
+session revived after a restart has no key and no way to get one. **See 007's open question.**
 
 ---
 
@@ -85,7 +135,7 @@ gate), anything touching the seal, anything touching the relay.
 
 ---
 
-## Review
+## Review — CLOSED. This half is done; do not repeat it.
 
 One pass, `cello-unit-reviewer` on Opus. **Six findings — three blocking, all six fixed.**
 
