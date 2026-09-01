@@ -190,3 +190,18 @@ sessions; anything in the directory or the relay; the `not_implemented` stubs fo
 ## Newly discovered
 
 *(One or two lines each. Do not act on them.)*
+
+- **The verifier has no CLI twin, and it is the half that most needs one.** `cello_verify_inclusion_proof`
+  reads no session and no database precisely so a SCEPTIC can run it — and a sceptic is likelier to
+  have a terminal than an MCP client. Exempted in `capability-registration-inversion.test.ts` with
+  that reason stated.
+- **The party that was ABSENT at seal time can never issue a proof.** The signed leaves ship only on
+  the present party's confirm frame (`FINDING-5`), so the absent side holds a receipt it cannot prove
+  anything against. Refused by name (`certified_leaves_unavailable`) with guidance to ask the
+  counterparty, but the asymmetry is real and undisclosed anywhere else.
+- **A salt read FAILURE and a genuinely unsalted session are the same `null`.** `#getSessionSalt`
+  returns null for a transient DB read error as well as for absence, so `session_unsalted`'s guidance
+  can tell an operator something false about their own session.
+- **`seal-coordinator.ts` still carries pre-LEG-2 backward-compat branches** ("no frontier_leaves
+  shipped (an older directory)"). With no users and no deployed old directories, those are branches
+  with no beneficiary.
