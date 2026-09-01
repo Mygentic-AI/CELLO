@@ -114,6 +114,21 @@ import { protocolLog, truncId, truncHex } from "./protocol-log.js";
 
 export const RELAY_PROTOCOL_ID = "/cello/relay/1.0.0";
 export const DIRECTORY_RELAY_PROTOCOL_ID = "/cello/directory-relay/1.0.0";
+
+/**
+ * DOD-M15-RELAYSLOTS-1 — the most CONCURRENT sessions this relay will hold between one pair of
+ * identities.
+ *
+ * This closes the second door into the reservation table, and it only appears once the first is
+ * shut. With an online token required, an attacker can no longer mint keys — but they can register
+ * two agents they own, open thousands of sessions between them, put one message down each, and take
+ * the table with slots that are genuinely, correctly in use. Nothing bounded that.
+ *
+ * Five is chosen to be obviously past what any real pair needs: two agents holding five separate
+ * live conversations with each other at the same instant is already unusual, and the sixth is far
+ * more likely to be conversations that were never closed than one anybody is waiting on.
+ */
+export const SESSION_CAP_PER_PAIR = 5;
 const AUTH_DOMAIN = "CELLO-RELAY-AUTH-v1";
 const NONCE_TTL_MS = 30_000;
 
@@ -354,6 +369,8 @@ export interface RelayNodeOptions {
    * this is what makes the misconfigured case fail loudly instead of open.
    */
   directoryPubkey?: Uint8Array;
+  /** DOD-M15-RELAYSLOTS-1: see `SESSION_CAP_PER_PAIR`. */
+  sessionCapPerPair?: number;
   /**
    * FED-OPTIONB-SETUP-001 (any-directory): the full set of sovereign consortium directory node
    * pubkeys. Under Option B a client presents a directory-signed session assignment to its chosen
@@ -454,6 +471,8 @@ export class CelloRelayNode {
   readonly #node: CelloNode;
   /** `null` when no directory key is configured — see `RelayNodeOptions.directoryPubkey`. */
   readonly #directoryPubkey: Uint8Array | null;
+  /** DOD-M15-RELAYSLOTS-1: see `SESSION_CAP_PER_PAIR`. */
+  readonly #sessionCapPerPair: number;
   /** FED-OPTIONB-SETUP-001: consortium directory pubkeys a client-presented assignment may be signed by. */
   readonly #directoryPubkeys: Uint8Array[];
   /** DOD-SEAL-BROKER-1: directory pubkey hex -> multiaddr. Empty in single-directory deployments. */
@@ -544,6 +563,7 @@ export class CelloRelayNode {
   constructor(opts: RelayNodeOptions) {
     this.#node = opts.node;
     this.#directoryPubkey = opts.directoryPubkey ?? null;
+    this.#sessionCapPerPair = opts.sessionCapPerPair ?? SESSION_CAP_PER_PAIR;
     // FED-OPTIONB-SETUP-001: the consortium set always contains the primary directoryPubkey, plus any
     // additional sovereign nodes. Deduped so a repeated pubkey doesn't cost an extra verify attempt.
     // DOD-M15-RELAYSLOTS-1: with no primary configured the set starts EMPTY rather than being padded
@@ -861,6 +881,36 @@ export class CelloRelayNode {
     if (!signer) {
       return { ok: false, reason: "directory_signature_invalid" };
     }
+    /**
+     * DOD-M15-RELAYSLOTS-1 — **THE TUPLE CAP.** Nothing bounded how many sessions two identities
+     * could hold at once, and that is the second door into the reservation table: register two
+     * agents you own, open four thousand sessions between them, put one message down each, and you
+     * hold the whole relay with slots every "is this in use" test correctly calls busy. The
+     * per-agent cap does not catch it on its own — the attacker simply uses more agents — but
+     * together the two make the attack cost real registered identities per handful of slots.
+     *
+     * Checked BEFORE `recordSession` so a refused session leaves no trace to clean up. Counted from
+     * live participant tracking, which `#cleanupSessionTracking` maintains, so sealed and swept
+     * sessions do not hold the count down.
+     *
+     * No legitimate pair of agents needs five concurrent conversations with each other.
+     */
+    const aHexForCap = Buffer.from(assignment.participant_a).toString("hex");
+    const bHexForCap = Buffer.from(assignment.participant_b).toString("hex");
+    const concurrent = this.#concurrentSessionsBetween(aHexForCap, bHexForCap);
+    if (concurrent >= this.#sessionCapPerPair) {
+      this.#logger.warn("relay.session.tuple_cap_exceeded", {
+        participantA: truncHex(aHexForCap),
+        participantB: truncHex(bHexForCap),
+        concurrent,
+        cap: this.#sessionCapPerPair,
+        impact: "these two identities already hold the most concurrent sessions one pair may hold " +
+          "on this relay. Refused. For a real operator this means conversations with one " +
+          "counterparty that were never closed — the count says how many, so they can go and close some.",
+      });
+      return { ok: false, reason: "session_tuple_cap_exceeded" };
+    }
+
     const genesisRoot = computeGenesisPrevRoot(
       assignment.participant_a,
       assignment.participant_b,
@@ -2425,6 +2475,24 @@ export class CelloRelayNode {
    * entries for swept sessions. SI-003 is preserved — this only deletes the
    * binding, it never exposes Peer ID values.
    */
+  /**
+   * DOD-M15-RELAYSLOTS-1: how many LIVE sessions this relay currently holds between these two
+   * identities. The intersection of the two participants' live session sets — the same tracking
+   * `#cleanupSessionTracking` tears down, so a sealed or swept session stops counting immediately.
+   */
+  #concurrentSessionsBetween(aHex: string, bHex: string): number {
+    const a = this.#participantSessions.get(aHex);
+    const b = this.#participantSessions.get(bHex);
+    if (!a || !b) return 0;
+    // Iterate the smaller set — a relay carrying a busy agent should not pay for that here.
+    const [small, large] = a.size <= b.size ? [a, b] : [b, a];
+    let n = 0;
+    for (const sessionIdHex of small) {
+      if (large.has(sessionIdHex)) n++;
+    }
+    return n;
+  }
+
   #cleanupSessionTracking(sessionIdHex: string): void {
     // Clear idle timer
     const timer = this.#sessionIdleTimers.get(sessionIdHex);
@@ -2673,6 +2741,8 @@ export interface CreateRelayNodeOptions {
   reservationGraceMs?: number;
   /** DOD-M15-RELAYSLOTS-1: see `SLOT_CAP_PER_AGENT` in relay-connection-gater.ts. */
   slotCapPerAgent?: number;
+  /** DOD-M15-RELAYSLOTS-1: see `SESSION_CAP_PER_PAIR`. */
+  sessionCapPerPair?: number;
   /** DOD-M15-RELAYAUTH-1 review H2: durable vouching — see `RelayNodeOptions.vouchedKeyStore`. */
   vouchedKeyStore?: VouchedKeyStore;
   /** FED-OPTIONB-SETUP-001: consortium directory pubkeys (any-directory). Falls back to [directoryPubkey]. */
@@ -2832,6 +2902,7 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     node,
     connectionGater,
     directoryPubkey: opts.directoryPubkey,
+    sessionCapPerPair: opts.sessionCapPerPair,
     directoryPubkeys: opts.directoryPubkeys,
     // This factory copies options FIELD BY FIELD, so a new option that is not listed here is
     // dropped in silence — the env parses, the resolver runs, and the value is simply never there.
