@@ -64,7 +64,12 @@ function makeGater(): {
   };
 }
 
-/** What a real client does: dial, prove itself, then ask for the slot. */
+/**
+ * What a real client does: dial, authenticate WITH A RESERVATION AS THE STATED PURPOSE, then ask
+ * for the slot. The third argument is that purpose, and it is not decoration — an auth that does
+ * not name a reservation (a session node submitting a leaf) creates a ledger entry too, and the
+ * gate must not grant on one.
+ */
 function proveThenReserve(
   gater: RelayConnectionGater,
   peerId: string,
@@ -72,8 +77,7 @@ function proveThenReserve(
   connected: Set<string>,
 ): boolean {
   connected.add(peerId);
-  if (!gater.admitSlot(peerId, agent).ok) return false;
-  gater.recordAuthenticated(peerId);
+  if (!gater.admitSlot(peerId, agent, true).ok) return false;
   return gater.denyInboundRelayReservation(peer(peerId) as never) === false;
 }
 
@@ -153,8 +157,7 @@ describe("DOD-M15-RELAYSLOTS-1 clause 0: an attacker cannot hold reservation slo
     // Connection one: the client proves itself and goes. This is forced, not a design choice — a
     // reservation taken on the same connection as the proof yields a slot with no dialable address.
     connected.add("receiver");
-    expect(gater.admitSlot("receiver", AGENT).ok).toBe(true);
-    gater.recordAuthenticated("receiver");
+    expect(gater.admitSlot("receiver", AGENT, true).ok).toBe(true);
     gater.recordDisconnect("receiver");
     expect(gater.slotCount(), "nothing is held across the gap").toBe(0);
 
@@ -173,8 +176,7 @@ describe("DOD-M15-RELAYSLOTS-1 clause 0: an attacker cannot hold reservation slo
     try {
       const { gater, reserve, connected } = makeGater();
       connected.add("stale");
-      expect(gater.admitSlot("stale", "dd".repeat(32)).ok).toBe(true);
-      gater.recordAuthenticated("stale");
+      expect(gater.admitSlot("stale", "dd".repeat(32), true).ok).toBe(true);
       gater.recordDisconnect("stale");
 
       vi.advanceTimersByTime(PROVEN_PEER_MEMORY_MS + 1);
@@ -188,6 +190,128 @@ describe("DOD-M15-RELAYSLOTS-1 clause 0: an attacker cannot hold reservation slo
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("★★★ a registered agent that proves EVERYTHING FIRST is still capped — the attacker's ordering", () => {
+    const { gater, connected } = makeGater();
+    const AGENT = "cc".repeat(32);
+    const N = SLOT_CAP_PER_AGENT + 20;
+
+    /**
+     * ⚠️ THIS ORDERING IS THE POINT, and the review found nothing testing it. Every other cap test
+     * in this suite interleaves — prove one, reserve one, prove the next — so `admitSlot`'s cap
+     * trips first and the cap inside the gate is never reached. Delete that check from
+     * `denyInboundRelayReservation` and every one of those tests stays green.
+     *
+     * It is not redundant, because the two checks count the same population: RESERVATIONS. An
+     * attacker who proves all N peer ids BEFORE reserving on any of them passes every `admitSlot`
+     * with a held count of zero, and the gate is then the only thing left standing between one
+     * registered agent and the whole table.
+     */
+    const peers: string[] = [];
+    for (let i = 0; i < N; i++) {
+      const id = `preproved-${String(i)}`;
+      connected.add(id);
+      expect(gater.admitSlot(id, AGENT, true).ok, "every proof is accepted — none holds a slot yet").toBe(true);
+      peers.push(id);
+    }
+
+    let held = 0;
+    for (const id of peers) {
+      if (gater.denyInboundRelayReservation(peer(id) as never) === false) held++;
+    }
+
+    expect(held, "the gate's own cap is the only check this ordering reaches").toBe(SLOT_CAP_PER_AGENT);
+    expect(gater.slotCount()).toBe(SLOT_CAP_PER_AGENT);
+  });
+
+  it("★★★ authenticating is not asking — a delivery auth does not license a reservation", () => {
+    const { gater, connected } = makeGater();
+    const AGENT = "ff".repeat(32);
+
+    /**
+     * A session node dials in to submit a seal leaf. That is a real, registered, fully authenticated
+     * peer — and it has no business holding a circuit reservation. `admitSlot` still records it,
+     * because the relay does want it counted and attributed; what it must not do is satisfy the
+     * gate. Before `provenForReservation` existed, the ledger entry alone was enough and this peer
+     * would have been granted.
+     */
+    connected.add("session-node");
+    expect(gater.admitSlot("session-node", AGENT, false).ok).toBe(true);
+    expect(gater.agentsForSlot("session-node"), "it IS in the ledger").toEqual([AGENT]);
+
+    expect(
+      gater.denyInboundRelayReservation(peer("session-node") as never),
+      "authenticated, registered, attributed — and still refused, because it never said it wanted a slot",
+    ).toBe(true);
+    expect(gater.slotCount()).toBe(0);
+  });
+
+  it("a slow client is told its proof EXPIRED, not that it is a stranger", () => {
+    vi.useFakeTimers();
+    try {
+      const lines: Array<{ event: string; fields: Record<string, unknown> }> = [];
+      const connected = new Set<string>();
+      const gater = new RelayConnectionGater({
+        logger: {
+          debug(event: string, fields?: Record<string, unknown>) { lines.push({ event, fields: fields ?? {} }); },
+          info() {}, warn(event: string, fields?: Record<string, unknown>) { lines.push({ event, fields: fields ?? {} }); }, error() {},
+        } as unknown as Logger,
+      });
+      gater.attachNode({
+        hangUp: async () => {}, getConnections: () => [...connected].map((peerId) => ({ peerId })),
+        releaseRelayReservation: () => true,
+      } as unknown as Parameters<RelayConnectionGater["attachNode"]>[0]);
+
+      connected.add("slowpoke");
+      gater.admitSlot("slowpoke", "ab".repeat(32), true);
+      gater.recordDisconnect("slowpoke");
+      vi.advanceTimersByTime(PROVEN_PEER_MEMORY_MS + 1);
+      gater.denyInboundRelayReservation(peer("slowpoke") as never);
+
+      /**
+       * The return value is identical either way — delete the whole expired branch and every other
+       * test stays green, which is why this one exists. What differs is what the operator is told.
+       * "You are not a registered agent" sends someone to check their registration; the truth is
+       * that their two connections were minutes apart, and only this line says so.
+       */
+      const denial = lines.find((l) => l.event === "relay.reservation.denied");
+      expect(denial?.fields["reason"], "an expired proof must not be reported as an unknown peer").toBe("proof_expired");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the ordinary refuse-then-prove round trip is NOT logged as an attack", () => {
+    const lines: Array<{ level: string; event: string; fields: Record<string, unknown> }> = [];
+    const connected = new Set<string>();
+    const rec = (level: string) => (event: string, fields?: Record<string, unknown>) => {
+      lines.push({ level, event, fields: fields ?? {} });
+    };
+    const gater = new RelayConnectionGater({
+      logger: { debug: rec("debug"), info: rec("info"), warn: rec("warn"), error: rec("error") } as unknown as Logger,
+    });
+    gater.attachNode({
+      hangUp: async () => {}, getConnections: () => [...connected].map((peerId) => ({ peerId })),
+      releaseRelayReservation: () => true,
+    } as unknown as Parameters<RelayConnectionGater["attachNode"]>[0]);
+
+    // Every honest receiver does exactly this, on every relay candidate, on every build.
+    connected.add("honest");
+    gater.denyInboundRelayReservation(peer("honest") as never);
+
+    expect(
+      lines.filter((l) => l.level === "warn" && l.event === "relay.reservation.denied"),
+      "this is the designed happy path. Logged at WARN it becomes the highest-volume warning on " +
+        "the relay, and an operator counting warnings to spot a flood is counting their own agents.",
+    ).toEqual([]);
+    expect(lines.filter((l) => l.level === "debug" && l.event === "relay.reservation.denied")).toHaveLength(1);
+
+    // Asking a SECOND time without proving in between is the shape that means something.
+    gater.denyInboundRelayReservation(peer("honest") as never);
+    const warned = lines.filter((l) => l.level === "warn" && l.event === "relay.reservation.denied");
+    expect(warned).toHaveLength(1);
+    expect(warned[0]?.fields["asksWithoutProving"]).toBe(2);
   });
 
   it("one agent's cap is not spent by another's slots", () => {

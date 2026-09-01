@@ -288,8 +288,7 @@ describe("DOD-M15-RELAYSLOTS-1: only a registered agent may authenticate to a re
 
     // Two real reservations for this agent, taken the way a client takes them.
     for (const id of ["held-1", "held-2"]) {
-      expect(gater.admitSlot(id, agentHex).ok).toBe(true);
-      gater.recordAuthenticated(id);
+      expect(gater.admitSlot(id, agentHex, true).ok).toBe(true);
       expect(gater.denyInboundRelayReservation({ toString: () => id } as never)).toBe(false);
       // Traffic, so the reclaim backstop does not free them: these fake peer ids are not in the
       // relay node's connection list, so without this they read as departed holders.

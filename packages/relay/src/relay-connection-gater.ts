@@ -107,10 +107,11 @@ export interface RelayConnectionGaterOptions {
 }
 
 /**
- * One reservation slot, from the moment it is granted until the peer goes away.
+ * One reservation slot, from the moment its holder proves itself until the peer goes away.
  *
- * `agentPubkeyHex` is null between the grant and the authentication that attributes it — a real
- * state, not a transient one: an unproven holder sits there until its grace timer revokes it.
+ * The entry now comes into existence at AUTHENTICATION, not at the grant — that inversion is the
+ * whole of this order. There is no longer a window in which a slot is held by someone the relay
+ * cannot name.
  */
 interface SlotRecord {
   /**
@@ -125,9 +126,20 @@ interface SlotRecord {
    */
   reserved: boolean;
   /**
-   * The registered agents reachable through this reservation. Empty between the grant and the first
-   * authentication — a real state, not a transient one: an unproven holder sits there until its
-   * grace timer revokes it.
+   * DOD-M15-RELAYSLOTS-1 — **did this peer authenticate with a reservation as its stated purpose?**
+   *
+   * The gate requires it. Authenticating is not the same act as asking to hold a slot: a session
+   * node dials in with `purpose: "delivery"` to submit a leaf, and it has no business reserving.
+   * Without this flag its ledger entry — which the delivery auth legitimately creates — would have
+   * satisfied the gate on its own, handing the reservation table a population the design never
+   * described. Set only by a `purpose: "reservation"` auth, and it STAYS set: libp2p re-enters the
+   * gate on every reservation refresh, and a refresh that found no proof would take a working
+   * agent's front door away roughly half an hour after it opened.
+   */
+  provenForReservation: boolean;
+  /**
+   * The registered agents reachable through this reservation. Never empty in practice — the entry
+   * is created by the authentication that names them.
    *
    * ⚠️ A SET, NOT ONE KEY. A reservation belongs to a transport connection, and nothing in the
    * protocol says one connection carries exactly one agent. An earlier version refused a second
@@ -159,15 +171,14 @@ export class RelayConnectionGater implements ConnectionGater {
   readonly #logger: Logger;
   #node: CelloNode | null = null;
 
-  /** Transport peer ids (libp2p PeerId, stringified) that have completed relay_auth. */
-  readonly #authenticatedPeers = new Set<string>();
   /** session_id_hex → the two EPHEMERAL SESSION peer ids a recorded assignment names. */
   readonly #sessionBindings = new Map<string, { initiator: string; counterparty: string }>();
   /**
    * Review L3: transport peer id → when this relay granted it a reservation. Diagnostics only —
    * nothing gates on it. It exists so a denial can distinguish "the assignment has not arrived here
    * yet" from "this dialer has no business with this destination", which the reason string alone
-   * cannot. Bounded the same way `#authenticatedPeers` is, and by the same population.
+   * cannot. Bounded by the slot ledger: every writer here has a matching delete in `#releaseSlot`
+   * and `recordDisconnect`.
    */
   readonly #reservedAt = new Map<string, number>();
 
@@ -195,8 +206,29 @@ export class RelayConnectionGater implements ConnectionGater {
    *
    * Short-lived on purpose: it is crossing seconds, not sessions. An entry outliving its usefulness
    * is a peer id that can reserve without proving, which is the whole thing being prevented.
+   *
+   * ⚠️ **RESERVATION-PURPOSE AUTHS ONLY** — review finding 4. This used to be written on every
+   * authentication, including the delivery auths a session node makes to submit a seal leaf. A
+   * session node never asks for a reservation, so its entry was never read and never collected:
+   * the only remover is the expiry branch of the gate, which runs only if that same peer id comes
+   * back to reserve. On a busy relay the map grew without bound in ORDINARY traffic — no attacker
+   * needed — and for two minutes each of those peer ids was licensed to take a reservation the
+   * design never meant it to have. Written only where a reservation is the stated purpose, and
+   * swept in `reapIdleSlots` so nothing depends on the peer coming back.
    */
   readonly #provenPeers = new Map<string, { agentPubkeyHex: string; expiresAt: number }>();
+
+  /**
+   * Peer ids that asked for a reservation without a proof, and when they first did.
+   *
+   * Not a gate — a NOISE FILTER, and review finding 3 is why it exists. Asking before proving is
+   * the designed happy path: `#startReceiverNode` builds a receiver with a circuit listen address,
+   * gets refused here, proves itself, and asks again. Logging that refusal at WARN made the single
+   * highest-volume warning on the relay fire on the normal case, so an operator counting warnings
+   * to spot a flood would have been counting their own agents. A peer that asks, is told to prove,
+   * and asks AGAIN without proving is the shape that means something — that one is warned about.
+   */
+  readonly #unprovenAsks = new Map<string, number>();
   readonly #slotCap: number;
   readonly #slotCeiling: number;
   readonly #reapPressureFraction: number;
@@ -215,11 +247,6 @@ export class RelayConnectionGater implements ConnectionGater {
    */
   attachNode(node: CelloNode): void {
     this.#node = node;
-  }
-
-  /** Call on every successful `relay_auth_ok` — cancels this peer's pending revoke, if any. */
-  recordAuthenticated(peerId: string): void {
-    this.#authenticatedPeers.add(peerId);
   }
 
   /** Call from `recordAssignment()` when both session Peer IDs are present on the assignment. */
@@ -248,14 +275,15 @@ export class RelayConnectionGater implements ConnectionGater {
    * counting it here made the reaper's pressure line fire against a table that was not full — which
    * would hang up peers to free capacity that was never scarce.
    */
-  slotCeiling(): number {
-    return this.#slotCeiling;
-  }
-
   slotCount(): number {
     let n = 0;
     for (const slot of this.#slots.values()) if (slot.reserved) n++;
     return n;
+  }
+
+  /** The reservation ceiling this relay was configured with — the denominator `slotCount()` is read against. */
+  slotCeiling(): number {
+    return this.#slotCeiling;
   }
 
   /**
@@ -277,7 +305,14 @@ export class RelayConnectionGater implements ConnectionGater {
     this.#giveBackReservation(peerId);
     this.#slots.delete(peerId);
     this.#reservedAt.delete(peerId);
-    this.#authenticatedPeers.delete(peerId);
+    this.#unprovenAsks.delete(peerId);
+    /**
+     * ⚠️ `#provenPeers` DELIBERATELY SURVIVES THIS. Carrying the proof across the disconnect is the
+     * entire reason that map exists: the client proves itself on one connection and reserves on the
+     * next, because a reservation taken on the same connection as the proof yields no dialable
+     * address. Deleting here would refuse every honest agent its front door. It expires on its own,
+     * and the sweep collects it.
+     */
   }
 
   /**
@@ -285,7 +320,11 @@ export class RelayConnectionGater implements ConnectionGater {
    *
    * Called once the relay has verified the agent's directory-issued online token, so
    * `agentPubkeyHex` is a fact rather than a claim. Returning a refusal means the relay refuses the
-   * authentication and leaves the grace-window revoke timer running, so the slot is reclaimed.
+   * authentication — and since the gate grants only to a peer this method has already admitted,
+   * a refusal here is also what stops the reservation existing.
+   *
+   * `forReservation` says whether the caller named a reservation as the purpose of this
+   * authentication. Only those may go on to hold a slot; see `SlotRecord.provenForReservation`.
    *
    * ─── RECLAIM BEFORE REFUSE ────────────────────────────────────────────────────────────────
    *
@@ -301,7 +340,12 @@ export class RelayConnectionGater implements ConnectionGater {
    * imperfect, so reclaiming first means a counting mistake costs an idle slot; refusing first means
    * it costs a real agent its front door. Every outage in this area came from the latter.
    */
-  admitSlot(peerId: string, agentPubkeyHex: string): SlotAdmission {
+  /*
+   * ⚠️ `forReservation` is REQUIRED, deliberately. A default would make "I forgot to say" and "this
+   * is not for a reservation" the same call, and the compiler would have nothing to say about it.
+   * There is one production call site and it reads `resp.purpose` directly.
+   */
+  admitSlot(peerId: string, agentPubkeyHex: string, forReservation: boolean): SlotAdmission {
     const existing = this.#slots.get(peerId);
     const now = Date.now();
 
@@ -339,14 +383,16 @@ export class RelayConnectionGater implements ConnectionGater {
     }
 
     /**
-     * The cap is consulted whenever this slot is not ALREADY attributed to this agent — which is
-     * every first authentication, including the common one where `denyInboundRelayReservation` has
-     * already created an unattributed record for this peer.
+     * The cap is consulted whenever this slot is not ALREADY attributed to this agent.
      *
-     * ⚠️ Written as `!existing` first, and the ledger test caught it: a reservation is always
-     * granted before its holder authenticates, so `existing` is virtually never absent in
-     * production and the cap was skipped on every real call. The check that mattered ran only on a
-     * path the relay does not take.
+     * ⚠️ THE CONDITION IS `!existing?.agents.has(...)`, NEVER `!existing`, and that must survive
+     * any rewrite of this method. It was written as `!existing` once and the ledger test caught it.
+     * The reason it was wrong has since INVERTED — back then a reservation was always granted
+     * before its holder authenticated, so `existing` was virtually never absent and the cap was
+     * skipped on every real call; today authentication comes first, so `existing` is usually absent
+     * and `!existing` would happen to work. It would go on happening to work right up until a peer
+     * authenticates twice, which a reconnect does. Ask the question that is actually being asked:
+     * is this agent already on this slot?
      */
     if (!existing?.agents.has(agentPubkeyHex)) {
       const held = this.slotCountForAgent(agentPubkeyHex);
@@ -365,16 +411,26 @@ export class RelayConnectionGater implements ConnectionGater {
       }
     }
 
-    // Remembered past this connection — see `#provenPeers`.
-    this.#provenPeers.set(peerId, { agentPubkeyHex, expiresAt: Date.now() + PROVEN_PEER_MEMORY_MS });
+    // Remembered past this connection, and ONLY for a reservation proof — see `#provenPeers`.
+    if (forReservation) {
+      this.#provenPeers.set(peerId, { agentPubkeyHex, expiresAt: now + PROVEN_PEER_MEMORY_MS });
+      this.#unprovenAsks.delete(peerId);
+    }
 
     if (existing) {
       existing.agents.add(agentPubkeyHex);
+      if (forReservation) existing.provenForReservation = true;
     } else {
-      // No reservation was granted to this peer — it dialled in and authenticated. It still counts
-      // against the agent's own cap (it is capacity this agent is using), but NOT against the
-      // reservation ceiling the reaper measures.
-      this.#slots.set(peerId, { reserved: false, agents: new Set([agentPubkeyHex]), grantedAt: now, lastActivityAt: null });
+      // A peer that has authenticated but holds no reservation yet. It occupies nothing in libp2p's
+      // reservation table, so it is NOT counted against the ceiling the reaper measures — but the
+      // entry has to exist, because it is what the gate reads when the reservation is asked for.
+      this.#slots.set(peerId, {
+        reserved: false,
+        provenForReservation: forReservation,
+        agents: new Set([agentPubkeyHex]),
+        grantedAt: now,
+        lastActivityAt: null,
+      });
     }
     return { ok: true };
   }
@@ -398,6 +454,15 @@ export class RelayConnectionGater implements ConnectionGater {
    *     just a slower version of refusing too eagerly.
    */
   reapIdleSlots(notify?: (slot: ReapedSlot) => void): ReapedSlot[] {
+    /**
+     * ⚠️ **BEFORE THE PRESSURE CHECK, NOT AFTER** — review finding 4. Both of these maps are keyed
+     * by peer ids the relay may never see again, and their only other remover runs when that peer
+     * comes back. Sweeping them below the early return would mean they are collected only on a
+     * relay that is already under pressure, which is precisely the relay that cannot afford to have
+     * spent the intervening hours growing them.
+     */
+    this.#sweepProofBookkeeping();
+
     const pressureLine = Math.floor(this.#slotCeiling * this.#reapPressureFraction);
     // RESERVATION-backed only, on both sides of the comparison and in the target below. The ceiling
     // is libp2p's reservation limit, so measuring a population that includes plain authenticated
@@ -498,8 +563,9 @@ export class RelayConnectionGater implements ConnectionGater {
    * `hangUp` does not free a circuit reservation. Measured against `@libp2p/circuit-relay-v2@4.2.3`
    * (see the transport package's own test): the server frees one only when its TTL aborts, there is
    * no disconnect listener, and the TTL defaults to two hours. So every reclaim path this relay has
-   * — the grace-window revoke, the reaper, the unproven-budget eviction — was dropping bookkeeping
-   * while libp2p went on holding the slot against its 4096 limit.
+   * — the reaper under pressure, the reclaim of an agent's own unused slot, and the peer that
+   * simply disconnects — was dropping bookkeeping while libp2p went on holding the slot against its
+   * 4096 limit.
    *
    * ⚠️ The capability check is a VERSION check, not an optional feature. `releaseRelayReservation`
    * ships in `@cello-protocol/transport`; a relay running an older one cannot free reservations at
@@ -547,7 +613,13 @@ export class RelayConnectionGater implements ConnectionGater {
   #releaseSlot(peerId: string): void {
     this.#slots.delete(peerId);
     this.#reservedAt.delete(peerId);
-    this.#authenticatedPeers.delete(peerId);
+    this.#unprovenAsks.delete(peerId);
+    /**
+     * ⚠️ `#provenPeers` survives here too, and for a second reason on top of the reconnect: the
+     * reaper takes a slot from an agent that is still running, and that agent's client rebuilds its
+     * standing receiver. Dropping the proof would make the rebuild ask, be refused, prove, and ask
+     * again — recoverable, but a needless extra round trip on the path the reaper just disrupted.
+     */
     this.#giveBackReservation(peerId);
     this.#node?.hangUp(peerId).catch((err: unknown) => {
       this.#logger.debug("relay.slot.release.hangup_failed", {
@@ -595,10 +667,17 @@ export class RelayConnectionGater implements ConnectionGater {
      * address (libp2p only announces circuit addresses for reservations its own discovery made).
      * Re-establish the ledger entry from that proof.
      */
-    if (!slot || slot.agents.size === 0) {
+    if (!slot?.provenForReservation) {
       const proven = this.#provenPeers.get(id);
       if (proven && Date.now() < proven.expiresAt) {
-        slot = slot ?? { reserved: false, agents: new Set(), grantedAt: Date.now(), lastActivityAt: null };
+        slot = slot ?? {
+          reserved: false,
+          provenForReservation: true,
+          agents: new Set(),
+          grantedAt: Date.now(),
+          lastActivityAt: null,
+        };
+        slot.provenForReservation = true;
         slot.agents.add(proven.agentPubkeyHex);
         this.#slots.set(id, slot);
       } else if (proven) {
@@ -617,15 +696,41 @@ export class RelayConnectionGater implements ConnectionGater {
       }
     }
 
-    if (!slot || slot.agents.size === 0) {
-      this.#logger.warn("relay.reservation.denied", {
+    if (!slot?.provenForReservation || slot.agents.size === 0) {
+      /**
+       * ⚠️ **THE FIRST REFUSAL IS THE HAPPY PATH, AND MUST NOT BE LOGGED AS AN ATTACK** — review
+       * finding 3. Every honest receiver arrives here exactly once per relay per build: it asks,
+       * is refused, proves itself, and asks again. That is roughly all of this event's volume. It
+       * was WARN with an impact naming "an older client or exactly the flood this gate exists to
+       * stop" — two causes, neither of which produces it, on a line an operator was invited to
+       * count when hunting a flood. They would have been counting their own agents.
+       *
+       * The second ask WITHOUT a proof in between is the shape that means something: a peer that
+       * was told what to do and did not do it. That one is warned about.
+       */
+      const asks = (this.#unprovenAsks.get(id) ?? 0) + 1;
+      this.#unprovenAsks.set(id, asks);
+      const line = {
         peerId: truncId(id),
         reason: "not_authenticated",
-        impact: "a reservation was requested by a peer that has not proved it belongs to a " +
-          "registered agent on this connection. Refused. A current client authenticates first and " +
-          "then asks, so this is either an older client — which should upgrade — or exactly the " +
-          "flood this gate exists to stop.",
-      });
+        asksWithoutProving: asks,
+      };
+      if (asks === 1) {
+        this.#logger.debug("relay.reservation.denied", {
+          ...line,
+          impact: "expected. A receiver asks for its slot, is refused, authenticates, and asks " +
+            "again — this is the first half of that. It becomes a warning if the same peer asks " +
+            "again without authenticating in between.",
+        });
+      } else {
+        this.#logger.warn("relay.reservation.denied", {
+          ...line,
+          impact: "this peer has now asked for a reservation more than once without ever proving " +
+            "it belongs to a registered agent. A current client authenticates between the two " +
+            "asks, so this is either an older client — which should upgrade — or exactly the " +
+            "flood this gate exists to stop. Refused; it holds nothing.",
+        });
+      }
       return true; // DENY
     }
 
@@ -675,11 +780,24 @@ export class RelayConnectionGater implements ConnectionGater {
   }
 
   /**
-   * Review L1: drop every pending revoke timer. Called from the relay's own `stop()` — the sweeps
-   * there were already cleared, and these were not, so the gater alone could keep the event loop
-   * alive after a clean shutdown.
+   * Drop expired proofs and the refusal counters for peers that have gone quiet.
+   *
+   * Neither map gates anything on its own — `#provenPeers` is already checked against its expiry at
+   * the point of use, and `#unprovenAsks` only decides a log level. This is collection, not
+   * correctness: without it a long-running relay carries an entry per peer id it ever refused.
    */
-  stop(): void {
+  #sweepProofBookkeeping(): void {
+    const now = Date.now();
+    for (const [id, proof] of this.#provenPeers) {
+      if (now >= proof.expiresAt) this.#provenPeers.delete(id);
+    }
+    /**
+     * A refused peer that has not been seen since the last sweep is not mid-handshake — the two
+     * asks that matter are seconds apart, and the sweep interval is minutes. Anything still here is
+     * bookkeeping about a peer that left, so the whole map goes; a peer that comes back and asks
+     * twice again earns its warning again.
+     */
+    this.#unprovenAsks.clear();
   }
 
   /**

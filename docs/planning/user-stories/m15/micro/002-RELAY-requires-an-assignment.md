@@ -129,6 +129,14 @@ correctly… we have zero users."* So:
 
 - **Relay:** grants immediately (never denied at grant time), then **revokes** if the holder has not
   proven Ed25519 key possession within a grace window (`RESERVATION_GRACE_MS`, default 15s).
+  > ⚠️ **SUPERSEDED by 008-RELAY, and this bullet is why it had to be.** Granting first and revoking
+  > afterwards is the defect that order was reopened twice to remove: an attacker who never opens an
+  > auth stream never meets the check, so the slot was already handed over and every refusal the
+  > relay logged was correct while one machine held the table. There is no grace window and no
+  > `RESERVATION_GRACE_MS` any more. The client authenticates BEFORE it asks, and an unproven peer
+  > is refused at the reservation itself. Left in place rather than edited out because the reasoning
+  > above is the record of a decision that was made and then reversed — see
+  > `008-RELAY-reservation-slot-flooding.md`.
 - **Client (cello-client, same branch name):** the standing receiver now authenticates to its
   reservation relay **as soon as it has a reservation**, instead of waiting for a session to exist.
   Same `relay_auth` handshake, moved earlier; no new wire frames.

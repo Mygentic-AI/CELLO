@@ -163,8 +163,7 @@ describe("DOD-M15-RELAYABUSE-1: relayed connections carry a REAL duration and by
      * asking again.
      */
     if (gater) {
-      gater.admitSlot(node.getPeerId(), "cc".repeat(32));
-      gater.recordAuthenticated(node.getPeerId());
+      gater.admitSlot(node.getPeerId(), "cc".repeat(32), true);
     }
     await node.start();
     await node.handle(ECHO_PROTOCOL, () => { /* swallow — this test only cares whether the LINK survives */ });

@@ -51,25 +51,31 @@ function makeGater(opts: { connected?: Set<string> } = {}): {
 } {
   const hungUp: string[] = [];
   const connected = opts.connected ?? new Set<string>();
-  const gater = new RelayConnectionGater({ logger: silentLogger});
+  const gater = new RelayConnectionGater({ logger: silentLogger });
   gater.attachNode({
     hangUp: async (id: string) => {
       hungUp.push(id);
       connected.delete(id);
     },
     getConnections: () => [...connected].map((peerId) => ({ peerId })),
+    /**
+     * ⚠️ Present so these tests exercise the REAL release path. Without it `#giveBackReservation`
+     * feature-detects a transport too old to free reservations and returns early at ERROR — so
+     * every assertion below would have been measuring the degraded path while reading as though it
+     * measured the working one.
+     */
+    releaseRelayReservation: () => true,
   } as unknown as Parameters<RelayConnectionGater["attachNode"]>[0]);
   return { gater, hungUp, connected };
 }
 
 /**
- * Reserve, then authenticate — the exact sequence the relay performs, `recordAuthenticated`
- * included.
+ * Authenticate WITH A RESERVATION AS THE STATED PURPOSE, then reserve — the exact sequence the relay
+ * performs, and the only one the gate accepts.
  *
- * ⚠️ That last call is not decoration. Without it the grace-window revoke timer stays armed, and any
- * test that advances the clock past it has all its slots hung up by the timer rather than by the
- * rule under test. Two assertions here failed that way first, and the reported cause — thirty-two
- * slots released instead of one — pointed at the ledger, not at the fixture.
+ * ⚠️ The third argument is not decoration. `false` is what a session node sends when it dials in to
+ * submit a seal leaf: fully registered, fully attributed, and refused a reservation. Passing `true`
+ * here where the test means a delivery auth would hide exactly that distinction.
  */
 function takeSlot(
   gater: RelayConnectionGater,
@@ -79,9 +85,8 @@ function takeSlot(
 ): ReturnType<RelayConnectionGater["admitSlot"]> {
   connected?.add(peerId);
   // Prove first, THEN reserve — the order the gate requires and a real client now uses.
-  const admission = gater.admitSlot(peerId, agent);
+  const admission = gater.admitSlot(peerId, agent, true);
   if (admission.ok) {
-    gater.recordAuthenticated(peerId);
     gater.denyInboundRelayReservation(peer(peerId) as never);
   }
   return admission;
@@ -233,14 +238,14 @@ describe("DOD-M15-RELAYSLOTS-1: the slot ledger", () => {
     const { gater, connected } = makeGater();
     expect(takeSlot(gater, "peer-1", AGENT_A, connected).ok).toBe(true);
     gater.recordActivity("peer-1");
-    expect(gater.admitSlot("peer-1", AGENT_A).ok).toBe(true);
+    expect(gater.admitSlot("peer-1", AGENT_A, true).ok).toBe(true);
     expect(gater.slotCountForAgent(AGENT_A)).toBe(1);
   });
 
   it("two agents over ONE connection are each charged for it, and neither can reclaim it from under the other", () => {
     const { gater, hungUp, connected } = makeGater();
     expect(takeSlot(gater, "peer-shared", AGENT_A, connected).ok).toBe(true);
-    expect(gater.admitSlot("peer-shared", AGENT_B).ok).toBe(true);
+    expect(gater.admitSlot("peer-shared", AGENT_B, true).ok).toBe(true);
 
     expect(
       gater.slotCountForAgent(AGENT_A),
