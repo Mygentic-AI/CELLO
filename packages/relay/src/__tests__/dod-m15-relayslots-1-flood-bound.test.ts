@@ -106,19 +106,34 @@ describe("DOD-M15-RELAYSLOTS-1: the flood is BOUNDED, measured by what the attac
   it("★★★ a distributed flood is bounded too — a new source per key is not a way around it", () => {
     const { gater, reserve } = makeGater();
 
-    // One key, one address. This is the botnet shape, and the per-source cap alone does nothing
-    // against it: every attempt is the first from its own address.
+    /**
+     * One key, one address — the botnet shape, and the per-source bound does nothing against it
+     * because every attempt is the first from its own address. Reservations arrive 10ms apart,
+     * because a real flood takes real time; that matters, since the eviction floor exempts a slot
+     * younger than a handshake and a test with a frozen clock would make every slot exempt.
+     */
     let granted = 0;
     for (let i = 0; i < 4096; i++) {
       if (reserve(`bot-${String(i)}`, `198.51.${String(Math.floor(i / 250))}.${String(i % 250)}`)) granted++;
+      vi.advanceTimersByTime(10);
     }
 
     expect(granted, "again: admitted, then bounded by eviction").toBe(4096);
+    /**
+     * ⚠️ THE BOUND DEGRADES HERE RATHER THAN HOLDING ABSOLUTELY, and that is a real limit worth
+     * stating plainly. A flood arriving on one address per key, faster than a handshake completes,
+     * is at that instant indistinguishable from a genuine stampede of new agents — same one slot
+     * per source, same age. There is no signal to separate them, so the relay declines to guess and
+     * the pool runs to roughly the global budget plus whatever arrived inside the floor window.
+     *
+     * What it costs the attacker is the thing worth measuring: thousands of distinct addresses, to
+     * hold a fraction of a table they used to take entirely from one machine.
+     */
     expect(
       gater.slotCount(),
-      "without a global bound on unproven reservations, spreading across addresses restores the " +
-        "original attack in full.",
-    ).toBe(UNPROVEN_RESERVATIONS_TOTAL);
+      "spreading across addresses must not restore the original attack — the table stays mostly " +
+        "available to real agents even in the case with the least signal to act on.",
+    ).toBeLessThan(1024);
   });
 
   it("★★★ an agent that AUTHENTICATES is never counted against the flood bound", () => {
@@ -167,6 +182,15 @@ describe("DOD-M15-RELAYSLOTS-1: the flood is BOUNDED, measured by what the attac
       "if the budget did not free on authentication, one busy host would be permanently capped at " +
         "sixteen agents no matter how long it had been running.",
     ).toBe(UNPROVEN_RESERVATIONS_PER_SOURCE * 2);
+    // Review: the pass-one version of this test asserted the overflow was REFUSED, which reddened
+    // under revert; replacing it with a count alone weakened it. This restores the teeth by naming
+    // what must still be held — every first-wave agent, none of them evicted by the second wave.
+    for (let i = 0; i < UNPROVEN_RESERVATIONS_PER_SOURCE; i++) {
+      expect(
+        gater.agentsForSlot(`local-${String(i)}`),
+        `first-wave agent ${String(i)} must still hold its slot`,
+      ).toContain("aa".repeat(32));
+    }
   });
 
   it("★★★ at the budget the caller is ADMITTED and the oldest unproven one is dropped", () => {
@@ -183,10 +207,13 @@ describe("DOD-M15-RELAYSLOTS-1: the flood is BOUNDED, measured by what the attac
     ).toBe(true);
 
     expect(gater.slotCount(), "the budget holds").toBe(UNPROVEN_RESERVATIONS_PER_SOURCE);
-    // The newcomer is in; the oldest squatter is gone. Proven by giving the newcomer a token —
-    // a slot that was evicted would have no ledger entry to attribute.
-    expect(gater.admitSlot("newcomer", "bb".repeat(32)).ok).toBe(true);
-    expect(gater.slotCountForAgent("bb".repeat(32))).toBe(1);
+    /**
+     * Review: this used to assert only the COUNT, which an evict-NEWEST implementation satisfies
+     * just as well — so the test was named for a selector it could not see. Name the slots.
+     */
+    expect(gater.agentsForSlot("squatter-0"), "the oldest is the one that went").toBeNull();
+    expect(gater.agentsForSlot(`squatter-${String(UNPROVEN_RESERVATIONS_PER_SOURCE - 1)}`), "the newest survived").toEqual([]);
+    expect(gater.agentsForSlot("newcomer"), "and the caller was admitted, not refused").toEqual([]);
   });
 
   it("a peer whose address cannot be read still counts against the GLOBAL bound", () => {
@@ -202,6 +229,54 @@ describe("DOD-M15-RELAYSLOTS-1: the flood is BOUNDED, measured by what the attac
       "review M1: an unreadable source must be COUNTED, not silently absorbed — otherwise the " +
         "per-source bound could stop existing in production with every test still green.",
     ).toBe(UNPROVEN_RESERVATIONS_TOTAL + 50);
+  });
+
+  it("★★★ an honest agent MID-HANDSHAKE survives the flood — the window every other test skipped", () => {
+    const { gater, reserve } = makeGater();
+
+    // The honest agent reserves and has NOT authenticated yet. This is the whole dangerous window,
+    // and review measured that the first eviction rule hung this agent up: with "evict the oldest",
+    // a churning flood keeps its own pool young, so the one slot sitting still is always the oldest
+    // in the table. Every other test in this file authenticated in the same tick and never saw it.
+    expect(reserve("honest", "192.0.2.99")).toBe(true);
+
+    /**
+     * The flood must be WIDE enough to reach the global budget, and getting that wrong is why the
+     * first version of this test could not see the defect. With only a handful of addresses the
+     * per-source branch trims each of them at 16 and the total never approaches 512 — so the global
+     * branch, the one that could pick the honest agent, never runs at all. 64 addresses × 16 = 1024,
+     * comfortably past it.
+     */
+    const FLOOD_SOURCES = 64;
+    for (let i = 0; i < UNPROVEN_RESERVATIONS_TOTAL * 4; i++) {
+      reserve(`flood-${String(i)}`, `203.0.113.${String(i % FLOOD_SOURCES)}`);
+      vi.advanceTimersByTime(10);
+    }
+    expect(
+      gater.slotCount(),
+      "precondition: the flood must actually have reached the global budget, or the branch that " +
+        "could evict the honest agent was never exercised and this test proves nothing.",
+    ).toBeGreaterThanOrEqual(UNPROVEN_RESERVATIONS_TOTAL);
+
+    /**
+     * ⚠️ ASSERT THE SLOT, NOT THE ADMISSION. My first version of this test called `admitSlot` and
+     * checked it succeeded — and it passes against the broken selector, because `admitSlot` CREATES
+     * a ledger record for a peer that has none. It reports success for an agent whose reservation
+     * was just torn out from under it. `agentsForSlot` returns null only when the slot is really
+     * gone, which is the thing being claimed.
+     */
+    expect(
+      gater.agentsForSlot("honest"),
+      "if its slot was evicted while it was proving itself, the agent is hung up mid-handshake and " +
+        "the operator sees a bare disconnect with no cause — less legible than the refusal this " +
+        "eviction rule replaced. The honest agent holds ONE slot from its address while the flood " +
+        "holds many from each of its own; taking from the source holding the most is what makes it " +
+        "unreachable as a victim.",
+    ).toEqual([]);
+
+    // And it can still finish its handshake on the slot it kept.
+    expect(gater.admitSlot("honest", "ee".repeat(32)).ok).toBe(true);
+    expect(gater.slotCountForAgent("ee".repeat(32))).toBe(1);
   });
 
   it("★★★ an honest agent is NEVER refused, however hard the flood is running", () => {

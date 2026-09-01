@@ -67,6 +67,7 @@ describe("DOD-M15-RELAYSLOTS-1: the per-source bound holds over the real wire", 
 
     // PER_SOURCE + 2 standing receivers, each a real libp2p node asking this relay for a real
     // circuit reservation, all from 127.0.0.1. None authenticates — the flood shape.
+    let reservationsObtained = 0;
     for (let i = 0; i < PER_SOURCE + 2; i++) {
       const node = await createNode({
         keyProvider: generateKeypair(),
@@ -75,20 +76,28 @@ describe("DOD-M15-RELAYSLOTS-1: the per-source bound holds over the real wire", 
       });
       scope.addCleanup(async () => { try { await node.stop(); } catch { /* cleanup */ } });
       await node.start();
-      // Give the reservation a chance to land before the next one asks, so this measures the bound
-      // rather than a race between five simultaneous handshakes.
       const deadline = Date.now() + 5_000;
       while (Date.now() < deadline && !node.listenAddresses().some((a) => a.includes("/p2p-circuit"))) {
         await new Promise((r) => setTimeout(r, 50));
       }
+      if (node.listenAddresses().some((a) => a.includes("/p2p-circuit"))) reservationsObtained++;
     }
 
+    /**
+     * Review: `toBeLessThanOrEqual` accepted ZERO, and nothing asserted any reservation had
+     * actually been obtained — so five nodes failing to reserve for an unrelated reason (a bad
+     * address, a relay that never came up) would have passed this test silently. Both halves now.
+     */
+    expect(
+      reservationsObtained,
+      "precondition: real reservations must actually have landed, or this measures nothing",
+    ).toBeGreaterThanOrEqual(PER_SOURCE);
     expect(
       gater.slotCount(),
       "if libp2p had not registered the connection before calling the reservation hook, the source " +
         "address would be unreadable, the per-source bound would be inert, and all five of these " +
         "would be holding reservations. That is the failure every other test in this unit is blind to.",
-    ).toBeLessThanOrEqual(PER_SOURCE);
+    ).toBe(PER_SOURCE);
 
     expect(
       gater.unreadableSourceCount(),

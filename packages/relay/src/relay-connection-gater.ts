@@ -139,6 +139,17 @@ export const DEFAULT_SLOT_CEILING = 4096;
 export const UNPROVEN_RESERVATIONS_PER_SOURCE = 16;
 
 /**
+ * DOD-M15-RELAYSLOTS-1 — the youngest a slot may be and still be evictable.
+ *
+ * An honest agent authenticates about one round trip after reserving; to a relay in another region
+ * that is 300-600ms. Anything younger than this floor is plausibly a handshake in flight, so it is
+ * not a candidate at all — which is what stops the eviction rule from preferring exactly the caller
+ * it is supposed to protect. Two seconds is comfortably above a round trip and far below the grace
+ * window, so a flood's slots become evictable long before they are revoked anyway.
+ */
+export const SLOT_EVICT_MIN_AGE_MS = 2_000;
+
+/**
  * The same bound globally, as a backstop against a flood spread across many addresses — where every
  * attempt is the first from its own source and the per-source cap alone does nothing.
  *
@@ -355,6 +366,8 @@ export class RelayConnectionGater implements ConnectionGater {
    * nothing.
    */
   recordDisconnect(peerId: string): void {
+    // The peer is gone and libp2p still holds its reservation — see `#giveBackReservation`.
+    this.#giveBackReservation(peerId);
     this.#slots.delete(peerId);
     this.#reservedAt.delete(peerId);
     this.#authenticatedPeers.delete(peerId);
@@ -548,14 +561,17 @@ export class RelayConnectionGater implements ConnectionGater {
   }
 
   /**
-   * Is this peer still connected to us?
+   * The agents reachable through a slot, or null when there is no slot for that peer at all.
    *
-   * ⚠️ **UNKNOWN COUNTS AS CONNECTED.** With no node attached — a gater constructed outside the
-   * production wiring — this returns true, so the reclaim rule declines to act rather than acting
-   * blind. When unsure whether a slot is in use, treat it as in use: that is the whole ordering
-   * this unit rests on, and here it is the difference between leaving an idle slot alone and
-   * hanging up a live conversation.
+   * Exists so a test can name WHICH slot survived an eviction rather than only counting them — a
+   * count is satisfied equally by evicting the newest, so a test asserting a count cannot see the
+   * selector it is named for.
    */
+  agentsForSlot(peerId: string): string[] | null {
+    const slot = this.#slots.get(peerId);
+    return slot ? [...slot.agents] : null;
+  }
+
   /** Every unproven slot as [peerId, record]. Unproven = no agent has authenticated over it. */
   #unprovenSlots(): Array<[string, SlotRecord]> {
     const out: Array<[string, SlotRecord]> = [];
@@ -573,14 +589,72 @@ export class RelayConnectionGater implements ConnectionGater {
     candidates: Array<[string, SlotRecord]>,
     ctx: { reason: string; remoteIp: string; held: number; cap: number; impact: string },
   ): void {
+    /**
+     * ⚠️ **"OLDEST" WAS THE WRONG VICTIM, AND REVIEW MEASURED IT RATHER THAN ARGUING IT.**
+     *
+     * An attacker's slots churn — each new reservation evicts their own oldest — so their pool
+     * self-trims to the youngest. An honest agent's slot sits still for one handshake. Once the
+     * pool's age span drops below a round trip, the honest agent is ALWAYS the oldest unproven slot
+     * in the table, and evicting the oldest means evicting it, every time. Measured: an honest
+     * agent survived exactly one rotation of the unproven pool and was then hung up mid-handshake.
+     *
+     * Two changes, and they are both necessary:
+     *
+     *  1. **Never evict anything younger than `SLOT_EVICT_MIN_AGE_MS`.** An in-flight handshake is
+     *     not a candidate at all. If nothing is old enough, admit anyway and let the pool overshoot
+     *     briefly — overshooting for a second is cheap; hanging up a real agent is not.
+     *  2. **Take from the source holding the MOST unproven slots**, oldest first within it. An
+     *     honest agent holds one slot from its address; a flood holds many from theirs. That is
+     *     max-min fair share, and it makes an honest agent unreachable as a victim until every
+     *     source holds exactly one — at which point the attacker needs as many addresses as the
+     *     budget and has no advantage left.
+     */
+    const now = Date.now();
+    const heldBySource = new Map<string, number>();
+    for (const [, slot] of candidates) {
+      const key = slot.remoteIp ?? "(unreadable)";
+      heldBySource.set(key, (heldBySource.get(key) ?? 0) + 1);
+    }
+    /**
+     * The floor protects a SINGLE handshake in flight, which is what an honest agent looks like —
+     * one unproven reservation from its address. It deliberately does NOT protect a source holding
+     * several at once: that is not one client mid-handshake, and exempting it would let a flood buy
+     * immunity simply by being fast. Without this exception the bound loosens to (rate × floor),
+     * which at a few hundred reservations a second is most of the table again.
+     */
+    const evictable = candidates.filter(([, slot]) =>
+      now - slot.grantedAt >= SLOT_EVICT_MIN_AGE_MS ||
+      (heldBySource.get(slot.remoteIp ?? "(unreadable)") ?? 0) > 1);
+    if (evictable.length === 0) {
+      this.#logger.info("relay.reservation.evict.nothing_old_enough", {
+        ...ctx,
+        minAgeMs: SLOT_EVICT_MIN_AGE_MS,
+        impact: "the unproven budget is full but every slot in it is younger than the eviction " +
+          "floor, so they are all plausibly handshakes in flight. This caller is admitted and the " +
+          "pool overshoots for a moment rather than a real agent being hung up mid-handshake.",
+      });
+      return;
+    }
+
     let oldest: [string, SlotRecord] | undefined;
-    for (const entry of candidates) {
-      if (!oldest || entry[1].grantedAt < oldest[1].grantedAt) oldest = entry;
+    let oldestWeight = -1;
+    for (const entry of evictable) {
+      // Weighted by what the source holds across ALL its unproven slots, not just the evictable
+      // ones — the question is which source is hogging, and a young slot still counts as hogging.
+      const weight = heldBySource.get(entry[1].remoteIp ?? "(unreadable)") ?? 0;
+      if (
+        weight > oldestWeight ||
+        (weight === oldestWeight && oldest !== undefined && entry[1].grantedAt < oldest[1].grantedAt)
+      ) {
+        oldest = entry;
+        oldestWeight = weight;
+      }
     }
     if (!oldest) return;
     this.#logger.warn("relay.reservation.unproven_evicted", {
       evictedPeerId: truncId(oldest[0]),
-      evictedAgeMs: Date.now() - oldest[1].grantedAt,
+      evictedAgeMs: now - oldest[1].grantedAt,
+      evictedSourceHeld: oldestWeight,
       ...ctx,
     });
     this.#releaseSlot(oldest[0]);
@@ -635,6 +709,15 @@ export class RelayConnectionGater implements ConnectionGater {
     }
   }
 
+  /**
+   * Is this peer still connected to us?
+   *
+   * ⚠️ **UNKNOWN COUNTS AS CONNECTED.** With no node attached — a gater constructed outside the
+   * production wiring — this returns true, so the reclaim rule declines to act rather than acting
+   * blind. When unsure whether a slot is in use, treat it as in use: that is the whole ordering
+   * this unit rests on, and here it is the difference between leaving an idle slot alone and
+   * hanging up a live conversation.
+   */
   #isPeerConnected(peerId: string): boolean {
     if (!this.#node) return true;
     try {
@@ -645,7 +728,50 @@ export class RelayConnectionGater implements ConnectionGater {
     }
   }
 
-  /** Hang the peer up and drop its ledger entry. */
+  /**
+   * DOD-M15-RELAYSLOTS-1 — **GIVE THE RESERVATION BACK, not just the ledger row.**
+   *
+   * `hangUp` does not free a circuit reservation. Measured against `@libp2p/circuit-relay-v2@4.2.3`
+   * (see the transport package's own test): the server frees one only when its TTL aborts, there is
+   * no disconnect listener, and the TTL defaults to two hours. So every reclaim path this relay has
+   * — the grace-window revoke, the reaper, the unproven-budget eviction — was dropping bookkeeping
+   * while libp2p went on holding the slot against its 4096 limit.
+   *
+   * ⚠️ The capability check is a VERSION check, not an optional feature. `releaseRelayReservation`
+   * ships in `@cello-protocol/transport`; a relay running an older one cannot free reservations at
+   * all, and that is a fact an operator has to be told rather than something to paper over — so it
+   * is reported at ERROR, once, naming the consequence.
+   */
+  #giveBackReservation(peerId: string): void {
+    const node = this.#node as (CelloNode & { releaseRelayReservation?: (p: string) => boolean }) | null;
+    if (!node) return;
+    if (typeof node.releaseRelayReservation !== "function") {
+      if (!this.#warnedNoReservationRelease) {
+        this.#warnedNoReservationRelease = true;
+        this.#logger.error("relay.reservation.release_unavailable", {
+          impact: "this relay's transport package predates releaseRelayReservation, so hanging a " +
+            "peer up does NOT return its circuit reservation — libp2p holds it for the full TTL. " +
+            "Every slot this relay believes it reclaimed is still counted against its 4096 limit. " +
+            "Upgrade @cello-protocol/transport; until then the reservation table drifts above what " +
+            "this relay reports and will eventually refuse real agents.",
+        });
+      }
+      return;
+    }
+    try {
+      node.releaseRelayReservation(peerId);
+    } catch (err: unknown) {
+      this.#logger.debug("relay.reservation.release_failed", {
+        peerId: truncId(peerId),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /** Reported once — a relay either can release reservations or it cannot. */
+  #warnedNoReservationRelease = false;
+
+  /** Hang the peer up, give the reservation back, and drop its ledger entry. */
   #releaseSlot(peerId: string): void {
     this.#slots.delete(peerId);
     this.#reservedAt.delete(peerId);
@@ -655,6 +781,7 @@ export class RelayConnectionGater implements ConnectionGater {
       clearTimeout(timer);
       this.#pendingRevoke.delete(peerId);
     }
+    this.#giveBackReservation(peerId);
     this.#node?.hangUp(peerId).catch((err: unknown) => {
       this.#logger.debug("relay.slot.release.hangup_failed", {
         peerId: truncId(peerId),
@@ -703,11 +830,15 @@ export class RelayConnectionGater implements ConnectionGater {
      * 512, so the fix made the outage EIGHT TIMES CHEAPER to cause while the relay sat 87% empty.
      *
      * Evicting inverts it. An unproven reservation is at most one grace window old and carries
-     * nothing, so dropping the oldest costs at most one in-flight handshake, and that client
-     * retries. Under a flood the attacker's slots rotate out continuously while an honest agent —
-     * which authenticates about one round trip after reserving — passes straight through and is
-     * never refused at all. That is this milestone's own "reap, then refuse" rule: here there is
-     * nothing left to refuse.
+     * nothing, so dropping one costs at most an in-flight handshake and that client retries. Under
+     * a flood the attacker's slots rotate out continuously while an honest agent passes straight
+     * through and is never refused at all. That is this milestone's own "reap, then refuse" rule:
+     * here there is nothing left to refuse.
+     *
+     * ⚠️ WHICH slot is dropped is the part that had to be got right, and the first version got it
+     * wrong — see `#evictOldestUnproven`. "The honest agent authenticates in a round trip so it is
+     * never the one evicted" is FALSE on its own, and was measured to be false: a churning flood
+     * keeps its own pool young, so the slot sitting still is the oldest in the table.
      */
     const remoteIp = this.#remoteIpFor(id);
     if (remoteIp === null) this.#unreadableSourceCount++;
@@ -721,9 +852,10 @@ export class RelayConnectionGater implements ConnectionGater {
           held: fromSource.length,
           cap: this.#unprovenPerSource,
           impact: "this source is at its budget for circuit reservations held WITHOUT having proved " +
-            "they belong to a registered agent, so its oldest unproven one was dropped to make room. " +
-            "A real client authenticates about a round trip after reserving, so it is never the " +
-            "thing evicted; a flood, which never authenticates at all, is exactly what rotates out here.",
+            "they belong to a registered agent, so one of its own was dropped to make room. The " +
+            "victim is chosen from the source holding the MOST unproven reservations and is never a " +
+            "lone handshake still in flight, so a real client bringing up one agent is not what " +
+            "rotates out here — a source holding many at once is.",
         });
       }
     }
@@ -758,6 +890,8 @@ export class RelayConnectionGater implements ConnectionGater {
       // in — it would make the reaper refuse while the table was not actually full.
       this.#slots.delete(id);
       this.#reservedAt.delete(id);
+      // The grace-window revoke has the same hole every other reclaim path had.
+      this.#giveBackReservation(id);
       this.#node?.hangUp(id).catch((err: unknown) => {
         this.#logger.debug("relay.reservation.revoke.hangup_failed", {
           peerId: truncId(id),

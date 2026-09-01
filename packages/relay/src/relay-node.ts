@@ -2436,6 +2436,26 @@ export class CelloRelayNode {
    * watchdog rebuilds the receiver; what they lose is the explanation, not the recovery.
    */
   #reapSlots(): void {
+    /**
+     * Review M1: report the unreadable-source count from a place production actually runs.
+     *
+     * The counter existed but only tests read it, which does not achieve what M1 asked for — the
+     * per-source reservation bound could still have stopped existing in production with every test
+     * green. `#remoteIpFor` returns null on five different conditions, all silent; this is the one
+     * number that makes that visible. Emitted on the hourly sweep alongside occupancy.
+     */
+    const unreadable = this.#connectionGater?.unreadableSourceCount() ?? 0;
+    this.#logger.info("relay.slot.occupancy", {
+      reservedSlots: this.#connectionGater?.slotCount() ?? 0,
+      ceiling: DEFAULT_SLOT_CEILING,
+      unreadableSourceCount: unreadable,
+      ...(unreadable > 0 ? {
+        impact: "some reservations arrived whose source address could not be read, so the per-source " +
+          "unproven bound did not apply to them and only the global one did. A number that climbs " +
+          "means that bound is losing its reach — it is not something a caller can cause.",
+      } : {}),
+    });
+
     // Review H3: the notice is sent from INSIDE the reap, before the peer is hung up. Sending it
     // afterwards raced the disconnect it was announcing.
     this.#connectionGater?.reapIdleSlots((slot) => {
@@ -2930,6 +2950,18 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
         // would give a reaper that either never fires or fires constantly — and both look like the
         // reaper working.
         maxReservations: DEFAULT_SLOT_CEILING,
+        /**
+         * DOD-M15-RELAYSLOTS-1 — a BACKSTOP, not the mechanism. libp2p frees a reservation only
+         * when this TTL aborts: there is no disconnect listener in its relay server, so anything
+         * the relay fails to release explicitly is held for exactly this long. The default is TWO
+         * HOURS, which meant one missed release cost a slot for two hours.
+         *
+         * Ten minutes is far above what an honest client needs — libp2p's client store refreshes a
+         * reservation well before expiry — and far below the window an abandoned one should occupy.
+         * The real mechanism is `releaseRelayReservation` on every reclaim path; this bounds what
+         * happens when that does not run, which on an older transport build is every time.
+         */
+        reservationTtl: 10 * 60 * 1000,
         applyDefaultLimit: true,
         defaultDurationLimit: opts.circuitDurationLimitMs ?? DEFAULT_CIRCUIT_DURATION_LIMIT_MS,
         defaultDataLimit: opts.circuitDataLimitBytes ?? DEFAULT_CIRCUIT_DATA_LIMIT_BYTES,
