@@ -495,6 +495,13 @@ Each mutant typechecks and lints clean, and reddens exactly one test.
 - **The three caps are judgement calls with no occupancy data behind them** — 32 slots per agent, 5
   sessions per identity pair, reaper at 80% of the ceiling. Worth revisiting once a relay has run
   with real traffic. The six-hour activity floor is not in this category; it is a floor.
-- **Deploy ordering is not enforced by anything.** Publish the client before deploying the relays: an
-  old relay ignores the extra field, but an enforcing relay in front of clients that send no token
-  refuses every agent.
+- **🔴 DEPLOY ORDERING IS NOT ENFORCED BY ANYTHING, and it is now sharper than when this line was
+  first written.** Publish and roll out the CLIENT first, then the relays. An old relay simply
+  ignores the extra field; a relay running this gate in front of clients that do not prove before
+  they ask refuses **every** reservation, and every agent behind it is unreachable until it upgrades.
+  Both halves are on main; neither is published.
+- **The repo's own suite is not safe to run while the e2e lane is running.** Three full runs on
+  identical code: green alone, then one MMR checkpoint failure, then four directory HTTP failures —
+  a 404 where 200 was due, a 403 where 503 was due, and a body that was not JSON. Those are another
+  server's answers and another suite's database rows. It reads exactly like a real regression and it
+  cost two full re-runs to rule out. Worth a per-lane Postgres and a note in the test script.
