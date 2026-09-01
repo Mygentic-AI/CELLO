@@ -46,6 +46,175 @@
 
 ---
 
+## Alerting — what tells you something is wrong, and where it arrives (2026-09-01)
+
+**Until this date there was not one `google_monitoring_alert_policy` in the Terraform tree — zero
+policies, zero notification channels.** The only alerting that existed was the seal path below, and
+it watches discrete events that have already cost a receipt. Nothing watched a node that was merely
+sick. A directory node ran at ~0.4 of a core against a fleet steady state of 0.055 for **51 hours**
+and nobody was told; it was found by a person looking.
+
+**There are now TWO routes, and both are written here so neither is a route nobody knows exists:**
+
+| What | Route | Why that route |
+|---|---|---|
+| A seal was refused / a redial did not recover | log sink → Pub/Sub → Cloud Run `cello-seal-notifier` → **Telegram** | Rare discrete events; the sink delivers the log entry itself so the message can name the session |
+| A directory node is unwell (CPU, memory) | `google_monitoring_alert_policy` → **email**, `alert_operator_email` (`andre@mygentic.ai`) | The seal notifier parses Cloud Logging's `LogEntry` shape (`jsonPayload.event`, `resource.labels.zone`); a Monitoring incident carries neither, so pointing a policy at that topic delivers *"unknown_event in unknown-zone"*. Reusing it means changing the notifier — a different unit |
+
+**The two policies, both in `infra/terraform/alerting.tf`:**
+
+- **`Directory node burning CPU for an hour`** — `compute.googleapis.com/instance/cpu/usage_time`,
+  ALIGN_RATE, **> 0.25 cores sustained 60 min**, per instance.
+  **`usage_time`, NOT `utilization`, and that is the whole design.** Utilization is normalised
+  across vCPUs, so the same illness reads as a different number on a different machine — and these
+  nodes change machine type under capacity pressure (use1 went `e2-standard-2` → `n2-standard-2` on
+  2026-09-01). A utilization threshold would silently halve in meaning at the next resize.
+  `usage_time` with ALIGN_RATE is cores burned: machine-size invariant, and the physically right
+  question, because the pathology is single-threaded (V8's GC pins one core).
+- **`Directory node approaching its heap ceiling`** — the log-based metric
+  `cello_directory_node_rss_kb`, ALIGN_PERCENTILE_99, REDUCE_MAX grouped by `node_id`,
+  **> 60% of the V8 ceiling** (~2,572 MB of the 4,288 MB the process can actually reach), sustained 30 min.
+  Derived from `heap_mb`, not hardcoded, so raising a node's ceiling moves the alert with it.
+
+> **🔴 `cello.node.memory` IS A LOG LINE, NOT A METRIC.** The sampler `echo`s text every 60 s,
+> because GCP collects VM memory only through the Ops Agent and COS does not ship it. A policy
+> written against that name would be permanently silent and indistinguishable from a healthy fleet.
+> `google_logging_metric.directory_node_rss` turns the existing stream into a metric — it does **not**
+> add a sampler. It pins `logName=".../cos_journal_warning"` deliberately: if anyone lowers the
+> sampler's `SyslogLevel` the metric goes empty rather than quietly half-working.
+
+**How the thresholds were chosen — replayed, not picked.** Both were tested against real fleet data
+before being written, because a threshold that fires on the ordinary case gets muted and a muted
+alert reads as coverage:
+
+- CPU, over **30 days / 58 directory instances**: 0.25 cores for 60 min fires on `use1-246m`
+  (0.456 peak, **3,090 min continuous**) and `euw1-9lvn` (0.395 peak, **2,490 min**), and stays
+  silent on the other 55, whose worst reading ever was 0.162. Boot spikes reach ~1.0 core but last
+  minutes, and cannot hold a 30-minute bucket for an hour.
+- Memory, over **7 days / 20,000 real samples**: nodes ran 181–841 MB (fresh ~185, medians
+  507/567/638). The threshold sits **3.1× above the highest sample the fleet has ever produced**.
+  Stall zone is ~80% of ceiling ≈ 3,430 MB; firing at 60% leaves 857 MB, which is ~2 days at the
+  steepest growth ever observed over a single process run (407 MB/day) and ~3.4 days at the typical
+  ~250 MB/day.
+
+> ### ✅ APPLIED AND LIVE — 2026-09-01, verified against the running project
+> `terraform apply` targeted at exactly these four resources: **`Apply complete! Resources: 4 added,
+> 0 changed, 0 destroyed.`**
+>
+> | Resource | Live id |
+> |---|---|
+> | Notification channel (email → `andre@mygentic.ai`) | `notificationChannels/11450992193386963104` |
+> | Log-based metric | `cello_directory_node_rss_kb` |
+> | CPU policy | `alertPolicies/13615676940086938930` |
+> | Memory policy | `alertPolicies/11202673742217822439` |
+>
+> Read back from GCP, not from Terraform state: both policies are `enabled=True` with
+> `thresholdValue` 0.25 / 2634547 and `duration` 3600s / 1800s — the values intended.
+>
+> **`-target` was not optional and still is not.** An untargeted apply planned **2 destroys and 6
+> changes against the relay**, none of them from this work — that is the in-flight `7befcc95` roll's
+> drift, and sweeping it in is how a monitoring change becomes a relay outage. Three consecutive
+> plans also named three *different* relay action sets, so the fleet was moving underneath them.
+> Use the targeted form for any further alerting change until that roll settles:
+>
+> ```bash
+> export GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)
+> cd infra/terraform
+> terraform apply -target=google_logging_metric.directory_node_rss \
+>   -target=google_monitoring_notification_channel.operator_email \
+>   -target=google_monitoring_alert_policy.directory_cpu_sustained \
+>   -target=google_monitoring_alert_policy.directory_memory_ceiling
+> ```
+>
+> **Nothing fired on apply, and that was checked BEFORE applying rather than hoped for**: every
+> directory instance was at 0.038–0.060 cores against a 0.25 threshold, and RSS was 248–275 MB
+> against 2,573 MB.
+>
+> **The email channel needs no confirmation click — measured, not assumed.** The channel comes back
+> from the API with **no `verificationStatus` field at all**, and the API's own words are that a
+> channel which is neither `VERIFIED` nor `UNVERIFIED` "is of a type that does not require
+> verification". (The concern was real and worth checking: `UNVERIFIED` means a channel is
+> **non-functioning** — it delivers nothing while every policy pointing at it still reads as
+> configured.) To re-check it later:
+>
+> ```bash
+> gcloud alpha monitoring channels list --project cello-infra \
+>   --format='value(type,displayName,verificationStatus)'
+> ```
+>
+> **`alpha`, not `beta`** — there is no GA `gcloud monitoring channels`, and the `beta` component is
+> not installed on this machine (it stops to ask). The `alpha` form is verified working; `curl`
+> against `v3/projects/cello-infra/notificationChannels` needs no component at all.
+>
+> ⚠️ **That command prints the status column BLANK, and a blank is ambiguous to a skimmer.** It is
+> blank because the field is absent, which here means "type does not require verification" — but a
+> blank is what you would also see if you had simply not looked properly. If you need to tell the
+> two apart, read the raw object, where an absent key and an `UNVERIFIED` value are plainly
+> different things:
+> ```bash
+> curl -s -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+>   https://monitoring.googleapis.com/v3/projects/cello-infra/notificationChannels \
+>   | python3 -c 'import json,sys;[print(c["type"], "verificationStatus" in c, c.get("verificationStatus")) for c in json.load(sys.stdin)["notificationChannels"]]'
+> ```
+
+> ### 🔕 A DEAD DIRECTORY PROCESS USED TO SILENCE BOTH ALERTS — closed 2026-09-01
+> Worth knowing because the fix is one attribute and the failure was total. Monitoring defaults to
+> `EVALUATION_MISSING_DATA_INACTIVE` — no data means not violating. The sampler is
+> `PID=$(pgrep -f 'node .*directory'); [ -z "$PID" ] && exit 0`, so a directory process that has died
+> or is crash-looping emits **no** memory samples and the series disappears rather than climbing;
+> and a dead process burns no CPU, so `COMPARISON_GT` on cores never trips either. **Both alerts went
+> quiet together on a node that is not running.**
+>
+> The memory condition now carries `evaluation_missing_data = "EVALUATION_MISSING_DATA_ACTIVE"`, so
+> 30 minutes of silence from a node raises the same email. **Only the memory one**, deliberately: it
+> groups by `node_id` which survives instance replacement, whereas the CPU condition is per instance
+> and instances legitimately vanish on every roll — ACTIVE there would email once per replaced
+> instance, every deploy. Verified live: memory `ACTIVE`, CPU unset.
+>
+> **Accepted cost:** a node genuinely down for over 30 minutes now emails. During a capacity-stalled
+> roll that will happen, and it is the intended behaviour — a node down half an hour is news.
+
+> ### 🔔 WHAT IS **NOT** PROVEN: NO NOTIFICATION HAS EVER BEEN DELIVERED THROUGH THIS CHANNEL
+> Stated plainly because everything else here is green and this is the gap. What IS proven: both
+> policies exist and are enabled with the intended thresholds; the metrics behind them are arriving;
+> and real historical data crossed the CPU threshold for 3,090 consecutive minutes, so the condition
+> demonstrably can evaluate true. What is NOT proven is the last hop — **that an incident on this
+> channel actually lands in a mailbox.** A channel that accepts creation and silently drops mail
+> looks identical to a healthy one from every check above.
+>
+> It was not forced, deliberately: firing it means either a throwaway policy created by hand (this
+> file's rule is that nothing exists outside Terraform) or an hour of synthetic load on a production
+> node, and either way it emails at 1am for a drill.
+>
+> **The cheap way to close it is a human one-click:** Cloud Console → Monitoring → Alerting →
+> Notification channels → the `CELLO operator — node health` row → **Send test notification**. Until
+> someone does that, treat node-health alerting as wired-and-plausible rather than proven.
+
+> ### 📏 THE MEMORY METRIC READS IN 50 MB STEPS, AND SLIGHTLY HIGH
+> Verified after the apply: the metric returns **3 series, one per `node_id`** (which is what proves
+> the label extractor works), and all three reported the same `306688 KB` while the raw log lines
+> said 251/259/275 MB. That is not a fault — it is the 50 MB bucket. Cloud Monitoring interpolates
+> the percentile inside the bucket, so `ALIGN_PERCENTILE_99` lands 99% of the way through it and a
+> reading can overstate real RSS by up to ~50 MB. Against 857 MB of runway that is ~6%, and it errs
+> in the safe direction for a ceiling alert: it fires marginally EARLY, never late.
+
+**What was verified before each policy was written** (the work order's central instruction — a
+policy against a metric that never arrives is indistinguishable from a healthy fleet):
+
+- **CPU** — `timeSeries.list` returned **58 directory instance series over 30 days** at ~60 s
+  resolution. The same query proved the `monitoring.regex.full_match` excludes the relay: relay
+  instances exist in that metric and none appeared.
+- **Memory** — the metric's exact filter, run verbatim against Cloud Logging, returned samples from
+  all three nodes within the hour and 20,000 across 7 days. A **negative control** with a wrong
+  `SYSLOG_IDENTIFIER` returned nothing, which is what proves the filter discriminates rather than
+  matching everything. Both extractor regexes were run against the real message strings.
+- **The aligner** — `ALIGN_PERCENTILE_99` + `REDUCE_MAX` was put to the live Monitoring API against
+  an existing DELTA/DISTRIBUTION metric and **accepted**; `ALIGN_MAX` was **rejected** with *"the
+  aligner cannot be applied to metrics with kind DELTA and value type DISTRIBUTION"*. That is why
+  the policy uses a percentile rather than a max.
+
+---
+
 ## Billing slot ledger (the 5-project cap is REAL)
 
 The billing account allows **max 5 linked projects** (`FAILED_PRECONDITION: Cloud billing quota
@@ -521,6 +690,11 @@ emits `cello.node.memory node_id=… rss_kb=… heap_limit_mb=…`. Query it:
 gcloud logging read 'jsonPayload.MESSAGE:"cello.node.memory"' \
   --project cello-infra --freshness=12h --format="value(timestamp,jsonPayload.MESSAGE)"
 ```
+
+> **This sampler is now the input to an alert** — `google_logging_metric.directory_node_rss`
+> turns it into a metric and `Directory node approaching its heap ceiling` fires at 60% of the
+> V8 ceiling. See **Alerting** near the top of this file, including the caveat that the policies
+> were written and plan-verified but **not yet applied**.
 
 > **⚠️ COS forwards journald to Cloud Logging at WARNING AND ABOVE ONLY.** The sampler shipped once
 > at default (info) priority and produced perfect lines that never left the instance — working

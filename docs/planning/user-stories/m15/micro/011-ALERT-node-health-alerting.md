@@ -155,10 +155,119 @@ CloudFormation, which is stale for the protocol.
 
 ## Review
 
-*(Reviewer verdict goes here. One quote. Not a transcript. Include the terraform plan summary.)*
+### Terraform plan summary
+
+Targeted at the four resources this unit adds:
+
+```
+  # google_logging_metric.directory_node_rss will be created
+  # google_monitoring_alert_policy.directory_cpu_sustained will be created
+  # google_monitoring_alert_policy.directory_memory_ceiling will be created
+  # google_monitoring_notification_channel.operator_email will be created
+Plan: 4 to add, 0 to change, 0 to destroy.
+```
+
+`terraform validate` — `Success! The configuration is valid.` `terraform fmt -check alerting.tf` — clean. **Qualified deliberately:** repo-scope `terraform fmt -check` exits 3, naming `node-relay.tf` (pre-existing — it fails identically on `main`, checked) and `terraform.tfvars` (the in-flight roll's uncommitted edit). Neither is from this diff, and an unqualified "fmt clean" would have let the next person believe the repo gate passes.
+
+**The UNTARGETED plan destroys two things, and neither is mine.** It reports `7 to add, 6 to change,
+2 to destroy`; the destroys and changes are relay resources belonging to the in-flight `7befcc95`
+roll. Proven rather than asserted: the same plan run on `main` **without this change** reports
+`3 to add, 6 to change, 2 to destroy`, and diffing the two resource-action lists leaves exactly the
+four additions above. Three consecutive plan runs also disagreed with each other about *which*
+relay resources move — the fleet is being changed underneath the plan — while the four alerting
+resources were create-only in every run.
+
+### Applied and live
+
+The lock cleared later in the session, so the four resources were applied — `Apply complete!
+Resources: 4 added, 0 changed, 0 destroyed.` — targeted at exactly them, plus one in-place change
+(`0 added, 1 changed, 0 destroyed`) for the review's H3 fix. Read back from GCP rather than from
+Terraform state: both policies `enabled`, thresholds 0.25 / 2634547, durations 3600s / 1800s. A
+post-apply plan reports **`No changes. Your infrastructure matches the configuration.`**
+
+**Nothing fired on apply, and that was checked before applying rather than hoped for:** every
+directory instance sat at 0.038–0.060 cores against a 0.25 threshold and 248–275 MB against 2,573 MB.
+
+**The one thing still unproven is delivery.** No incident has ever actually landed in a mailbox
+through this channel; a channel that accepts creation and silently drops mail looks identical to a
+healthy one from every check available here. Forcing it means either a throwaway policy created by
+hand — against the rule that nothing exists outside Terraform — or an hour of synthetic load on a
+production node. The one-click close (Console → Alerting → Notification channels → **Send test
+notification**) is recorded in `GCP-STATE.md`. Treat node-health alerting as wired-and-plausible
+rather than proven until someone presses it.
+
+### How each metric was confirmed to be arriving (DoD 3)
+
+- **CPU** — `timeSeries.list` against the live project returned **58 directory instance series over
+  30 days** at ~60 s resolution. The same query is the negative control for the regex: relay
+  instances exist in that metric and none of them matched.
+- **Memory** — `cello.node.memory` is **a log line, not a metric**, so the policy is against a
+  log-based metric built over the stream that already exists. Its filter, run verbatim against Cloud
+  Logging, returned samples from all three nodes within the hour and 20,000 across 7 days; a negative
+  control with a deliberately wrong `SYSLOG_IDENTIFIER` returned nothing. Both extractor regexes were
+  run against the real message strings.
+- **The aligner** — `ALIGN_PERCENTILE_99` + `REDUCE_MAX` was put to the live Monitoring API against
+  an existing DELTA/DISTRIBUTION metric and accepted; `ALIGN_MAX` was rejected with *"the aligner
+  cannot be applied to metrics with kind DELTA and value type DISTRIBUTION"*.
+
+### Reviewer verdict
+
+> **SPEC: DEVIATIONS FOUND** … **SILENT FALLBACKS FOUND** — H3 (missing data reads as healthy; a
+> dead process silences both policies) and H2 (unverified channel) are [blocking]. … *"Not
+> rubber-stamping: the two things that would have shipped unnoticed are the record/reality inversion
+> and a channel with no proof it delivers."*
+
+Findings and disposition — 3 high, 2 medium, 3 low:
+
+| # | Finding | Disposition |
+|---|---|---|
+| H1 | GCP-STATE said the resources were not applied when they were | **already fixed** before the verdict arrived — the reviewer read a snapshot taken before the apply |
+| H2 | Channel delivery unproven; the status check misleads | **fixed** — the check now distinguishes an absent field from `UNVERIFIED`, and the unproven last hop is stated outright rather than left implied |
+| **H3** | **A dead directory process silenced BOTH alerts** | **fixed and applied** — `evaluation_missing_data = ACTIVE` on the memory condition. The best finding in the review |
+| M1 | Plan summary said `1 to add`, was `4` | **already fixed** before the verdict arrived |
+| M2 | `terraform fmt -check` claimed clean at repo scope | **fixed** — qualified above; `node-relay.tf` recorded below |
+| L1 | Cloud-init comment says `cos_system`, actual is `cos_journal_warning` | **NOT fixed — see Newly discovered 3.** Editing that file re-renders the instance template and forces a fleet roll for a one-word comment |
+| L2 | File argues for `join`, then uses a heredoc | **fixed** — the claim is narrowed to the monitoring filter; the logging heredoc shows no drift |
+| L3 | Percentile returns bucket-edge values | **already fixed** — the 50 MB quantisation note was added before the verdict |
+
+The reviewer independently re-derived every quoted figure and re-ran the filters against live GCP:
+all twelve numbers hold, the regex excludes relays and the capacity probes, and the metric returned
+three correctly-labelled series. Its own summary of that: *"The memory policy is not permanently
+silent — which was the order's central fear, and it is answered."*
 
 ---
 
 ## Newly discovered
 
 *(One or two lines each. Do not act on them.)*
+
+> **Item 1 was CLOSED inside this unit, not deferred.** I first filed "if the sampler stops the
+> alert goes silent and that reads like health" here and left it. The reviewer showed it was worse
+> than filed — a dead directory process silences BOTH policies — and that it had a one-attribute
+> fix. It is struck rather than deleted because the misjudgement is the useful part: the thing I
+> classified as a future design decision was the failure the unit exists to catch.
+
+1. ~~**If the memory sampler stops, the alert goes silent and that reads exactly like health.**~~
+   **CLOSED** — `evaluation_missing_data = "EVALUATION_MISSING_DATA_ACTIVE"` on the memory
+   condition, applied and verified live. What remains open by design: the CPU condition is per
+   instance and instances legitimately vanish on every roll, so it stays `INACTIVE`. The memory
+   condition covers the node-down case for both.
+
+2. **`node-relay.tf` fails `terraform fmt -check`** (exit 3, a misaligned `templatefile` argument
+   block). Pre-existing — it fails identically on `main` — so repo-scope `terraform fmt` has been red
+   for a while and nobody is running it at repo scope.
+
+3. **A comment in `directory-cloud-init.yaml` says journald forwards as `cos_system`; it is
+   `cos_journal_warning`,** which the line 20 below it and the live logs both confirm. Now
+   load-bearing: the memory metric pins that `logName`, so someone "correcting" the metric to match
+   the wrong comment would silently empty it. **Left alone deliberately — editing that file
+   re-renders the instance template and forces a replacement of all three nodes for a one-word
+   comment fix.** Worth folding into the next roll that touches the file for another reason.
+
+4. ~~**The relay's Terraform state does not agree with itself run to run right now.**~~
+   **EXPLAINED, not a defect.** Three plans in succession named three different relay action sets and
+   one wanted to *create* a relay `GCP-STATE.md` records as live. That was the `7befcc95` roll being
+   read mid-flight. It has since landed on `main` (`infra: the whole fleet is on 7befcc95`), which
+   moved both relays to new zones and machine types, and after rebasing onto it a plan reports
+   **`No changes`**. Recorded because "terraform thinks a live relay does not exist" is alarming to
+   read cold, and the answer is that someone was mid-roll.
