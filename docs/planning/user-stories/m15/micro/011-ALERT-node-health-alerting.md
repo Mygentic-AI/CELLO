@@ -264,9 +264,10 @@ silent — which was the order's central fear, and it is answered."*
    re-renders the instance template and forces a replacement of all three nodes for a one-word
    comment fix.** Worth folding into the next roll that touches the file for another reason.
 
-4. **The relay's Terraform state does not agree with itself run to run right now.** Three plans in
-   succession named three different relay action sets, and one of them wanted to *create*
-   `google_compute_instance_group_manager.relay["us-east1"]` — a relay `GCP-STATE.md` records as live
-   at 34.139.119.165. Almost certainly the in-flight roll being read mid-flight; worth one look once
-   the roll settles, because "terraform thinks a live relay does not exist" is not a good resting
-   state.
+4. ~~**The relay's Terraform state does not agree with itself run to run right now.**~~
+   **EXPLAINED, not a defect.** Three plans in succession named three different relay action sets and
+   one wanted to *create* a relay `GCP-STATE.md` records as live. That was the `7befcc95` roll being
+   read mid-flight. It has since landed on `main` (`infra: the whole fleet is on 7befcc95`), which
+   moved both relays to new zones and machine types, and after rebasing onto it a plan reports
+   **`No changes`**. Recorded because "terraform thinks a live relay does not exist" is alarming to
+   read cold, and the answer is that someone was mid-roll.
