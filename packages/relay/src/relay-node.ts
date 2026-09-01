@@ -83,7 +83,7 @@ import type { Logger, SessionWal, ContentStore } from "@cello-protocol/interface
 import { verifyOnlineToken } from "@cello-protocol/interfaces";
 import { DepositRateLimiter, type DepositRateLimitConfig } from "./deposit-rate-limiter.js";
 import { ContentParkHandler } from "./content-park.js";
-import { RelayConnectionGater } from "./relay-connection-gater.js";
+import { RelayConnectionGater, DEFAULT_SLOT_CEILING } from "./relay-connection-gater.js";
 import { InMemoryVouchedKeyStore, type VouchedKeyStore } from "./adapters/file-vouched-keys.js";
 import { RELAY_LEAF_KINDS, RELAY_LEAF_HASHERS } from "./relay-types.js";
 import type {
@@ -2388,6 +2388,15 @@ export class CelloRelayNode {
       // is already destroyed by sweepIdleSessions, so #cleanupSessionTracking must
       // be store-independent (it is) to avoid leaking participant/timer entries.
       for (const key of swept) this.#cleanupSessionTracking(key);
+      /**
+       * DOD-M15-RELAYSLOTS-1: and reclaim reservation slots if the table is under pressure.
+       *
+       * It rides this sweep rather than getting a timer of its own because the two are the same
+       * job at two levels — freeing capacity that nothing is using — and one fewer interval is one
+       * fewer thing to remember to stop at shutdown. The reaper is a no-op below the pressure line,
+       * so on an ordinary relay this costs a map scan an hour.
+       */
+      this.#reapSlots();
     };
 
     // Run first sweep immediately to catch sessions that were idle before the relay process started.
@@ -2399,6 +2408,38 @@ export class CelloRelayNode {
 
     // Schedule recurring sweeps
     this.#idleSweepInterval = setInterval(sweep, intervalMs);
+  }
+
+  /**
+   * DOD-M15-RELAYSLOTS-1 — reclaim idle reservation slots, and **TELL WHOEVER LOST ONE.**
+   *
+   * The notice is the half that is easy to skip, and skipping it is how "my agent just stopped
+   * working" happens: the relay is the only party that knows this occurred, and from the agent's
+   * side an unexplained hangup is indistinguishable from the network failing. So every agent that
+   * held a reaped slot AND has an authenticated stream here is sent a frame naming the cause and
+   * what to do about it.
+   *
+   * ⚠️ Not every reaped holder has a stream to be told on, and that limit is stated rather than
+   * papered over. A bare standing receiver proves its reservation and closes the stream — there is
+   * nothing open to write to. For those the hangup IS the signal, and the client's own reservation
+   * watchdog rebuilds the receiver; what they lose is the explanation, not the recovery.
+   */
+  #reapSlots(): void {
+    const reaped = this.#connectionGater?.reapIdleSlots() ?? [];
+    for (const slot of reaped) {
+      for (const agentHex of slot.agents) {
+        const stream = this.#streams.get(agentHex);
+        if (!stream) continue;
+        void this.#sendFrame(stream, CBOR_ENC.encode({
+          type: "relay_slot_reclaimed",
+          reason: "idle_capacity_reclaimed",
+          idle_ms: slot.idleMs,
+          detail: "This relay reclaimed your circuit reservation to free capacity. It had carried " +
+            "no traffic for longer than the relay's activity floor. Your agent stays online — " +
+            "reconnect to this relay, or start a new session, and a fresh reservation is taken.",
+        }) as Uint8Array).catch(() => { /* the peer is going away; the reap log is the durable record */ });
+      }
+    }
   }
 
   /**
@@ -2872,7 +2913,11 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     relayServer: {
       enabled: true,
       reservations: {
-        maxReservations: 4096,
+        // DOD-M15-RELAYSLOTS-1: ONE source for this number. The reaper's pressure line is a
+        // fraction of the ceiling, so a ceiling that drifted from what libp2p actually enforces
+        // would give a reaper that either never fires or fires constantly — and both look like the
+        // reaper working.
+        maxReservations: DEFAULT_SLOT_CEILING,
         applyDefaultLimit: true,
         defaultDurationLimit: opts.circuitDurationLimitMs ?? DEFAULT_CIRCUIT_DURATION_LIMIT_MS,
         defaultDataLimit: opts.circuitDataLimitBytes ?? DEFAULT_CIRCUIT_DATA_LIMIT_BYTES,

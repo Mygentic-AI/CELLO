@@ -87,12 +87,55 @@ export const SLOT_CAP_PER_AGENT = 32;
  */
 export const SLOT_RECLAIM_MIN_IDLE_MS = 5 * 60 * 1000;
 
+/**
+ * DOD-M15-RELAYSLOTS-1 — **THE FLOOR. NOT A TUNING PARAMETER.**
+ *
+ * The reaper never touches a slot that has seen activity within six hours, however much pressure the
+ * table is under. A conversation people are actually having can go quiet for an afternoon, and
+ * tearing it down to free capacity is the same failure this unit exists to prevent, one level up:
+ * refusing a legitimate agent, only worse, because it interrupts something already working.
+ *
+ * If everything is inside the floor, the reaper frees nothing and the relay refuses at the ceiling
+ * instead. That is the correct outcome — at that point the table really is full of things in use.
+ */
+export const SLOT_REAP_ACTIVITY_FLOOR_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * The relay's reservation ceiling. **Ours, not a default** — libp2p ships 15, which caused a real
+ * outage: fifteen slots vanish immediately in normal use, because every agent needs one and (before
+ * this unit) every daemon restart took a NEW one rather than reclaiming its own. Not to be reverted.
+ * It does mean the number is a choice, and this is where it is written down.
+ */
+export const DEFAULT_SLOT_CEILING = 4096;
+
+/**
+ * How full the table must be before the reaper does anything at all.
+ *
+ * Below this line there is capacity to spare and reclaiming would cost some agent its front door to
+ * free space nobody wanted. Above it, freeing a slot that has been silent for six hours is plainly
+ * better than refusing the next agent to arrive.
+ */
+export const DEFAULT_REAP_PRESSURE_FRACTION = 0.8;
+
+/** One slot the reaper freed, with what the relay needs to tell its holder why. */
+export interface ReapedSlot {
+  peerId: string;
+  /** The agents reachable through it. Empty when it was never claimed by anyone. */
+  agents: string[];
+  /** How long it had been silent — what makes the notice explain itself rather than just assert. */
+  idleMs: number;
+}
+
 export interface RelayConnectionGaterOptions {
   logger: Logger;
   /** See `DEFAULT_RESERVATION_GRACE_MS`. */
   reservationGraceMs?: number;
   /** See `SLOT_CAP_PER_AGENT`. Overridable per deployment and for tests. */
   slotCapPerAgent?: number;
+  /** See `DEFAULT_SLOT_CEILING`. Must match the reservation limit the libp2p relay service runs with. */
+  slotCeiling?: number;
+  /** See `DEFAULT_REAP_PRESSURE_FRACTION`. */
+  reapPressureFraction?: number;
 }
 
 /**
@@ -161,11 +204,15 @@ export class RelayConnectionGater implements ConnectionGater {
    */
   readonly #slots = new Map<string, SlotRecord>();
   readonly #slotCap: number;
+  readonly #slotCeiling: number;
+  readonly #reapPressureFraction: number;
 
   constructor(opts: RelayConnectionGaterOptions) {
     this.#logger = opts.logger;
     this.#graceMs = opts.reservationGraceMs ?? DEFAULT_RESERVATION_GRACE_MS;
     this.#slotCap = opts.slotCapPerAgent ?? SLOT_CAP_PER_AGENT;
+    this.#slotCeiling = opts.slotCeiling ?? DEFAULT_SLOT_CEILING;
+    this.#reapPressureFraction = opts.reapPressureFraction ?? DEFAULT_REAP_PRESSURE_FRACTION;
   }
 
   /**
@@ -331,6 +378,71 @@ export class RelayConnectionGater implements ConnectionGater {
       this.#slots.set(peerId, { agents: new Set([agentPubkeyHex]), grantedAt: now, lastActivityAt: null });
     }
     return { ok: true };
+  }
+
+  /**
+   * DOD-M15-RELAYSLOTS-1 — **REAP, THEN REFUSE.** Free the quietest slots when the table is under
+   * pressure, so the relay refuses only at the ceiling with nothing left to reclaim.
+   *
+   * Returns what was freed, so the relay can tell the agents that lost capacity. Silent teardown is
+   * how "my agent just stopped working" happens, and the relay is the only party that knows.
+   *
+   * Three rules, in order:
+   *
+   *  1. **Below the pressure line, do nothing.** There is capacity to spare, and reclaiming would
+   *     cost some agent its front door to free space nobody wanted.
+   *  2. **Never inside the activity floor.** A slot that has carried traffic in the last six hours
+   *     is off limits at any pressure — see `SLOT_REAP_ACTIVITY_FLOOR_MS`. A slot that has never
+   *     carried traffic is measured from when it was GRANTED, which is what keeps a waiting standing
+   *     receiver (silent by definition) from being reaped the instant it arrives on a busy relay.
+   *  3. **Quietest first, and stop as soon as there is room.** Freeing more than the table needs is
+   *     just a slower version of refusing too eagerly.
+   */
+  reapIdleSlots(): ReapedSlot[] {
+    const pressureLine = Math.floor(this.#slotCeiling * this.#reapPressureFraction);
+    if (this.#slots.size <= pressureLine) return [];
+
+    const now = Date.now();
+    const candidates: Array<{ peerId: string; idleMs: number; agents: string[] }> = [];
+    for (const [peerId, slot] of this.#slots) {
+      const since = slot.lastActivityAt ?? slot.grantedAt;
+      const idleMs = now - since;
+      if (idleMs <= SLOT_REAP_ACTIVITY_FLOOR_MS) continue;
+      candidates.push({ peerId, idleMs, agents: [...slot.agents] });
+    }
+    if (candidates.length === 0) {
+      this.#logger.warn("relay.slot.reap.nothing_to_free", {
+        held: this.#slots.size,
+        ceiling: this.#slotCeiling,
+        floorHours: SLOT_REAP_ACTIVITY_FLOOR_MS / 3_600_000,
+        impact: "the reservation table is under pressure and every slot in it has carried traffic " +
+          "inside the activity floor. Nothing is reaped — the relay will refuse new agents at the " +
+          "ceiling instead, which is correct here: the table is genuinely full of sessions in use. " +
+          "If this persists, this relay needs more capacity, not a lower floor.",
+      });
+      return [];
+    }
+
+    candidates.sort((a, b) => b.idleMs - a.idleMs); // quietest first
+    const target = this.#slots.size - pressureLine;
+    const reaped: ReapedSlot[] = [];
+    for (const c of candidates) {
+      if (reaped.length >= target) break;
+      this.#logger.info("relay.slot.reaped", {
+        peerId: truncId(c.peerId),
+        agents: c.agents.map((a) => truncId(a)),
+        idleHours: Math.round(c.idleMs / 3_600_000),
+        held: this.#slots.size,
+        ceiling: this.#slotCeiling,
+        impact: "this reservation was reclaimed to free capacity on a relay under pressure. It had " +
+          "carried no traffic for longer than the activity floor. The agent's client rebuilds its " +
+          "standing receiver on losing a reservation, so this is recoverable — but it is a real " +
+          "interruption and the holder is told.",
+      });
+      this.#releaseSlot(c.peerId);
+      reaped.push({ peerId: c.peerId, agents: c.agents, idleMs: c.idleMs });
+    }
+    return reaped;
   }
 
   /** Hang the peer up and drop its ledger entry. */
