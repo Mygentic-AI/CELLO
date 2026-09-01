@@ -155,10 +155,71 @@ CloudFormation, which is stale for the protocol.
 
 ## Review
 
-*(Reviewer verdict goes here. One quote. Not a transcript. Include the terraform plan summary.)*
+### Terraform plan summary
+
+Targeted at the four resources this unit adds:
+
+```
+  # google_logging_metric.directory_node_rss will be created
+  # google_monitoring_alert_policy.directory_cpu_sustained will be created
+  # google_monitoring_alert_policy.directory_memory_ceiling will be created
+  # google_monitoring_notification_channel.operator_email will be created
+Plan: 4 to add, 0 to change, 0 to destroy.
+```
+
+`terraform validate` — `Success! The configuration is valid.` `terraform fmt -check` — clean.
+
+**The UNTARGETED plan destroys two things, and neither is mine.** It reports `7 to add, 6 to change,
+2 to destroy`; the destroys and changes are relay resources belonging to the in-flight `7befcc95`
+roll. Proven rather than asserted: the same plan run on `main` **without this change** reports
+`3 to add, 6 to change, 2 to destroy`, and diffing the two resource-action lists leaves exactly the
+four additions above. Three consecutive plan runs also disagreed with each other about *which*
+relay resources move — the fleet is being changed underneath the plan — while the four alerting
+resources were create-only in every run.
+
+### Not applied — the unit is complete, the alerts are not live
+
+The state lock `gs://cello-infra-tfstate/cello-infra/default.tflock` was held by `andrep@Mac` for the
+whole session (the in-flight roll). It was **not** force-unlocked. Two consequences, both recorded in
+`infra/GCP-STATE.md` rather than left implicit: the four resources do not exist in GCP yet, and the
+email channel's `verification_status` cannot be checked until they do — the API's own words are that
+`UNVERIFIED` means a channel is **non-functioning**, so that check is the difference between alerting
+and the appearance of it. The ready-to-paste `-target` apply is in `GCP-STATE.md`.
+
+### How each metric was confirmed to be arriving (DoD 3)
+
+- **CPU** — `timeSeries.list` against the live project returned **58 directory instance series over
+  30 days** at ~60 s resolution. The same query is the negative control for the regex: relay
+  instances exist in that metric and none of them matched.
+- **Memory** — `cello.node.memory` is **a log line, not a metric**, so the policy is against a
+  log-based metric built over the stream that already exists. Its filter, run verbatim against Cloud
+  Logging, returned samples from all three nodes within the hour and 20,000 across 7 days; a negative
+  control with a deliberately wrong `SYSLOG_IDENTIFIER` returned nothing. Both extractor regexes were
+  run against the real message strings.
+- **The aligner** — `ALIGN_PERCENTILE_99` + `REDUCE_MAX` was put to the live Monitoring API against
+  an existing DELTA/DISTRIBUTION metric and accepted; `ALIGN_MAX` was rejected with *"the aligner
+  cannot be applied to metrics with kind DELTA and value type DISTRIBUTION"*.
+
+### Reviewer verdict
+
+*(pending — `cello-unit-reviewer` dispatched on the branch diff)*
 
 ---
 
 ## Newly discovered
 
 *(One or two lines each. Do not act on them.)*
+
+1. **If the memory sampler stops, the alert goes silent and that reads exactly like health.** The
+   log-based metric produces no time series when no lines arrive, and neither policy has an
+   absence/heartbeat condition — so a sampler that dies (a failed unit, a lowered `SyslogLevel`, a
+   node that boots without the timer) removes the alarm rather than raising one. Same shape for CPU
+   if an instance stops reporting. Adding absence detection is a third policy and a design decision,
+   so it is recorded, not built.
+
+2. **The relay's Terraform state does not agree with itself run to run right now.** Three plans in
+   succession named three different relay action sets, and one of them wanted to *create*
+   `google_compute_instance_group_manager.relay["us-east1"]` — a relay `GCP-STATE.md` records as live
+   at 34.139.119.165. Almost certainly the in-flight roll being read mid-flight; worth one look once
+   the roll settles, because "terraform thinks a live relay does not exist" is not a good resting
+   state.
