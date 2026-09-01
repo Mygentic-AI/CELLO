@@ -624,6 +624,12 @@ export class CelloRelayNode {
     this.#node.onPeerDisconnect((disconnectedPeerId) => {
       const short = truncId(disconnectedPeerId);
       protocolLog("RELAY", `Peer disconnected: ${short}`);
+      /**
+       * DOD-M15-RELAYSLOTS-1: free the slot the moment the peer goes, rather than carrying it until
+       * the reservation TTL runs out. The delay was never neutral — it is how an agent that
+       * restarts a handful of times exhausts its own per-agent cap while holding nothing at all.
+       */
+      this.#connectionGater?.recordDisconnect(disconnectedPeerId);
     });
   }
 
@@ -1269,6 +1275,37 @@ export class CelloRelayNode {
             return;
           }
 
+          /**
+           * DOD-M15-RELAYSLOTS-1 — attribute the slot, and decide whether this agent may keep it.
+           *
+           * The token above proved WHO this is. This asks whether they already hold more of this
+           * relay's reservation table than one agent may. The ledger reclaims the agent's own idle
+           * slots before it consults the cap, so a refusal here means every slot they hold has
+           * actually carried traffic.
+           *
+           * On a refusal the revoke timer is deliberately LEFT RUNNING: the reservation was already
+           * granted by the time we got here (it has to be — a relay cannot deny at grant time
+           * without stranding every brand-new agent's first reservation), so the grace window is
+           * what reclaims it. The caller is told why in the same breath.
+           */
+          if (remotePeerId) {
+            const admission = this.#connectionGater?.admitSlot(remotePeerId, authedPubkeyHex);
+            if (admission && !admission.ok) {
+              await this.#refuseAuth(
+                stream,
+                encodeAuthFailed({
+                  type: "relay_auth_failed",
+                  reason: admission.reason,
+                  ...(admission.reason === "slot_cap_exceeded"
+                    ? { slots_held: admission.held, slot_cap: admission.cap }
+                    : {}),
+                }),
+                admission.reason,
+              );
+              return;
+            }
+          }
+
           // DOD-M15-RELAYAUTH-1: this proves Ed25519 key POSSESSION, not participation in any
           // session — cancels this peer's reservation-revoke grace timer if one is running (see
           // relay-connection-gater.ts). Does NOT vouch the pubkey; that still requires a real
@@ -1495,6 +1532,17 @@ export class CelloRelayNode {
           continue;
         }
         if (parsed.type === "hash_submit") {
+          /**
+           * DOD-M15-RELAYSLOTS-1: a submit is traffic, and traffic is what marks a slot in use.
+           *
+           * Recorded HERE, on the relay's own carrying path, because that is the one place that
+           * cannot be wrong about it — and it is a sound signal precisely because nothing can be
+           * submitted until a directory-signed assignment was presented. Recorded BEFORE the submit
+           * is processed, so a submit that is refused downstream still counts: the slot is plainly
+           * in use either way, and treating an ambiguous slot as idle is the one direction this
+           * unit must never be wrong in.
+           */
+          if (remotePeerId) this.#connectionGater?.recordActivity(remotePeerId);
           await this.#processHashSubmit(stream, authedPubkeyHex!, parsed, remotePeerId);
         } else if (parsed.type === "session_liveness_query") {
           await this.#processSessionLivenessQuery(stream, authedPubkeyHex!, parsed);
@@ -2623,6 +2671,8 @@ export interface CreateRelayNodeOptions {
   connectionGater?: RelayConnectionGater;
   /** DOD-M15-RELAYAUTH-1: see `DEFAULT_RESERVATION_GRACE_MS` in relay-connection-gater.ts. */
   reservationGraceMs?: number;
+  /** DOD-M15-RELAYSLOTS-1: see `SLOT_CAP_PER_AGENT` in relay-connection-gater.ts. */
+  slotCapPerAgent?: number;
   /** DOD-M15-RELAYAUTH-1 review H2: durable vouching — see `RelayNodeOptions.vouchedKeyStore`. */
   vouchedKeyStore?: VouchedKeyStore;
   /** FED-OPTIONB-SETUP-001: consortium directory pubkeys (any-directory). Falls back to [directoryPubkey]. */
@@ -2720,6 +2770,7 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
   const connectionGater = opts.connectionGater ?? new RelayConnectionGater({
     logger: relayLogger,
     reservationGraceMs: opts.reservationGraceMs,
+    slotCapPerAgent: opts.slotCapPerAgent,
   });
   const node = await createNode({
     keyProvider,

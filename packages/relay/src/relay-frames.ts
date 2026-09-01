@@ -69,6 +69,11 @@ export function encodeAuthFailed(frame: RelayAuthFailed): Uint8Array {
     type: frame.type,
     reason: frame.reason,
     ...(frame.retry_after_ms !== undefined ? { retry_after_ms: frame.retry_after_ms } : {}),
+    // DOD-M15-RELAYSLOTS-1: the slot-cap affordance. Same additive convention — present only for
+    // `slot_cap_exceeded`, where the two numbers are what make the refusal actionable rather than
+    // a dead end. See the fields' note on RelayAuthFailed.
+    ...(frame.slots_held !== undefined ? { slots_held: frame.slots_held } : {}),
+    ...(frame.slot_cap !== undefined ? { slot_cap: frame.slot_cap } : {}),
   });
 }
 

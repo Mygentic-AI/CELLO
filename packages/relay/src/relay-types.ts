@@ -112,7 +112,20 @@ export type AuthFailedReason =
    * This relay holds no directory public key, so it cannot verify anything and refuses everyone.
    * A relay-side fault, not the caller's: the daemon should try a different relay.
    */
-  | "online_token_no_directory_key";
+  | "online_token_no_directory_key"
+  /**
+   * DOD-M15-RELAYSLOTS-1: this agent already holds the most reservation slots one agent may hold
+   * here, and none of them was idle enough to reclaim. Carries `slots_held` and `slot_cap`.
+   *
+   * A different relay WOULD grant this — but doing that quietly papers over leaked sessions and the
+   * same wall arrives on the next relay, so the daemon surfaces it rather than spreading it.
+   */
+  | "slot_cap_exceeded"
+  /**
+   * A second agent key authenticated over a transport identity already attributed to another agent.
+   * Should be unreachable — one libp2p connection carries one agent.
+   */
+  | "slot_agent_mismatch";
 
 export interface RelayAuthFailed {
   type: "relay_auth_failed";
@@ -123,6 +136,18 @@ export interface RelayAuthFailed {
    * than leaving the caller to guess a retry interval.
    */
   retry_after_ms?: number;
+  /**
+   * DOD-M15-RELAYSLOTS-1: how many reservation slots this agent currently holds on this relay, and
+   * the most one agent may hold. Present only when `reason` is `slot_cap_exceeded`.
+   *
+   * ⚠️ These two numbers ARE the affordance, and without them the refusal is a dead end. People do
+   * not know what sessions they have open — sessions fall apart and sit there, idle and unreachable
+   * and still counted — so anyone who hits this cap will believe they have nothing open. A bare
+   * reason code tells them the product is broken; "you hold 32 of a maximum 32" tells them what to
+   * go and close.
+   */
+  slots_held?: number;
+  slot_cap?: number;
 }
 
 export interface RelayAuthOk {

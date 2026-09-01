@@ -26,7 +26,7 @@ import {
   beforeEach,
   afterEach,
 } from "@claude-flow/testing";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { Encoder, decode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import { generateKeypair } from "@cello-protocol/crypto";
@@ -261,6 +261,83 @@ describe("DOD-M15-RELAYSLOTS-1: only a registered agent may authenticate to a re
         "flood works exactly as if this feature had never shipped.",
     ).toBe("relay_auth_failed");
     expect(verdict["reason"]).toBe("online_token_no_directory_key");
+  }, 30_000);
+
+  it("★★★ refuses past the per-agent slot cap OVER THE WIRE, and the refusal carries what to do about it", async () => {
+    const dirKp = generateKeypair();
+    // Cap of 2, so the test is about the rule rather than about opening 33 connections.
+    const { relay, node, stop } = await createRelayNode({
+      directoryPubkey: await dirKp.getPublicKey(),
+      slotCapPerAgent: 2,
+    });
+    scope.addCleanup(stop);
+    const relayPeerId = node.getPeerId();
+    const relayAddr = node.listenAddresses()[0]!;
+
+    const agentKp = generateKeypair();
+    const otherKp = generateKeypair();
+    const token = await tokenFor(dirKp, await agentKp.getPublicKey());
+
+    /**
+     * A real recorded session, because the slots have to carry REAL traffic.
+     *
+     * Without traffic the ledger would (correctly) reclaim each idle slot as the next connection
+     * arrives, the count would never exceed one, and the cap would never be reached — so a version
+     * of this test that skipped the submits would pass while asserting nothing about the cap. The
+     * relay marks a slot in use from its own carrying path and there is no test seam for it, which
+     * is the point: the signal cannot be faked here any more than it can be in production.
+     */
+    const sessionId = new Uint8Array(randomBytes(16));
+    const sessionTimestamp = Date.now();
+    const assignmentTbs = CBOR_ENC.encode([
+      sessionId,
+      await agentKp.getPublicKey(),
+      await otherKp.getPublicKey(),
+      sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
+    ]) as Uint8Array;
+    expect(relay.recordAssignment({
+      session_id: sessionId,
+      participant_a: await agentKp.getPublicKey(),
+      participant_b: await otherKp.getPublicKey(),
+      session_timestamp: sessionTimestamp,
+      directory_signature: await dirKp.sign(assignmentTbs),
+    })).toEqual({ ok: true });
+
+    // Three connections from ONE agent. Each is a separate transport identity, which is what a
+    // standing receiver plus its replacements look like.
+    const verdicts: Array<Record<string, unknown>> = [];
+    for (let i = 0; i < 3; i++) {
+      const node_i = await agentDialing(relayAddr, agentKp);
+      const { stream, reader, verdict } = await authenticate(node_i, relayPeerId, agentKp, { online_token: token });
+      verdicts.push(verdict);
+      if (verdict["type"] !== "relay_auth_ok") continue;
+      const pubkey = await agentKp.getPublicKey();
+      const tbs = CBOR_ENC.encode([1, new Uint8Array(randomBytes(32)), pubkey, sessionId, i, Date.now()]) as Uint8Array;
+      sendFrame(stream, CBOR_ENC.encode({
+        type: "hash_submit",
+        session_id: sessionId,
+        leaf_kind: 0x00,
+        structure1_cbor: tbs,
+        sender_signature: await agentKp.sign(tbs),
+      }));
+      let resp = await reader.readDecoded();
+      for (let n = 0; n < 5 && resp["type"] !== "hash_submit_ack" && resp["type"] !== "hash_submit_error"; n++) {
+        resp = await reader.readDecoded();
+      }
+      expect(resp["type"], `precondition: slot ${String(i)} must carry real traffic`).toBe("hash_submit_ack");
+    }
+
+    expect(verdicts[0]!["type"]).toBe("relay_auth_ok");
+    expect(verdicts[1]!["type"]).toBe("relay_auth_ok");
+    expect(verdicts[2]!["type"]).toBe("relay_auth_failed");
+    expect(verdicts[2]!["reason"]).toBe("slot_cap_exceeded");
+    expect(
+      verdicts[2]!["slots_held"],
+      "a bare reason code is not an affordance. Sessions fall apart and sit there counted, so " +
+        "whoever hits this cap believes they have nothing open — the numbers are what turn 'no' " +
+        "into something they can act on.",
+    ).toBe(2);
+    expect(verdicts[2]!["slot_cap"]).toBe(2);
   }, 30_000);
 
   it("refuses a token that is not the right length rather than reading past its end", async () => {
