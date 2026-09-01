@@ -332,8 +332,9 @@ resource "google_monitoring_alert_policy" "directory_cpu_sustained" {
     display_name = "Directory node over 0.25 cores for 60 minutes"
 
     condition_threshold {
-      # Assembled with join so the string is the single line that was verified against
-      # timeSeries.list, rather than a heredoc whose whitespace nobody checked.
+      # Assembled with join so this MONITORING filter is the exact single line that was verified
+      # against timeSeries.list. (The logging filter on the metric above is a heredoc — a different
+      # filter language, and a post-apply plan reports "No changes", so it normalises without drift.)
       filter = join(" AND ", [
         "metric.type=\"compute.googleapis.com/instance/cpu/usage_time\"",
         "resource.type=\"gce_instance\"",
@@ -371,7 +372,7 @@ resource "google_monitoring_alert_policy" "directory_cpu_sustained" {
     mime_type = "text/markdown"
     content   = <<-EOT
       A directory node has burned more than 0.25 CPU cores for over an hour. Fleet steady state is
-      0.055 cores, so this is roughly 5x normal and it is sustained, not a spike.
+      0.055 cores, so this is about 4.5x normal and it is sustained, not a spike.
 
       **The known cause is memory.** The node process grows a few hundred MB a day; near ~80% of its
       V8 ceiling it garbage-collects continuously on the same thread that serves HTTP, so the node
@@ -493,6 +494,28 @@ resource "google_monitoring_alert_policy" "directory_memory_ceiling" {
       comparison      = "COMPARISON_GT"
       threshold_value = local.directory_rss_alert_kb
       duration        = "1800s"
+
+      # 🔴 THE STATE NEITHER ALERT COULD OTHERWISE REACH: A DEAD DIRECTORY PROCESS.
+      # Monitoring's default is EVALUATION_MISSING_DATA_INACTIVE — no data means not violating —
+      # and that default is exactly wrong here, because the sampler is
+      # `PID=$(pgrep -f 'node .*directory'); [ -z "$PID" ] && exit 0`. A process that has died or is
+      # crash-looping emits NO memory samples, so this series simply disappears; and it burns no CPU
+      # either, so a COMPARISON_GT on cores can never trip on it. Both alerts go quiet together on
+      # the single failure most worth being told about, and the fleet reads as healthy.
+      #
+      # ACTIVE makes 30 minutes of silence from a node fire the same email as a node that is too fat.
+      #
+      # ONLY ON THE MEMORY CONDITION, and the asymmetry is deliberate rather than an oversight: this
+      # series is grouped by `node_id`, which SURVIVES instance replacement, so a roll's few-minute
+      # gap cannot reach 30 minutes. The CPU condition is per INSTANCE, and instances legitimately
+      # cease to exist on every roll — ACTIVE there would email once per replaced instance, every
+      # deploy, which is precisely the muting-by-noise this file opens by warning about.
+      #
+      # ACCEPTED COST, stated so nobody "fixes" it later: a node genuinely down for over 30 minutes
+      # sends this email. During a capacity-stalled roll that has happened. It is the correct
+      # behaviour — a node down half an hour is news, not routine — but it is the one case where
+      # this fires without anything being wrong with memory.
+      evaluation_missing_data = "EVALUATION_MISSING_DATA_ACTIVE"
 
       aggregations {
         alignment_period = "600s"
