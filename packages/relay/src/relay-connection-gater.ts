@@ -142,12 +142,22 @@ export const UNPROVEN_RESERVATIONS_PER_SOURCE = 16;
  * DOD-M15-RELAYSLOTS-1 — the youngest a slot may be and still be evictable.
  *
  * An honest agent authenticates about one round trip after reserving; to a relay in another region
- * that is 300-600ms. Anything younger than this floor is plausibly a handshake in flight, so it is
- * not a candidate at all — which is what stops the eviction rule from preferring exactly the caller
- * it is supposed to protect. Two seconds is comfortably above a round trip and far below the grace
- * window, so a flood's slots become evictable long before they are revoked anyway.
+ * that is 300-600ms on a good day. Anything younger than this floor is plausibly a handshake still
+ * in flight, so it is not a candidate at all — which is what stops the eviction rule from preferring
+ * exactly the caller it is supposed to protect.
+ *
+ * ⚠️ TEN SECONDS, NOT TWO — Andre's call, on network variability, and he is right. A round trip is
+ * 300-600ms when things are healthy; it is seconds on a congested mobile link or a saturated uplink,
+ * and those are the connections that most need a relay in the first place. Two seconds protected an
+ * agent on a good network and quietly abandoned one on a bad one.
+ *
+ * The cost is bounded and worth naming: a longer floor widens the window in which a purely
+ * DISTRIBUTED flood — one reservation per address, arriving faster than a handshake completes — can
+ * overshoot the budget, because none of its slots is old enough to evict. It does NOT weaken the
+ * bound against a concentrated flood at all, since the floor deliberately does not apply to a source
+ * holding more than one unproven reservation.
  */
-export const SLOT_EVICT_MIN_AGE_MS = 2_000;
+export const SLOT_EVICT_MIN_AGE_MS = 10_000;
 
 /**
  * The same bound globally, as a backstop against a flood spread across many addresses — where every
