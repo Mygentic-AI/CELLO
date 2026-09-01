@@ -222,12 +222,11 @@ pre-existing failure, unrelated.
 
 *(One or two lines each. Not acted on.)*
 
-- **The key agreement has no production caller.** `deriveSessionSecrets`, `generateSessionEphemeral`
-  and `destroySessionEphemeral` appear only in `core/crypto` and its barrel — verified with a positive
-  control (`deriveSessionSalt` returns 11 files including live daemon code). So the salt half is wired
-  and working, and the encryption half never encrypts a message; nothing destroys an ephemeral at
-  close. This is deliberate sequencing — the identity binding (007-CRYPTO) comes first — and the file
-  now says so instead of reading as done. Wiring it is a separate order and a wire change.
+- ~~**The key agreement has no production caller.**~~ **RESOLVED by 007-CRYPTO.** It was true when
+  this order closed: `deriveSessionSecrets` appeared only in `core/crypto` and its barrel, so nothing
+  encrypted a message. 007 gave it one — the daemon derives on a verified inbound ephemeral and the
+  result encrypts the message body. Left visible rather than deleted, because the gap it records is
+  why the two orders exist in the shape they do.
 - **`SALT_ADOPTION_CLOSED` is a dead export** (`session-salt-agreement.ts`). Exactly one occurrence
   repo-wide: its own declaration. The wire uses `SALT_ADOPTION_LABELS.*`. Left alone — removing an
   export from a published package is not this order's business.

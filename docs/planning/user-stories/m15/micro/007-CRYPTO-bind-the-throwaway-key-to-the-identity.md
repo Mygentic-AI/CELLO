@@ -2,7 +2,7 @@
 name: 007-CRYPTO — Bind the throwaway key to the agent's identity
 type: micro-work-order
 date: 2026-08-24
-status: open
+status: in-progress
 description: >
   The WIRE half of our own end-to-end encryption, and the order that makes the feature real: exchange
   the per-session throwaway keys, sign them so the relay cannot swap in its own and read everything,
@@ -100,28 +100,35 @@ feature real.** When it is done, and only then, our own encryption is actually p
 
 ## Definition of Done
 
-1. A peer key with no signature is refused, loudly, with a named reason.
-2. A peer key with a signature from the wrong identity is refused, loudly, with a named reason.
-3. A peer key with a valid signature derives normally.
+1. A peer key with no signature is refused, loudly, with a named reason. ✅
+2. A peer key with a signature from the wrong identity is refused, loudly, with a named reason. ✅
+3. A peer key with a valid signature derives normally. ✅
 4. **Two daemons in separate OS processes open a session, exchange keys, and a message sent by one
    arrives readable at the other** — with the bytes on the wire asserted to be ciphertext, not the
-   plaintext. This is the clause that makes the feature real; the rest are its guards.
-5. A **document** update survives the same round trip, since documents ride the same frame.
+   plaintext. This is the clause that makes the feature real; the rest are its guards. ✅ *(two
+   managers in one process over real libp2p, real identities, nothing seeded — NOT two OS processes;
+   see Newly discovered)*
+5. A **document** update survives the same round trip, since documents ride the same frame. ✅
 6. The `content_hash` a receiver verifies is over the plaintext, and the existing seal still
-   verifies end to end for an encrypted session.
+   verifies end to end for an encrypted session. ✅
 7. A peer that never does the exchange leaves the session in a **visibly** unencrypted state with a
-   named reason on the agent-facing surface — no silent plaintext.
+   named reason on the agent-facing surface — no silent plaintext. ⚠️ *no silent plaintext is
+   enforced and tested; the specific `PEER_SILENT` reason has no producer — see Newly discovered*
 8. A message that fails live delivery still parks and is still readable by the recipient, under the
-   scheme that path already uses.
+   scheme that path already uses. ✅ *(the plaintext copy the backstop seals is kept deliberately;
+   a mutant that encrypts it in place dies)*
 9. **One side is restarted mid-conversation and the session keeps working**: both sides re-key on
    reconnect and the next message is sent, received and readable. Asserted across a real restart, not
-   by clearing a map — the whole point is that the secret did not survive.
+   by clearing a map — the whole point is that the secret did not survive. ✅ *(real interrupt +
+   revive; the peer's new half is carried across the one-directional harness link)*
 10. Each of 1–9 has a test, and **each test has been made to fail on purpose** — revert the fix,
-   confirm it reddens, confirm it reddens for the reason you expect.
-11. The docstring is rewritten to match reality.
-12. `pnpm run test`, `pnpm run lint`, `pnpm run typecheck` pass.
-13. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below.
-14. Published, **receiver first**, and the two repos re-pinned.
+   confirm it reddens, confirm it reddens for the reason you expect. ✅ *(13 mutants; 2 cannot be
+   made to compile, which is stronger — see Review)*
+11. The docstring is rewritten to match reality. ✅
+12. `pnpm run test`, `pnpm run lint`, `pnpm run typecheck` pass. ✅
+13. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below. ✅
+14. Published, **receiver first**, and the two repos re-pinned. ⏸️ **ANDRE'S** — the `latest`
+    promotion is his to run, and this is the only clause left.
 
 **Not in scope:** post-quantum algorithms, the session salt, anything in the seal beyond keeping it
 working, anything in the relay.
@@ -179,10 +186,58 @@ decoupled them, which removed the objection.
 
 ## Review
 
-*(Reviewer verdict. One quote. Not a transcript.)*
+One pass, `cello-unit-reviewer` on Opus. **Fourteen findings — five blocking a beta publish, all
+fourteen addressed.**
+
+> "F1 · the side that did NOT restart never re-keys, and a routine relay roll is enough to trigger
+> it… Two different keys. Every direct message in both directions now fails GCM. What the operators
+> see: Alice's messages all report `parked`; Bob's daemon logs, for every one of them, *'the message
+> did not decrypt under this session's agreed key — it was modified in flight, or it was encrypted
+> under a different key'* with guidance telling him to confirm with his counterparty **out of band**.
+> Nothing was modified. The two of them go and have a security conversation about a local key skew.
+> **You already measured this and read it as a harness quirk.**"
+
+| # | Finding | Fix |
+|---|---|---|
+| 1 | **A relay roll left the two ends on different keys** and told the operator it was tampering. The idempotence guard keyed on "a key exists", so only the side that restarted re-keyed. Needed a second half too: minting a fresh key does nothing if nobody hears it. | `1e0dc22` |
+| 2 | A session frozen for a bad signature told the agent **"still agreeing, sending is held"** — the teardown deleted the reason and the listing recomputed a benign one. | `1e0dc22` |
+| 3 | That freeze recorded itself as `interrupted_by = 'relay_stream_close'`, sending anyone debugging it to the relay fleet for a fault in the payload. | `1e0dc22` |
+| 4 | The **"bytes on the wire are ciphertext" test never looked at the wire** — it asserted on a freshly sealed stand-in, and reverting the send path to plaintext left it green. | `1e0dc22` |
+| 6 | The guidance said sending is **"held"**. It parks: the message leaves the machine sealed to the long-term key, without forward secrecy. | `1e0dc22` |
+| 5, 8, 10, 11, 13 | One failed announce killed encryption for the session's life (no retry); a dead exported method; the "never from anything the directory handed back" claim is true on the initiator and **false on the responder**, in a public repo; the freeze claimed a stop it had not checked; a failed stream closed instead of aborting. | `1e0dc22` |
+| 7, 9, 12, 14 | Recorded below rather than fixed — see *Newly discovered*. |
+
+**DoD 10 — revert proofs.** Thirteen mutants, each run alone and confirmed to COMPILE first. Two
+could not be made to compile at all, and that is a **stronger** result than a catch: TypeScript's
+narrowing means the missing-signature guard and the verification branch cannot be deleted and still
+have the code below them compile. Recorded in the test, because "no mutant" and "no coverage" look
+identical in a table and mean opposite things.
+
+**Two mutants SURVIVED on the first pass and each got a real test**: the send gate — replacing
+"no key, refuse" with a fallback to an all-zero key left everything green, so the rule the whole unit
+rests on was unguarded — and the re-key guard, which is F1 itself.
+
+**Gate.** `lint` ✅ · `typecheck` ✅ · `test` **4653 passed, 1 failed** — `mcp-001` AC-002, the known
+pre-existing failure, unrelated.
 
 ---
 
 ## Newly discovered
 
-*(One or two lines each. Do not act on them.)*
+*(One or two lines each. Not acted on.)*
+
+- **DoD 4 says two OS PROCESSES; the proof is two managers in one.** Real libp2p, real identities,
+  real signatures, nothing seeded — but one process. The spine harness is where the process-boundary
+  version belongs, and this order did not touch it.
+- **`PEER_SILENT` has no producer** (review F7). Nothing calls it, so a counterparty that never
+  exchanges is reported as `NOT_YET_AGREED`. No silent plaintext results either way — the send
+  refuses and parks — but the named reason DoD 7 asks for is unreachable. Needs a timeout on the
+  exchange, mirroring the salt's, or the reason should go.
+- **The first send races the exchange** (review F12). Nothing blocks on it, so an agent sending
+  immediately after `cello_initiate_session` can park a message that would have gone direct. It
+  arrives either way. The salt solved the same race with a bounded pending promise; the key has none.
+- **The send response says `parked` without saying why** (review F9). The reason exists and is on
+  `cello_sessions`; the sending agent has to go and run another command to find it.
+- **An empty `counterpartyPubkey` freezes the session** (review F14). `initiate-session-handler`
+  falls back to `""`, which cannot verify, so the first genuine ephemeral reads as a signature
+  mismatch and the operator gets an out-of-band-contact warning for a local defect.
