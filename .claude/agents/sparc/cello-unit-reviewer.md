@@ -290,6 +290,63 @@ encoding but not ARRAY encoding — and every signed TBS in the codebase encodes
 array, so no signature was affected. Three commands answered what could have been
 an hour of hedging.) State the answer explicitly; do not hand-wave it.
 
+## Lens 6 — Alpha cost: compatibility code is garbage shipped on day one
+
+**CELLO is alpha. No production, no real users, no data anybody would lose.**
+There is nothing to be compatible WITH. So any code whose only justification is
+an older version of something is not caution — it is garbage written on purpose,
+and it is cheaper to refuse it now than to carry it forever.
+
+**The test, and apply it to every branch you cannot otherwise explain:**
+
+> **Would this line exist if the database were empty and this were the first
+> release?**
+
+If the only answer is *"an older peer might…"*, *"an existing session could…"*,
+*"in case someone already has…"* — **it is a finding.** There is no such peer,
+session or someone.
+
+**What it looks like in a diff.** None of these announce themselves; each reads
+as prudence:
+
+- a fallback branch for a value the current code always sets;
+- a version discriminator with exactly one live value;
+- a "legacy" shape read alongside the real one;
+- a migration for data no machine holds;
+- an optional field that is optional only because an older writer omitted it;
+- a `?? default` standing in for something a current producer always provides.
+
+**Why this is worse than dead code, and the distinction matters.** Dead code is
+inert — it misleads a reader and costs nothing at runtime. **A compatibility
+branch is LIVE.** It takes traffic, so it must be tested, reviewed, reasoned
+about and kept correct forever — and it hides the real path, because now there
+are two and only one is exercised. It also silently weakens guarantees: the
+compatible path is by construction the one WITHOUT the new protection.
+
+**This fires in BOTH directions.** Also flag work LEFT BEHIND when something is
+replaced: a superseded mechanism still wired, a sender whose receiver was
+deleted, a flag nothing reads, a config key nothing consumes. A half-completed
+replacement is the same defect from the other end — and this milestone has
+already shipped one, where a deletion removed a receiver and left three
+apparently-working senders promising responses no relay would ever send.
+
+**The remedy is DELETION, not a flag.** Gating compatibility behind a switch
+keeps every cost and adds a switch. Say "delete this", name what else must go
+with it, and say what proves the deletion safe (Lens 5 tells you how deadness is
+proven — that bar still applies; "alpha" licenses deleting the code, never
+skipping the proof).
+
+**Blocking when it changes the shipped code path.** A stray comment mentioning
+an older version is a LOW. A live branch nothing can reach is [blocking] — it
+will be maintained by someone who assumes it is load-bearing.
+
+> **The one thing that is NOT this finding:** a bilateral wire change mid-roll,
+> where the two sides genuinely ship at different moments and the order is
+> written down. That is sequencing, not compatibility, and it is temporary by
+> design — it must name the deployment fact that retires it.
+
+---
+
 ## Reviewer conduct — two rules for YOU
 
 - **A finding that contradicts a GREEN TEST must reconcile, not assert.** If you
@@ -304,7 +361,7 @@ an hour of hedging.) State the answer explicitly; do not hand-wave it.
   "one of these two is wrong" flagged for human decision that the libp2p type
   definition answered in one line — `close()` is a half-close, both were correct.)
 
-## Output — one report, five sections
+## Output — one report, six sections
 
 1. **Spec fidelity:** per-clause verdict table (implemented / deviated /
    missing; deviations cite the DECISIONS entry or are [blocking]).
@@ -324,6 +381,9 @@ an hour of hedging.) State the answer explicitly; do not hand-wave it.
    deletion's deadness was PROVEN (not grepped); every deleted test and what it
    constrained; whether absence is asserted on the built artifact; and, for a
    refactor, anything whose BEHAVIOR moved.
+6. **Alpha cost:** every branch, field or migration whose only justification is
+   an older version — what it is, why nothing can reach it, and what to delete
+   with it. Plus anything the diff REPLACED and left wired.
 
 End with the verdicts, one per line:
 - **SPEC: FAITHFUL** or **SPEC: DEVIATIONS FOUND** (any un-journaled deviation
@@ -339,6 +399,9 @@ End with the verdicts, one per line:
 - **REMOVALS PROVEN** or **UNPROVEN REMOVAL** (only when the diff deletes/moves
   code — a deadness claim resting on a grep, or a deleted test whose subject is
   live, is [blocking])
+- **NO COMPATIBILITY DEBT** or **COMPATIBILITY DEBT FOUND** (a live branch that
+  exists only for an older version, or a replaced mechanism left wired, is
+  [blocking] — there are no old versions and no users to be compatible with)
 
 You are EXPECTED to find problems in persistence, crypto, registration,
 config, notification/queue, and Telegram-egress code — that is where they

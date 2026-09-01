@@ -104,9 +104,12 @@ salt.
 - **Use the daemon's own hashing function.** There is one (`wire-content-hash.ts`, `contentHashFor`).
   Do not re-derive the HMAC in the handler. A second implementation of the hash is the same defect
   class as a second Merkle, and this exact mistake has already been made once in a journey fixture.
-- **A session with NO salt is a legitimate case, not an error.** Older sessions are unsalted, and the
-  algorithm is discriminated on the wire rather than guessed. Handle both, name which applies in the
-  output, and never present an unsalted proof as though it carried the salted protection.
+- **Assume SALTED. Do not build an unsalted path.** There are no users and no production data, so
+  there is no stock of old unsalted sessions to be compatible with — supporting one is work with no
+  beneficiary, and the procedure's alpha-cost lens makes that a blocking finding, not a nicety.
+  Write the proof for the salted case, and if an unsalted session turns up, **refuse it by name** so
+  it is visible rather than silently proved under a weaker scheme. Record it under *Newly
+  discovered*; do not grow a branch for it.
 
 > ⚠️ **Do not "fix" the salt problem by leaving the salt out and calling the proof "about the hash".**
 > That is technically true and useless: it is a proof about a number, and the operator's question is
@@ -144,7 +147,9 @@ salt.
 6. **A tampered message fails verification.** Change one byte of the message bytes and the verify
    path must reject — this is the assertion that proves the whole feature does its job.
 7. A tampered proof path fails verification.
-8. Both a SALTED and an UNSALTED session produce a working proof, and the output names which.
+8. A salted session produces a working proof whose output names the algorithm and carries the salt.
+   **An unsalted session is refused by name** — no compatibility branch (see the alpha-cost note
+   above).
 9. The proof verifies with **no access to the daemon's database** — from proof + message + certificate
    alone. Prove it in the test by constructing the verifier from those three inputs only.
 10. Each of 1–9 has a test, and **each has been made to fail on purpose** — revert the fix, confirm
