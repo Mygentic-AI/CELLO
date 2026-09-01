@@ -97,15 +97,26 @@ alert reads as coverage:
   steepest growth ever observed over a single process run (407 MB/day) and ~3.4 days at the typical
   ~250 MB/day.
 
-> ### ⚠️ WRITTEN AND PLAN-VERIFIED, **NOT YET APPLIED** — this is the one thing to check before
-> ### trusting the section above
-> `terraform validate` passes and a targeted plan is clean (`1 to add, 0 to change, 0 to destroy`),
-> but **nothing was applied**: the state lock `gs://cello-infra-tfstate/cello-infra/default.tflock`
-> was held by `andrep@Mac` throughout (the in-flight `7befcc95` relay roll). It was **not** force-
-> unlocked. **So these four resources do not exist in GCP yet** — the alerts are not live and the
-> fleet is still unwatched for node health until someone applies them.
+> ### ✅ APPLIED AND LIVE — 2026-09-01, verified against the running project
+> `terraform apply` targeted at exactly these four resources: **`Apply complete! Resources: 4 added,
+> 0 changed, 0 destroyed.`**
 >
-> **To finish, once the roll's lock is released:**
+> | Resource | Live id |
+> |---|---|
+> | Notification channel (email → `andre@mygentic.ai`) | `notificationChannels/11450992193386963104` |
+> | Log-based metric | `cello_directory_node_rss_kb` |
+> | CPU policy | `alertPolicies/13615676940086938930` |
+> | Memory policy | `alertPolicies/11202673742217822439` |
+>
+> Read back from GCP, not from Terraform state: both policies are `enabled=True` with
+> `thresholdValue` 0.25 / 2634547 and `duration` 3600s / 1800s — the values intended.
+>
+> **`-target` was not optional and still is not.** An untargeted apply planned **2 destroys and 6
+> changes against the relay**, none of them from this work — that is the in-flight `7befcc95` roll's
+> drift, and sweeping it in is how a monitoring change becomes a relay outage. Three consecutive
+> plans also named three *different* relay action sets, so the fleet was moving underneath them.
+> Use the targeted form for any further alerting change until that roll settles:
+>
 > ```bash
 > export GOOGLE_OAUTH_ACCESS_TOKEN=$(gcloud auth print-access-token)
 > cd infra/terraform
@@ -114,26 +125,34 @@ alert reads as coverage:
 >   -target=google_monitoring_alert_policy.directory_cpu_sustained \
 >   -target=google_monitoring_alert_policy.directory_memory_ceiling
 > ```
-> **`-target` is not optional here.** An untargeted apply at the time of writing planned
-> **2 destroys and 6 changes against the relay**, none of them from this work — that is the in-flight
-> roll's drift, and sweeping it in is how a monitoring change becomes a relay outage.
 >
-> **Then check the channel is VERIFIED, and do not assume it.** Monitoring reports a
-> `verification_status` on every channel, and the API's own words are that `UNVERIFIED` means the
-> channel is **non-functioning** — it delivers nothing while the policy above it looks perfectly
-> healthy, which is this file's favourite failure mode wearing a green badge. An email channel may
-> need a confirmation click on a mail GCP sends to the address. One command settles it:
+> **Nothing fired on apply, and that was checked BEFORE applying rather than hoped for**: every
+> directory instance was at 0.038–0.060 cores against a 0.25 threshold, and RSS was 248–275 MB
+> against 2,573 MB.
+>
+> **The email channel needs no confirmation click — measured, not assumed.** The channel comes back
+> from the API with **no `verificationStatus` field at all**, and the API's own words are that a
+> channel which is neither `VERIFIED` nor `UNVERIFIED` "is of a type that does not require
+> verification". (The concern was real and worth checking: `UNVERIFIED` means a channel is
+> **non-functioning** — it delivers nothing while every policy pointing at it still reads as
+> configured.) To re-check it later:
 >
 > ```bash
 > gcloud alpha monitoring channels list --project cello-infra \
 >   --format='value(type,displayName,verificationStatus)'
 > ```
 >
-> **`alpha`, not `beta`** — there is no GA `gcloud monitoring channels`, and the `beta`
-> component is not installed on this machine (it stops to ask). The `alpha` form is verified
-> working; `curl` against `v3/projects/cello-infra/notificationChannels` needs no component at all.
->
-> A status other than `VERIFIED` on a type that requires it means both alerts are wired to nothing.
+> **`alpha`, not `beta`** — there is no GA `gcloud monitoring channels`, and the `beta` component is
+> not installed on this machine (it stops to ask). The `alpha` form is verified working; `curl`
+> against `v3/projects/cello-infra/notificationChannels` needs no component at all.
+
+> ### 📏 THE MEMORY METRIC READS IN 50 MB STEPS, AND SLIGHTLY HIGH
+> Verified after the apply: the metric returns **3 series, one per `node_id`** (which is what proves
+> the label extractor works), and all three reported the same `306688 KB` while the raw log lines
+> said 251/259/275 MB. That is not a fault — it is the 50 MB bucket. Cloud Monitoring interpolates
+> the percentile inside the bucket, so `ALIGN_PERCENTILE_99` lands 99% of the way through it and a
+> reading can overstate real RSS by up to ~50 MB. Against 857 MB of runway that is ~6%, and it errs
+> in the safe direction for a ceiling alert: it fires marginally EARLY, never late.
 
 **What was verified before each policy was written** (the work order's central instruction — a
 policy against a metric that never arrives is indistinguishable from a healthy fleet):

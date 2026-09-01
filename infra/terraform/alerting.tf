@@ -269,10 +269,14 @@ variable "alert_operator_email" {
   description = "Where node-health alerts are delivered. Same person as ops_dashboard_operator_email, kept as its own variable because the two are unrelated concerns and overloading one would hide a change to either."
 }
 
-# ⚠️ A CHANNEL THAT EXISTS IS NOT A CHANNEL THAT DELIVERS. Monitoring's own description of
+# A CHANNEL THAT EXISTS IS NOT NECESSARILY A CHANNEL THAT DELIVERS: Monitoring's own description of
 # `verification_status` is that UNVERIFIED means the channel is NON-FUNCTIONING — it delivers
-# nothing, while every policy pointing at it still reads as configured. After the first apply,
-# confirm it rather than assuming:
+# nothing, while every policy pointing at it still reads as configured.
+#
+# CHECKED AFTER THE FIRST APPLY (2026-09-01) AND THIS ONE IS FINE: the channel comes back from the
+# API with no `verificationStatus` field at all, which per that same description means a type that
+# does not require verification. Recorded so nobody re-derives it — but re-check if the address or
+# the channel type ever changes:
 #   gcloud alpha monitoring channels list --project cello-infra \
 #     --format='value(type,displayName,verificationStatus)'
 # `alpha`, not `beta`: there is no GA `gcloud monitoring channels` and `beta` is not installed.
