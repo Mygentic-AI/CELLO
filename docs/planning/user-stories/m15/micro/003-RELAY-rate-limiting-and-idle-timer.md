@@ -187,6 +187,44 @@ design:
   agent that cannot reach a directory cannot be offered a session anyway, because offers arrive on
   that same stream. It is already unreachable for other reasons, so failing closed costs nothing.
 
+### The token alone is NOT enough — slot accounting, five parts (Andre, 2026-09-01)
+
+The token stops **unregistered** keys from taking slots. It does not stop a **registered** agent
+from taking too many, and that hole is wide: promoted slots were not going to be counted, and nothing
+bounds how many sessions two agents may open. So open 4096 sessions between two agents you own, send
+one message down each to make them active, and you hold the whole table without ever tripping a cap.
+
+**The token is also what makes the rest of this possible.** Today the relay knows only transport peer
+ids, and those change on every daemon restart — which is why a restart consumes a fresh slot instead
+of reclaiming its old one. The relay cannot tell it is the same agent. Once a slot is attributable to
+a directory-signed agent key, "this agent already holds an unused slot" and "this agent holds too
+many" become answerable. Without it, they are not.
+
+**1. Reuse or release an unused slot.** If an agent asks for a slot while already holding one that
+has never carried traffic, release the old one and grant a new one — or reinitiate the existing one
+if the transport permits. This is not only anti-abuse: it fixes an ordinary bug, since today every
+daemon restart strands its previous slot for the full TTL.
+
+**2. Audit every reason a session should close — this is the biggest piece.** Enumerate every way a
+session ends, decide for each whether the relay is INFORMED or can DETECT it, and close on all of
+them. Expect the finding to be that the relay is simply never told about most of them: a relay that
+gated a dial but never witnessed the session sees no seal, so today only an idle timer frees it.
+
+**3. Per-agent cap.** No agent may hold more than X slots on one relay. Bounds the session-factory
+attack: at 32, filling a 4096 table needs ~128 registered agents, each email-gated.
+
+**4. Tuple cap.** No more than a handful of concurrent sessions between the SAME two identities —
+five at most. This is what makes the two-agents-you-own attack pointless, and no legitimate pair of
+agents needs more.
+
+**5. Reaper, then refusal — in that order.** As the table approaches full, close inactive slots early
+rather than waiting out the TTL. Refuse only at the absolute ceiling.
+
+> ⚠️ **Point 5's ordering is the safety property, not a nicety.** Every outage in this area came from
+> refusing too eagerly, and the relay's view of what is "in use" is imperfect. Reaping first means a
+> counting mistake costs an idle slot; refusing first means it costs a real agent its front door.
+> When unsure whether a slot is in use, treat it as in use.
+
 **⚠️ A PROPOSAL, not work for this order.** It touches directory, client and relay, so it needs its
 own work order to build. 003 carries the decision, not the implementation.
 
