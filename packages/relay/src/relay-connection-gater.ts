@@ -114,6 +114,39 @@ export const SLOT_REAP_ACTIVITY_FLOOR_MS = 6 * 60 * 60 * 1000;
 export const DEFAULT_SLOT_CEILING = 4096;
 
 /**
+ * DOD-M15-RELAYSLOTS-1 — **THE BOUND THAT ACTUALLY STOPS THE FLOOD**, and the reason it is here
+ * rather than on the token check.
+ *
+ * libp2p hands `denyInboundRelayReservation` a peer id and nothing else. There is nowhere to put a
+ * directory token, and the client has not sent one yet — it rides CELLO's own auth stream, which
+ * happens afterwards. So the first version of this unit granted the slot unconditionally and checked
+ * the token later, and an attacker who simply never opened an auth stream never met the check: 4096
+ * throwaway keys, reserve, hold for the grace window, reconnect. Every refusal the relay logged was
+ * correct and the attacker held the whole table.
+ *
+ * What CAN be decided at reservation time is how many UNPROVEN reservations one source already
+ * holds. That is the bound, and it works precisely BECAUSE of the token: a key that cannot obtain
+ * one can never authenticate, so it can never leave the unproven pool. Without the token this cap
+ * was rightly rejected — a throwaway key would simply authenticate and free its own budget within
+ * seconds. The token is what makes it bite.
+ *
+ * Sixteen is far above what an honest host needs: a real client authenticates within milliseconds
+ * of reserving, so its reservations are unproven for about the length of a handshake. A host would
+ * have to restart more than sixteen agents in the same instant to notice, and those retry.
+ */
+export const UNPROVEN_RESERVATIONS_PER_SOURCE = 16;
+
+/**
+ * The same bound globally, as a backstop against a flood spread across many addresses — where every
+ * attempt is the first from its own source and the per-source cap alone does nothing.
+ *
+ * 512 of 4096 leaves seven eighths of the table for real agents while a distributed flood is
+ * running. It is deliberately generous: unproven reservations are supposed to be rare and brief, so
+ * a relay legitimately holding hundreds at once is already a relay under a stampede.
+ */
+export const UNPROVEN_RESERVATIONS_TOTAL = 512;
+
+/**
  * How full the table must be before the reaper does anything at all.
  *
  * Below this line there is capacity to spare and reclaiming would cost some agent its front door to
@@ -161,6 +194,12 @@ interface SlotRecord {
    * full. Set by `denyInboundRelayReservation`, which is the only place a reservation is granted.
    */
   reserved: boolean;
+  /**
+   * The IP this peer reserved from, or null when the connection list could not tell us. Recorded so
+   * the per-source bound below can be counted without re-walking libp2p's connection list, and so it
+   * survives the connection going away.
+   */
+  remoteIp: string | null;
   /**
    * The registered agents reachable through this reservation. Empty between the grant and the first
    * authentication — a real state, not a transient one: an unproven holder sits there until its
@@ -409,7 +448,7 @@ export class RelayConnectionGater implements ConnectionGater {
       // No reservation was granted to this peer — it dialled in and authenticated. It still counts
       // against the agent's own cap (it is capacity this agent is using), but NOT against the
       // reservation ceiling the reaper measures.
-      this.#slots.set(peerId, { reserved: false, agents: new Set([agentPubkeyHex]), grantedAt: now, lastActivityAt: null });
+      this.#slots.set(peerId, { reserved: false, remoteIp: this.#remoteIpFor(peerId), agents: new Set([agentPubkeyHex]), grantedAt: now, lastActivityAt: null });
     }
     return { ok: true };
   }
@@ -507,6 +546,30 @@ export class RelayConnectionGater implements ConnectionGater {
    * this unit rests on, and here it is the difference between leaving an idle slot alone and
    * hanging up a live conversation.
    */
+  /**
+   * The IP this peer is connected from, or null when it cannot be read.
+   *
+   * ⚠️ OBSERVED, never supplied. This comes from our own connection list, so a caller cannot choose
+   * it or suppress it to escape the per-source bound — which is the question to ask of any signal a
+   * guard depends on. When it genuinely cannot be read the caller still counts against the GLOBAL
+   * bound, so an unreadable address is not a way through either.
+   */
+  #remoteIpFor(peerId: string): string | null {
+    if (!this.#node) return null;
+    try {
+      const conn = this.#node.getConnections().find((c) => c.peerId === peerId);
+      const addr = conn?.remoteAddr;
+      if (!addr) return null;
+      // /ip4/1.2.3.4/tcp/4001 and /ip6/::1/tcp/4001 — take the address component after the family.
+      const parts = addr.split("/");
+      const family = parts.indexOf("ip4") !== -1 ? parts.indexOf("ip4") : parts.indexOf("ip6");
+      if (family === -1) return null;
+      return parts[family + 1] ?? null;
+    } catch {
+      return null;
+    }
+  }
+
   #isPeerConnected(peerId: string): boolean {
     if (!this.#node) return true;
     try {
@@ -543,6 +606,63 @@ export class RelayConnectionGater implements ConnectionGater {
     const id = source.toString();
     if (this.#authenticatedPeers.has(id)) return false;
     if (this.#pendingRevoke.has(id)) return false; // timer already running from an earlier reservation attempt
+
+    /**
+     * DOD-M15-RELAYSLOTS-1 — **THE ONE DECISION THAT HAPPENS BEFORE THE SLOT IS HANDED OVER.**
+     *
+     * Everything else in this unit runs after the reservation is already granted, because that is
+     * all libp2p's hook allows: it passes a peer id, the client has sent no token yet, and there is
+     * nowhere in the circuit-relay-v2 reservation to carry one. An attacker who never opens a CELLO
+     * auth stream therefore never meets the token check at all — which is how the first version of
+     * this unit let one machine hold the entire table while refusing correctly the whole time.
+     *
+     * So the reservation path bounds the only thing it can see: how many UNPROVEN reservations this
+     * source already holds. See `UNPROVEN_RESERVATIONS_PER_SOURCE` for why the token is what makes
+     * this bound bite, and why it was correctly rejected before the token existed.
+     *
+     * ⚠️ This is the ONLY place in this unit that denies a reservation outright, and the codebase's
+     * own history says that is the dangerous direction. Two things keep it safe: it counts only
+     * UNPROVEN reservations, which a real agent holds for about the length of a handshake before
+     * authenticating and freeing its budget; and both bounds sit far above anything an honest host
+     * does. A denial here is a `false` from libp2p's point of view — the client retries on its
+     * existing reservation backoff.
+     */
+    const remoteIp = this.#remoteIpFor(id);
+    let unprovenTotal = 0;
+    let unprovenFromSource = 0;
+    for (const slot of this.#slots.values()) {
+      if (slot.agents.size > 0) continue; // proven — never counted against the flood bound
+      unprovenTotal++;
+      if (remoteIp !== null && slot.remoteIp === remoteIp) unprovenFromSource++;
+    }
+    if (remoteIp !== null && unprovenFromSource >= UNPROVEN_RESERVATIONS_PER_SOURCE) {
+      this.#logger.warn("relay.reservation.denied", {
+        peerId: truncId(id),
+        remoteIp,
+        unprovenFromSource,
+        cap: UNPROVEN_RESERVATIONS_PER_SOURCE,
+        reason: "too_many_unproven_reservations_from_this_source",
+        impact: "this source already holds the most circuit reservations one address may hold " +
+          "WITHOUT having proved it belongs to a registered agent. A real client authenticates " +
+          "within milliseconds of reserving, so this is either a flood or a host restarting more " +
+          "agents at once than the cap allows — the latter retries and gets in.",
+      });
+      return true; // DENY
+    }
+    if (unprovenTotal >= UNPROVEN_RESERVATIONS_TOTAL) {
+      this.#logger.warn("relay.reservation.denied", {
+        peerId: truncId(id),
+        remoteIp: remoteIp ?? "(unknown)",
+        unprovenTotal,
+        cap: UNPROVEN_RESERVATIONS_TOTAL,
+        reason: "too_many_unproven_reservations_on_this_relay",
+        impact: "this relay is holding the most unproven circuit reservations it will carry at " +
+          "once, across all sources — the shape of a flood spread over many addresses. Reservations " +
+          "from agents that have already authenticated are unaffected, and the rest of the table " +
+          "stays available to them.",
+      });
+      return true; // DENY
+    }
     const timer = setTimeout(() => {
       this.#pendingRevoke.delete(id);
       if (this.#authenticatedPeers.has(id)) return; // authenticated in the last tick before firing
@@ -579,7 +699,7 @@ export class RelayConnectionGater implements ConnectionGater {
     if (known) {
       known.reserved = true;
     } else {
-      this.#slots.set(id, { reserved: true, agents: new Set(), grantedAt: Date.now(), lastActivityAt: null });
+      this.#slots.set(id, { reserved: true, remoteIp, agents: new Set(), grantedAt: Date.now(), lastActivityAt: null });
     }
     return false;
   }
