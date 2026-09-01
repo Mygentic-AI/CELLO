@@ -120,10 +120,52 @@ What would actually work, and the tradeoff each carries:
    cannot vary for free. Needs the remote multiaddr, which the reservation hook does not currently
    receive, so it is a new plumb.
 
-**This is a product call, not a coder's.** Option 2 trades a real availability risk for a
-hypothetical one, and CELLO has zero users and no adversary today while the outage it risks is one
-we have already lived through. Recommendation: take option 1 when clause 2 is done, and do nothing
-here in the meantime — but that is Andre's to decide, not something to slip in overnight.
+4. **⭐ RECOMMENDED — an online token, issued at agent start. Proposal below.**
+
+**Recommendation as of 2026-09-01: option 4.**
+
+---
+
+### ⭐ PROPOSAL — the online token (Andre, 2026-09-01)
+
+**A rule was overruled to get here.** 002-RELAY carries "the relay verifies a credential the caller
+presents, it does NOT query the directory" as settled. Andre overruled it: the relay already
+registers with the directory, submits seals to it, and asks it for other relays' public keys, so
+"never talks to the directory" was never true of the code. **The rule is now: prefer not to talk to
+the directory, but for security or expediency it is allowed.**
+
+**What this rests on: the directory already knows you started, one step before you need it to.**
+Startup order is — daemon opens a persistent signaling stream to the directory → directory
+authenticates it and marks the agent **online** → *then* the standing receiver asks a relay for a
+slot. The fact the relay is missing is established before the relay is contacted.
+
+**The proposal.** When it marks an agent online, the directory issues a short-lived signed token:
+*this public key is a registered agent, valid until T*. The client presents it when asking for a
+slot. The relay verifies one signature against directory keys it already holds.
+
+| | Real agent | Attacker's throwaway key |
+|---|---|---|
+| 1. Open signaling stream | directory authenticates it | no registration to authenticate |
+| 2. Directory issues token | gets one | **stops here — cannot obtain one** |
+| 3. Present token for a slot | relay verifies signature, grants | nothing to present |
+
+**Why it beats the others:**
+- **vs. option 1:** an assignment only exists after a session, so a brand-new agent has none — a
+  chicken-and-egg at exactly the wrong moment. A token is issued at *start*.
+- **vs. option 2b:** no capped pool, so no first-run agent is the one that degrades.
+- **vs. the relay asking the directory per reservation:** no round-trip on the reservation path, so
+  a relay that cannot reach a directory need not choose between refusing everyone and failing open.
+
+**Why it stops the attack:** minting 4096 keypairs takes seconds. Minting 4096 *registered agents*
+does not — registration is email-gated and involves a threshold ceremony.
+
+**Settle when built, not now:** token lifetime and what happens when it expires mid-session; which
+of the N directories issues it and whether any consortium member's token is accepted; whether an
+unreachable directory blocks a restart from reserving; revocation of a retired agent's unexpired
+token.
+
+**⚠️ A PROPOSAL, not work for this order.** It touches directory, client and relay, so it needs its
+own work order to build. 003 carries the decision, not the implementation.
 
 ---
 
