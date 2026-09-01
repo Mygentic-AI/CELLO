@@ -988,28 +988,11 @@ Parallel with Tier 4 — different disciplines, no shared files.
 > **So there IS dead surface here after all, just not the whole handler** → `DOD-M15-RELAYADMIN-DEAD-FRAMES-1`.
 > Replay window → `DOD-M15-RELAYADMIN-REPLAY-1`. Full entry → [[M15-DEFINITION-OF-DONE-ARCHIVE]].
 
-### `DOD-M15-RELAYADMIN-DEAD-FRAMES-1` — ❌ Three of the admin stream's four frame types have no sender
-Found 2026-08-24 (CELLO_Support) correcting my own over-broad correction to `DOD-M15-RELAYADMIN-1`.
-**This is the quick win #4 that actually exists** — smaller than the original bullet claimed, and
-real, where the bullet's "delete the whole handler" was not.
-- **Measured per frame, which is what the two previous readings both skipped:**
-  - `discard_session` — **LIVE.** `directory-node.ts:2766`, on a stream close before the session is
-    fully established. **This is why the handler is kept.**
-  - `record_assignment` — **the directory no longer dials it.** Option B moved recording to the
-    CLIENT (`client_record_assignment`), verified against the any-directory set. The admin variant
-    remains, accepted, and unsent.
-  - `confirm_seal` / `reject_seal` — **no caller at all.** *"no directory→relay confirmSeal dial —
-    the relay idle-sweep reclaims the post-seal session."*
-- **Why it ranks above its size:** three fully-written, authenticated, accepted frame types with no
-  sender are exactly *"abandoned work to anyone auditing a public repo"* (`SEALWIRE-1` bullet 7) —
-  Andre's discoverability filter. They are also live attack surface: each is accepted on a
-  publicly-dialable relay and each replays (`DOD-M15-RELAYADMIN-REPLAY-1`).
-- **⚠️ Do NOT delete `record_assignment` on the strength of "Option B removed the dial".** The
-  relay may still be recording sessions from OLDER directories mid-roll, and the client path was the
-  replacement, not a proven-complete migration. Check the deployed fleet before removing that one;
-  `confirm_seal` and `reject_seal` have no such caveat.
-- **Deleting shrinks `RELAYADMIN-REPLAY-1` too** — a frame type that does not exist cannot be
-  replayed, so take these in that order and the wire change gets smaller.
+### `DOD-M15-RELAYADMIN-DEAD-FRAMES-1` — ✅ Three of the admin stream's four frame types have no sender
+> **Closed 2026-09-01** (`004-RELAY`). Deletion sound and independently re-derived on Opus, but it
+> **left three problems behind** — including a rewritten header that would have led the next deletion
+> unit to break the ABSENT attestation. Full entry in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under
+> `DOD-M15-RELAYADMIN-DEAD-FRAMES-1`. → Entry S15.
 
 ### `DOD-M15-RELAYADMIN-REPLAY-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was ❌ A directory admin frame cannot be replayed
 Split from `DOD-M15-RELAYADMIN-1` once its deletion premise was disproved and the handler was kept.

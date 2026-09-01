@@ -4085,3 +4085,75 @@ security property survives; the operator's picture of why does not. Worth keepin
 type change made the compiler find four test doubles, three of which returned a shape that would now
 crash the caller and none of which is exercised today — **a convention would have found none of
 them.**
+
+---
+
+### `DOD-M15-RELAYADMIN-DEAD-FRAMES-1` — ✅ Three of the admin stream's four frame types have no sender
+**Closed 2026-09-01** by `micro/004-RELAY-admin-dead-frames.md`. → Entry S15.
+
+Found 2026-08-24 correcting an over-broad correction to `DOD-M15-RELAYADMIN-1`, whose original bullet
+said the whole handler had no caller and should be deleted. **It had one — the production directory —
+and deleting it would have broken every session teardown.** The real finding was smaller and real:
+three of the four frame types had no sender.
+
+**Measured per frame, which is what the two previous readings both skipped:**
+
+- `discard_session` — **LIVE**, on a stream close before the session is fully established. This is
+  why the handler was kept.
+- `record_assignment` — the directory no longer dials it; Option B moved recording to the client.
+  **Deleted only after checking the deployed fleet**, because the relay could still have been
+  recording sessions from older directories mid-roll and the client path was the replacement, not a
+  proven-complete migration.
+- `confirm_seal` / `reject_seal` — no caller at all; the relay idle-sweep reclaims the post-seal
+  session.
+
+**Why it ranked above its size:** three fully-written, authenticated, accepted frame types with no
+sender are exactly *"abandoned work to anyone auditing a public repo"* — the discoverability filter.
+They were also live attack surface, each accepted on a publicly-dialable relay.
+
+#### Review — the deletion was SOUND, and it left three problems behind
+
+Pass 1 (Sonnet) verified the deletion correct with one procedural finding. Pass 2 was commissioned
+because the unit and its first review had both run on Sonnet:
+
+> *"**The deletion itself is sound** — I re-derived the deadness independently and it holds on both
+> the code-path and fleet-dated lens. But the unit left three real problems behind, and one of them
+> is a landmine for the next deletion unit in this same milestone. The Sonnet review missed all
+> four."* — `cello-unit-reviewer` (Opus, 2026-08-31)
+
+**Deadness re-derived on stronger evidence than the order itself gave:** `packages/relay/package.json`
+exposes exactly one export and `directory-relay-types.ts` is not re-exported from `src/index.ts`, so
+the deleted interfaces were never on the package's public surface and no by-name import can break.
+The fleet claim reproduced six-for-six against every recorded image plus the live tfvars pin.
+Deleted-test triage: all five, no live coverage orphaned.
+
+**All four fixed 2026-08-31.**
+
+1. **The rewritten header stated something false, assertively, with a DoD stamp on it** — that
+   `discard_session` *"remains the one live directory→relay dial"*. The relay handles **three** live
+   frames on that protocol. **This was the top finding because this milestone is running a deletion
+   campaign:** the next unit to read that header would have concluded `get_session_liveness` was dead
+   and deleting it silently breaks the ABSENT attestation. **The unit reproduced the exact mistake
+   its own first trap warns about** — do not generalise from the frames you looked at to the ones you
+   did not. (Correction to the reviewer, verified at the call sites: it named `get_seal_leaves` as
+   live. It is not — the relay handles it and the directory adapter still implements the sender, but
+   no directory calls it. Same shape as the three deleted here; recorded, not acted on.)
+2. **The receiver was gone; the sender was still fully wired, documented, and silent.** On this
+   unit's own stated axis — abandoned-looking code in a public repo — **the repo came out WORSE than
+   before**: sender and receiver used to match, and afterwards the directory kept three
+   apparently-working senders whose header still promised responses no relay will ever send. Two of
+   them swallowed the failure in a bare `catch {}` — no log, no return value. All three now refuse by
+   name and send nothing.
+3. **The relay refused an authenticated directory frame and wrote nothing down.** `stream.abort()`
+   does not throw locally, so even the catch below it never ran, and a libp2p reset carries no reason
+   across the wire — the event left no trace on either machine. Meanwhile the directory reported
+   `relay_unavailable` for a relay that was up, authenticating and answering every other frame: **an
+   exit-point label pointing at the network for what was actually a wire-protocol narrowing.**
+4. **Nothing tested the behaviour the deletion introduced.** Every surviving test passed identically
+   with all three handlers restored — **the deletion was not self-defending.** Now covered on both
+   sides and revert-tested.
+
+**Lesson that generalises.** A deletion unit has two halves and this one shipped only the first.
+Removing a receiver without removing its sender does not shrink the abandoned surface — it converts
+a matched pair into a sender that lies. And a deletion that no test defends will be silently undone
+by the next person who thinks the handler looks useful.
