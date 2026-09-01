@@ -2,7 +2,7 @@
 name: 008-RELAY — An agent cannot flood a relay's reservation slots
 type: micro-work-order
 date: 2026-09-01
-status: complete
+status: open
 description: >
   A relay grants circuit reservation slots to anyone holding any keypair, and counts nothing. Mint
   keys and take the table; or, once that is closed, open thousands of sessions between two agents you
@@ -24,6 +24,76 @@ description: >
 > 5. **Standard procedure still applies:** implement → review (`cello-unit-reviewer`) → fix every
 >    finding → commit. Commit per fix, push after every commit.
 > 6. **Done is done.** When the Definition of Done below is met, stop. Do not look for more.
+
+## 🔴 REOPENED 2026-09-01 — the order was met to the letter and failed its intent
+
+**The intent, and it governs everything below:** a malicious agent or a botnet cannot fill a relay's
+reservation slots. Every clause in this order serves that sentence. A clause that passes while that
+sentence is false has not been met.
+
+**What shipped, and why it failed.** The relay verified the directory token on CELLO's own auth
+stream — correctly, with honest tests for every refusal. But libp2p hands
+`denyInboundRelayReservation` a peer id and nothing else: there is nowhere to carry a token, and the
+client has not sent one yet, because the token rides a protocol that runs *after* the reservation. So
+the slot was granted unconditionally and the credential checked afterwards. **An attacker who never
+opens an auth stream never meets the check at all.** Reserve, hold for the grace window, reconnect —
+one machine, and the whole table.
+
+Two further attempts made it worse before they made it better, and both are recorded because the
+mistake is the same each time: **compensating downstream for a gate that is not there.**
+
+1. *Refusing past an unproven budget.* Once 512 unproven reservations existed, every new reservation
+   was refused — including every honest agent's, since an agent's reservation is unproven at the
+   instant it is made. Denying the whole relay went from needing 4096 slots to needing 512.
+2. *Evicting the oldest instead.* An attacker's slots churn and stay young; an honest agent's sits
+   still for one handshake, so it becomes the oldest thing in the table and is hung up mid-handshake.
+
+Each fix was a heuristic about *who looks bad* rather than a check for *who is allowed*, and a
+botnet walks through all of them, because the only thing they can see at reservation time is an IP
+address.
+
+## The design that meets the intent: authenticate, THEN reserve
+
+The wall was never real. The relay cannot see a token at reservation time **only because the client
+asks for the slot before presenting one.** Reverse that and the check becomes a gate:
+
+1. Client dials the relay.
+2. Client presents its directory-issued online token over `/cello/relay/1.0.0`.
+3. Relay records that this transport peer belongs to a registered agent.
+4. Client asks for the circuit reservation.
+5. **The relay refuses any reservation from a peer that has not proven itself.**
+
+Feasible on both sides, verified before this was written: `circuitRelayTransport()` is a factory the
+client supplies, so the client can hold the transport instance and call
+`reservationStore.addRelay(relayPeerId, "configured")` on demand rather than taking a reservation at
+node construction; and the relay already knows which peers have authenticated on the current
+connection.
+
+**What this costs an attacker.** Nothing they can do with IP addresses — no token, no slot, at the
+door. To take slots at all they need registered agents, which are email-gated and involve a threshold
+ceremony, and then the per-agent and tuple caps below apply. Filling 4096 slots needs roughly 128
+registered agents instead of a few thousand addresses.
+
+**What gets DELETED, because it exists only to compensate for the missing gate.** Leaving it would
+be worse than not having written it — dead defence reads as defence:
+- the per-source (IP) unproven reservation cap,
+- the global unproven reservation budget,
+- the eviction rule, its minimum-age floor and its overshoot multiple,
+- the grace-window revoke timer for an unproven holder (nothing unproven can hold a reservation now).
+
+**What stays, because it is still right:** the online token itself; the per-agent slot cap, which now
+moves to reservation time where it belongs, since the relay knows *which agent* is asking before it
+grants; the tuple cap; the reaper; and releasing the real libp2p reservation on every reclaim path.
+
+**Risks, stated rather than discovered later:**
+- **Bilateral order is now strict.** The client must ship authenticate-then-reserve *before* any
+  relay enforces, or every agent loses its reservation.
+- **No directory, no relay reachability.** An agent that cannot obtain a token gets no slot at all.
+  That is fail-closed, which this order already chose, but it is a harder failure than before.
+- A peer can still open connections without reserving. That is connection exhaustion, a different
+  resource, and not this order's mission.
+
+---
 
 > ⚠️ **This one is NOT relay-only.** It changes the directory (issue the token), the client (present
 > it, refresh it, re-present assignments on reconnect) and the relay (verify, count, reap). Bilateral
@@ -237,21 +307,37 @@ freed and why; slot-table occupancy exposed with an alarm before the ceiling.
 
 ## Definition of Done
 
-1. A slot request without a valid, unexpired, correctly-bound token is refused.
-2. A slot request from a registered agent already at its per-agent cap is refused.
+> ### 0. THE INTENT CLAUSE — checked FIRST, and it outranks every clause below it
+>
+> **With this shipped, a machine with no registered agent cannot hold a relay reservation slot, and
+> a botnet with any number of addresses cannot either.** Asserted by a test that mints throwaway
+> keys, floods, and measures **HOW MANY SLOTS THE ATTACKER ENDS UP HOLDING** — never how many
+> refusals were logged.
+>
+> This clause exists because every clause below it passed while the headline was false. Each refusal
+> was correct; the attacker held the whole table. **A test that counts refusals cannot see that.**
+> If clause 0 fails, the order is not met however many of the rest are green.
+
+1. A reservation request from a peer that has not presented a valid, unexpired, correctly-bound
+   token is **refused at the reservation**, before any slot is granted.
+2. A registered agent already at its per-agent cap is refused **at the reservation**, since the
+   relay now knows which agent is asking before it grants.
 3. A session-record beyond the tuple cap for that identity pair is refused.
-4. An agent asking for a slot while holding an unused one does not consume a second.
-5. A relay with no directory public key configured refuses every slot request.
-6. Under pressure the reaper frees inactive slots, and **never** one with activity inside six hours.
-7. **Every refusal above reaches the operator with its cause AND an affordance** — asserted in a test
-   that reads what the CLIENT surfaced, not what the relay logged.
+4. A relay with no directory public key configured refuses every reservation.
+5. Under pressure the reaper frees inactive slots, and **never** one with activity inside six hours.
+6. Reclaiming a slot **actually returns the libp2p reservation**, not merely the relay's own
+   bookkeeping — asserted against a real relay, because `hangUp` alone does not.
+7. **Every refusal reaches the operator with its cause AND an affordance** — asserted in a test that
+   reads what the CLIENT surfaced, not what the relay logged.
 8. A reaped party is told it happened and what to do about it.
 9. The daemon fails over to another relay for relay-specific refusals, and does NOT for
    client-specific ones.
-10. Tests cover every refusal and the happy path, and **each has been made to fail on purpose** —
+10. The client authenticates BEFORE requesting a reservation, and a relay that refuses an unproven
+    one is recoverable — the client obtains its slot on the next attempt, not never.
+11. Tests cover every refusal and the happy path, and **each has been made to fail on purpose** —
     revert the fix, confirm it reddens, confirm it reddens for the reason you expect.
-11. `pnpm run test`, `pnpm run lint`, `pnpm run typecheck` pass in both repos.
-12. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below.
+12. `pnpm run test`, `pnpm run lint`, `pnpm run typecheck` pass in both repos.
+13. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below.
 
 **Not in scope:** the 24-hour session idle timer's value (settled, and a reclaimer not a conversation
 timeout); the dial-through gate (002-RELAY, done); anything about who may DIAL an agent, which is a
