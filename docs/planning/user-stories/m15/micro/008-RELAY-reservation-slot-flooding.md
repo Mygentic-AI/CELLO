@@ -2,7 +2,7 @@
 name: 008-RELAY — An agent cannot flood a relay's reservation slots
 type: micro-work-order
 date: 2026-09-01
-status: open
+status: complete
 description: >
   A relay grants circuit reservation slots to anyone holding any keypair, and counts nothing. Mint
   keys and take the table; or, once that is closed, open thousands of sessions between two agents you
@@ -65,10 +65,10 @@ asks for the slot before presenting one.** Reverse that and the check becomes a 
 
 **⚠️ THE OBVIOUS WAY TO DO STEP 4 DOES NOT WORK, and it was measured rather than reasoned.** Taking
 the reservation by hand after authenticating — `reservationStore.addRelay(relayPeerId, "configured")`
-— does get the slot, and libp2p then announces NO circuit address for it: its listener returns early
-on a `configured` reservation and announces addresses only for ones its own relay-discovery made. The
-agent would hold a slot nobody could dial through. Proven in
-`core/transport/src/__tests__/dod-m15-relayslots-1-reserve-on-demand.test.ts`.
+— does get the slot, and libp2p then announces NO circuit address for it: `_onAddRelayPeer` returns
+early on a `configured` reservation and announces addresses only for ones its own relay-discovery
+made. The agent would hold a slot nobody could dial through. That is why the two-attempt rebuild
+below is the design, and why the on-demand API written for this order was deleted rather than kept.
 
 **So the client proves on one connection and reserves on another, keeping the same transport
 identity, and the relay remembers the proof across the gap** (`#provenPeers`, two minutes — long
@@ -86,13 +86,13 @@ prover node. Let the first attempt fail.
    relay just vouched for.
 4. The second attempt is granted.
 
-Nothing new to reason about — the retry path exists and is tested — and revival gets the same
-treatment for free, which the prover-node approach did not. The cost is that an agent is unreachable
-for one retry cycle at first start. It self-heals, and with no users it costs nothing.
+The cost is one extra node build per relay candidate. Verified rather than inherited: a refused
+reservation does NOT make libp2p blacklist that relay for the retry (`relayFilter` is written only on
+`DialError`/`UnsupportedProtocolError`), and the retry builds a fresh reservation store regardless.
 
-**One assumption to verify before building it:** that a refused reservation does not make libp2p
-blacklist that relay for the retry. Review reported it does not; verify directly rather than
-inheriting the claim, because the whole approach rests on it.
+**As built, the loop is written out explicitly in both `#startReceiverNode` and `#buildRevivedNode`
+rather than left to the watchdog** — review found the revival path silently skipped, which returned
+every revived session on the plain floor, dialable by nobody.
 
 **What this costs an attacker.** Nothing they can do with IP addresses — no token, no slot, at the
 door. To take slots at all they need registered agents, which are email-gated and involve a threshold
@@ -111,11 +111,10 @@ moves to reservation time where it belongs, since the relay knows *which agent* 
 grants; the tuple cap; the reaper; and releasing the real libp2p reservation on every reclaim path.
 
 **Risks, stated rather than discovered later:**
-- **Bilateral order is now strict, and the note that used to sit here was dangerous.** It read
-  "publish the client before deploying the relays", which sounds like sequencing code that exists.
-  The client half did NOT exist — following that instruction literally would have published the
-  transport, deployed the relays, and refused every agent permanently. **Neither half ships until the
-  client actually proves before it reserves.**
+- **Bilateral order is strict. Neither half ships until the client actually proves before it
+  reserves** — an earlier note here read "publish the client before deploying the relays", which
+  sounds like sequencing code that existed. It did not; following it literally would have refused
+  every agent permanently.
 - **No directory, no relay reachability.** An agent that cannot obtain a token gets no slot at all.
   That is fail-closed, which this order already chose, but it is a harder failure than before.
 - A peer can still open connections without reserving. That is connection exhaustion, a different
@@ -141,13 +140,11 @@ agents may hold, so open 4096 sessions between two agents you own, put one messa
 take the table again.
 
 **What that costs an operator:** their agent comes up, reports itself online, and is reachable by
-nobody. The relay looks healthy. Nothing in the logs says an attack happened, because every
-individual request was well-formed and legitimate.
+nobody. The relay looks healthy, and nothing in the logs says an attack happened, because every
+individual request was well-formed.
 
-> **The 4096 ceiling is ours, not a default.** libp2p ships 15, which caused a real outage — fifteen
-> slots vanish immediately in normal use, because every agent needs one and every daemon restart
-> mints a fresh peer id that takes a NEW slot instead of reusing its own. Raising it fixed that
-> outage and is not to be reverted. It also means the ceiling is a number we chose and may revisit.
+> **The 4096 ceiling is ours, not a default.** libp2p ships 15, which caused a real outage. Raising
+> it is not to be reverted — and it means the ceiling is a number we chose and may revisit.
 
 ---
 
@@ -172,12 +169,10 @@ slot. The relay verifies one signature against directory keys it already holds.
 | 2. Directory issues token | gets one | **stops here — cannot obtain one** |
 | 3. Present token for a slot | relay verifies signature, grants | nothing to present |
 
-**Why it beats the others:**
-- **vs. option 1:** an assignment only exists after a session, so a brand-new agent has none — a
-  chicken-and-egg at exactly the wrong moment. A token is issued at *start*.
-- **vs. option 2b:** no capped pool, so no first-run agent is the one that degrades.
-- **vs. the relay asking the directory per reservation:** no round-trip on the reservation path, so
-  a relay that cannot reach a directory need not choose between refusing everyone and failing open.
+**Why it beats the alternatives considered:** an assignment only exists after a session, so a
+brand-new agent has none; a capped pool makes the first-run agent the one that degrades; and asking
+the directory per reservation puts a round-trip on the reservation path, forcing a relay that cannot
+reach a directory to choose between refusing everyone and failing open.
 
 **Why it stops the attack:** minting 4096 keypairs takes seconds. Minting 4096 *registered agents*
 does not — registration is email-gated and involves a threshold ceremony.
@@ -194,10 +189,9 @@ does not — registration is email-gated and involves a threshold ceremony.
    the natural default is to allow, and the flood works exactly as if the feature had never shipped.
    Verification is not optional at the composition root.
 
-Neither is about the signature verification itself — the relay is already configured with the
-directory pubkey and the consortium set, and already verifies directory signatures on admin frames
-and on session assignments. The token rides existing machinery. A modified daemon can present
-anything, but cannot produce a valid signature over its own key without the directory's private key.
+Neither is about the signature verification itself: the relay already holds the directory pubkey and
+the consortium set and already verifies directory signatures elsewhere, so the token rides existing
+machinery.
 
 **Answered 2026-09-01 — these were listed as open questions and mostly were not.** None blocks the
 design:
@@ -257,15 +251,11 @@ the relay. Not `relay_unavailable`. The reason must survive every hop back to th
 someone who runs `cello_use_agent` and gets rebuked learns *why* they were rebuked.
 
 **And every refusal carries an affordance — what to DO about it — chosen for that specific cause.**
-Refused because you already hold an unused standing receiver? Perhaps restart the daemon. Refused
-because you have too many sessions open with one counterparty? Then say how many, and which, so they
-can close some.
 
-> **The reason this matters more here than it looks: people do not know what sessions they have
-> open.** Sessions fall apart and sit there — idle, unreachable, still counted. Every cap on this
-> list will therefore be hit by someone who believes they have nothing open. A refusal that does not
-> show them the state it is refusing on is a dead end, and they will read it as the product being
-> broken. Affordances are not polish here; they are what makes these caps usable at all.
+> **Why that matters more here than it looks: people do not know what sessions they have open.**
+> Sessions fall apart and sit there — idle, unreachable, still counted. Every cap here will be hit by
+> someone who believes they have nothing open, so a refusal that does not show them the state it is
+> refusing on is a dead end they will read as the product being broken.
 
 **The reason must be MACHINE-readable as well as human-readable, because the daemon is the second
 consumer.** We run several relays, and the daemon must fail over to another when refused — but *which
@@ -291,45 +281,31 @@ new session.
 
 ---
 
-## Build checklist
+## Build checklist — as built
 
-**State the relay must hold per slot** — none of this exists today:
-the agent's public key from the token (without this nothing else here is countable); whether traffic
-has ever flowed and when it last did; whether an assignment naming this slot's node was presented;
-granted-at time.
+**Per slot the relay holds:** the agent public keys the token named; whether a circuit reservation
+backs the entry or the peer merely authenticated; whether the auth named a reservation as its
+purpose; whether traffic has ever flowed and when it last did; granted-at time.
 
-**Indexes:** slots per agent key; unused slots per agent key; concurrent sessions per identity pair;
-total in use against the ceiling.
+**At AUTHENTICATION:** the token's signature verifies against configured directory keys; it names the
+same key completing the challenge-response; it is unexpired; its lifetime is within the maximum; a
+relay with **no** directory key refuses outright. Then the agent's own slots that never carried
+traffic and whose peers have gone are reclaimed, and the per-agent cap is applied.
 
-**Checks at slot-grant time:** token signature verifies against configured directory keys; token
-names the same key completing the challenge-response; token not expired; **refuse outright if no
-directory key is configured**; per-agent cap not exceeded; if the agent already holds an unused slot,
-release or reuse it rather than granting a second.
+**At the RESERVATION (the gate):** refuse unless this peer proved itself for a reservation; apply the
+per-agent cap again, because an attacker can prove many identities before reserving on any of them.
 
-**Check at session-record time:** tuple cap not exceeded for this identity pair.
+**At session-record time:** the tuple cap for this identity pair.
 
-**Every path that must free a slot:** session sealed; idle timeout fires; **client disconnects** —
-today the slot is held for its full TTL regardless; agent re-reserves while holding an unused slot;
-reaper fires under pressure; and every other way a session ends, which is what the audit in part 2 is
-for.
+**Every path that frees a slot returns the real libp2p reservation**, not just the ledger row:
+disconnect, reclaim, the reaper. `hangUp` alone does not — measured, not assumed.
 
-**Caps, starting values:** unused slots per agent 1; total slots per agent per relay 32; concurrent
-sessions per identity pair 5; reaper threshold some fraction of the ceiling; hard ceiling 4096,
-refusing only there.
+**Caps as built:** 32 slots per agent per relay; 5 concurrent sessions per identity pair; reaper at
+80% of the ceiling and never inside a six-hour activity floor; ceiling 4096; reservation TTL 30
+minutes; proof memory 2 minutes; reservation proofs 30/minute per key, on their own budget.
 
-**Guards that must not be violated:** never refuse before reaping; never treat an ambiguous slot as
-idle — when unsure, in use; never fail open when verification is impossible; never leave a slot
-permanently exempt from counting, so every "in use" needs a demotion path.
-
-**Client changes:** present the token when reserving; refresh it over the existing signaling stream;
-**re-present the session assignment as part of reconnecting**, not as a reaction to a failed submit —
-that is what removes the cold-start ambiguity after a relay restart.
-
-**Directory change:** issue a short-lived token bound to the agent's public key when it marks the
-agent online.
-
-**Observability:** every refusal logged with reason and agent key; every reap logged with what was
-freed and why; slot-table occupancy exposed with an alarm before the ceiling.
+**Guards:** never refuse before reclaiming; never treat an ambiguous slot as idle; never fail open
+when verification is impossible; never log the designed happy path as an attack.
 
 ---
 
@@ -386,9 +362,8 @@ different question from who may HOLD a slot.
 
 ## Revert proofs — Part 1 (the token)
 
-Each mutation applied ALONE, compiled and linted before running (a mutant that fails the gate proves
-nothing — the red came from the mutation, not from a broken build), then restored. `git diff` empty
-afterwards, verified.
+Discipline for all three tables below: one mutation at a time, compiled and linted before running (a
+mutant that fails the gate proves nothing), then restored, with `git diff` empty afterwards.
 
 | Mutation | What reddened | Reason it gave |
 |---|---|---|
@@ -399,16 +374,13 @@ afterwards, verified.
 | Client: never attach the token to the auth frame | 2 of 3 | `expected null to be 'a5a5a5…'` |
 | Client: snapshot the token at construction instead of reading it fresh | exactly 1 — the refresh test | `expected '1111…' to be '2222…'`, i.e. the mutation produces the real symptom (a stale token), not merely a failure |
 
-The client's red was also captured before any implementation existed, as a typecheck failure naming
-each missing API. **That needed a positive control to be worth anything:** the root typecheck first
-reported exit 0 against a test calling methods that did not exist, because the file was outside the
-daemon's typecheck allowlist. A deliberate `const x: number = "not a number"` in the same file also
-reported exit 0 — which is what proved the gate could not see the file at all.
+The client's red was captured before any implementation existed, as a typecheck failure naming each
+missing API — and that needed a positive control: the root typecheck first reported exit 0 against a
+test calling methods that did not exist, because the file sat outside the daemon's typecheck
+allowlist. A deliberate type error in the same file also reported exit 0, which is what proved the
+gate could not see the file at all.
 
 ## Revert proofs — Part 2 (slot accounting)
-
-Same discipline: one mutation at a time, typechecked and linted before running, then restored.
-`git diff` empty in both repos afterwards, verified.
 
 | Mutation | What reddened | Reason it gave |
 |---|---|---|
@@ -443,27 +415,74 @@ relay never observed; the ordinary case — a daemon restart — is handled by t
 which frees the slot at once. The clause's purpose (a restart must not strand a slot for its full
 TTL) is met; its literal wording is not.
 
-## Review
+## Review — two passes
 
-**One pass, per the rules. Verdict, in the reviewer's own words:**
+**Pass 1 (the token + slot accounting), verdict in the reviewer's own words:**
 
 > *SPEC: DEVIATIONS FOUND* — clause 8 (no consumer for the reaped-party notice) and clause 9 (no
 > failover branch) are un-journaled and [blocking]. … *SILENT FALLBACKS FOUND* — H1 is [blocking]:
-> the reclaim rule hangs up a live promoted receiver and the test that names the case only covers a
-> 5-minute window. … *ERROR SUBSTITUTION FOUND* … *HOLLOW TESTS FOUND* … *REMOVALS PROVEN.*
+> the reclaim rule hangs up a live promoted receiver. … *HOLLOW TESTS FOUND* … *REMOVALS PROVEN.*
 
-Eight findings, all fixed: **H1** the reclaim floor did not prevent what it was written to prevent;
-**H2** clause 9 was a flag nothing branched on; **H3** the reaped-party notice had no consumer and
-raced its own disconnect; **M1** one refusal label for three different causes; **M2** the tuple cap
-never reached the operator; **M3** the ledger counted connections against a reservation ceiling;
-**L1** a refusal reason with no producer; **L2** a stale refusal survived a transport failure.
+Eight findings, all fixed: the reclaim floor did not prevent what it was written to prevent; clause
+9 was a flag nothing branched on; the reaped-party notice had no consumer and raced its own
+disconnect; one refusal label stood for three causes; the tuple cap never reached the operator; the
+ledger counted connections against a reservation ceiling; a refusal reason had no producer; a stale
+refusal survived a transport failure.
 
-The reviewer also confirmed the parts that hold: the token check cannot be bypassed (one call site
-for `recordAuthenticated`, strictly after the token check, and the binding compares against the
-already-verified key); omitted-vs-empty is consistent across directory, wire and relay; the
-registration-lookup premise is correct; the three fail-open candidates all point the safe way; and
-the fourteen pre-existing relay test files were changed **additively only — confirmed by diffing
-every removed assertion, not asserted.**
+**Pass 2 (the gate itself), run separately on each repo. Relay verdict:**
+
+> *"The unregistered/botnet half is genuinely closed, and for the first time it is closed by a
+> question of fact rather than a heuristic. I tried to find a way through and could not."* —
+> alongside *SPEC: DEVIATIONS FOUND*, *ERROR SUBSTITUTION FOUND* and *HOLLOW TESTS FOUND*, all
+> [blocking], all fixed.
+
+Relay findings: the per-agent cap AT THE DOOR had no test at all and deleting it left the suite
+green — an attacker proving N peer ids before reserving on any passes every auth with a held count
+of zero, so that check is the only bound; a delivery auth (a session node submitting a leaf) created
+a ledger entry that satisfied the gate on its own; the gate's refusal fired at WARN on the designed
+happy path with text naming two causes that produce almost none of it; the proof map was written on
+every auth and collected only if that peer came back, so it grew without bound in ordinary traffic;
+reservation proofs shared the 20/minute auth budget with delivery auths, so a daemon reviving ten
+sessions lost its front door; nothing tested that the relay marks a slot in use, and losing that
+call inverts both the reaper and the reclaim rule. `recordAuthenticated`, the set it wrote and the
+gater's empty `stop()` were dead and are deleted; six comments describing the removed grace timer
+are rewritten as present-tense constraints rather than dropped.
+
+**Client verdict:**
+
+> *"delete `#proveToRelay` and the two-attempt wrapper — restoring main exactly — and nothing
+> reddens."*
+
+Client findings: the prove step discarded the relay's classified refusal, so an agent refused by
+every relay showed as online and reachable by nobody with no cause in `cello_status`; it could not
+branch on `tryAnotherRelay`, so a per-AGENT refusal walked the whole fleet and read as a fleet
+outage; **the revival path had no prove step at all**, so every revived session came back on the
+plain floor with the counterparty unable to dial it; an unreachable relay was labelled
+`relay_granted_no_reservation`, sending the operator to relay capacity for a network fault; a
+malformed circuit address was skipped silently; and a throw from `proveReservation` skipped the
+client close.
+
+`reserveRelaySlot` and its transport plumbing are **deleted**. It had no production caller — the
+two-attempt node rebuild replaced it — and its test file's headline assertion was passing off a
+reservation libp2p's own discovery had taken, making it evidence for the opposite of the design it
+claimed to prove.
+
+## Revert proofs — the gate
+
+Each mutant typechecks and lints clean, and reddens exactly one test.
+
+| Mutation | What reddened |
+|---|---|
+| Per-agent cap loop deleted from the gate | prove-all-then-reserve holds 32, not 52 |
+| Gate ignores the reservation-purpose flag | a session node's delivery auth wins a slot |
+| Relay stops reporting traffic on its carrying path | the activity-wiring test |
+| First refusal logged at WARN again | the happy path reads as an attack |
+| Expired-proof branch deleted (identical return value) | the diagnostic test |
+| The sweep never runs | the bookkeeping-growth test |
+| The two-attempt loop deleted | the receiver comes up with no circuit address |
+| `#proveToRelay` drops the refusal | `cello_status` reads null where a cause was due |
+| The `tryAnotherRelay` branch removed | a per-agent refusal walks the whole fleet |
+| The revival's prove step deleted | the revived session holds no circuit address |
 
 ---
 
