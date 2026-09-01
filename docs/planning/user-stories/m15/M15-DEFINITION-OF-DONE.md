@@ -808,8 +808,9 @@ consumes.
 > **BOTH halves are now written and reviewed.** `006-CRYPTO` (local: mint per session, memory only,
 > destroyed at teardown and shutdown — one Opus pass, six findings, three blocking, all fixed, 17
 > mutants) and `007-CRYPTO` (wire: exchange, sign, verify, encrypt the body — one Opus pass, fourteen
-> findings, five blocking a publish, all addressed, 13 mutants). **The tag stays 🟡 for evidence and
-> shipping, not for code** — see `DOD-M15-EPHEMERAL-AUTH-1` for the two things standing. → Entry S15.
+> findings, five blocking a publish, all addressed, 13 mutants). **Merged and published 2026-09-01,
+> so operators are running it.** The tag stays 🟡 for ONE thing only: the multi-process proof — see
+> `DOD-M15-EPHEMERAL-AUTH-1`. → Entry S15.
 >
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
@@ -820,18 +821,21 @@ consumes.
 > hard-fail path, and the message body is encrypted with the agreed secret. **The active-relay MITM
 > this line exists for is closed in code.**
 >
-> **NOT ✅, and the two reasons are precise:**
-> 1. **The clause the order itself calls "the clause that makes the feature real" was proven with two
->    managers in ONE process** — real libp2p, real identities, real signatures, nothing seeded, but
->    one process. This file's own rule is that Vitest green is necessary and never sufficient. The
->    process-boundary version belongs in the spine harness, which `007` did not touch.
-> 2. **Clause 14 — publish, receiver first — is outstanding and is ANDRE'S.** Until it runs, the fix
->    exists and protects nobody: no operator is running it.
+> ✅ **MERGED AND PUBLISHED 2026-09-01.** Clause 14 is done — Andre ran the promotion, verified
+> against the registry rather than the log (`crypto` 0.0.60, `transport` 0.0.66, `protocol-types`
+> 0.0.64, `client` 0.0.50, `connect` 0.0.158, each one ahead of the working tree). **Daemons on
+> `latest` are now running the encryption.**
 >
-> ⚠️ **And the code is not on `main`.** 14 commits sit on `m15/007-crypto-ephemeral-auth` in
-> cello-client. §2 step 11 — *a reviewed-green unit does not sit on a branch* — and this is a
-> bilateral wire change touching 63 fixtures, so every day it stays there the merge gets worse.
-> → Entry S15.
+> **ONE reason it is not ✅, and it is the only one left:** the clause `007` itself calls *"the clause
+> that makes the feature real"* — two daemons in separate OS processes, ciphertext asserted on the
+> wire — **was proven with two managers in ONE process.** Real libp2p, real identities, real
+> signatures, nothing seeded, but one process. This file's own rule is that Vitest green is necessary
+> and never sufficient.
+>
+> **That proof is available now and costs nothing to obtain.** The spine harness spawns
+> `../cello-client/core/daemon/dist/bin/cello-daemon.js` — the LOCAL build, not the published
+> package — so the process-boundary version needs no publish and no new infrastructure, only a
+> journey that asserts the wire bytes. → Entry S15.
 >
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 Split from `DOD-M15-KEYAGREE-1` (review F6). The key agreement defeats a PASSIVE recorder — the
@@ -1054,7 +1058,19 @@ Split from `DOD-M15-RELAYADMIN-1` once its deletion premise was disproved and th
 > — it was extracted from `DOD-M15-RELAYABUSE-1` (the slot accounting) and `DOD-M15-RELAYAUTH-1` (work
 > item 2, the registered-agent check), and given its own line on Andre's ruling rather than folded
 > back, because 002 had already recorded what folding costs: *"a work item with no DoD clause is
-> invisible to the gate that is supposed to catch exactly this."* Eight review findings, all fixed.
+> invisible to the gate that is supposed to catch exactly this."*
+>
+> ⚠️ **CLOSED TWICE. The first close was wrong and the ✅ rests on the second.** The order was
+> reopened the same day — *"met to the letter and its title stayed false"* — because **the token was
+> checked one step too late, so the flood still worked.** A second round added the gate that refuses
+> a stranger, deleted what had been standing in for one, and made the client prove itself before it
+> asks. Re-merged and closed by its owner.
+>
+> 🚨 **THE DEPLOY ORDER IS NOW LOAD-BEARING, not a compatibility nicety.** With the gate live, **a
+> relay deployed in front of clients that do not prove before they ask refuses EVERY reservation**,
+> and every agent behind it is unreachable until it upgrades. **Client first, then relays.** The
+> client shipped 2026-09-01; the relay roll follows it.
+>
 > Full entry in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYSLOTS-1`. → Entry S15.
 
 ### `DOD-M15-MULTIRELAY-1` — ❌ An agent's reachability does not rest on one relay

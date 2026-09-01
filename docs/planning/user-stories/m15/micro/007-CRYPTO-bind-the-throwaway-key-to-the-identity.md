@@ -2,7 +2,7 @@
 name: 007-CRYPTO — Bind the throwaway key to the agent's identity
 type: micro-work-order
 date: 2026-08-24
-status: in-progress
+status: complete
 description: >
   The WIRE half of our own end-to-end encryption, and the order that makes the feature real: exchange
   the per-session throwaway keys, sign them so the relay cannot swap in its own and read everything,
@@ -127,8 +127,10 @@ feature real.** When it is done, and only then, our own encryption is actually p
 11. The docstring is rewritten to match reality. ✅
 12. `pnpm run test`, `pnpm run lint`, `pnpm run typecheck` pass. ✅
 13. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below. ✅
-14. Published, **receiver first**, and the two repos re-pinned. ⏸️ **ANDRE'S** — the `latest`
-    promotion is his to run, and this is the only clause left.
+14. Published, **receiver first**, and the two repos re-pinned. ✅ **DONE 2026-09-01 (Andre ran the
+    promotion).** Verified against the registry rather than the log: `crypto` 0.0.60, `transport`
+    0.0.66, `protocol-types` 0.0.64, `client` 0.0.50, `connect` 0.0.158 — each one version ahead of
+    the working tree, so the cascade landed. Daemons on `latest` are running the encryption.
 
 **Not in scope:** post-quantum algorithms, the session salt, anything in the seal beyond keeping it
 working, anything in the relay.
