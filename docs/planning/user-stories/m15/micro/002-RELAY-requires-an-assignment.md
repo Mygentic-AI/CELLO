@@ -2,7 +2,7 @@
 name: 002-RELAY — No relay service without a directory-issued assignment
 type: micro-work-order
 date: 2026-08-24
-status: open
+status: complete
 description: >
   The relay serves anyone holding any Ed25519 keypair. Make it refuse unless the caller presents a
   directory-signed session assignment naming them as a participant, and install the connection gater
@@ -56,8 +56,19 @@ a participant.
   messages belong to — the caller already holds it. This is not an exemption, it is a credential
   they already have.
 
-### 2. Verify the authenticating key is a registered agent
+### 2. Verify the authenticating key is a registered agent — ⛔ NOT DONE HERE, MOVED TO `006-RELAY`
 Today any Ed25519 keypair authenticates. It must be a key the presented assignment names.
+
+**This was never implemented in this order, and the Opus re-review caught it.** It is now Part 1 of
+`006-RELAY-reservation-slot-flooding.md`, which solves it with a directory-issued token bound to the
+agent's public key rather than with a session assignment — because an assignment only exists after a
+session, so a brand-new agent has none at the moment it first needs one.
+
+**How it went missing is the part worth keeping.** The Definition of Done below has no clause for
+this item. Its six clauses cover parked content, assignments that do not name the caller, the dial
+gate, tests, gates and review — every one of them ✅ — so the order read as fully done while a third
+of its stated work was untouched. **A work item with no DoD clause is invisible to the gate that is
+supposed to catch exactly this.**
 
 ### 3. Install the connection gater on the relay, including the reservation-dial hook
 - Reservations are granted to any peer, up to 4096.
@@ -143,6 +154,11 @@ not before it.
 **Not in scope:** rate limiting (003-RELAY), the admin frame types (004-RELAY), any change to the
 directory. **Client-side scope was widened by Andre mid-unit** (see above) — the order's original
 "no client change" fence would have made the reservation half unimplementable.
+
+**✅ CLOSED 2026-09-01.** Work items 1 and 3 are done, merged, and re-reviewed; every finding from
+both review passes is fixed and revert-tested. **Work item 2 is NOT done and is not counted as
+done** — it moved to `006-RELAY`, which carries it as Part 1. Closing this order does not close that
+work; 006 does.
 
 ---
 
