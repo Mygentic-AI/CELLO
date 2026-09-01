@@ -174,9 +174,18 @@ directory pubkey and the consortium set, and already verifies directory signatur
 and on session assignments. The token rides existing machinery. A modified daemon can present
 anything, but cannot produce a valid signature over its own key without the directory's private key.
 
-**Settle when built:** token lifetime and what happens when it expires mid-session; which of the N
-directories issues it and whether any consortium member's token is accepted; whether an unreachable
-directory blocks a restart from reserving; revocation of a retired agent's unexpired token.
+**Answered 2026-09-01 — these were listed as open questions and mostly were not.** None blocks the
+design:
+
+- **Lifetime:** short, on the order of an hour, refreshed over the signaling stream the daemon
+  already holds open to the directory. No new channel.
+- **Which directory issues it:** the one you are connected to. The relay already accepts signatures
+  from any node in the consortium set, so it does not matter which.
+- **Revocation:** the short lifetime does the work. Only worth building if tokens were long-lived,
+  and they should not be.
+- **Unreachable directory:** fail closed. No token, no slot, so the agent is unreachable — but an
+  agent that cannot reach a directory cannot be offered a session anyway, because offers arrive on
+  that same stream. It is already unreachable for other reasons, so failing closed costs nothing.
 
 **⚠️ A PROPOSAL, not work for this order.** It touches directory, client and relay, so it needs its
 own work order to build. 003 carries the decision, not the implementation.
