@@ -25,8 +25,8 @@
  * attacker ENDS UP HOLDING — never how many refusals were produced, because refusal counts were
  * green through all three failures above.
  */
-import { describe, it, expect } from "vitest";
-import { RelayConnectionGater, SLOT_CAP_PER_AGENT } from "../relay-connection-gater.js";
+import { describe, it, expect, vi } from "vitest";
+import { RelayConnectionGater, SLOT_CAP_PER_AGENT, PROVEN_PEER_MEMORY_MS } from "../relay-connection-gater.js";
 import type { Logger } from "@cello-protocol/interfaces";
 
 const silentLogger: Logger = { debug() {}, info() {}, warn() {}, error() {} };
@@ -144,6 +144,50 @@ describe("DOD-M15-RELAYSLOTS-1 clause 0: an attacker cannot hold reservation slo
         "enforced at the door, because the relay knows which agent is asking before it grants.",
     ).toBe(SLOT_CAP_PER_AGENT);
     expect(gater.slotCount()).toBe(SLOT_CAP_PER_AGENT);
+  });
+
+  it("★★★ the proof survives the reconnect the client has to make, and only briefly", () => {
+    const { gater, reserve, connected } = makeGater();
+    const AGENT = "dd".repeat(32);
+
+    // Connection one: the client proves itself and goes. This is forced, not a design choice — a
+    // reservation taken on the same connection as the proof yields a slot with no dialable address.
+    connected.add("receiver");
+    expect(gater.admitSlot("receiver", AGENT).ok).toBe(true);
+    gater.recordAuthenticated("receiver");
+    gater.recordDisconnect("receiver");
+    expect(gater.slotCount(), "nothing is held across the gap").toBe(0);
+
+    // Connection two: same transport identity, and this one reserves.
+    expect(
+      reserve("receiver"),
+      "if the proof did not survive the disconnect, a real agent could never get a reservation at " +
+        "all — the gate would refuse everyone, which is exactly the outage the review caught.",
+    ).toBe(true);
+    expect(gater.slotCount()).toBe(1);
+    expect(gater.agentsForSlot("receiver")).toEqual([AGENT]);
+  });
+
+  it("★★★ a proof does NOT last — a peer id cannot reserve forever on one old handshake", () => {
+    vi.useFakeTimers();
+    try {
+      const { gater, reserve, connected } = makeGater();
+      connected.add("stale");
+      expect(gater.admitSlot("stale", "dd".repeat(32)).ok).toBe(true);
+      gater.recordAuthenticated("stale");
+      gater.recordDisconnect("stale");
+
+      vi.advanceTimersByTime(PROVEN_PEER_MEMORY_MS + 1);
+
+      expect(
+        reserve("stale"),
+        "a proof that never expires is a standing licence to reserve without proving, which is the " +
+          "thing this gate exists to withhold.",
+      ).toBe(false);
+      expect(gater.slotCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("one agent's cap is not spent by another's slots", () => {

@@ -51,7 +51,7 @@ function makeGater(opts: { connected?: Set<string> } = {}): {
 } {
   const hungUp: string[] = [];
   const connected = opts.connected ?? new Set<string>();
-  const gater = new RelayConnectionGater({ logger: silentLogger, reservationGraceMs: 60_000 });
+  const gater = new RelayConnectionGater({ logger: silentLogger});
   gater.attachNode({
     hangUp: async (id: string) => {
       hungUp.push(id);

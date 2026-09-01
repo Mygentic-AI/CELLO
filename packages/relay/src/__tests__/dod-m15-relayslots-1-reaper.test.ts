@@ -43,7 +43,6 @@ function makeGater(ceiling: number): { gater: RelayConnectionGater; hungUp: stri
   const connected = new Set<string>();
   const gater = new RelayConnectionGater({
     logger: silentLogger,
-    reservationGraceMs: 60_000,
     slotCeiling: ceiling,
   });
   gater.attachNode({

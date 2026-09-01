@@ -1344,10 +1344,9 @@ export class CelloRelayNode {
            * slots before it consults the cap, so a refusal here means every slot they hold has
            * actually carried traffic.
            *
-           * On a refusal the revoke timer is deliberately LEFT RUNNING: the reservation was already
-           * granted by the time we got here (it has to be — a relay cannot deny at grant time
-           * without stranding every brand-new agent's first reservation), so the grace window is
-           * what reclaims it. The caller is told why in the same breath.
+           * A refusal here also means no reservation: the gate in `denyInboundRelayReservation`
+           * grants only to a peer with a ledger entry naming a registered agent, and this refusal
+           * is what stops that entry existing.
            */
           if (remotePeerId) {
             const admission = this.#connectionGater?.admitSlot(remotePeerId, authedPubkeyHex);
@@ -2791,12 +2790,9 @@ export interface CreateRelayNodeOptions {
   circuitDataLimitBytes?: bigint;
   /**
    * DOD-M15-RELAYAUTH-1: override the connection gater entirely (mainly for tests that need to
-   * inspect its state directly, e.g. `pendingRevokeCount()`). Normal callers should leave this
-   * unset and use `reservationGraceMs` to tune the one thing worth tuning.
+   * inspect its state directly, e.g. `slotCount()`). Normal callers should leave this unset.
    */
   connectionGater?: RelayConnectionGater;
-  /** DOD-M15-RELAYAUTH-1: see `DEFAULT_RESERVATION_GRACE_MS` in relay-connection-gater.ts. */
-  reservationGraceMs?: number;
   /** DOD-M15-RELAYSLOTS-1: see `SLOT_CAP_PER_AGENT` in relay-connection-gater.ts. */
   slotCapPerAgent?: number;
   /** DOD-M15-RELAYSLOTS-1: see `SESSION_CAP_PER_PAIR`. */
@@ -2897,7 +2893,6 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
   const relayLogger = opts.logger ?? { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
   const connectionGater = opts.connectionGater ?? new RelayConnectionGater({
     logger: relayLogger,
-    reservationGraceMs: opts.reservationGraceMs,
     slotCapPerAgent: opts.slotCapPerAgent,
   });
   const node = await createNode({
