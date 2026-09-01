@@ -26,7 +26,7 @@ import {
   beforeEach,
   afterEach,
 } from "@claude-flow/testing";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { Encoder, decode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import { generateKeypair } from "@cello-protocol/crypto";

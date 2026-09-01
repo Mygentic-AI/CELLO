@@ -35,6 +35,7 @@ import {
   type McpConn,
 } from "./live-harness.js";
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
+import { expectMatches } from "./expect-present.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -276,7 +277,7 @@ describe("J-SUSPEND-TOFN — quorum-aware suspension (DOD-SUSPEND-1)", () => {
     const createOut = cello(["create-agent", "binit"], env);
     expect(createOut.status, `create binit failed: ${createOut.stdout}`).toBe(0);
     const pubB = (JSON.parse(createOut.stdout.trim()) as { pubkey?: string }).pubkey!;
-    expect(pubB, `binit must have a K_local pubkey: ${createOut.stdout}`).toMatch(/^[0-9a-f]{64}$/);
+    expectMatches(pubB, `binit must have a K_local pubkey: ${createOut.stdout}`, /^[0-9a-f]{64}$/);
     {
       const r = registerAgent("binit", `DEV-suspn-binit-${randomBytes(6).toString("hex")}`, env);
       expect(r.status, `register binit failed: ${r.stdout}`).toBe(0);
