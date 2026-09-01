@@ -2438,10 +2438,11 @@ export class CelloRelayNode {
     // DOD-M15-RELAYSLOTS-1: occupancy against the ceiling, so a relay filling up is visible before
     // it refuses anyone. The unreadable-source counter that used to ride here went with the
     // per-address bound it existed to watch — there is no address heuristic left to go quiet.
-    this.#logger.info("relay.slot.occupancy", {
-      reservedSlots: this.#connectionGater?.slotCount() ?? 0,
-      ceiling: DEFAULT_SLOT_CEILING,
-    });
+    // Review L2: the CONFIGURED ceiling, not the default — a deployment that overrides it was
+    // getting a log line comparing a real number against a fictional one.
+    const held = this.#connectionGater?.slotCount() ?? 0;
+    const ceiling = this.#connectionGater?.slotCeiling() ?? DEFAULT_SLOT_CEILING;
+    this.#logger.info("relay.slot.occupancy", { reservedSlots: held, ceiling });
     this.#connectionGater?.reapIdleSlots((slot) => {
       for (const agentHex of slot.agents) {
         const stream = this.#streams.get(agentHex);

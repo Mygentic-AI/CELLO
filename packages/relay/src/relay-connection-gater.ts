@@ -236,11 +236,7 @@ export class RelayConnectionGater implements ConnectionGater {
 
   /** How many slots this agent currently holds here. Only ATTRIBUTED slots count. */
   slotCountForAgent(agentPubkeyHex: string): number {
-    let n = 0;
-    for (const slot of this.#slots.values()) {
-      if (slot.agents.has(agentPubkeyHex)) n++;
-    }
-    return n;
+    return this.#reservedSlotsForAgent(agentPubkeyHex, "");
   }
 
   /**
@@ -252,6 +248,10 @@ export class RelayConnectionGater implements ConnectionGater {
    * counting it here made the reaper's pressure line fire against a table that was not full — which
    * would hang up peers to free capacity that was never scarce.
    */
+  slotCeiling(): number {
+    return this.#slotCeiling;
+  }
+
   slotCount(): number {
     let n = 0;
     for (const slot of this.#slots.values()) if (slot.reserved) n++;
@@ -656,7 +656,15 @@ export class RelayConnectionGater implements ConnectionGater {
     return false; // ALLOW
   }
 
-  /** RESERVATION-backed slots this agent holds, excluding `exceptPeerId`. */
+  /**
+   * RESERVATION-backed slots this agent holds, excluding `exceptPeerId`.
+   *
+   * Review M3: the cap is charged against ONE population — reservations — at both checkpoints. It
+   * used to count every authenticated peer at the auth step and only reservations at the grant
+   * step, so an agent running 32 session nodes that dial in to submit leaves, holding no
+   * reservations at all, was refused AUTHENTICATION and told to go and close sessions it did not
+   * have. Two numbers against one limit is one number too many.
+   */
   #reservedSlotsForAgent(agentPubkeyHex: string, exceptPeerId: string): number {
     let n = 0;
     for (const [peerId, slot] of this.#slots) {
