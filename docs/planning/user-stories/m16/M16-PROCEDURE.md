@@ -65,77 +65,78 @@ process choice below follows from that single fact.
 | Artifact | Location |
 |---|---|
 | Scoreboard (status authority) | `M16-DEFINITION-OF-DONE.md` — tags flipped in place, one line of evidence + journal pointer |
-| Work orders | `docs/planning/user-stories/m16/work-orders/DOD-M16-<LINE>.md` — one file per DoD line (split lines get `-a`, `-b` suffixes) |
-| Build journal | `M16-BUILD-JOURNAL.md` — evidence, run output, reviewer verdicts, NEW-FINDING entries. Append-only. |
+| Micro work orders | `docs/planning/user-stories/m16/micro/NNN-SLUG-<short-name>.md` — the proven M15 format (see `m15/micro/` for fifteen worked examples). Numbered in issue order; frontmatter carries `Source: DOD-M16-<LINE>`; one DoD line may produce several orders. |
+| Build journal | `M16-BUILD-JOURNAL.md` — evidence, run output, reviewer verdicts, finding dispositions. Append-only. |
 | Design source | The 2026-08-23 broadcast-channels discussion log — **planner-only reading** |
 
-## §3. THE WORK ORDER — template and standard
+## §3. THE MICRO WORK ORDER — inherit the M15 format, tightened for weaker coders
 
-Every work order is written to be executed by a model that will do exactly what it is told and
-nothing it is not told. The planner writes it; Andre can skim the FORBIDDEN and interface sections
-in two minutes. Required sections, in order:
+**The M16 work order IS the M15 micro work order** — the format proven fifteen times in
+`m15/micro/` (015-WITNESS is a good exemplar). Everything that format already mandates carries
+over unchanged:
 
-```markdown
-# WO: DOD-M16-<LINE> — <title>
-Size: S | M | L        (L means the planner failed to split it — split before issuing)
-Repo(s): cello-client | trustless-cello | both
-Depends on: <completed work orders, by ID>
+- **The rules header**, updated to name M16: read M16-PROCEDURE in full first; do NOT read the DoD
+  or the journal — the order carries everything needed from them; MICRO means small, one mission,
+  never grown; **500 lines, hard cap**; commit per fix, push after every commit; **closing a unit
+  means flipping the order's own `status:` frontmatter to `complete` in the SAME commit as the
+  reviewer's verdict.**
+- **The section shape:** *The problem, plainly* → *The work* → *⚠️ WHAT MUST NOT CHANGE* →
+  *Definition of Done* (numbered clauses) → *Not in scope* → *Traps recorded before you start* →
+  *Newly discovered* (foot of file).
+- **The revert test:** every DoD clause has a test, and each test is made to fail on purpose —
+  revert the fix, confirm it reddens, confirm it reddens for the expected reason.
+- **The enforcer clause:** separate OS processes, output quoted; vitest green necessary, never
+  sufficient.
+- **"Found something else? Write it under *Newly discovered* and KEEP GOING."** Do not fix, do not
+  investigate. (M16 delta: the planner triages that section at unit close through §5a — same-day
+  disposition, severity screen, frozen line count.)
 
-## 1. What this builds and why (≤10 lines, fully self-contained)
-No pointers to the design log. Every decision this unit rests on is restated here in full.
+**What M16 tightens, because the coders are weaker models than M15's:**
 
-## 2. Interfaces and files — decided here, not by you
-Exact TypeScript interfaces/types, exact file paths for new files, exact packages touched.
-The coder does not design interfaces, choose file locations, or add dependencies.
-Any new table: schema written out, keyed on agent_id or channel pubkey (never agent_name).
+1. **No open decisions inside an order.** An M15 order could say *"consider — and decide in
+   writing — whether the relay should also refuse to relay"*; that was correct for a strong coder
+   and is banned here. Every such fork is decided by the planner before issue. If the coder meets
+   an undecided question, that is a §5 stop, not an invitation.
+2. ***The work* section carries the design, not just the mission.** Exact TypeScript interfaces,
+   exact file paths for new files, packages touched, any new table's schema written out (keyed on
+   `agent_id` or channel pubkey, never `agent_name`). The coder designs nothing and adds no
+   dependencies.
+3. **Tests are enumerated, not implied.** Test file path, test name, setup, action, exact
+   assertion — written by the planner. Fixtures extend
+   `packages/e2e-tests/src/session-fixture.ts` via `opts` with non-breaking defaults; a
+   from-scratch fixture is a blocking review finding. Failure-path tests are listed explicitly:
+   for every FORBIDDEN fallback, a test proving the code fails loudly with the named error.
+4. ***WHAT MUST NOT CHANGE* names the temptations, unit by unit.** Generic "no silent fallbacks"
+   does not land on a weak model. Each entry names the specific missing input and the specific
+   wrong recovery, with the required behavior and the test that proves it — e.g. *"if the group
+   key is absent, do NOT fall back to plaintext; throw `channel_key_missing`; test 7 proves it."*
+   Backward-compat shims (§0) are restated here wherever the unit makes them tempting.
+5. **Observability is verbatim.** Every log event name (`domain.noun.verb`), its required context
+   fields, and where the correlationId is minted and threaded. A missing or renamed event is a
+   blocking finding.
+6. **Verification commands are copy-pasteable.** The gate sequence and the enforcer as exact
+   commands, with the shape of passing output described — including, for multi-process enforcers,
+   the processes to start, in order, and which output line proves the property.
 
-## 3. Tests — write ALL of these first, confirm ALL red, then implement
-Enumerated list: test file path, test name, setup, action, exact assertion.
-Fixtures: extend packages/e2e-tests/src/session-fixture.ts via opts with non-breaking
-defaults — a from-scratch fixture is a blocking review finding.
-Include the FAILURE-PATH tests: for every error named in §5, a test that proves the code
-fails loudly with that exact error rather than continuing.
+**Planner obligations before issuing an order:**
 
-## 4. Implementation steps (ordered)
-Small numbered steps. Each names the file and what changes in it.
-
-## 5. FORBIDDEN — the shortcuts you will be tempted by, by name
-The unit-specific silent fallbacks, each with the required behavior instead, e.g.:
-- If the group key is absent, do NOT fall back to plaintext or skip encryption.
-  Required: throw `channel_key_missing`; the publish fails; test 3.7 proves it.
-- If the directory notarization fails, do NOT seal locally and continue.
-  Required: the epoch stays unsealed; emit `channel.epoch.seal_failed`; test 3.9 proves it.
-Plus the standing items (§4 rulebook) restated only where this unit makes them tempting.
-
-## 6. Observability — exact names, exact fields
-Every log event verbatim (`domain.noun.verb`), its required context fields, and where the
-correlationId is minted and threaded. Missing or renamed events are blocking findings.
-
-## 7. Verification — run these commands verbatim, paste output to the journal
-The gate sequence and the unit's enforcer, as copy-pasteable commands, with the expected
-shape of passing output described. Multi-process enforcers: the exact processes to start,
-in order, and what line of output proves the property.
-
-## 8. Done means
-The DoD tag flips to 🟡 with: gate output pasted, enforcer output pasted, journal entry
-written, commit pushed. ✅ is the reviewer's to earn, never yours.
-```
-
-**Planner obligations when writing a work order:**
-
-- **Split until every order is S or M.** A weak coder holding a long context loses the early
-  constraints; a work order should be executable in one sitting.
-- **Run the falsification step yourself** (does the call site hold the right interface, does
-  responsibility live where the fix goes) — the coder cannot be relied on to.
-- **Name the temptations.** Generic "no silent fallbacks" does not land on a weak model; §5 items
-  must name the specific input that will be missing and the specific wrong recovery, unit by unit.
-- **Cross-repo orders carry the cascade explicitly:** which package bumps, that `/cello-publish` is
-  loaded fresh for the publish, and that publishing itself is a planner/Andre step — a coder's work
-  order ends at "committed, pushed, journal updated," never at "published."
+- **Split until it is genuinely micro** — executable in one sitting. A weak coder holding a long
+  context loses the early constraints.
+- **Run the falsification step yourself** (does the call site hold the right interface; does
+  responsibility live where the change goes) — the coder cannot be relied on to.
+- **Cross-repo orders carry the cascade explicitly:** which package bumps where, and that
+  `/cello-publish` and any publish step are planner/Andre work — a coder's order ends at
+  "committed, pushed, journal updated," never at "published."
 
 ## §4. THE CODER RULEBOOK — mechanical, no judgment required
 
-1. **WIP limit is ONE.** One work order, start to reviewed, before the next.
+1. **ONE SESSION, ONE MICRO WORK ORDER.** The order file is the complete handoff: a session is
+   opened, given one order, and told *get this done and just this done*; when the order's status
+   flips to `complete`, the session's work is over. The next order gets a FRESH session — never a
+   continuation — so nothing from the last unit (assumptions, leftover context, half-remembered
+   constraints) bleeds into the next. This is the WIP limit and the encapsulation boundary in one
+   rule, and it is what keeps a tightly-scoped order from becoming a launching pad for "everything
+   nearby."
 2. **Tests first, all red, then implement, all green.** In that order, no exceptions. If a test
    cannot be made to go red (it passes before you implement), the test is wrong — fix the test,
    do not delete the assertion.
@@ -176,9 +177,10 @@ A weak model either never stops or stops constantly; this list is exhaustive in 
 **Everything else: keep working.** No check-ins, no recaps, no "should I continue," no stopping at
 "natural stopping points," no token-budget stops.
 
-**Found a defect outside your work order?** Do NOT fix it and do NOT follow it. Write a
-`NEW-FINDING` entry in the journal — symptom, file, one-line consequence, **five lines maximum, no
-investigation** — and continue your unit. Capture is cheap; admission is not (§5a).
+**Found a defect outside your work order?** Do NOT fix it and do NOT follow it. Write it under
+***Newly discovered* at the foot of your order file** — symptom, file, one-line consequence,
+**five lines maximum, no investigation** — and continue your unit. Capture is cheap; admission is
+not (§5a: the planner triages that section at unit close).
 
 ## §5a. THE SCOPE FREEZE — how a finding gets in, and why the default is OUT
 
