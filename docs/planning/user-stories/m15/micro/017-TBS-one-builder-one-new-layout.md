@@ -1,0 +1,205 @@
+---
+name: 017-TBS — One assignment TBS builder, and the layout the handover needs
+type: micro-work-order
+date: 2026-09-02
+status: open
+description: >
+  The session-assignment TBS has a DUPLICATED builder — the directory keeps a local copy of a helper
+  that is now published — and relay handover needs two new fields in it. Delete the copy first, then
+  extend the published one. Wire and plumbing only: after this unit a resume assignment can be BUILT
+  and VERIFIED, and nothing yet requests one. Source: M15-STORY-RELAYHANDOVER unit 1a.
+---
+
+# **<ins>MICRO</ins>** WORK ORDER 017-TBS — One builder, one new layout
+
+> ## THE RULES OF A MICRO WORK ORDER
+>
+> 1. **Read [[M15-PROCEDURE]] IN FULL before you start.** It is the working discipline for this
+>    milestone and it binds you — the gate, the review dispatch, the invariants, how tests are run.
+>    **Do not read `M15-DEFINITION-OF-DONE.md` or `M15-BUILD-JOURNAL.md`**; this order carries
+>    everything you need from them.
+> 2. **MICRO means small.** One mission. Follow it to its end. **Never grow the mission.**
+> 3. **Found something else?** Write it under *Newly discovered* at the foot of this file and
+>    **keep going**. Do not fix it. Do not investigate it.
+> 4. **500 lines, hard cap.** Minimal without omitting anything.
+> 5. **Standard procedure still applies:** implement → review (`cello-unit-reviewer`) → fix every
+>    finding → commit. Commit per fix, push after every commit. **Closing a unit means flipping
+>    this file's `status:` frontmatter to `complete` in the SAME commit as the verdict.**
+> 6. **Done is done.** When the Definition of Done below is met, stop.
+
+> ## 🚫 NO BEHAVIOUR CHANGE IN THIS UNIT
+>
+> Nothing requests a resume assignment when you are finished. Nothing hands one to a relay. You are
+> making the **bytes** exist and agree across three places. If you find yourself writing a resume
+> code path in the directory's session handler, you have grown the mission — stop and re-read this.
+
+---
+
+## Background — you need exactly this much
+
+Two agents in a conversation are assigned a **witness relay** by the directory, in a
+**SessionAssignment** the directory threshold-signs. The signed bytes are called the TBS
+("to-be-signed"). Everyone who verifies the assignment rebuilds those bytes independently and
+checks the signature, so **every builder of that TBS must produce byte-identical output or the
+assignment stops verifying.**
+
+A later story moves a live conversation to a **new** relay when the current one dies. That needs two
+things the TBS does not carry. This unit adds them, and cleans up a duplication first so we are not
+adding a third layout to a copy-pasted builder.
+
+---
+
+## Part 1 — Delete the duplicate builder (do this FIRST)
+
+`packages/directory/src/directory-node.ts` carries a local copy, `buildSessionEstablishmentTbsM7`
+(lines ~335–376). Its own comment says why it exists and when to remove it:
+
+> *"the 10-field M7 extension is NOT yet published — so this local copy cannot simply import and
+> delegate… Remove this copy and delegate to protocol-types after the 10-field helper is published
+> (AC-021)."*
+
+**The condition has been met.** `@cello-protocol/protocol-types` is at **0.0.65** and its
+`buildSessionEstablishmentTbs` already implements the 10-field path. The copy is now pure debt.
+
+- Delete `buildSessionEstablishmentTbsM7` and import `buildSessionEstablishmentTbs` from
+  `@cello-protocol/protocol-types`.
+- **One production caller:** `directory-node.ts:4271`. Update it.
+- `packages/directory/src/__tests__/m7-wire-001-tbs-drift-guard.test.ts` imports the local copy in
+  five places. **Do not delete this test.** Repoint it (Part 3).
+- **Prove the delegation is byte-identical before you touch anything else.** The drift guard exists
+  precisely to catch this; it must be green against the published helper with the local copy gone.
+
+---
+
+## Part 2 — The new layout
+
+Two fields go in, and they are batched deliberately: **a TBS change is bilateral** — every party
+signing and verifying must move together — so we pay that cost once, not twice.
+
+**Field A — `high_stakes` (a debt already queued for this exact change).**
+`directory-node.ts` holds `#sessionHighStakes` and its comment records the defect:
+
+> *"THE TARGET IS NOT TOLD, AND IS HELD TO IT ANYWAY… the flag rides the INITIATOR's
+> `session_request` and is not forwarded on the assignment, so the counterparty is subject to a
+> longer floor and a mandatory-evidence bar they never opted into and cannot see… Forwarding it
+> means adding a field to the assignment, which is signed, so it belongs with the next
+> assignment-TBS change."*
+
+This is that change. Forward it.
+
+**Field B — `prior_relay_id` (what handover needs).**
+On a resume assignment this names the relay that witnessed the conversation up to the handover.
+It **must** be carried here, inside the directory-signed bytes, and the reason is measured: a relay
+has **no knowledge of any other relay's identity** — grep confirms there is no relay pool on the
+relay side, only `CELLO_DIRECTORY_PUBKEYS`. The new relay has to verify ACK receipts signed by the
+old one, and the only trustworthy source for who the old one was is the directory's signature.
+**Never take it from the client.**
+
+### The layout, decided — do not redesign it
+
+The published helper dispatches on **arity**: 10 fields when all M7 parameters are present,
+otherwise the legacy 5. Extend that pattern with one new layout, **not** a combinatorial matrix:
+
+| Fields | When |
+|---|---|
+| **12** | current — the 10 M7 fields, then `high_stakes`, then `prior_relay_id` |
+| 10 | M7 legacy, unchanged |
+| 5 | ancient legacy, unchanged |
+
+- The 12-field layout is emitted whenever the M7 fields are present — i.e. it becomes the normal
+  path. **`high_stakes` is a boolean and is always present** (`false` is a real value, not an
+  absence). **`prior_relay_id` is an empty string on a fresh session** and a 64-hex relay id on a
+  resume.
+- **Do not** make the 12-field path conditional on `prior_relay_id` being non-empty. That would give
+  a fresh session two possible layouts and hand the next reader an ambiguity to resolve at runtime.
+- Keep the existing two legacy paths byte-for-byte untouched.
+
+---
+
+## Part 3 — The three places that must agree
+
+Byte-identical output is the whole property. All three move in the same change:
+
+1. **`cello-client/core/protocol-types/src/session.ts`** — `buildSessionEstablishmentTbs`, the one
+   true builder.
+2. **`cello-client/core/daemon/src/assignment-verify.ts`** — the verifier, two call sites
+   (lines ~48 and ~214). Both must pass the new fields.
+3. **`trustless-cello/packages/directory/src/directory-node.ts`** — now a caller, not a builder
+   (Part 1).
+
+**Extend the drift guard**, do not replace it: `m7-wire-001-tbs-drift-guard.test.ts` must gain a
+12-field case asserting the directory's produced bytes equal the published helper's, alongside the
+existing 5- and 10-field cases which stay.
+
+---
+
+## Part 4 — Publish and re-pin (BLOCKING — the unit is not done without it)
+
+`protocol-types` is a **published cello-client package**. A change to it that is not published and
+re-pinned means the directory and relay keep running the old bytes, silently, with no type error and
+green tests. That failure has already cost this project real debugging time.
+
+- **Load the `/cello-publish` skill FIRST, for this publish.** It is the authority and it is
+  hook-enforced — publish-trigger commands are hard-blocked until it is loaded. Loading it earlier
+  in the session does not count. **Do not reconstruct the version cascade from this file or from
+  memory.**
+- `trustless-cello/packages/{directory,relay}/package.json` both already reference
+  `"@cello-protocol/protocol-types": "latest"` — correct, leave them as `latest`. **Run
+  `pnpm install` so the lockfile records the new resolved version, and commit the lockfile.**
+- **Verify against the published artifact, not the source tree**, per the skill.
+
+---
+
+## Definition of Done
+
+1. `buildSessionEstablishmentTbsM7` no longer exists in `directory-node.ts`; the production caller
+   imports the published helper.
+2. The drift guard passes with **three** cases — 5, 10 and 12 fields — comparing the directory's
+   real output against the published helper.
+3. `high_stakes` and `prior_relay_id` are in the 12-field TBS, the builder and both verifier call
+   sites agree byte-for-byte, and the two legacy layouts are unchanged.
+4. **Each new assertion has been made to fail on purpose.** Revert the field, confirm it reddens for
+   the reason you expect. A drift-guard test that cannot fail is the one thing this unit must not
+   ship.
+5. `protocol-types` published via `/cello-publish`, `pnpm install` run, lockfile committed.
+6. Gate passes (test / lint / typecheck) in **both** repos.
+7. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below.
+
+**Not in scope:** any resume code path in the directory's session handler; the relay accepting a
+resume assignment; the replay of leaves; anything about detecting that a relay has died. Those are
+later units and building them here grows the mission.
+
+---
+
+## Traps recorded before you start
+
+**A "compatible" fallback is how this breaks.** If your new path silently falls back to the 10-field
+layout when a field looks absent, a resume assignment will verify as a fresh one and the prior relay
+id disappears from the signed bytes without anybody being told. `high_stakes: false` and
+`prior_relay_id: ""` are **values**, not absences. Fail loud on a genuinely malformed input; never
+substitute a shorter layout.
+
+**The drift guard is the load-bearing test, and it is easy to make vacuous.** If it builds both
+sides through the same helper it proves nothing. It must compare the DIRECTORY's real production
+path against the PUBLISHED helper — that is the drift it exists to catch.
+
+**Do not "improve" the arity dispatch.** It looks like something that wants a version field or a
+discriminated union. Both are wire changes and both are out of scope. Add the layout; leave the
+shape alone.
+
+**Sorting and canonical encoding.** The 10-field path JSON-stringifies a **sorted copy** of each
+address array. If you touch that line you will change bytes for every existing session. Do not
+touch it.
+
+**Publishing from memory has burned versions before.** Load the skill. Every publish is a fresh
+load, including the second one in the same session.
+
+---
+
+## Review
+
+*(the coder fills this in — evidence, mutation proofs, the reviewer's verdict quoted)*
+
+## Newly discovered
+
+*(anything found and NOT acted on, per rule 3)*
