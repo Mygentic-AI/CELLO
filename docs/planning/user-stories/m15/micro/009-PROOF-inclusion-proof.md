@@ -183,7 +183,23 @@ sessions; anything in the directory or the relay; the `not_implemented` stubs fo
 
 ## Review
 
-*(Reviewer verdict goes here. One quote. Not a transcript.)*
+`cello-unit-reviewer`, one pass, ten findings — all fixed:
+
+> **SPEC: FAITHFUL** … **NO SILENT FALLBACKS** … **ERROR SUBSTITUTION FOUND** — [blocking] F5 …
+> **HOLLOW TESTS FOUND** — [blocking] F1 (the seal→table wiring survives full deletion with the
+> suite green) and F7 … **REMOVALS PROVEN.**
+>
+> "I am not rubber-stamping this: it is the strongest unit I have read in this milestone, and F1 is
+> still the kind of gap that ships a feature which works in vitest and returns
+> `certified_leaves_not_carried` on every real session."
+
+It also confirmed the load-bearing claim independently, from the directory source rather than from
+my comments: the certified root is built over **every** leaf including ctrl, `final_root` is the
+non-ctrl root, and `SessionTree.rootHex()` equals the second. A literal reading of DoD clause 5
+(compare the two roots) would have refused every session; the prefix check is the only workable one.
+
+A `cello-fallback-finder` pass ran first and produced six more, also all fixed. The two that
+mattered were one shape: **a refusal that asserted the most benign of four causes.**
 
 ---
 
@@ -205,3 +221,8 @@ sessions; anything in the directory or the relay; the `not_implemented` stubs fo
 - **`seal-coordinator.ts` still carries pre-LEG-2 backward-compat branches** ("no frontier_leaves
   shipped (an older directory)"). With no users and no deployed old directories, those are branches
   with no beneficiary.
+- **The tool name is already spoken for in the other repo.** PERSIST-017 specifies
+  `cello_get_inclusion_proof` as the **MMR checkpoint** proof — pending before the sealed root is
+  anchored, the full MMR proof after (`packages/directory/src/mmr-store.ts`, still `test.todo`), and
+  `.claude/commands/cello-chat.md` described that behaviour to operators. Two different proofs, one
+  name, and the MMR surface now has none.
