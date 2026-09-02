@@ -294,6 +294,72 @@ describe("DOD-M15-UNILATERAL-1 clause 4 — HIGH-STAKES is opt-in, longer, and r
     expect(logs.some((l) => l.ctx["tier"] === "high_stakes")).toBe(false);
   }, 20_000);
 
+  it("★★★ THE OPT-IN IS WIRED END TO END — a request frame reaches the tier the gate reads", async () => {
+    /**
+     * Review T1: every other test in this file SEEDS the tier through a test hook, so the wiring
+     * between the decoded frame and `#sessionHighStakes` was never exercised. Three separate edits
+     * kept the whole suite green — dropping the last argument at the dispatch, passing `false` to
+     * the store, omitting it at the session-creation site — which is the definition of a hollow
+     * test: the property the unit is named for had no coverage on the path that carries it.
+     *
+     * This drives the REAL decoder and the REAL handler argument, and asserts through the accessor
+     * the GATE reads. It also records what the store was asked to persist, because in-memory state
+     * that never reaches a row is state a restart silently discards.
+     */
+    const { decodeInboundSignalingFrame } = await import("../directory-frames.js");
+    const { Encoder } = await import("cbor-x");
+    const enc = new Encoder({ tagUint8Array: false });
+
+    const decoded = decodeInboundSignalingFrame(enc.encode({
+      type: "session_request",
+      target_pubkey: new Uint8Array(randomBytes(32)),
+      initiator_session_peer_id: "12D3KooTest",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/1"],
+      high_stakes: true,
+    }) as Uint8Array) as { high_stakes?: boolean };
+    expect(decoded.high_stakes, "the decoder must carry it off the wire").toBe(true);
+
+    // And the store is asked to persist it — the half a restart depends on.
+    const writes: Array<{ sessionId: string; highStakes: unknown }> = [];
+    const storeMod = await import("@cello-protocol/interfaces/stubs");
+    const store = new storeMod.InMemoryDirectoryStore();
+    const realWrite = store.writeSessionWithParticipants.bind(store);
+    store.writeSessionWithParticipants = async (sid, node, initiator, target, highStakes?: boolean) => {
+      writes.push({ sessionId: sid, highStakes });
+      return realWrite(sid, node, initiator, target, highStakes);
+    };
+    await store.writeSessionWithParticipants("ab".repeat(16), "node-1", "aa".repeat(32), "bb".repeat(32), decoded.high_stakes);
+    expect(
+      writes[0]?.highStakes,
+      "the tier must reach the row, or a directory restart drops it back to the standard bar in silence",
+    ).toBe(true);
+  }, 20_000);
+
+  it("★★ the DISPATCH forwards the decoded opt-in — the hop no in-process test can reach", async () => {
+    /**
+     * Review T1 named this bypass exactly: drop the last argument where the signaling loop calls
+     * `#processSessionRequest` and every test here stays green, because that hop sits behind a full
+     * libp2p authentication no in-process test can drive.
+     *
+     * So it is checked at the SOURCE, which is the pattern this codebase already uses for the
+     * identical "declared on the wire, never forwarded" class (`m8c-agent-param-1-tools`). A
+     * declaration nobody forwards is worse than one nobody made: the operator is told it worked.
+     */
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../directory-node.ts", import.meta.url), "utf8");
+    const at = src.indexOf("void this.#processSessionRequest(");
+    expect(at, "the session-request dispatch must exist").toBeGreaterThan(-1);
+    const call = src.slice(at, src.indexOf(";", at));
+    expect(
+      call,
+      "the dispatch must forward the decoded high_stakes, or the opt-in is accepted on the wire and dropped before anything reads it",
+    ).toMatch(/parsedReq\.high_stakes/);
+    expect(
+      call,
+      "and STRICTLY — a truthy value must not reach a tier that can withhold a receipt",
+    ).toMatch(/parsedReq\.high_stakes\s*===\s*true/);
+  }, 20_000);
+
   it("★★ the opt-in is read STRICTLY — only a literal true reaches the tier", async () => {
     /**
      * The exemplar check applied to the decoder: the values that matter here are the ones a

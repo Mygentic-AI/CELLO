@@ -1027,6 +1027,9 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
 export function encodeSealUnilateralTooEarly(frame: SealUnilateralTooEarly): Uint8Array {
   const obj: Record<string, unknown> = { type: frame.type, session_id: frame.session_id };
   if (frame.remaining_seconds !== undefined) obj["remaining_seconds"] = frame.remaining_seconds;
+  // Review F1: WHICH refusal, so the client's guidance stops asserting a grace window for a refusal
+  // that has nothing to do with one.
+  if (frame.cause !== undefined) obj["cause"] = frame.cause;
   return ENC.encode(obj);
 }
 
@@ -1560,10 +1563,20 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
      */
     const raw = o["remaining_seconds"];
     if (raw !== undefined && typeof raw !== "number") return null;
+    // Review F1: the cause, against the closed set. An unrecognised value is DROPPED rather than
+    // passed through — the client switches its guidance on this, and a string it does not know
+    // would fall to the default, which is the plain floor message. Dropping it lands on the same
+    // default without pretending the value was understood.
+    const rawCause = o["cause"];
+    const cause =
+      rawCause === "too_early" || rawCause === "counterparty_present" || rawCause === "high_stakes_evidence_required"
+        ? rawCause
+        : undefined;
     return {
       type: "seal_unilateral_too_early",
       session_id,
       ...(typeof raw === "number" ? { remaining_seconds: raw } : {}),
+      ...(cause !== undefined ? { cause } : {}),
     };
   }
 

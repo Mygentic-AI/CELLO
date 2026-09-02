@@ -2600,7 +2600,7 @@ export class PgDirectoryStore implements DirectoryStore {
    *
    * M6B-010 AC-002/AC-003: extends writeSession() to also store initiator and target
    * pubkeys. These are used at startup to reconstruct #sessionParticipants and
-   * #sessionLastActivity for active (unsealed) sessions.
+   * #sessionGenesisAt for active (unsealed) sessions.
    *
    * Participants default to '' in V18/V28 rows (no participant data for pre-M6B-010
    * sessions). This method always writes real pubkey values.
@@ -2660,13 +2660,13 @@ export class PgDirectoryStore implements DirectoryStore {
    * Load active session participants from the sessions table.
    *
    * M6B-010 AC-002/AC-003: called at startup to reconstruct #sessionParticipants
-   * and #sessionLastActivity. Returns only sessions that:
+   * and #sessionGenesisAt. Returns only sessions that:
    *   1. Have non-empty initiator_pubkey_hex and target_pubkey_hex (set by writeSessionWithParticipants)
    *   2. Are NOT yet sealed (no matching row in seal_notarizations)
    *
    * The genesisTimestampMs is derived from sessions.created_at, which is the Postgres
    * TIMESTAMPTZ column set to NOW() at insert time. This is the session genesis timestamp
-   * and is used to initialize #sessionLastActivity to a sensible value rather than 0.
+   * and is used to initialize #sessionGenesisAt to a sensible value rather than 0.
    *
    * Pseudocode:
    *   SELECT s.session_id, s.initiator_pubkey_hex, s.target_pubkey_hex,
@@ -2691,7 +2691,7 @@ export class PgDirectoryStore implements DirectoryStore {
       initiator_pubkey_hex: string;
       target_pubkey_hex: string;
       genesis_ms: string;
-      high_stakes: boolean | null;
+      high_stakes: boolean;
     }>(
       // DATE_PART avoids EXTRACT(EPOCH FROM ...) which confuses the schema-completeness
       // static analyzer (regex /FROM\s+(\w+)/ matches 'FROM s.created_at' → 's').
@@ -2712,15 +2712,17 @@ export class PgDirectoryStore implements DirectoryStore {
 
     return result.rows.map((row) => ({
       // CRIT-001: strip dashes so sessionId matches the 32-char hex format used as the
-      // key in #sessionLastActivity and #sessionParticipants in directory-node.ts.
+      // key in #sessionGenesisAt and #sessionParticipants in directory-node.ts.
       // Postgres returns session_id as a dashed UUID string (e.g. "550e8400-..."), but all
       // runtime lookups use Buffer.from(session_id).toString("hex") which produces dashless hex.
       sessionId: row.session_id.replace(/-/g, ""),
       initiatorHex: row.initiator_pubkey_hex,
       targetHex: row.target_pubkey_hex,
       genesisTimestampMs: Math.round(parseFloat(row.genesis_ms)),
-      // DOD-M15-UNILATERAL-1: NULL (a row written before the column existed) is STANDARD, which is
-      // the tier that never strands a party — never read an unknown as the stricter one.
+      // DOD-M15-UNILATERAL-1: `=== true` rather than a cast. V64 is NOT NULL DEFAULT FALSE so
+      // there is no NULL row to defend against — this defends against the pg driver handing back
+      // something that is not a boolean at all, and lands on STANDARD if it ever does, which is the
+      // tier that never withholds a receipt from an honest party.
       highStakes: row.high_stakes === true,
     }));
   }

@@ -102,7 +102,21 @@ const TABLE_EXTRA_EXCLUDED: Record<string, ReadonlySet<string>> = {
   // Exclude both per the M4 bug #7 pattern. The chain still proves session ownership
   // (session_id + owning_node_id) which is the security property — participant data is
   // operational, not the integrity target.
-  sessions: new Set(["initiator_pubkey_hex", "target_pubkey_hex"]),
+  //
+  // `DOD-M15-UNILATERAL-1`: V64 added `high_stakes` (NOT NULL DEFAULT FALSE), and it is the same
+  // pattern a third time. `insertWithChain` now hashes it; `verifyChain` does `SELECT *` and rehashes
+  // every row WITH it — so every row written before V64 reads back `false` against a chain_hash
+  // computed without the column, and the whole sessions chain goes red. Excluded for that reason.
+  //
+  // ⚠️ **AND THE COST IS THE THING THE COLUMN EXISTS FOR, so it is stated rather than implied.** The
+  // seal tier is now stored and NOT tamper-evident: anyone with UPDATE on this table can flip a
+  // high-stakes session to standard — a shorter floor and no evidence requirement — and verifyChain
+  // stays green. What that buys an attacker is bounded: it can only WEAKEN a solo seal's
+  // preconditions, never forge a signature, and the receipt still records the counterparty's
+  // attestation from the relay's own observation. Chaining it properly means rechaining every
+  // existing sessions row, which is its own unit with a migration step, not a one-line flip here —
+  // the same conclusion `user_accounts.email_stub_hash` reached above.
+  sessions: new Set(["initiator_pubkey_hex", "target_pubkey_hex", "high_stakes"]),
   // CELLO-M7-UPGRADE-001 (DOD-UP-1): V31 added seal_type (NOT NULL DEFAULT 'bilateral')
   // and supersedes_notarization_id (nullable, no DEFAULT) to seal_notarizations.
   //  - seal_type: same M4 bug #7 / sessions-V29 pattern — pre-V31 rows read back the
