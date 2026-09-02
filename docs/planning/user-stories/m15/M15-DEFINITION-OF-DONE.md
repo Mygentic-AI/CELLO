@@ -1028,7 +1028,14 @@ for a communication protocol, and one that does not depend on directory behaviou
 - **This is the counterbalance line of the milestone** (Invariant 1): name it explicitly in the
   journal before building.
 
-### `DOD-M15-UNILATERAL-1` — ❌ Absence is evidenced and tiered, and the artifact says what is weak
+### `DOD-M15-UNILATERAL-1` — 🟡 Absence is evidenced and tiered, and the artifact says what is weak
+> **IMPLEMENTED 2026-09-02 (`013-ABSENCE`), REVIEW IN FLIGHT — not closed.** The solo seal asks the
+> relay whether the counterparty is actually there; a reachable one is refused in both tiers at any
+> age. Two tiers, opt-in only, high-stakes refuses without a positive observation rather than
+> falling back to the clock. `j-unilateral` 3/3 live as separate OS processes — it was red on the
+> counterparty-absent gate, and the cause was the SEALING party refusing to co-sign its own solo
+> seal. → Entry 013b
+
 T-of-N log Decisions 1 and 2, plus its Part 4.
 - **Hybrid trigger:** a time floor as a backstop, paired with an actual delivery-attempt/timeout
   record — **elapsed time alone is never sufficient on its own.** Today `#processSealUnilateral`
