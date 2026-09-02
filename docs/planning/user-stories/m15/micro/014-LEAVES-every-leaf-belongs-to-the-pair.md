@@ -2,7 +2,7 @@
 name: 014-LEAVES — Is every message in a sealed conversation tied to the two participants?
 type: micro-work-order
 date: 2026-09-02
-status: open
+status: complete
 description: >
   The seal checks that the final two control entries came from two distinct participants. Nobody has
   ever confirmed the same constraint applies to the CONTENT leaves — the actual messages. This is a
@@ -244,14 +244,79 @@ alone:
 
 Neither mutant's red came from the other's path, so the two call sites are independently covered.
 
+### What the review changed, after the first pass
+
+Five findings, all fixed, and one of them was a live security hole this unit had walked past:
+
+- **A stranger could unilaterally seal a session they were not in.** `#processSealUnilateral` never
+  checked that the SUBMITTER is a participant. S sends `seal_unilateral` for A↔B's session carrying
+  `[S msg, S ctrl]`; `absentPartyHex` resolves to A by its else-branch; every signature is S's own and
+  real; one ctrl leaf, from the submitter; root matches. **Proven, not argued:** with the fix reverted,
+  `session.unilateral.notarized` fires — the directory signs a receipt over A and B's session naming S.
+  Now `unilateral_not_a_participant`, which names the caller rather than blaming a leaf a layer down.
+- **The test seam was hiding it.** `triggerSealUnilateralWithLeavesForTest` overwrote
+  `#sessionParticipants` with the submitter as initiator, so the only case that matters was
+  unconstructible and the missing guard unnoticeable. The seam is non-destructive now.
+- **The degraded-roster refusal accused an innocent participant.** Falling back to the first two
+  distinct senders of the suspect array puts the intruder *inside* the roster: on `[A, S, A, B]` the
+  pair is `[A, S]` and the refusal named **B**. Right verdict, false accusation. The module is handed
+  `null` now and says only what it can know — the signer count, and that naming the intruder is not
+  possible from here.
+- **The participants' own frame was untested** and survived reverting.
+- **The roster parameter was optional and unbounded**; now required and typed as a pair.
+
+### Clause 7, stated rather than glossed: the spine seal journeys could NOT exercise this
+
+`j-spine` and `j-unilateral` were run against the real binaries. **Neither reaches the seal.** Both
+fail earlier, at relay authentication — `relay.auth.online_token.missing` ×14–18,
+`session.relay.auth.failed` ×8, `relay.reservation.denied` ×6, then a standing receiver with no
+reservation. That is the online-token path (`DOD-M15-RELAYSLOTS-1` / `DOD-M15-RELAYAUTH-1`), in the
+relay and the client; this diff touches neither, and the failure happens before any leaf is submitted.
+**Zero of this unit's new refusal reasons appear in either run**, which is the honest measure of what
+those runs proved about it: nothing.
+
+So the property is verified against **hand-built Structure 1 bytes, not bytes a real client signed.**
+I tried to establish a clean before/after baseline and failed: the baseline worktree run had no reach
+(it could not resolve the client binaries, whose path is relative to the real checkout), so it is not
+offered as evidence. **This is the one thing about this unit that a live run has not seen.**
+
 ### Gate
 
-`packages/directory` suite 1167 passed / exit 0 · `pnpm run lint` exit 0 · `pnpm run typecheck`
+`packages/directory` 1168 passed / exit 0 · `pnpm run lint` exit 0 · `pnpm run typecheck`
 (`tsc --build`, emits) exit 0.
+
+The ROOT suite has 4 failures, none in this diff and each traced rather than assumed: three
+`relay-node` assertions broken by `015-WITNESS`'s new reason code (`git log -S` → commit `3680d6b0`),
+and the hidden-lane count guard moving 37→39 because that unit added `j-witness.spine.test.ts` and
+`j-ciphertext.spine.test.ts` is untracked. Four further suites fail to collect on a
+`@claude-flow/testing` resolution drift in the shared checkout. This unit's two commits touch three
+files, all under `packages/directory`, and no manifest.
+
+### Mutation record — five mutants, each typechecked, each re-run alone
+
+| Mutant | Result |
+|---|---|
+| bilateral provenance verdict discarded | 4 bilateral refusals red (`ok` was **true** — certified); 3 unilateral **green** |
+| unilateral provenance verdict discarded | 2 unilateral refusals red (no failure logged at all); 5 bilateral **green** |
+| submitter guard deleted | the stranger test red — refused, but with the wrong-layer reason |
+| submitter guard **and** roster reverted | **`session.unilateral.notarized` fires** — the hole, demonstrated |
+| degraded roster guesses `[pA, pB]` again | detail red, and it named `leaf 3 (ctrl, sender 64d6…)` — participant B |
+
+No mutant's red came from another's path.
 
 ### Reviewer verdict
 
-*(pending — `cello-unit-reviewer` in flight)*
+> **SPEC: DEVIATIONS FOUND** … **ERROR SUBSTITUTION FOUND** — H2 … the refusal names a participant as
+> the intruder. The reason code is truthful; the sentence the operator reads is not. **HOLLOW TESTS
+> FOUND** — H1 (the roster fix is unreddenable and the seam prevents a test), H4 (the participant-facing
+> reason survives revert) … **REMOVALS PROVEN** … **NO COMPATIBILITY DEBT**
+>
+> *"Not rubber-stamping: this diff touches crypto provenance and I found four things worth fixing, one
+> of which (H1) is a security fix currently protected by nothing but the author's attention."*
+
+All five findings fixed and each pinned by a mutant above. The deviations were the write-up clauses
+(1/2/3/6) — the answer existed only in code comments when the reviewer read the tree; it is in this
+section now, including the word *incidental* the DoD asks for literally.
 
 ---
 
@@ -269,4 +334,13 @@ Neither mutant's red came from the other's path, so the two call sites are indep
   read and dropped, which is the shape that produced this unit's defect.
 - **Every refusal on the unilateral seal path logs and returns with no frame to the client.** Not
   introduced here — it is true of every reason on that path, including the pre-existing ones. The
-  present party sees a seal that simply never completes.
+  client waits for `seal_unilateral_confirmed` or `seal_unilateral_too_early` and gets neither, so the
+  operator experiences a timeout that reads as the network. This diff adds two more reasons to that
+  silent set.
+- **A cross-session leaf now makes a conversation permanently unsealable.** The directory refuses what
+  the relay still accepts, and the relay's `leaf_log` is append-only — so one such submit destroys that
+  conversation's receipt for good. Refusing is still the right trade, but the check belongs at the
+  point of injection too: refuse one submit loudly rather than the whole conversation silently, later.
+  Relay work, and `015-WITNESS` is already in that file.
+- **The live spine seal journeys are red on `main`** at relay authentication, before any seal —
+  `relay.auth.online_token.missing` → `relay.reservation.denied`. Nothing in this unit touches it.
