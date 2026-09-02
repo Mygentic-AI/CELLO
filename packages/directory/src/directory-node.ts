@@ -139,7 +139,7 @@ import type {
   SealLegibility,
 } from "./directory-types.js";
 import { buildSealLegibility, bindLegibilityToTbs, findSealCeremonyPair } from "./seal-legibility.js";
-import { verifySealFinalRoots, SEAL_FINAL_ROOT_REASONS, SEAL_FINAL_ROOT_GUIDANCE } from "./seal-final-root.js";
+import { verifySealFinalRoots, verifyLeafProvenance, SEAL_FINAL_ROOT_REASONS, SEAL_FINAL_ROOT_GUIDANCE } from "./seal-final-root.js";
 import { WALL_CLOCK } from "./directory-types.js";
 import type { DirectoryStore } from "@cello-protocol/interfaces";
 import { mintOnlineToken, ONLINE_TOKEN_ISSUE_LIFETIME_MS } from "@cello-protocol/interfaces";
@@ -4519,11 +4519,26 @@ export class CelloDirectoryNode {
     // DOD-SEAL-1: rebuild + verify the chain and compare to frame.reported_root. Rejects
     // unilateral_root_unverifiable (mismatch / bad chain) or unilateral_seal_leaf_invalid
     // (not exactly one SEAL ctrl leaf from the present party).
-    const verifyResult = this.#verifyUnilateralChain(leafData.leaves, frame.reported_root, senderHex);
+    const verifyResult = this.#verifyUnilateralChain(
+      leafData.leaves,
+      frame.reported_root,
+      senderHex,
+      frame.session_id,
+      [Buffer.from(senderHex, "hex"), Buffer.from(absentPartyHex, "hex")],
+    );
     if (!verifyResult.ok) {
       this.#logger?.error("session.unilateral.verification.failed", {
         sessionId: sessionIdHex,
         reason: verifyResult.reason,
+        impact: "NO certificate was signed for this unilateral close. The carried chain did not verify, so no honest receipt can be written over it.",
+        /**
+         * `DOD-M15-LEAFPARTIES-1`: the two provenance reasons carry the same operator guidance the
+         * bilateral path prints. The other reasons on this path are pre-existing and carry none —
+         * recorded in the order's *Newly discovered* rather than widened here.
+         */
+        ...(verifyResult.reason in SEAL_FINAL_ROOT_GUIDANCE
+          ? { guidance: SEAL_FINAL_ROOT_GUIDANCE[verifyResult.reason as import("./seal-final-root.js").SealFinalRootReason] }
+          : {}),
         correlationId,
       });
       return;
@@ -4697,6 +4712,8 @@ export class CelloDirectoryNode {
     leaves: RelaySealData["leaves"],
     reportedRoot: Uint8Array,
     presentHex: string,
+    sessionId: Uint8Array,
+    roster: readonly Uint8Array[],
   ): { ok: true; recomputedRoot: Uint8Array } | { ok: false; reason: string } {
     // (a) Rebuild the CLIENT-VERIFIABLE root and compare to the reported root. The client's
     // local SessionTree hashes each leaf as its content_hash (kind "hash"), NOT as
@@ -4743,6 +4760,26 @@ export class CelloDirectoryNode {
       const partialInputs: LeafInput[] = leaves.slice(0, i + 1).map((l) => ({ kind: l.kind, data: encodeStructure2(l.s2) }));
       runningRoot = merkleRoot(buildMerkleTree(partialInputs));
     }
+
+    /**
+     * EVERY LEAF BELONGS TO THIS PAIR AND THIS SESSION — `DOD-M15-LEAFPARTIES-1`.
+     *
+     * The same check the bilateral path runs, from the same module, because it is the same question.
+     * The adversary differs: here the chain is CARRIED BY THE PRESENT PARTY, so the party assembling
+     * the array is a participant rather than the relay. That does not weaken the case — a present
+     * party can hold a genuinely-signed leaf from a third key it once talked to, or one of its own
+     * from another conversation, and neither belongs in this receipt.
+     *
+     * ⚠️ PLACED AFTER THE LOOP ABOVE, AND THE POSITION IS THE PRECONDITION — the same one
+     * `seal-final-root.ts`'s header states. Until `verify(s2.sender_pubkey, structure1_cbor,
+     * s2.sender_signature)` has run for every leaf, `sender_pubkey` is a field the assembler filled
+     * in, and asking whether it is a participant is asking the assembler about itself.
+     *
+     * The roster is not degraded on this path: `#processSealUnilateral` REFUSES outright when the
+     * session participants are unknown, so both facts are anchored to the directory's own record.
+     */
+    const provenance = verifyLeafProvenance(leaves, sessionId, roster);
+    if (!provenance.ok) return { ok: false, reason: provenance.reason };
 
     // (e) Exactly ONE SEAL control leaf (kind "ctrl"), from the present (submitting) party.
     const ctrlLeaves = leaves.filter((l) => l.kind === "ctrl");
@@ -5462,7 +5499,26 @@ export class CelloDirectoryNode {
           impact: "the certificate was NOT signed. A participant's own signed transcript root does not match the leaves presented for sealing, so no honest certificate can be written over them.",
           guidance: SEAL_FINAL_ROOT_GUIDANCE[finalRoots.reason],
         });
-        this.#notifySealRejected(sessionIdHex, sessionId, "merkle_root_mismatch");
+        /**
+         * ⚠️ THE CODE THE PARTICIPANTS ARE TOLD MUST DESCRIBE WHAT WAS ACTUALLY WRONG —
+         * `DOD-M15-LEAFPARTIES-1`.
+         *
+         * `SealRejectionReason` is a closed union in the published `protocol-types`, so the precise
+         * reason cannot travel on this frame without a wire change; it travels on the RETURN below,
+         * which is what reaches the relay and then the submitting client. What must not happen is
+         * the participants being told `merkle_root_mismatch` — "your two roots disagree" — when the
+         * finding was a stranger's leaf or a leaf from another conversation. That sends the operator
+         * to compare transcripts over an injection. `seal_leaves_invalid` is the true statement the
+         * union can carry for those two.
+         */
+        const provenanceFault =
+          finalRoots.reason === SEAL_FINAL_ROOT_REASONS.SENDER_NOT_PARTICIPANT ||
+          finalRoots.reason === SEAL_FINAL_ROOT_REASONS.LEAF_SESSION_MISMATCH;
+        this.#notifySealRejected(
+          sessionIdHex,
+          sessionId,
+          provenanceFault ? "seal_leaves_invalid" : "merkle_root_mismatch",
+        );
         return { ok: false, reason: finalRoots.reason };
       }
     } else {
