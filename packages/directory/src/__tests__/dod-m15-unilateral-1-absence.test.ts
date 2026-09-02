@@ -165,7 +165,15 @@ describe("DOD-M15-UNILATERAL-1 clause 2 — an ABSENT counterparty can still be 
 });
 
 describe("DOD-M15-UNILATERAL-1 clause 3 — the STANDARD tier is unchanged for the ordinary case", () => {
-  it("unknown liveness past the floor still seals — an honest party is never stranded by a missing signal", async () => {
+  /**
+   * ⚠️ THESE THREE STAY GREEN ON A REVERT, AND THAT IS THE POINT — review, revert-test note.
+   *
+   * Clause 3 asks for PRESERVATION: the ordinary case must behave exactly as it did before this
+   * unit. A test of preservation cannot redden when the unit is removed, because the behaviour it
+   * pins predates the unit. They are named so nobody later reads their green as evidence that the
+   * new gate works — the clause 1 and 4 tests are what carry that, and those do redden.
+   */
+  it("PRESERVED (green before this unit too): unknown liveness past the floor still seals — an honest party is never stranded by a missing signal", async () => {
     /**
      * `unknown` is the relay saying nothing either way: it never tracked this counterparty, or the
      * query failed. The order's first recorded trap is that refusing too eagerly here would strand a
@@ -179,7 +187,7 @@ describe("DOD-M15-UNILATERAL-1 clause 3 — the STANDARD tier is unchanged for t
     expect(notarized(logs)).toBe(true);
   }, 20_000);
 
-  it("a relay adapter with NO liveness method at all is treated as unknown, not as a crash or a refusal", async () => {
+  it("PRESERVED: a relay adapter with NO liveness method at all is treated as unknown, not as a crash or a refusal", async () => {
     const logs: LogEntry[] = [];
     const [a, b] = [generateKeypair(), generateKeypair()];
     await runUnilateral(CONVERSATION(a, b), a, b, logs, { liveness: "omitted" });
@@ -187,7 +195,7 @@ describe("DOD-M15-UNILATERAL-1 clause 3 — the STANDARD tier is unchanged for t
     expect(notarized(logs)).toBe(true);
   }, 20_000);
 
-  it("the standard floor still holds: inside it, the seal is refused with a countdown", async () => {
+  it("PRESERVED: the standard floor still holds — inside it, the seal is refused with a countdown", async () => {
     const logs: LogEntry[] = [];
     const [a, b] = [generateKeypair(), generateKeypair()];
     const { frames } = await runUnilateral(CONVERSATION(a, b), a, b, logs, {

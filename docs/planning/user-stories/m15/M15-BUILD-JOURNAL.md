@@ -10119,3 +10119,71 @@ Two consequences already paid for:
   That is Invariant 3 pointing the other way: a downstream handler overwriting an upstream
   descriptive value. **Not fixed here.** It is that lane's file, they are mid-review on that exact
   commit, and editing an in-flight file in a shared checkout is how two agents corrupt each other.
+
+## Entry 013c — 2026-09-02: 013-ABSENCE reviewed; the receipt's new number was itself a claim
+
+**Reviewer:** `cello-unit-reviewer`, one full pass, both repos. Nine findings and three hollow-test
+findings. Its own summary of what had to change:
+
+> *"the gate itself is sound (A holds no switch over B's standing stream), the two-tier split is
+> correct, and the `verifyCertifiedRoot` fix is safe. What needs to change before close is what the
+> operator is told (F1), what the receipt's new number actually rests on (F2), and the chain claim in
+> V64 (F3)."*
+
+And on the number I had just added:
+
+> *"`countersigned_through_seq` is documented as un-steerable and is directory-attested on the very
+> path this unit is about."*
+
+**That one is the finding worth reading twice.** I published the boundary, wrote that the client
+"recomputes it, so it cannot be steered", and the recomputation ran over the certificate's own
+participant list. On the SOLO path the certificate binds no legibility to the seal signature at all,
+and the client verifies only the *live* party's frontier — so the absent party's numbers, the very
+ones that decide the boundary, arrived unchecked. A directory could publish the absent party's
+frontier as 3 and the receipt would read *"mutually signed through 3"* over a transcript that party
+never signed for. **The field that exists to prevent a conflation reintroduced it.** The rule it
+breaks is already written down: a signature proves something only when checked against what the
+signer does not control, and I applied that rule to the gate and not to my own new field.
+
+It is derived from the daemon's own carry now — we hold the counterparty's leaves, and each carries,
+inside the bytes THEY signed, both what they authored and what they acknowledged. An unreadable
+carry yields NO boundary rather than a guessed one, and says so.
+
+### Findings and disposition
+
+| | What | Done |
+|---|---|---|
+| F1 | All three refusals reached the operator as *"the grace window has not elapsed"* — false for two of them; a session refused because the counterparty is ONLINE was told to wait out a window that expired 110 minutes earlier | fixed both repos: closed-set `cause` on the frame, guidance branches |
+| F2 | The boundary was arithmetic over unverified wire values | fixed: derived from the local signed carry |
+| F3 | V64 would have reddened `verifyChain("sessions")` for every pre-V64 row; the migration comment described the writer and called it the verifier | fixed: excluded like V29's columns, with the cost stated — the tier is stored and NOT tamper-evident |
+| F4 | A counterparty who is PRESENT but will never co-sign (auto-ack disabled after an unverifiable message) now has no exit: before this unit they got a solo receipt at 600s | **accepted, see below** |
+| F5 | Relay liveness is process memory, so a relay restart erases every `gone` and a high-stakes seal is impossible until the counterparty reconnects and leaves again | **accepted, in the guidance** |
+| F6 | `unknown` is recorded as `DELIVERED` — asserting a delivery nobody observed | pre-existing (DOD-LIVE-2); backlog |
+| F7 | The tier map was never evicted | fixed before the review returned |
+| F8 | The target is never told the session is high-stakes and is held to it anyway | recorded at the map; forwarding it needs a signed-assignment change |
+| F9 + 3 alpha-cost | Stale comment references, a NULL branch for a NOT NULL column, rollout reasoning for a permanent choice | fixed |
+| T1 | The opt-in wiring had NO test — three separate edits kept the suite green | fixed: decoder→store test plus a source guard on the dispatch hop no in-process test can reach |
+| T2 | The boundary's only assertion expected `0`, which a constant `0` satisfies | fixed: non-zero boundary, acknowledgement-moves-it, one-author floor, underivable case |
+| T3 | Every fixture satisfied `min(authored)` alone | fixed by T2's acknowledgement case |
+
+**F4, accepted and written down rather than fixed.** An `alive` counterparty who will never co-sign
+is now refused forever where they previously yielded a solo receipt after ten minutes. Refusing is
+right — they are not absent, and a receipt saying so would be false — but the order's first trap says
+a legitimate party must not be stranded, so this is a real cost and not a detail. The exit that
+exists is closing together; the exit that does not exist is a solo receipt against a present peer,
+and that is the trade the unit deliberately makes. If it bites, the answer is a counterparty-refusal
+signal, not a weaker gate.
+
+**F5, accepted, and the guidance says it.** The high-stakes tier's evidence lives only in the relay's
+memory, so a relay redeploy erases it. The refusal text names the condition — waiting helps only if
+the counterparty connects and then leaves — rather than implying a receipt is coming.
+
+### Clause 8, restated honestly
+
+`j-unilateral` 3/3 against the real binaries as separate OS processes, re-run after every fix. The
+final run exits non-zero on a vitest **teardown** RPC timeout (`Timeout calling "onTaskUpdate"`)
+after all three tests report passed; that is the reporter, not a test. One run in between failed at
+`cello_send` with `content_not_encryptable: not_yet_agreed` and `not_registered_here` — a cold-start
+condition immediately after Docker was restarted, where registration had not reached the directory
+the daemon asked and the relay was unreachable. Named rather than called flaky: it is a startup
+ordering in the harness against a fresh database, and it cleared on a warm stack.

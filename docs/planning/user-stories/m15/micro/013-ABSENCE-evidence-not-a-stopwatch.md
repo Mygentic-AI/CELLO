@@ -2,7 +2,7 @@
 name: 013-ABSENCE — Sealing alone needs evidence the other side is gone, not just a clock
 type: micro-work-order
 date: 2026-09-02
-status: open
+status: complete
 description: >
   A party can seal without their counterparty once 600 seconds have passed. There is NO presence
   check of any kind — a fully reachable person who takes eleven minutes to reply can be sealed out
@@ -139,7 +139,23 @@ build; if it has changed, say so in the journal rather than inheriting my readin
 
 ## Review
 
-*(Reviewer verdict goes here. One quote. Not a transcript.)*
+`cello-unit-reviewer`, one full pass, both repos. Nine findings plus three hollow-test findings. Its
+own summary of what had to change before close:
+
+> *"the gate itself is sound (A holds no switch over B's standing stream), the two-tier split is
+> correct, and the `verifyCertifiedRoot` fix is safe. What needs to change before close is what the
+> operator is told (F1), what the receipt's new number actually rests on (F2), and the chain claim
+> in V64 (F3)."*
+
+And on the number this order asked for, which is the finding worth reading twice:
+
+> *"`countersigned_through_seq` is documented as un-steerable and is directory-attested on the very
+> path this unit is about."*
+
+Every finding is fixed or accepted in writing — the table and the reasoning are in journal entry
+013c. F4 (a present counterparty who will never co-sign now has no solo exit) and F5 (a relay
+restart erases the evidence a high-stakes seal needs) are accepted costs, stated in the guidance
+rather than papered over. F6 is pre-existing and goes to the backlog.
 
 ---
 
@@ -159,6 +175,20 @@ build; if it has changed, say so in the journal rather than inheriting my readin
   `{ agent }`. The shape `agent ? { target_pubkey, agent } : { target_pubkey }` drops an empty name
   identically and sails through. `cello_initiate_session` carried that shape until this unit
   rewrote it; whether other tools still do was not surveyed.
+- **A present counterparty who will never co-sign now has no solo exit.** Auto-acknowledge is
+  disabled for a session after an unverifiable message, so such a peer is `alive` forever and the
+  gate refuses forever — where before this unit they yielded a solo receipt at 600s. Refusing is
+  right (they are not absent) and it is still a real cost. The fix, if it bites, is a
+  counterparty-refusal signal, not a weaker gate.
+- **The high-stakes tier's evidence lives only in relay process memory.** A relay redeploy erases
+  every `gone`, so an honest high-stakes party whose counterparty left before the restart cannot get
+  a solo receipt until that counterparty connects and leaves again. The refusal guidance names the
+  condition; persisting liveness transitions would remove it.
+- **`unknown` liveness is recorded as `DELIVERED`.** Asserting a delivery nobody observed, in the
+  same family as the absence claim this order is about. Pre-existing (`DOD-LIVE-2`), and this unit
+  made the value load-bearing for the standard tier.
+- **The target is never told the session is high-stakes** and is held to its longer floor and
+  evidence bar anyway. Forwarding it means a field on the signed assignment.
 - **Two lanes are committing into one checkout and the commits interleave.** `016-RELAYLOSS`'s
   commits sit on `m15/013-absence` in both repos (trustless-cello `901bd9c7`, `72901b99`, `5f87081e`;
   cello-client `194296a`, `032f5a5`). Nothing lost, nothing rewritten, but a reviewer reading either
