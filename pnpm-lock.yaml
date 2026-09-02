@@ -19,7 +19,7 @@ importers:
     devDependencies:
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.2
-        version: 3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
       '@typescript-eslint/eslint-plugin':
         specifier: ^8.0.0
         version: 8.59.1(@typescript-eslint/parser@8.59.1(eslint@9.39.4)(typescript@5.9.3))(eslint@9.39.4)(typescript@5.9.3)
@@ -92,7 +92,7 @@ importers:
         version: link:../relay
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.2)
@@ -131,7 +131,7 @@ importers:
         version: 0.0.63
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.2)
@@ -144,6 +144,9 @@ importers:
       cbor-x:
         specifier: ^1.6.0
         version: 1.6.4
+      it-length-prefixed:
+        specifier: ^9.1.0
+        version: 9.1.1
       zod:
         specifier: ^4.4.2
         version: 4.4.2
@@ -236,7 +239,7 @@ importers:
     devDependencies:
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
 
   packages/seal-notifier:
     devDependencies:
@@ -252,7 +255,7 @@ importers:
     devDependencies:
       '@claude-flow/testing':
         specifier: 3.0.0-alpha.6
-        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
+        version: 3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))
       '@types/node':
         specifier: 25.6.2
         version: 25.6.2
@@ -3273,10 +3276,6 @@ packages:
   it-filter@3.1.6:
     resolution: {integrity: sha512-yXiGPAvJn/exXjVFSCMQc3+J/7RLpOMwKoY2DH1yMhF4lYkdRoAdOwU0vnDACAlRAexf7AZvESZIc9mzhEoi/A==}
 
-  it-length-prefixed@10.0.1:
-    resolution: {integrity: sha512-BhyluvGps26u9a7eQIpOI1YN7mFgi8lFwmiPi07whewbBARKAG9LE09Odc8s1Wtbt2MB6rNUrl7j9vvfXTJwdQ==}
-    engines: {node: '>=16.0.0', npm: '>=7.0.0'}
-
   it-length-prefixed@10.0.2:
     resolution: {integrity: sha512-RrNBs4d7baK8AKGHleC55l/JtvzxDw6DPXs3CvFgQwdwFzLBFDvlpKgDDNDFwXJjPSy1nEX1A44nL110+EKc3g==}
 
@@ -5286,14 +5285,14 @@ snapshots:
 
   '@claude-flow/swarm@3.0.0-alpha.1': {}
 
-  '@claude-flow/testing@3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))':
+  '@claude-flow/testing@3.0.0-alpha.2(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))':
     dependencies:
       '@claude-flow/memory': 3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2)
       '@claude-flow/shared': 3.0.0-alpha.1
       '@claude-flow/swarm': 3.0.0-alpha.1
       vitest: 3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0)
 
-  '@claude-flow/testing@3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))':
+  '@claude-flow/testing@3.0.0-alpha.6(@claude-flow/memory@3.0.0-alpha.14(@types/node@25.6.2))(@claude-flow/shared@3.0.0-alpha.1)(@claude-flow/swarm@3.0.0-alpha.1)(vitest@3.2.4(@types/node@25.6.2)(tsx@4.22.0)(yaml@2.9.0))':
     dependencies:
       '@claude-flow/memory': 3.0.0-alpha.14(@types/node@25.6.2)(zod@4.4.2)
       '@claude-flow/shared': 3.0.0-alpha.1
@@ -5913,7 +5912,7 @@ snapshots:
     dependencies:
       '@libp2p/interface': 3.2.2
       '@libp2p/utils': 7.1.0
-      it-length-prefixed: 10.0.1
+      it-length-prefixed: 10.0.2
       uint8arraylist: 2.4.9
       uint8arrays: 5.1.1
 
@@ -6046,7 +6045,7 @@ snapshots:
       cborg: 5.1.1
       delay: 7.0.0
       is-loopback-addr: 2.0.2
-      it-length-prefixed: 10.0.1
+      it-length-prefixed: 10.0.2
       it-pipe: 3.0.1
       it-pushable: 3.2.3
       it-stream-types: 2.0.4
@@ -8285,14 +8284,6 @@ snapshots:
   it-filter@3.1.6:
     dependencies:
       it-peekable: 3.0.10
-
-  it-length-prefixed@10.0.1:
-    dependencies:
-      it-reader: 6.0.4
-      it-stream-types: 2.0.4
-      uint8-varint: 2.0.4
-      uint8arraylist: 2.4.9
-      uint8arrays: 5.1.1
 
   it-length-prefixed@10.0.2:
     dependencies:
