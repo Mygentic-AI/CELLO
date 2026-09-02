@@ -320,15 +320,19 @@ describe("DOD-M15-CI-SKIPS-SILENT-1: files a project config hides never collect 
      * so"* — but `toBeGreaterThan(0)` stays green after deleting 36 of the 37 files, so nobody had to
      * come and say anything. A test that names a number and asserts a floor is not counting.
      *
-     * 37 = 36 `*.spine.test.ts` + 1 `*.cross-machine.test.ts`. The DoD line said 38; it was wrong.
+     * 38 = 37 `*.spine.test.ts` + 1 `*.cross-machine.test.ts`. The DoD line said 38; it was wrong.
+     *
+     * +1 on 2026-09-02: `j-witness.spine.test.ts` (`DOD-M15-CORROBORATE-1`), hidden from the root
+     * gate like every other spine file. It IS run, deliberately, by
+     * `pnpm --filter @cello-protocol/e2e-tests test:spine` — the lane is hidden, not unrun.
      */
     expect(
       spine.length,
-      `The hidden lane is ${String(spine.length)} files, not 37. If files were ADDED, they are ` +
+      `The hidden lane is ${String(spine.length)} files, not 38. If files were ADDED, they are ` +
         `hidden too and nobody has run them — say so here. If files were REMOVED or wired into the ` +
         `gate, that is the outcome DOD-M15-SPINE-LANE-1 wanted; update the number and the DoD line ` +
         `together so the record moves with the code.`,
-    ).toBe(37);
+    ).toBe(38);
   });
 });
 
