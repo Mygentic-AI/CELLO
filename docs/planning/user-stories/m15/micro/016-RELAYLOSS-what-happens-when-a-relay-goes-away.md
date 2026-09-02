@@ -249,11 +249,13 @@ a success to close again, or the directory's grace window to expire into a unila
 operator following the guidance from the side that failed is walked into a dead end.
 
 **4 — How long is the gap?** With a killed relay process and a receiver confirmed to be holding a
-reservation at the moment of the kill, **17.0 seconds** from death to the daemon noticing. From
-production, across the three agents, a gap without a working circuit runs **3.6 to 4.8 seconds at
-the median and 322 to 371 seconds at the 90th percentile**; the windows longer than an hour are all
-three agents beginning and ending within milliseconds of each other overnight, which is the laptop
-asleep, not a fault.
+reservation at the moment of the kill, the daemon notices in **14.0 to 17.0 seconds** — three runs,
+one sample each, quoted as the range they actually span rather than as a single figure.
+
+From production, across the three agents, a gap without a working circuit runs **3.6 to 4.8 seconds
+at the median and 322 to 371 seconds at the 90th percentile**. The windows longer than an hour are
+all three agents beginning and ending within milliseconds of each other overnight, which is the
+laptop asleep, not a fault.
 
 **5 — Does the rebuild succeed, against a different relay?** The *different relay* half is not
 answerable here — this harness runs one. From production: the second relay **is** used, and rarely.
@@ -366,16 +368,27 @@ seal half, and the seal half is the receipt, which is the product.
 
 ### Gates
 
+Run on branch `m15/016-relayloss` in the paired worktrees, not in the shared checkout.
+
 | Repo | Result |
 |---|---|
-| cello-client | 299 files / 3087 tests pass; lint clean; typecheck clean; build clean, and the fix verified present in the BUILT artifact, not only in source |
-| trustless-cello | 189 files / 1932 tests pass; lint clean; typecheck clean |
+| cello-client | 299 files / 3097 tests pass (daemon) + 21 files / 183 tests (adapter); lint clean; typecheck clean; build clean, and the fix verified present in the BUILT artifact, not only in source |
+| trustless-cello | 189 files / 1936 tests pass; lint clean; typecheck clean |
 | the journey itself | passes against the rebuilt binary, with both `witnessed` values asserted |
 
-Two failures appeared in an earlier trustless-cello run and **neither was this unit's**. Both
-belonged to the `013-ABSENCE` lane working in the same checkout — a migration number and a spine-file
-count that my new journey happened to change. Both were re-run individually and pass. Attributed by
-re-running them, not by assuming.
+The spine-lane file count went red on this branch when the journey was added, which is the guard
+doing its job — an added file the root gate never runs has to be announced. Bumped here, in the same
+change that carries the file.
+
+Two failures appeared in an earlier run **in the shared checkout**, and **neither was this unit's**.
+Both belonged to the `013-ABSENCE` lane — a migration number and a spine-file count that my new
+journey happened to change. Both were re-run individually and pass. Attributed by re-running them,
+not by assuming.
+
+One regression **was** this unit's, and it was found by the other lane rather than by me: making the
+queued path's guidance conditional on witnessing discarded the relay's own retry window, because a
+rate-limited park is unwitnessed by construction. Their test caught it deterministically. Fixed by
+composing the two messages instead of choosing between them.
 
 The new unit test was mutated out, typechecked clean so the mutant genuinely compiled, and re-run
 alone: it reddens with *expected undefined to be false* on the exact response shape the live run
