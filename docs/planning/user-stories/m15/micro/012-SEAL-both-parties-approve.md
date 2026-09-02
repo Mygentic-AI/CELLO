@@ -193,3 +193,16 @@ the threshold.
 ## Newly discovered
 
 *(One or two lines each. Do not act on them.)*
+
+- **A seal refusal is still broadcast to every agent authenticated on the node**, on the refusal
+  paths that fire BEFORE the roster is resolved (the per-leaf signature loop, the chain checks). The
+  approval refusal added here delivers to the pair; the earlier ones cannot, because moving the
+  roster lookup ahead of the signature loop reorders a precondition several comments depend on. A
+  stranger learns a session id and that its seal failed.
+- **A message that lands BETWEEN the two SEAL leaves makes the two participants' approvals disagree**
+  — the first closer's `final_root` covers a shorter transcript than the second's, so
+  `verifySealFinalRoots` returns `seal_final_root_parties_disagree` and the seal is refused. This is
+  pre-existing whenever both parties carry their payload (it is not created by requiring both), and
+  `directory-node.test.ts` calls the shape *"reachable in production"*. The fix on record for the
+  retry version of this is *last carried leaf per sender wins*; nothing re-submits a SEAL leaf when a
+  late message lands.

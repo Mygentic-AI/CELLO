@@ -244,14 +244,24 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4, WIRED: the relay is checked against a 
     const authored = await authorTranscript(keyA, keyB, sessionId);
     const tampered = authored.filter((_, i) => i !== 1);  // delete A's second part
 
-    // (i) WITHOUT the carried payloads — i.e. every check this directory had until now.
+    /**
+     * (i) WITHOUT the carried payloads — every check that is not the final-root comparison.
+     *
+     * ⚠️ THIS USED TO ASSERT `ok === true`, AND THE CHANGE IS NOT A WEAKENING — `DOD-M15-SEALPARTIES-1`
+     * now refuses a bilateral seal that carries fewer than two approvals, so an uncarried set never
+     * reaches a verdict about its contents at all. The point of this half is unchanged and the
+     * assertion is what preserves it: the deletion leaves NO trace that any other check can see, so
+     * the refusal here must be about the missing approvals and nothing else. If the deletion ever
+     * started tripping `prev_root_chain_broken` or `merkle_root_mismatch`, this test would be
+     * proving something other than what it is named for, and that is exactly what this catches.
+     */
     await withDirectory(async ({ directory }) => {
       const blind = await present(tampered, keyA, keyB, sessionId, { carryPayloads: false });
       const blindResult = await directory.processSeal(sessionId, blind);
       expect(
-        blindResult.ok,
-        `the deletion must pass every PRE-EXISTING check, or this test is proving something else: ${JSON.stringify(blindResult)}`,
-      ).toBe(true);
+        blindResult.ok === false ? blindResult.reason : "certified",
+        `the deletion itself must remain invisible to every check but the carried root: ${JSON.stringify(blindResult)}`,
+      ).toBe("seal_approval_missing");
     });
 
     // (ii) The SAME tampered leaf set, with the payloads the participants signed.
@@ -277,14 +287,22 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4, WIRED: the relay is checked against a 
     });
   }, 60_000);
 
-  it("★★ AN OLD RELAY THAT CARRIES NOTHING IS STILL CERTIFIED — refusing it would take the federation down", async () => {
+  it("★★ A BILATERAL SEAL THAT CARRIES NOTHING IS NOW REFUSED — the off-switch is closed", async () => {
     /**
-     * The counterbalance, and getting it wrong is worse than the defect it guards. Every relay is
-     * un-upgraded until it upgrades, so treating an absent payload as a disagreement would refuse
-     * every seal in the federation the moment this directory shipped.
+     * ⚠️ THIS TEST ASSERTED THE OPPOSITE UNTIL `DOD-M15-SEALPARTIES-1`, and the reasoning it carried
+     * is kept here because it was right at the time and explains why the tolerance existed:
      *
-     * The seal proceeds exactly as it did before the check existed — and says so once, at info, so an
-     * operator can tell "checked" from "not checked" instead of assuming.
+     *   > *"Every relay is un-upgraded until it upgrades, so treating an absent payload as a
+     *   > disagreement would refuse every seal in the federation the moment this directory shipped."*
+     *
+     * That was the rollout window. It is over — nothing is registered against a client that predates
+     * the carry — and the price of keeping the tolerance was named in the same breath by the code it
+     * guarded: **`content_bytes` is supplied by the party assembling the leaves**, so a relay that
+     * deletes a message also drops both payloads and lands in the tolerated branch, certified. A
+     * check the guarded party can switch off by sending less is not a check.
+     *
+     * So the seal is refused, the refusal is at error rather than info (it is no longer the normal
+     * case), and the `not_carried` INFO path is gone rather than downgraded.
      */
     await withDirectory(async ({ directory, logs }) => {
       const keyA = generateKeypair(), keyB = generateKeypair();
@@ -294,15 +312,23 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4, WIRED: the relay is checked against a 
       );
 
       const result = await directory.processSeal(sessionId, uncarried);
-      expect(result.ok, "an un-upgraded relay must keep working — this is the whole rollout window").toBe(true);
-
-      const notCarried = logs.filter((l) => l.event === "seal.final_root.not_carried");
-      expect(notCarried.length, "and it must be visible that nothing was checked").toBe(1);
       expect(
-        notCarried[0]!.level,
-        "info, not warn: during the roll this is every seal, and a warning here trains operators to filter it",
-      ).toBe("info");
-      expect(logs.filter((l) => l.event === "seal.final_root.refused").length, "and nothing refused").toBe(0);
+        result.ok,
+        "with no approval carried, the certificate would rest on the assembler's word alone",
+      ).toBe(false);
+      expect(result.ok === false ? result.reason : "").toBe("seal_approval_missing");
+
+      expect(
+        logs.filter((l) => l.event === "seal.final_root.not_carried").length,
+        "the tolerated branch is deleted, not merely unused — an INFO here would mean it still runs",
+      ).toBe(0);
+      const refused = logs.filter((l) => l.event === "seal.final_root.refused");
+      expect(refused.length).toBe(1);
+      expect(refused[0]!.level, "no longer the normal case, so no longer info").toBe("error");
+      expect(
+        String(refused[0]!.ctx["guidance"]),
+        "and the reader is pointed at the producer — the counterparty's build first, then the relay",
+      ).toMatch(/relay/i);
     });
   }, 60_000);
 });

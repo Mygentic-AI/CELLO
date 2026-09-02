@@ -263,6 +263,22 @@ export type {
   SealVerified,
 } from "@cello-protocol/protocol-types";
 import type { SessionSealed as SessionSealedBase } from "@cello-protocol/protocol-types";
+import type { SealRejectionReason as SealRejectionReasonBase } from "@cello-protocol/protocol-types";
+
+/**
+ * The reason codes `session_seal_rejected` can carry, including the two `DOD-M15-SEALPARTIES-1`
+ * adds: `seal_approval_missing` (fewer than two participants approved) and `seal_parties_disagree`
+ * (they approved DIFFERENT transcripts). Both are in `@cello-protocol/protocol-types` from the next
+ * release; the local widening comes out when this repo re-pins to it.
+ *
+ * They exist as their own codes rather than folding into `merkle_root_mismatch` because each sends
+ * the operator somewhere different — a build to check, a counterparty to compare notes with, or a
+ * relay to suspect — and a code that names the wrong one costs the reader their time and their trust.
+ */
+export type SealRejectionWireReason =
+  | SealRejectionReasonBase
+  | "seal_approval_missing"
+  | "seal_parties_disagree";
 
 // ─── M7-SESSION-004: Seal certificate legibility wire shape ────────────────────
 // Local mirror of @cello-protocol/protocol-types SealLegibility. The published

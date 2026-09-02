@@ -108,6 +108,17 @@ export const SEAL_FINAL_ROOT_REASONS = {
   SENDER_NOT_PARTICIPANT: "seal_sender_not_participant",
   /** A leaf whose OWN SIGNED bytes name a different session than the one being sealed. */
   LEAF_SESSION_MISMATCH: "seal_leaf_session_mismatch",
+  /**
+   * A BILATERAL seal where fewer than two participants carried a signed root —
+   * `DOD-M15-SEALPARTIES-1`.
+   *
+   * Raised by the caller, not by `verifySealFinalRoots`, because it is a judgement about which SEAL
+   * TYPE is being certified rather than about the leaves: `coverage: "one"` is a refusal on the
+   * bilateral path and the expected outcome on the unilateral one, where the counterparty is gone by
+   * definition. Both verdicts come from the same walk; only the bilateral caller treats one of them
+   * as a fault.
+   */
+  APPROVAL_INCOMPLETE: "seal_approval_missing",
 } as const;
 
 export type SealFinalRootReason =
@@ -157,6 +168,14 @@ export const SEAL_FINAL_ROOT_GUIDANCE: Record<SealFinalRootReason, string> = {
     "A leaf in this seal was signed by a key belonging to neither participant. Nobody outside a conversation can speak in it or close it, so this leaf was injected by whoever assembled the leaf set — on the bilateral path that is the relay, and on the unilateral path it is the party that carried the chain. Treat it as tampering by that party and do not certify; the participants' own transcripts are the record to compare against.",
   [SEAL_FINAL_ROOT_REASONS.LEAF_SESSION_MISMATCH]:
     "A leaf's OWN SIGNED bytes name a different session than the one being sealed. The signature is genuine and the sender may well be a participant — the sentence was simply said in another conversation and has been grafted into this one. Nothing legitimate produces this: a client signs each leaf with the session it is sending in. Treat it as a replay by whoever assembled the leaf set and do not certify.",
+  /**
+   * ⚠️ THE THREE PRODUCERS ARE NOT DISTINGUISHABLE FROM HERE, so the guidance names all three and
+   * says which to check first. The old NOT_CARRIED text pointed at a rollout that no longer exists;
+   * pointing an operator at build versions for what is now, by elimination, tampering or a
+   * counterparty fault would be the wrong subsystem.
+   */
+  [SEAL_FINAL_ROOT_REASONS.APPROVAL_INCOMPLETE]:
+    "A bilateral seal needs BOTH participants' own signed transcript root, and fewer than two arrived. Nothing was signed. Three things produce this: the counterparty's agent did not attach its signed root when it closed, the relay did not forward it, or a relay STRIPPED it — the field is relay-supplied, so its absence is the off-switch for exactly the party this check exists to catch. Check the counterparty's agent build first (it is the producer), then the relay serving this session. Do NOT force-abandon: that permanently forfeits the receipt. If the counterparty is genuinely gone rather than out of date, the solo seal is the path that still gets you a receipt.",
 };
 
 /**

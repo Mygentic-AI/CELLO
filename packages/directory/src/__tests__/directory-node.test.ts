@@ -48,6 +48,7 @@ import type {
   RelaySessionAssignment,
   TimeSource,
 } from "../directory-types.js";
+import { rootOverContentHashes, sealApproval } from "./helpers/seal-fixture.js";
 import {
   decodeOutboundSignalingFrame,
 } from "../directory-frames.js";
@@ -2027,12 +2028,27 @@ async function buildValidSealData(
   const timestamp1 = (tsMs + 1) > 0xffffffff ? BigInt(tsMs + 1) : tsMs + 1;
   const timestamp2 = (tsMs + 2) > 0xffffffff ? BigInt(tsMs + 2) : tsMs + 2;
 
+  /**
+   * DOD-M15-SEALPARTIES-1: both SEAL ctrl leaves now carry their party's signed approval — the root
+   * over the NON-ctrl content hashes — because a bilateral seal with fewer than two approvals is
+   * refused. Both approvals are built over the FINAL non-ctrl set, including the leaf that lands
+   * between the two SEALs in the `docLeafBetweenCtrls` / `msgLeafBetweenCtrls` variants, so these
+   * tests stay about what they are named for. (A real late message that only ONE party's approval
+   * covers makes the two disagree; that race is recorded under *Newly discovered* on the 012 order
+   * and is not what these tests are for.)
+   */
+  const approvalRoot = rootOverContentHashes(
+    opts.docLeafBetweenCtrls || opts.msgLeafBetweenCtrls ? [contentHash, contentHash] : [contentHash],
+  );
+  const approvalB = sealApproval(sessionId, approvalRoot, tsMs + 1);
+  const approvalA = sealApproval(sessionId, approvalRoot, tsMs + 2);
+
   // Build Structure 1 CBOR for a message leaf from A
   const s1Tbs = CBOR_ENC.encode([1, contentHash, pubkeyA, sessionId, 0, timestamp]);
   const s1Sig = new Uint8Array(await keyA.sign(s1Tbs));
 
   // Build a second Structure 1 from B (ctrl leaf — SEAL)
-  const s1TbsB = CBOR_ENC.encode([1, contentHash, pubkeyB, sessionId, 1, timestamp1]);
+  const s1TbsB = CBOR_ENC.encode([1, approvalB.contentHash, pubkeyB, sessionId, 1, timestamp1]);
   const s1SigB = new Uint8Array(await keyB.sign(s1TbsB));
 
   // Genesis prev_root (for simplicity, use all-zeros — the relay would compute it per SESSION-002)
@@ -2047,19 +2063,19 @@ async function buildValidSealData(
   const prevRoot2 = merkleRoot(buildMerkleTree([{ kind: "msg", data: s2CborA }]));
 
   // Build Structure 2 for SEAL ctrl leaf from B (seq=2)
-  const s2ResultB = buildStructure2(2, pubkeyB, contentHash, s1SigB, prevRoot2);
+  const s2ResultB = buildStructure2(2, pubkeyB, approvalB.contentHash, s1SigB, prevRoot2);
   if (!s2ResultB.ok) throw new Error("buildStructure2 failed B");
   const s2CborB = encodeStructure2(s2ResultB.structure2);
 
   // We need a second ctrl leaf from A for the "two SEAL leaves" requirement
   // Build Structure 1 for A's SEAL ctrl leaf
-  const s1TbsA2 = CBOR_ENC.encode([1, contentHash, pubkeyA, sessionId, 2, timestamp2]);
+  const s1TbsA2 = CBOR_ENC.encode([1, approvalA.contentHash, pubkeyA, sessionId, 2, timestamp2]);
   const s1SigA2 = new Uint8Array(await keyA.sign(s1TbsA2));
   const prevRoot3 = merkleRoot(buildMerkleTree([
     { kind: "msg", data: s2CborA },
     { kind: "ctrl", data: s2CborB },
   ]));
-  const s2ResultA2 = buildStructure2(3, pubkeyA, contentHash, s1SigA2, prevRoot3);
+  const s2ResultA2 = buildStructure2(3, pubkeyA, approvalA.contentHash, s1SigA2, prevRoot3);
   if (!s2ResultA2.ok) throw new Error("buildStructure2 failed A2");
   const s2CborA2 = encodeStructure2(s2ResultA2.structure2);
 
@@ -2073,8 +2089,8 @@ async function buildValidSealData(
     return {
       leaves: [
         { kind: "msg", s2: s2ResultA.structure2, structure1_cbor: s1Tbs },
-        { kind: "ctrl", s2: s2ResultB.structure2, structure1_cbor: s1TbsB },
-        { kind: "ctrl", s2: s2ResultA2.structure2, structure1_cbor: s1TbsA2 },
+        { kind: "ctrl", s2: s2ResultB.structure2, structure1_cbor: s1TbsB, content_bytes: approvalB.contentBytes },
+        { kind: "ctrl", s2: s2ResultA2.structure2, structure1_cbor: s1TbsA2, content_bytes: approvalA.contentBytes },
       ],
       seq_count: 3,
       merkle_root: finalRoot,
@@ -2098,9 +2114,9 @@ async function buildValidSealData(
     { kind: "ctrl", data: s2CborB },
     { kind: betweenKind, data: s2CborDoc },
   ]));
-  const s1TbsA3 = CBOR_ENC.encode([1, contentHash, pubkeyA, sessionId, 2, timestamp3]);
+  const s1TbsA3 = CBOR_ENC.encode([1, approvalA.contentHash, pubkeyA, sessionId, 2, timestamp3]);
   const s1SigA3 = new Uint8Array(await keyA.sign(s1TbsA3));
-  const s2ResultA3 = buildStructure2(4, pubkeyA, contentHash, s1SigA3, prevRoot4);
+  const s2ResultA3 = buildStructure2(4, pubkeyA, approvalA.contentHash, s1SigA3, prevRoot4);
   if (!s2ResultA3.ok) throw new Error("buildStructure2 failed A3");
   const s2CborA3 = encodeStructure2(s2ResultA3.structure2);
 
@@ -2114,9 +2130,9 @@ async function buildValidSealData(
   return {
     leaves: [
       { kind: "msg", s2: s2ResultA.structure2, structure1_cbor: s1Tbs },
-      { kind: "ctrl", s2: s2ResultB.structure2, structure1_cbor: s1TbsB },
+      { kind: "ctrl", s2: s2ResultB.structure2, structure1_cbor: s1TbsB, content_bytes: approvalB.contentBytes },
       { kind: betweenKind, s2: s2ResultDoc.structure2, structure1_cbor: s1TbsDoc },
-      { kind: "ctrl", s2: s2ResultA3.structure2, structure1_cbor: s1TbsA3 },
+      { kind: "ctrl", s2: s2ResultA3.structure2, structure1_cbor: s1TbsA3, content_bytes: approvalA.contentBytes },
     ],
     seq_count: 4,
     merkle_root: finalRootDoc,

@@ -139,7 +139,8 @@ import type {
   SealLegibility,
 } from "./directory-types.js";
 import { buildSealLegibility, bindLegibilityToTbs, findSealCeremonyPair } from "./seal-legibility.js";
-import { verifySealFinalRoots, verifyLeafProvenance, SEAL_FINAL_ROOT_REASONS, SEAL_FINAL_ROOT_GUIDANCE } from "./seal-final-root.js";
+import { verifySealFinalRoots, verifyLeafProvenance, SEAL_FINAL_ROOT_REASONS, SEAL_FINAL_ROOT_GUIDANCE, type SealFinalRootReason } from "./seal-final-root.js";
+import type { SealRejectionWireReason } from "./directory-types.js";
 import { WALL_CLOCK } from "./directory-types.js";
 import type { DirectoryStore } from "@cello-protocol/interfaces";
 import { mintOnlineToken, ONLINE_TOKEN_ISSUE_LIFETIME_MS } from "@cello-protocol/interfaces";
@@ -5510,78 +5511,99 @@ export class CelloDirectoryNode {
      * difference between this check having teeth and merely appearing to.
      */
     const finalRoots = verifySealFinalRoots(leaves, sessionId, roster);
-    if (!finalRoots.ok) {
-      if (finalRoots.reason === SEAL_FINAL_ROOT_REASONS.NOT_CARRIED) {
-        /**
-         * ⚠️ ABSENT IS NOT A DISAGREEMENT, AND REFUSING IT WOULD BREAK EVERY SEAL DURING THE ROLL.
-         *
-         * A client or relay that has not deployed the carry sends no payload, and that is the state
-         * every node is in until it upgrades. Treating it as a failure would take the entire
-         * federation down the moment this directory shipped — the exact ABSENT-versus-NAMED collapse
-         * Decision #15 spends a wire discriminator preventing, applied one layer up.
-         *
-         * So the seal proceeds exactly as it did before this check existed, and says so once.
-         *
-         * ⚠️ AND THE DOWNGRADE IS NAMED, BECAUSE THIS IS THE ATTACKER'S OWN OFF-SWITCH — F4.
-         *
-         * `content_bytes` is relay-supplied, so a relay that deletes a message leaf also strips both
-         * payloads and lands right back here, certified. Tolerating absence is correct DURING THE
-         * ROLL and only during it: once clients and relays carry the payload, a bilateral seal that
-         * arrives without one must become a refusal, or the guard is optional for exactly the party
-         * it guards against. Tracked as `DOD-M15-NOTCARRIED-REFUSE-1` — a named follow-on rather
-         * than a sentence in a comment, because "we should tighten this later" written only here is
-         * how the two-milestone deferral this line just deleted came to exist.
-         */
-        this.#logger?.info("seal.final_root.not_carried", {
-          sessionId: sessionIdHex,
-          impact: "this seal was certified WITHOUT checking the participants' own signed root — the behaviour of every release before this check existed. Nothing is degraded relative to any shipped version.",
-          guidance: SEAL_FINAL_ROOT_GUIDANCE[finalRoots.reason],
-        });
-      } else {
-        /**
-         * A CARRIED payload that disagrees is the thing this whole line of work exists to catch, and
-         * it is refused. The reasons are distinct on purpose — a relay that altered the leaf set, two
-         * participants who disagree with each other, and a payload signed by neither of them are
-         * three different accusations against three different parties.
-         */
-        this.#logger?.error("seal.final_root.refused", {
-          sessionId: sessionIdHex,
-          reason: finalRoots.reason,
-          detail: finalRoots.detail,
-          impact: "the certificate was NOT signed. A participant's own signed transcript root does not match the leaves presented for sealing, so no honest certificate can be written over them.",
-          guidance: SEAL_FINAL_ROOT_GUIDANCE[finalRoots.reason],
-        });
-        /**
-         * ⚠️ THE CODE THE PARTICIPANTS ARE TOLD MUST DESCRIBE WHAT WAS ACTUALLY WRONG —
-         * `DOD-M15-LEAFPARTIES-1`.
-         *
-         * `SealRejectionReason` is a closed union in the published `protocol-types`, so the precise
-         * reason cannot travel on this frame without a wire change; it travels on the RETURN below,
-         * which is what reaches the relay and then the submitting client. What must not happen is
-         * the participants being told `merkle_root_mismatch` — "your two roots disagree" — when the
-         * finding was a stranger's leaf or a leaf from another conversation. That sends the operator
-         * to compare transcripts over an injection. `seal_leaves_invalid` is the true statement the
-         * union can carry for those two.
-         */
-        const provenanceFault =
-          finalRoots.reason === SEAL_FINAL_ROOT_REASONS.SENDER_NOT_PARTICIPANT ||
-          finalRoots.reason === SEAL_FINAL_ROOT_REASONS.LEAF_SESSION_MISMATCH;
-        this.#notifySealRejected(
-          sessionIdHex,
-          sessionId,
-          provenanceFault ? "seal_leaves_invalid" : "merkle_root_mismatch",
-        );
-        return { ok: false, reason: finalRoots.reason };
-      }
-    } else {
-      this.#logger?.info("seal.final_root.verified", {
+
+    /**
+     * 🚨 BOTH PARTICIPANTS OR NO CERTIFICATE — `DOD-M15-SEALPARTIES-1`, and it closes
+     * `DOD-M15-NOTCARRIED-REFUSE-1`.
+     *
+     * ─── What the two tolerated verdicts were, and why they are gone ─────────────────────────
+     *
+     * This branch used to accept two outcomes that are not agreement:
+     *
+     *   `not_carried`  — nobody's signed root was checked at all.
+     *   `coverage:"one"` — exactly one participant's was.
+     *
+     * Both were correct while the payload carry was rolling out, and the comment that stood here
+     * argued the case: refusing during a roll would have taken the whole federation down, so the
+     * seal proceeded exactly as every earlier release did. It also named the price, and the price is
+     * why the tolerance is now deleted rather than trimmed — **`content_bytes` is supplied by the
+     * party ASSEMBLING the leaves**, so a relay that drops one field lands back here and is
+     * certified. A check the guarded party can switch off by sending less is not a check.
+     *
+     * There is no roll to protect. Nothing is registered against a shipped client that predates the
+     * carry, so the older shape is deleted rather than supported alongside the new one.
+     *
+     * ─── Why this IS the counterparty's pre-signature approval ───────────────────────────────
+     *
+     * A participant's `final_root` is its own signed statement of the transcript it is closing on,
+     * made when it closed — before this method ran, and long before any notarizing signature exists.
+     * Requiring both of them is what moves the anchor from *"the verifying directory is honest"* to
+     * *"at least one of the two real participants is honest"*: the side that used to find out only
+     * when `session_sealed` landed now decides whether the certificate is written at all.
+     *
+     * ─── The one place `coverage:"one"` is still right ───────────────────────────────────────
+     *
+     * The UNILATERAL path, where exactly one ctrl leaf is required by design because the
+     * counterparty is gone. That path does not come through here — this is the bilateral entry
+     * point, and an honest party whose counterparty never closed still reaches its receipt the solo
+     * way (`DOD-M15-UNILATERAL-1`). Nothing here invents a clock.
+     */
+    const approvalIncomplete =
+      (!finalRoots.ok && finalRoots.reason === SEAL_FINAL_ROOT_REASONS.NOT_CARRIED) ||
+      (finalRoots.ok && finalRoots.coverage === "one");
+    if (!finalRoots.ok || approvalIncomplete) {
+      const reason = approvalIncomplete
+        ? SEAL_FINAL_ROOT_REASONS.APPROVAL_INCOMPLETE
+        : (finalRoots as { reason: SealFinalRootReason }).reason;
+      const detail = finalRoots.ok
+        ? (finalRoots as { detail?: string }).detail ?? "only one participant's signed root was carried"
+        : finalRoots.detail;
+      /**
+       * A CARRIED payload that disagrees is the thing this whole line of work exists to catch, and
+       * it is refused. The reasons are distinct on purpose — a relay that altered the leaf set, two
+       * participants who disagree with each other, a payload signed by neither of them, and a
+       * counterparty who approved nothing are four different accusations against four different
+       * parties.
+       */
+      this.#logger?.error("seal.final_root.refused", {
         sessionId: sessionIdHex,
-        coverage: finalRoots.coverage,
-        // `one` means a single participant's signature backed this root — see the verdict's own
-        // detail. Recorded because "verified" without it overstates what was checked.
-        ...(finalRoots.coverage === "one" ? { detail: finalRoots.detail } : {}),
+        reason,
+        detail,
+        impact: "the certificate was NOT signed and no FROST ceremony was started, so no signature over this root exists anywhere. A bilateral seal requires BOTH participants' own signed transcript root, and this one did not have them.",
+        guidance: SEAL_FINAL_ROOT_GUIDANCE[reason],
       });
+      /**
+       * ⚠️ THE CODE THE PARTICIPANTS ARE TOLD MUST DESCRIBE WHAT WAS ACTUALLY WRONG —
+       * `DOD-M15-LEAFPARTIES-1`, extended here by `DOD-M15-SEALPARTIES-1`.
+       *
+       * What must not happen is the participants being told `merkle_root_mismatch` — "your two roots
+       * disagree" — when the finding was a stranger's leaf, a leaf from another conversation, or a
+       * counterparty who approved nothing. Each of those sends the operator somewhere different, and
+       * only one of them is a reason to compare transcripts with each other.
+       */
+      const wireReason: SealRejectionWireReason =
+        reason === SEAL_FINAL_ROOT_REASONS.SENDER_NOT_PARTICIPANT ||
+        reason === SEAL_FINAL_ROOT_REASONS.LEAF_SESSION_MISMATCH
+          ? "seal_leaves_invalid"
+          : reason === SEAL_FINAL_ROOT_REASONS.APPROVAL_INCOMPLETE
+            ? "seal_approval_missing"
+            : reason === SEAL_FINAL_ROOT_REASONS.PARTIES_DISAGREE
+              ? "seal_parties_disagree"
+              : "merkle_root_mismatch";
+      this.#notifySealRejected(sessionIdHex, sessionId, wireReason, {
+        detail,
+        // The pair from the session record when this node holds one, else the pair the leaves name.
+        // Either beats the broadcast: a refusal is about one conversation and belongs to the two
+        // people in it, not to every agent that happens to be authenticated on this node.
+        recipients: roster ? [Buffer.from(roster[0]).toString("hex"), Buffer.from(roster[1]).toString("hex")] : participants,
+      });
+      return { ok: false, reason };
     }
+
+    this.#logger?.info("seal.final_root.verified", {
+      sessionId: sessionIdHex,
+      coverage: finalRoots.coverage,
+    });
 
     // The seal initiator authored the EARLIER of the two ceremony ctrl leaves. Derived from the
     // same kind-based helper the verification used — taking leaves[length - 2] positionally names
@@ -5964,10 +5986,40 @@ export class CelloDirectoryNode {
     if (pending.participantBHex) this.#deliverOrEnqueue(pending.participantBHex, sealedEvent, sessionIdHex);
   }
 
-  #notifySealRejected(sessionIdHex: string, sessionId: Uint8Array, reason: import("./directory-types.js").SealRejectionReason): void {
-    const rejectedEvent: SessionSealRejected = { type: "session_seal_rejected", session_id: sessionId, reason };
+  /**
+   * Tell the participants their seal did not happen, and why.
+   *
+   * `opts.recipients` — `DOD-M15-SEALPARTIES-1`. Without it this broadcasts to every authenticated
+   * stream on the node, which does reach the two people in the conversation and also everybody else;
+   * with it the refusal goes to the pair and nobody learns about a session they are not in. The
+   * broadcast survives for the call sites that refuse BEFORE the roster is resolved — noted under
+   * *Newly discovered* on the 012 order rather than fixed here, because moving the roster lookup
+   * ahead of the per-leaf signature loop would reorder a precondition several comments in this file
+   * depend on.
+   *
+   * `opts.detail` — the sentence that says WHICH thing was wrong. A bare code is not an affordance;
+   * the operator surface on the other side prints this next to the remedy.
+   */
+  #notifySealRejected(
+    sessionIdHex: string,
+    sessionId: Uint8Array,
+    reason: import("./directory-types.js").SealRejectionWireReason,
+    opts?: { detail?: string; recipients?: readonly string[] },
+  ): void {
+    const rejectedEvent = {
+      type: "session_seal_rejected" as const,
+      session_id: sessionId,
+      reason,
+      ...(opts?.detail ? { detail: opts.detail } : {}),
+    } as unknown as SessionSealRejected;
+    if (opts?.recipients && opts.recipients.length > 0) {
+      for (const pubkeyHex of opts.recipients) {
+        if (!pubkeyHex) continue;
+        this.#deliverOrEnqueue(pubkeyHex, rejectedEvent, sessionIdHex);
+      }
+      return;
+    }
     // M1: broadcast to all authenticated streams — clients ignore events for sessions they don't own.
-    // Future: look up session participants by sessionIdHex for targeted delivery.
     for (const [pubkeyHex, stream] of this.#streams) {
       try {
         this.#sendFrame(stream, encodeSessionSealRejected(rejectedEvent));

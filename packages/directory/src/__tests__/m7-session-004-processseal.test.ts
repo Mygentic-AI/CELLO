@@ -25,6 +25,7 @@ import { fileURLToPath } from "node:url";
 import { generateKeypair, buildMerkleTree, merkleRoot } from "@cello-protocol/crypto";
 import { buildStructure2, encodeStructure2 } from "@cello-protocol/protocol-types";
 import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
+import { rootOverContentHashes, sealApproval } from "./helpers/seal-fixture.js";
 import type { Logger } from "@cello-protocol/interfaces";
 import { createDirectoryNode, type RelayAdapter } from "../directory-node.js";
 import { encodeSessionSealed } from "../directory-frames.js";
@@ -71,19 +72,29 @@ async function buildSealData(keyA: Kp, keyB: Kp, sessionId: Uint8Array): Promise
   if (!s2A.ok) throw new Error("s2A");
   const s2CborA = encodeStructure2(s2A.structure2);
 
+  /**
+   * DOD-M15-SEALPARTIES-1: both ctrl leaves carry their participant's signed approval of the
+   * transcript — the root over the NON-ctrl content hashes, which here is just leaf 1. Without both
+   * of these the directory refuses the bilateral seal, so a fixture that omits them is no longer
+   * the honest shape; it is the shape a relay produces by dropping a field it supplies itself.
+   */
+  const approvalRoot = rootOverContentHashes([contentHash]);
+  const approvalB = sealApproval(sessionId, approvalRoot, ts + 1);
+  const approvalA = sealApproval(sessionId, approvalRoot, ts + 2);
+
   // Leaf 2: B ctrl seq2, last_seen 1 (B saw A's msg)
   const prev2 = merkleRoot(buildMerkleTree([{ kind: "msg", data: s2CborA }]));
-  const s1B = ENC.encode([1, contentHash, pubkeyB, sessionId, 1, ts + 1]) as Uint8Array;
+  const s1B = ENC.encode([1, approvalB.contentHash, pubkeyB, sessionId, 1, ts + 1]) as Uint8Array;
   const sigB = new Uint8Array(await keyB.sign(s1B));
-  const s2B = buildStructure2(2, pubkeyB, contentHash, sigB, prev2);
+  const s2B = buildStructure2(2, pubkeyB, approvalB.contentHash, sigB, prev2);
   if (!s2B.ok) throw new Error("s2B");
   const s2CborB = encodeStructure2(s2B.structure2);
 
   // Leaf 3: A ctrl seq3, last_seen 2 (A saw B's leaf)
   const prev3 = merkleRoot(buildMerkleTree([{ kind: "msg", data: s2CborA }, { kind: "ctrl", data: s2CborB }]));
-  const s1A2 = ENC.encode([1, contentHash, pubkeyA, sessionId, 2, ts + 2]) as Uint8Array;
+  const s1A2 = ENC.encode([1, approvalA.contentHash, pubkeyA, sessionId, 2, ts + 2]) as Uint8Array;
   const sigA2 = new Uint8Array(await keyA.sign(s1A2));
-  const s2A2 = buildStructure2(3, pubkeyA, contentHash, sigA2, prev3);
+  const s2A2 = buildStructure2(3, pubkeyA, approvalA.contentHash, sigA2, prev3);
   if (!s2A2.ok) throw new Error("s2A2");
   const s2CborA2 = encodeStructure2(s2A2.structure2);
 
@@ -96,8 +107,8 @@ async function buildSealData(keyA: Kp, keyB: Kp, sessionId: Uint8Array): Promise
   return {
     leaves: [
       { kind: "msg", s2: s2A.structure2, structure1_cbor: s1A },
-      { kind: "ctrl", s2: s2B.structure2, structure1_cbor: s1B },
-      { kind: "ctrl", s2: s2A2.structure2, structure1_cbor: s1A2 },
+      { kind: "ctrl", s2: s2B.structure2, structure1_cbor: s1B, content_bytes: approvalB.contentBytes },
+      { kind: "ctrl", s2: s2A2.structure2, structure1_cbor: s1A2, content_bytes: approvalA.contentBytes },
     ],
     seq_count: 3,
     merkle_root: finalRoot,
@@ -130,17 +141,22 @@ async function buildBilateralSealData(keyA: Kp, keyB: Kp, sessionId: Uint8Array)
   if (!s2B1.ok) throw new Error("s2B1");
   const cB1 = encodeStructure2(s2B1.structure2);
 
+  // DOD-M15-SEALPARTIES-1: both parties' approvals, over the two NON-ctrl content hashes.
+  const approvalRoot = rootOverContentHashes([contentHash, contentHash]);
+  const approvalA = sealApproval(sessionId, approvalRoot, ts + 2);
+  const approvalB = sealApproval(sessionId, approvalRoot, ts + 3);
+
   // L3: A ctrl seq3 (SEAL ack), last_seen 2 (A saw B's msg)
   const prev3 = merkleRoot(buildMerkleTree([{ kind: "msg", data: cA1 }, { kind: "msg", data: cB1 }]));
-  const s1A2 = ENC.encode([1, contentHash, pubkeyA, sessionId, 2, ts + 2]) as Uint8Array;
-  const s2A2 = buildStructure2(3, pubkeyA, contentHash, new Uint8Array(await keyA.sign(s1A2)), prev3);
+  const s1A2 = ENC.encode([1, approvalA.contentHash, pubkeyA, sessionId, 2, ts + 2]) as Uint8Array;
+  const s2A2 = buildStructure2(3, pubkeyA, approvalA.contentHash, new Uint8Array(await keyA.sign(s1A2)), prev3);
   if (!s2A2.ok) throw new Error("s2A2");
   const cA2 = encodeStructure2(s2A2.structure2);
 
   // L4: B ctrl seq4 (SEAL ack), last_seen 2 (B saw A's last content)
   const prev4 = merkleRoot(buildMerkleTree([{ kind: "msg", data: cA1 }, { kind: "msg", data: cB1 }, { kind: "ctrl", data: cA2 }]));
-  const s1B2 = ENC.encode([1, contentHash, pubkeyB, sessionId, 2, ts + 3]) as Uint8Array;
-  const s2B2 = buildStructure2(4, pubkeyB, contentHash, new Uint8Array(await keyB.sign(s1B2)), prev4);
+  const s1B2 = ENC.encode([1, approvalB.contentHash, pubkeyB, sessionId, 2, ts + 3]) as Uint8Array;
+  const s2B2 = buildStructure2(4, pubkeyB, approvalB.contentHash, new Uint8Array(await keyB.sign(s1B2)), prev4);
   if (!s2B2.ok) throw new Error("s2B2");
   const cB2 = encodeStructure2(s2B2.structure2);
 
@@ -155,8 +171,8 @@ async function buildBilateralSealData(keyA: Kp, keyB: Kp, sessionId: Uint8Array)
     leaves: [
       { kind: "msg", s2: s2A1.structure2, structure1_cbor: s1A1 },
       { kind: "msg", s2: s2B1.structure2, structure1_cbor: s1B1 },
-      { kind: "ctrl", s2: s2A2.structure2, structure1_cbor: s1A2 },
-      { kind: "ctrl", s2: s2B2.structure2, structure1_cbor: s1B2 },
+      { kind: "ctrl", s2: s2A2.structure2, structure1_cbor: s1A2, content_bytes: approvalA.contentBytes },
+      { kind: "ctrl", s2: s2B2.structure2, structure1_cbor: s1B2, content_bytes: approvalB.contentBytes },
     ],
     seq_count: 4,
     merkle_root: finalRoot,

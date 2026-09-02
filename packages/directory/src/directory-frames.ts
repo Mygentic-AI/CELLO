@@ -276,8 +276,19 @@ export function encodeSessionFrostSealed(frame: SessionFrostSealed): Uint8Array 
 }
 
 
-export function encodeSessionSealRejected(frame: SessionSealRejected): Uint8Array {
-  return ENC.encode({ type: frame.type, session_id: frame.session_id, reason: frame.reason });
+/**
+ * DOD-M15-SEALPARTIES-1: `detail` says WHICH thing was wrong, in a sentence. The `reason` code tells
+ * the operator surface which remedy to print; the detail is what makes the remedy actionable rather
+ * than a category. Omitted when there is none, so absence stays distinguishable from empty.
+ *
+ * The parameter type is widened locally for the same reason `encodeRegisterSuccess` is: the published
+ * `@cello-protocol/protocol-types` carries `detail` and the two new reason codes from the next
+ * release, and the widening comes out when this repo re-pins to it.
+ */
+export function encodeSessionSealRejected(frame: SessionSealRejected & { detail?: string }): Uint8Array {
+  const obj: Record<string, unknown> = { type: frame.type, session_id: frame.session_id, reason: frame.reason };
+  if (frame.detail !== undefined && frame.detail.length > 0) obj["detail"] = frame.detail;
+  return ENC.encode(obj);
 }
 
 export function encodeSessionRequestError(frame: SessionRequestError): Uint8Array {

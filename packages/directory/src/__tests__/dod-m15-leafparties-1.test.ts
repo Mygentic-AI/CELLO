@@ -32,136 +32,51 @@
 
 import { describe, it, expect } from "vitest";
 import { randomBytes } from "node:crypto";
-import { Encoder, decode } from "cbor-x";
+import { Encoder } from "cbor-x";
 import { generateKeypair, buildMerkleTree, merkleRoot, buildRelayAckTbs } from "@cello-protocol/crypto";
 import { buildStructure2, encodeStructure2 } from "@cello-protocol/protocol-types";
 import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
-import type { Logger } from "@cello-protocol/interfaces";
 import { createDirectoryNode, type RelayAdapter } from "../directory-node.js";
-import type { RelaySealData, SealUnilateralLeaf } from "../directory-types.js";
+import type { SealUnilateralLeaf } from "../directory-types.js";
+/**
+ * The leaf forger, the capturing stream and the directory harness moved to `helpers/seal-fixture.ts`
+ * when `DOD-M15-SEALPARTIES-1` needed the same machinery plus a carried SEAL payload. One copy: two
+ * would be two places to keep in step with the wire, and the copy that drifts is the one nobody runs.
+ */
+import {
+  buildSeal,
+  capturingStream,
+  hex,
+  makeSpyLogger,
+  registerRoster,
+  withDirectory,
+  type Kp,
+  type LeafSpec,
+  type LogEntry,
+} from "./helpers/seal-fixture.js";
 
 const ENC = new Encoder({ tagUint8Array: false });
-type Kp = ReturnType<typeof generateKeypair>;
-
-const hex = (u: Uint8Array): string => Buffer.from(u).toString("hex");
-
-interface LogEntry { level: string; event: string; ctx: Record<string, unknown> }
-function makeSpyLogger(sink: LogEntry[]): Logger {
-  const mk = (level: string) => (event: string, ctx?: Record<string, unknown>) =>
-    sink.push({ level, event, ctx: ctx ?? {} });
-  return { info: mk("info"), warn: mk("warn"), error: mk("error"), debug: mk("debug") } as unknown as Logger;
-}
-
-/** Undo the length prefix `#sendFrame` writes, so a captured frame can be decoded. */
-function lpUnwrap(framed: Uint8Array): Uint8Array {
-  let i = 0, shift = 0, len = 0;
-  for (;;) {
-    const b = framed[i++]!;
-    len |= (b & 0x7f) << shift;
-    if ((b & 0x80) === 0) break;
-    shift += 7;
-  }
-  return framed.subarray(i, i + len);
-}
-
-/** A client stream that records every frame the directory sends it. */
-function capturingStream(): { stream: import("@libp2p/interface").Stream; frames: () => Array<Record<string, unknown>> } {
-  const captured: Uint8Array[] = [];
-  return {
-    stream: {
-      send: (b: Uint8Array | { slice(): Uint8Array }) => {
-        captured.push(b instanceof Uint8Array ? b : b.slice());
-      },
-    } as unknown as import("@libp2p/interface").Stream,
-    frames: () =>
-      captured
-        .map((f) => { try { return decode(lpUnwrap(f)) as Record<string, unknown>; } catch { return null; } })
-        .filter((f): f is Record<string, unknown> => f !== null),
-  };
-}
-
-function makeNoopRelay(): RelayAdapter {
-  return {
-    recordAssignment: () => ({ ok: true as const }),
-    discardSession: () => {},
-    submitForSeal: () => ({ ok: false as const, reason: "not_implemented" }),
-    confirmSeal: () => {},
-    rejectSeal: () => {},
-  };
-}
-
-/**
- * One leaf's identity, stated by the test rather than derived: who signs it, what domain it is in,
- * and — for the cross-session case — which session its SIGNED bytes name.
- */
-interface LeafSpec { key: Kp; kind: "msg" | "ctrl"; signsSession?: Uint8Array }
-
-/**
- * A bilateral seal the directory accepts today: real Ed25519 signatures, a real `prev_root` chain,
- * `last_seen_seq` 0 everywhere (always within the causal bound), and the relay's own root over
- * `encodeStructure2`. No SEAL payload is carried on any ctrl leaf — the rollout shape.
- */
-async function buildSeal(specs: LeafSpec[], sessionId: Uint8Array): Promise<RelaySealData> {
-  const leaves: RelaySealData["leaves"] = [];
-  const encoded: Array<{ kind: "msg" | "ctrl"; data: Uint8Array }> = [];
-  for (let i = 0; i < specs.length; i++) {
-    const spec = specs[i]!;
-    const pub = new Uint8Array(await spec.key.getPublicKey());
-    const contentHash = new Uint8Array(randomBytes(32));
-    const prevRoot = i === 0 ? new Uint8Array(32) : merkleRoot(buildMerkleTree(encoded));
-    const s1 = ENC.encode([1, contentHash, pub, spec.signsSession ?? sessionId, 0, 1_700_000_000_000 + i]) as Uint8Array;
-    const sig = new Uint8Array(await spec.key.sign(s1));
-    const s2 = buildStructure2(i + 1, pub, contentHash, sig, prevRoot);
-    if (!s2.ok) throw new Error(`buildStructure2 failed at leaf ${i}`);
-    leaves.push({ kind: spec.kind, s2: s2.structure2, structure1_cbor: s1 });
-    encoded.push({ kind: spec.kind, data: encodeStructure2(s2.structure2) });
-  }
-  return { leaves, seq_count: leaves.length, merkle_root: merkleRoot(buildMerkleTree(encoded)) };
-}
-
-async function withDirectory<T>(
-  logs: LogEntry[],
-  fn: (d: Awaited<ReturnType<typeof createDirectoryNode>>["directory"], store: InMemoryDirectoryStore) => Promise<T>,
-): Promise<T> {
-  const store = new InMemoryDirectoryStore();
-  const { directory, stop } = await createDirectoryNode({
-    keyProvider: generateKeypair(),
-    relay: makeNoopRelay(),
-    relayEndpoint: { peer_id: "relay-peer", multiaddrs: [] },
-    store,
-    logger: makeSpyLogger(logs),
-  });
-  try {
-    return await fn(directory, store);
-  } finally {
-    await stop();
-  }
-}
-
-/** The session record the directory writes when it assigns a session — the roster's real producer. */
-async function registerRoster(
-  directory: Awaited<ReturnType<typeof createDirectoryNode>>["directory"],
-  sessionId: Uint8Array,
-  a: Kp,
-  b: Kp,
-): Promise<void> {
-  directory.restoreSessionParticipants([{
-    sessionId: hex(sessionId),
-    initiatorHex: hex(new Uint8Array(await a.getPublicKey())),
-    targetHex: hex(new Uint8Array(await b.getPublicKey())),
-    genesisTimestampMs: Date.now(),
-  }]);
-}
 
 describe("DOD-M15-LEAFPARTIES-1 (bilateral): every leaf is tied to the session's two participants", () => {
   it("★ the honest case still certifies — a guard that refuses the honest case is a wall", async () => {
+    /**
+     * ⚠️ BOTH CTRL LEAVES NOW CARRY THEIR PAYLOAD, and that is not a weakening of this test —
+     * `DOD-M15-SEALPARTIES-1`. A bilateral seal requires both participants' own signed transcript
+     * root, so a leaf array with none carried is no longer "the honest case"; it is the shape a
+     * relay produces by dropping a field it supplies itself. Every REFUSAL fixture below still
+     * carries nothing, because that is the shape that used to certify and is what those tests are
+     * about — and each of them refuses on provenance, which runs before the approval check.
+     */
     const logs: LogEntry[] = [];
     await withDirectory(logs, async (directory) => {
       const [a, b] = [generateKeypair(), generateKeypair()];
       const sessionId = new Uint8Array(randomBytes(16));
       await registerRoster(directory, sessionId, a, b);
       const seal = await buildSeal(
-        [{ key: a, kind: "msg" }, { key: b, kind: "msg" }, { key: a, kind: "ctrl" }, { key: b, kind: "ctrl" }],
+        [
+          { key: a, kind: "msg" }, { key: b, kind: "msg" },
+          { key: a, kind: "ctrl", carries: true }, { key: b, kind: "ctrl", carries: true },
+        ],
         sessionId,
       );
       expect((await directory.processSeal(sessionId, seal)).ok).toBe(true);
