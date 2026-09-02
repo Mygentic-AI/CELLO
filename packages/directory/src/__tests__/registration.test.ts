@@ -49,6 +49,11 @@ import {
 } from "../directory-node.js";
 import type { RelayAdapter } from "../directory-node.js";
 import type { RelaySessionAssignment } from "../directory-types.js";
+import {
+  verifyOnlineToken,
+  ONLINE_TOKEN_BYTES,
+  ONLINE_TOKEN_ISSUE_LIFETIME_MS,
+} from "@cello-protocol/interfaces";
 import { NetworkDirectoryNode, runNetworkDkg } from "@cello-protocol/daemon";
 import { TestDirectoryManifestStore } from "@cello-protocol/interfaces/stubs";
 import type { ConsortiumManifest } from "@cello-protocol/protocol-types";
@@ -124,7 +129,7 @@ async function doAuth(
   clientNode: Awaited<ReturnType<typeof createNode>>,
   dirPeerId: string,
   keyProvider: ReturnType<typeof generateKeypair>,
-): Promise<{ stream: Stream; reader: StreamReader }> {
+): Promise<{ stream: Stream; reader: StreamReader; authOk: Record<string, unknown> }> {
   const stream = await clientNode.newStream(dirPeerId, SIGNALING_PROTOCOL_ID);
   const reader = new StreamReader(stream);
 
@@ -141,7 +146,7 @@ async function doAuth(
   const authOk = await reader.readFrame();
   expect(authOk["type"]).toBe("signaling_auth_ok");
 
-  return { stream, reader };
+  return { stream, reader, authOk };
 }
 
 // ─── Registration helper: handles DKG flow ────────────────────────────────────
@@ -262,6 +267,78 @@ describe("REG-001: Directory registration", () => {
     expect(profile!.status).toBe("active");
     expect(profile!.ml_dsa_pubkey).toBe(mlDsaPubkeyHex);
   });
+
+  /**
+   * DOD-M15-SEALPARTIES-1 Part 0 — the relay credential has to ride register_success, because the
+   * only other moment it is issued has already passed by the time the agent is registered.
+   *
+   * The order is not incidental, it is forced: a daemon opens its signaling stream in order TO
+   * register (the DKG runs over that stream), so the directory authenticates it while it still has
+   * no `agent_profiles` row and correctly declines to issue a token. Registration then completes on
+   * the same stream — measured at 830ms later on a real three-node cluster — and nothing ever
+   * re-authenticates. The agent holds no relay credential for the rest of the daemon's life: no
+   * circuit reservation, no witnessed leaves, and a close that fails with `seal_persist_failed`.
+   *
+   * So both halves are asserted here, in one test, because the second is only meaningful given the
+   * first: auth_ok carries NO token (correct — unregistered at that instant), and register_success
+   * carries one bound to this agent's key and signed by this node's own signing key.
+   */
+  it("★★★ DOD-M15-SEALPARTIES-1 Part 0: auth_ok has no token (unregistered yet) and register_success carries it", async () => {
+    const dirKey = generateKeypair();
+    const { node: dirNode, stop: stopDir } = await createDirectoryNode({
+      keyProvider: dirKey,
+      relay: makeRelay(),
+      relayEndpoint: { peer_id: "12D3KooWFakeRelay", multiaddrs: ["/ip4/127.0.0.1/tcp/19999"] },
+    });
+    scope.addCleanup(stopDir);
+
+    const clientKey = generateKeypair();
+    const clientNode = await createNode({ keyProvider: clientKey, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+    await clientNode.start();
+    scope.addCleanup(() => clientNode.stop());
+    await clientNode.dial(dirNode.listenAddresses()[0]!);
+
+    const { stream, reader, authOk } = await doAuth(clientNode, dirNode.getPeerId(), clientKey);
+    expect(
+      authOk["online_token"],
+      "the agent is not registered at this instant — issuing here would hand a token to any keypair, " +
+        "which is the flood DOD-M15-RELAYSLOTS-1 exists to stop",
+    ).toBeUndefined();
+
+    const mlDsaProvider = await mlDsaKeygen();
+    const clientPubkey = await clientKey.getPublicKey();
+    const clientPubkeyHex = Buffer.from(clientPubkey).toString("hex");
+    const mlDsaPubkeyHex = Buffer.from(await mlDsaProvider.getPublicKey()).toString("hex");
+
+    const before = Date.now();
+    const successFrame = await doRegister(
+      stream, reader, clientNode, dirNode.getPeerId(), dirNode.listenAddresses(),
+      clientPubkeyHex, mlDsaPubkeyHex, "+1999000111",
+    );
+    expect(successFrame["type"]).toBe("register_success");
+
+    const token = successFrame["online_token"] as Uint8Array | undefined;
+    expect(
+      token,
+      "without this the agent has just registered successfully and still cannot hold a reservation " +
+        "on any relay — it is reachable only over a direct connection, nothing it sends is " +
+        "witnessed, and closing the conversation fails",
+    ).toBeDefined();
+    expect(token!.length).toBe(ONLINE_TOKEN_BYTES);
+
+    const verified = verifyOnlineToken(new Uint8Array(token!), [await dirKey.getPublicKey()], Date.now());
+    expect(
+      verified.ok,
+      "the relay checks this against the consortium directory pubkeys, so it must be this node's " +
+        "own signing key — a token signed by anything else fails far from its cause",
+    ).toBe(true);
+    if (!verified.ok) return;
+    expect(
+      Buffer.from(verified.agentPubkey).toString("hex"),
+      "bound to the agent that registered, not to whoever holds the stream",
+    ).toBe(clientPubkeyHex);
+    expect(verified.expiresAtMs).toBeGreaterThanOrEqual(before + ONLINE_TOKEN_ISSUE_LIFETIME_MS);
+  }, 30_000);
 
   it("AC-002: same pubkey registers again → already_registered; DKG not initiated; existing profile unchanged", async () => {
     const dirKey = generateKeypair();

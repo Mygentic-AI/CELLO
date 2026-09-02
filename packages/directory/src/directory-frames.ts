@@ -292,8 +292,25 @@ export function encodeNotAuthenticated(frame: NotAuthenticated): Uint8Array {
 
 import type { RegisterSuccess, RegisterError, DkgReady } from "@cello-protocol/protocol-types";
 
-export function encodeRegisterSuccess(frame: RegisterSuccess): Uint8Array {
-  return ENC.encode({ type: frame.type, agent_id: frame.agent_id, primary_pubkey: frame.primary_pubkey });
+/**
+ * DOD-M15-SEALPARTIES-1 Part 0: `online_token` is the relay credential for the agent that has just
+ * registered — see `#mintOnlineTokenForRegistered`. Omitted, never empty, when minting failed, so
+ * the client's "no token on this frame" branch reads the same as a directory that predates it.
+ *
+ * The parameter type is widened locally because `RegisterSuccess` lives in the published
+ * `@cello-protocol/protocol-types`, which carries the field from the next release; the widening
+ * comes out when this repo re-pins to it.
+ */
+export function encodeRegisterSuccess(frame: RegisterSuccess & { online_token?: Uint8Array }): Uint8Array {
+  const obj: Record<string, unknown> = {
+    type: frame.type,
+    agent_id: frame.agent_id,
+    primary_pubkey: frame.primary_pubkey,
+  };
+  if (frame.online_token !== undefined && frame.online_token.length > 0) {
+    obj["online_token"] = frame.online_token;
+  }
+  return ENC.encode(obj);
 }
 
 export function encodeRegisterError(frame: RegisterError): Uint8Array {

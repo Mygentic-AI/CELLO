@@ -3531,10 +3531,18 @@ export class CelloDirectoryNode {
     // OBS-001 AC-004: agent registered log
     protocolLog("REG", `Agent ${truncHex(frame.k_local_pubkey)} registered — primary_pubkey ${truncHex(primaryPubkeyFromDkg)}`);
 
+    /**
+     * DOD-M15-SEALPARTIES-1 Part 0: hand over the relay credential in the same breath as the
+     * identity. The signaling auth that opened this stream ran BEFORE the agent was registered and
+     * correctly issued nothing; this is the first — and, for a stream that never drops, the only —
+     * moment the answer changes. See `#mintOnlineTokenForRegistered`.
+     */
+    const onlineToken = await this.#mintOnlineTokenForRegistered(frame.k_local_pubkey, accountCorrelationId);
     this.#sendFrame(stream, encodeRegisterSuccess({
       type: "register_success",
       agent_id: agentId,
       primary_pubkey: primaryPubkeyFromDkg,
+      ...(onlineToken ? { online_token: onlineToken } : {}),
     }));
   }
 
@@ -6149,6 +6157,59 @@ export class CelloDirectoryNode {
           "Signaling itself is unaffected — session offers still arrive on this stream.",
       });
       return { absentReason: "issue_failed" };
+    }
+  }
+
+  /**
+   * DOD-M15-SEALPARTIES-1 Part 0 — the token for an agent whose registration this node JUST
+   * completed, minted without the profile read above.
+   *
+   * ─── Why this exists at all, and why skipping the read is not a loosening ─────────────────
+   *
+   * `#issueOnlineToken` fires on signaling auth, and for a registering agent that moment is always
+   * too early: the daemon opens the signaling stream in order TO register, because the DKG runs
+   * over it. So the directory authenticates a key with no `agent_profiles` row, correctly declines,
+   * and — since nothing re-authenticates a healthy stream — never gets a second chance. Measured on
+   * a live three-node cluster: auth at 04:54:33.587, profile row at 04:54:34.417. The agent then
+   * held no relay credential for the life of its daemon.
+   *
+   * The read is skipped rather than repeated because the caller is the tail of a COMPLETED
+   * registration ceremony on this node — real pre-auth, real FROST DKG, profile written from the
+   * result. That is a strictly stronger statement than "a row is readable", and repeating the read
+   * would race the profile write (`setProfile` is deliberately not awaited there) and answer NO to
+   * a question this node has already answered YES.
+   *
+   * ─── What it does NOT relax ──────────────────────────────────────────────────────────────
+   *
+   * The relay still verifies every token against the consortium's directory pubkeys, so this moves
+   * only WHEN a directory issues, never WHO checks. A rewritten client still cannot mint one; the
+   * only way to hold a token remains completing a real registration with a real directory.
+   *
+   * Returns `undefined` on a signing failure — registration itself still succeeds, because failing
+   * it would cost the agent its identity over a reachability credential it can re-obtain on the
+   * next signaling reconnect.
+   */
+  async #mintOnlineTokenForRegistered(
+    agentPubkeyHex: string,
+    correlationId: string,
+  ): Promise<Uint8Array | undefined> {
+    try {
+      return await mintOnlineToken({
+        agentPubkey: new Uint8Array(Buffer.from(agentPubkeyHex, "hex")),
+        expiresAtMs: this.#clock.now() + ONLINE_TOKEN_ISSUE_LIFETIME_MS,
+        sign: async (tbs) => new Uint8Array(await this.#keyProvider.sign(tbs)),
+      });
+    } catch (err) {
+      this.#logger?.error("directory.online_token.failed", {
+        agentPubkeyHex: agentPubkeyHex.slice(0, 16),
+        correlationId,
+        stage: "register_success",
+        error: err instanceof Error ? err.message : String(err),
+        impact: "this agent registered successfully but leaves with no relay online token, so its " +
+          "standing receiver will be refused a reservation slot and it is reachable only over a " +
+          "direct connection until its signaling stream next reconnects and re-issues.",
+      });
+      return undefined;
     }
   }
 
