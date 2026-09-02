@@ -297,17 +297,14 @@ Test Files  1 passed (1) · Tests  1 passed | 9 skipped (10) · exit=0
 ```
 
 The park path demonstrably ran rather than being skipped: that test hard-asserts
-`daemonA.waitForLine(/"event":"content\.park\.deposited"/)` and
-`daemonB.waitForLine(/"event":"content\.recover\.auto\.completed"/)`, and reads the exact parked
-plaintext back. **A recipient CAN collect a parked message.** The operator's fear in the header of
-this order — told "parked, success", message never collectable — does not happen.
+`content.park.deposited` and `content.recover.auto.completed` and reads the exact parked plaintext
+back. **A recipient CAN collect a parked message.** The operator's fear in the header of this order
+— told "parked, success", message never collectable — does not happen.
 
-**So this is 2A: the defect was in the TEST.** Confirmed from the daemon log of the rewritten
-test's own run, where a real send parks and is served back:
+**So this is 2A: the defect was in the TEST.** From the rewritten test's own run:
 
 ```json
 {"event":"content.park.pull.result","relayPeerId":"12D3KooWFZ4Gex…","count":1}
-{"event":"content.recover.verified","agentName":"agentB","sessionId":"7cbbf8eb…"}
 {"event":"content.recovered","sessionId":"7cbbf8eb…","sequenceNumber":1}
 {"event":"content.recover.auto.completed","agentName":"agentB","recovered":1,"refused":0}
 ```
@@ -315,13 +312,11 @@ test's own run, where a real send parks and is served back:
 ### DoD 3 — the vouching gate is UNTOUCHED
 
 **Stated explicitly, as the order requires.** `packages/relay/src/content-park.ts` was not edited,
-and **no file under `packages/relay/` was edited at all**. `git diff` across this order's commits
-names exactly two files: the test and this document. The reviewer verified this independently.
+and **no file under `packages/relay/` was edited at all** — this order's diff names exactly two
+files, the test and this document. The reviewer verified it independently.
 
-The refusal the spine lane reported was the gate working. The test minted `randomBytes(16)` as a
-session id and raw-IPC-deposited against it — a session no directory ever brokered, so the relay
-had never vouched B's key, so the pull was refused `not_a_participant`. Correct behaviour, measured
-by a test that then reported it as a broken park path.
+The refusal the spine lane reported was the gate working: a fabricated session the directory never
+brokered, so the relay had never vouched B's key, so the pull was refused `not_a_participant`.
 
 ### DoD 2 — the rewritten test, run alone
 
@@ -353,21 +348,19 @@ and the tree verified clean after.
 | **B** — A, plus the three relay assertions removed to reach the next guard | the recovery barrier | `no auto-recover sweep ever recovered anything. Every sweep B ran: …` |
 | **C** — B, plus the barrier reverted to its hollow form and the provenance assertions removed | **"B must receive the parked entry, byte for byte"** | `expected null to be 'msg2-while-offline — the EXACT bytes…'`, with `session.receive.empty` in B's log |
 
-**C is the proof the DoD asks for.** A and B exist because, after the review fixes, three guards now
-catch the failure *before* it reaches that line — which is the improvement, not a dodge. Removing an
-intervening assertion to reach a target one does not weaken the target; the reviewer ruled the same.
+**C is the proof the DoD asks for.** A and B exist because three guards now catch the failure
+*before* it reaches that line — the improvement, not a dodge. Removing an intervening assertion to
+reach a target one does not weaken the target; the reviewer ruled the same.
 
-**B is also the proof that the HIGH-1 fix has teeth.** Under the old barrier — matching the event
-name only — this exact state sailed through to the read, because `drainOnce` emits
-`content.recover.auto.completed` unconditionally, `recovered: 0` included. Under the fixed
-`"recovered":[1-9]` form it stops three layers earlier and names the cause.
+**B is also the proof the HIGH-1 fix has teeth.** Under the old barrier this exact state sailed
+through to the read, because `drainOnce` emits `content.recover.auto.completed` unconditionally,
+`recovered: 0` included. Under `"recovered":[1-9]` it stops three layers earlier and names the cause.
 
-**One mutation SURVIVED, and it is reported rather than buried.** Removing B's `cello_start_agent`
-(the reviewer's suggested isolation of the collect half) left the test **green**. The reason is
-diagnostic, not a hole: `cello_use_agent` on the next line auto-starts an offline agent, so the
-`cello_start_agent` call removes nothing. It is a redundant line in the test, not a missing
-assertion. The collect half is guarded instead by the `"recovered":[1-9]` barrier, whose teeth
-mutation B demonstrates.
+**One mutation SURVIVED, reported rather than buried.** Removing B's `cello_start_agent` (the
+reviewer's suggested isolation of the collect half) left the test **green** — because
+`cello_use_agent` on the next line auto-starts an offline agent, so that call removes nothing. A
+redundant line in the test, not a missing assertion; the collect half is guarded by the
+`"recovered":[1-9]` barrier, whose teeth mutation B demonstrates.
 
 ### DoD 5 — gate
 
@@ -409,9 +402,9 @@ signature defect:
 **Ruled deviation, recorded because an un-journaled one is blocking on its own.** The order says
 keep the test's name. I kept the tag `DOD-MSG-3 (transport)` (so the `-t` filter and the DoD tag
 still match) and rewrote only the prose after the em-dash, which described the deposit/pull
-mechanism the test no longer uses. The reviewer ruled the deviation **correct**: *"Leaving 'deposit
-ciphertext … recipient pulls' on a test that no longer deposits or pulls would be a false claim in
-the one place a reader looks first."*
+mechanism the test no longer uses. The reviewer ruled it **correct**: leaving *"deposit ciphertext …
+recipient pulls"* on a test that no longer deposits or pulls is a false claim in the first place a
+reader looks.
 
 **Scope question, ruled: keep.** `not.toContain(PAYLOAD)` is not scope growth — the old test
 deposited a random blob that was never plaintext anywhere, so "the relay holds ciphertext only"
