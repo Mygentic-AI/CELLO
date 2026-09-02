@@ -9977,3 +9977,54 @@ fixture carried no approvals.
   catch it — an unhandled rejection. Vitest caught one; in production it is an unhandled rejection in
   a directory. Every other seal-path send in that file already guarded. Adding the token mint widened
   the window enough to make it visible.
+
+## Entry 013a — 2026-09-02: 013-ABSENCE plan, counterbalance, and the verified reading of the clock
+
+**Unit:** `DOD-M15-UNILATERAL-1` (013-ABSENCE). Ships with 012-SEAL. Branch `m15/013-absence` in
+both repos.
+
+**Verified the order's reading of the clock before building.** `#processSealUnilateral` gates on
+`elapsedMs < graceMs` where `elapsedMs = now - #sessionLastActivity.get(session)`. The map is set
+ONCE at session creation (the `writeSessionWithParticipants` site) and restored from the sessions
+row's `created_at` at boot — never refreshed by traffic. So the field named "last activity" holds
+session GENESIS: the gate measures how old the session is, not how long the counterparty has been
+silent. There is NO presence check of any kind; liveness is queried later only to COLOUR the
+attestation ABSENT vs DELIVERED, never to gate. Confirmed exactly as the order describes.
+
+**Counterbalance (Invariant 1), named before the code.** Absence is a claim the sealing party
+benefits from, so the evidence must come from a party the sealer does not control. The relay is that
+party: `getSessionLiveness(absentPubkey)` returns a POSITIVE observation (`gone` = the relay saw the
+counterparty's standing stream drop, keyed by the counterparty's own pubkey). The sealer (A) has no
+control over whether the relay reports B present — B's own standing connection drives it. A cannot
+manufacture B's absence; A can only wait for B to actually leave. That is the counterbalance: the
+gate reads B's presence from B's own link to a third party.
+
+**The clock fix, honestly.** Under Option B the directory never sees message traffic, so it cannot
+"refresh on every message." The real fix is that the STOPWATCH stops being the whole test: the
+presence check (relay `alive` → refuse, both tiers) is what stops a reachable-but-slow counterparty
+being sealed out — which is the DoD-6 complaint ("a counterparty replying for an hour is as sealable
+as one who never answered"). The genesis field is renamed `#sessionGenesisAt` so its name matches
+what it holds, and it serves only as the minimum-age FLOOR (work item 1: "time is a floor, never the
+whole test"). A test pins that the gate no longer reads session-age as presence.
+
+**Clause checklist (what the reviewer receives):**
+1. Reachable counterparty (relay `alive`) past the floor → REFUSED, both tiers. [gate]
+2. Absent counterparty (relay `gone`) past the floor → still seals. [preserve existing path]
+3. Standard tier default 600s, `gone|unknown` proceeds — ordinary case unchanged. [preserve]
+4. High-stakes: explicit opt-in, 3600s floor, requires positive `gone`; `unknown` does NOT degrade
+   to time-only — it refuses. [gate + opt-in field + persistence]
+5. Artifact splits the mutually-signed prefix (≤ absent party's last signed seq) from the
+   uncountersigned tail; an explicit `countersigned_through_seq` + `seal_type: UNILATERAL` make them
+   un-conflatable. [seal-legibility + wire + client surface]
+6. The elapsed-time source measures what its name claims: `#sessionGenesisAt` holds genesis and the
+   gate treats it as a floor, not as presence. [rename + gate + test]
+
+**Refuse-too-eagerly trap (order's first trap).** Standard tier proceeds on `unknown` (relay never
+tracked the counterparty — evidence unavailable) so an honest party is never stranded; the stronger
+`gone`-required bar is the high-stakes OPT-IN, which trades availability for the guarantee. That is
+the whole point of two tiers.
+
+**Repos:** trustless-cello (gate, tiers, opt-in decode+persist, migration, legibility split) +
+cello-client (initiate opt-in param, legibility passthrough+surface). The client changes are
+source-only and exercised by the spine enforcer (BINS read `dist/`, not npm); the npm publish for
+real operators is a deploy step, not a close condition for this unit.

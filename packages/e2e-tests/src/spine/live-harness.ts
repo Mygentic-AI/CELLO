@@ -24,7 +24,7 @@
  */
 import { spawn, execFileSync, type ChildProcess } from "node:child_process";
 import { createServer, createConnection } from "node:net";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -114,6 +114,21 @@ export class Proc {
     // not a slow timeout. Reject any pending waiters with the code/signal + log tail.
     this.child.on("exit", (code: number | null, signal: NodeJS.Signals | null) => {
       this.exited = { code, signal };
+      /**
+       * Persist the whole log when `CELLO_SPINE_LOG_DIR` is set. A journey's assertion prints at
+       * most the last 30 filtered lines of one process, and a seal that dies between the verifying
+       * node, two co-signers and the coordinating daemon leaves its cause in whichever of the four
+       * the assertion did not quote. Nothing changes when the variable is unset.
+       */
+      const dumpDir = process.env["CELLO_SPINE_LOG_DIR"];
+      if (dumpDir) {
+        try {
+          mkdirSync(dumpDir, { recursive: true });
+          writeFileSync(join(dumpDir, `${this.name.replace(/[^A-Za-z0-9._-]/g, "_")}.log`), this.lines.join("\n"));
+        } catch {
+          /* a failed dump must never fail the journey */
+        }
+      }
       this.failWaiters(
         new Error(
           `[${this.name}] exited (code=${code}, signal=${signal}) before the awaited line.\n` +
