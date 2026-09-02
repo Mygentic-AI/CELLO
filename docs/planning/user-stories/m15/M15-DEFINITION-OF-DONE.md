@@ -788,6 +788,54 @@ value criterion** — "mint a trust signal and have it received" is advertised v
 
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
+### `DOD-M15-PARKCOLLECT-1` — ❌ A parked message can actually be collected
+**Found by the full-lane run 2026-09-02 (`j-content` DOD-MSG-3). NEW — this test PASSED in the
+2026-08-23 baseline**, so something between then and now broke it. **BLOCKS LAUNCH**: this is the
+offline path, and the offline path is most of what "two agents connect and communicate" means when
+you control only one of them.
+
+**What the operator lives through, in order:**
+1. They message someone whose agent is offline.
+2. The relay accepts it. Their side reports it **parked — a success.**
+3. The recipient comes online and goes to collect it.
+4. **The relay refuses to hand it over** — `relay_refused_pull:not_a_participant`.
+5. The message sits on the relay. Nobody can get it. **The sender was told it worked.**
+
+- **A silent one-way drop, and the sender is the one who cannot tell.** That is the shape this
+  milestone exists to remove — worse than a failure, because nothing prompts anyone to look.
+- **The relay's own guidance is a dead end here.** It tells the recipient to establish a session and
+  retry — but the message they are missing is the thing that would have told them to.
+- **Established, not guessed:** the refusal is the vouching gate — the relay only serves agents named
+  by a session assignment it has recorded. **What is NOT established is why the recipient is not
+  vouched at collection time**, and that is the unit's first job. Do not assume it is the restart
+  case: the durable store added under `RELAYAUTH-1` review H2 is real and wired in production.
+- **⚠️ Spine red is not proof of a live break.** Live behaviour has diverged from this lane before.
+  **First step is one real send to an offline agent and one collection** — minutes, and it decides
+  whether this is a product defect or a harness artifact. Record which.
+- **Enforcer:** journey — `j-content` DOD-MSG-3 green, plus the live check above.
+
+### `DOD-M15-PARKERROR-1` — ❌ A failed park deposit says what went wrong
+**Found by the same run (`j-content` DOD-MSG-5 / MSG-7). Red in the 2026-08-23 baseline too**, so
+this is long-standing rather than new — it was simply never inside `JCONTENT-DELIVERY-1`'s four.
+
+`content_park_deposit` returns `internal_error` with the message **`"[object Object]"`**. An object
+was stringified where a reason belonged, so the cause is destroyed at the point of reporting.
+
+- **What the operator gets:** *"An unexpected error occurred. Check daemon logs for details."* The
+  detail is not in the logs either — it went into the same `[object Object]`. **There is no path
+  from the error to the cause**, which is this milestone's own named defect class arriving through
+  a formatting bug rather than a missing check.
+- **The consequence is not just diagnostics:** a send to an offline counterparty fails, and neither
+  the operator nor the person debugging it can find out why.
+- **Fix the reporting first, then find out what it was hiding.** The underlying failure has never
+  been read by anyone; it may be small or may be another finding.
+- **⚠️ CLASSIFICATION IS ANDRE'S and this is the one to look at.** It sits in the gate under
+  §0z.1's "unclear ⇒ blocks", not because a case has been made that it is unforgivable. The argument
+  for moving it: the send FAILS, so nobody is misled about delivery — unlike `PARKCOLLECT-1`. The
+  argument for keeping it: it is on the same offline path, and while it stands, any other defect
+  there is undiagnosable.
+- **Enforcer:** unit — a failing deposit names its cause in the response and in the log.
+
 ### `DOD-M15-BACKUP-1` — ✅ An identity can be exported and restored
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-BACKUP-1`.
 
@@ -2200,11 +2248,27 @@ Two were stale expectations (a deleted always-empty stub; a `registered` flag re
 lied); the third was a real race, fixed with a readiness poll. Product-side cause filed as
 `DOD-M15-START-AGENT-UNAWAITED-1`. Trail → [[M15-BUILD-JOURNAL]].
 
-### `DOD-M15-JCONTENT-DELIVERY-1` — ✅ CLOSED 2026-08-24. `j-content` is 10/10, full-file.
-**Four separate defects, not the one cause this entry named** — an unsigned deposit shape SEC-1
-refuses, a deposit of the wrong string (`[[OVER]]` is in-band), a retired event name, and a wait
-latching onto the first of several recover sweeps. Every hypothesis recorded here was wrong.
-Trail → [[M15-BUILD-JOURNAL]].
+### `DOD-M15-JCONTENT-DELIVERY-1` — ⚠️ WAS ✅. THE CLAIM NO LONGER HOLDS — `j-content` is 6/10 (2026-09-02)
+> **The four defects this line fixed on 2026-08-24 stayed fixed. What is false is the headline** —
+> *"`j-content` is 10/10, full-file"* — and it has been false for some time without anyone knowing,
+> because the lane was not re-run between 2026-08-24 and 2026-09-02. **A file-level pass count is a
+> claim with a shelf life, and this one was written as though it were permanent.**
+>
+> The full-lane run of 2026-09-02 puts `j-content` at **4 of 10 failed**, in three separate causes,
+> none of them the four this line closed:
+> - **DOD-MSG-3 — parked mail cannot be collected. NEW; it passed in the 2026-08-23 baseline.**
+>   → `DOD-M15-PARKCOLLECT-1`.
+> - **DOD-MSG-5 / MSG-7 — the park deposit fails with an unreadable error.** Red in the baseline
+>   too, so not a regression — it was simply never in this line's four. → `DOD-M15-PARKERROR-1`.
+> - **DOD-MSG-8 — the test calls `cello_get_transcript`, which no longer exists** (the MCP tool is
+>   `cello_transcript`). Test-side, not a product break — but it means **DOD-MSG-8 is currently
+>   measuring nothing**, which is worse than a red for a check whose whole job is to read the
+>   transcript back. Fix the call, then find out what it says.
+>
+> Original entry, which stands on its own terms: four separate defects, not the one cause this line
+> named — an unsigned deposit shape SEC-1 refuses, a deposit of the wrong string (`[[OVER]]` is
+> in-band), a retired event name, and a wait latching onto the first of several recover sweeps.
+> Every hypothesis recorded here was wrong. Trail → [[M15-BUILD-JOURNAL]].
 
 ### `DOD-M15-SAMEOP-FALSEPOS-1` — ✅ RESOLVED: NOT a defect. The journey updates a superseded column.
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-SAMEOP-FALSEPOS-1`.
