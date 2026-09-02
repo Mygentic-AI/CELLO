@@ -4489,6 +4489,32 @@ export class CelloDirectoryNode {
       });
       return;
     }
+    /**
+     * 🚨 THE SUBMITTER MUST BE IN THIS SESSION — review H1, and it is a security fix, not tidying.
+     *
+     * Nothing on this path checked it. An authenticated stranger S could send `seal_unilateral` for
+     * A↔B's session carrying `[S msg, S ctrl]`: the line below would resolve `absentPartyHex` to A
+     * (its else-branch), the chain verifies against S's own real signatures, step (e) passes because
+     * the single ctrl leaf IS from the submitter, and the root matches what S reported. The result is
+     * a notarized receipt over A and B's `session_id` naming S as a party to it — a forged session
+     * record, signed by the directory.
+     *
+     * ⚠️ AND IT IS WHY THE ELSE-BRANCH BELOW IS SAFE TO READ. `absentPartyHex` means *"whichever of
+     * the two the sender is not"*, which is only meaningful once the sender is known to be one of
+     * them. Asking that question first is what makes the answer true.
+     */
+    if (senderHex !== participants.initiatorHex && senderHex !== participants.targetHex) {
+      this.#logger?.error("session.unilateral.verification.failed", {
+        sessionId: sessionIdHex,
+        reason: "unilateral_not_a_participant",
+        senderShort: truncHex(senderHex),
+        impact: "NO certificate was signed. The key asking to close this session is not one of the two the session was assigned to, so it cannot speak for either of them.",
+        guidance: "Nobody outside a conversation can close it. Treat this as an attempt to have this directory notarize a session record for a pair the caller is not part of — the two named participants are unaffected and their session is untouched.",
+        correlationId,
+      });
+      return;
+    }
+
     const absentPartyHex = participants.initiatorHex === senderHex
       ? participants.targetHex
       : participants.initiatorHex;
@@ -4525,13 +4551,11 @@ export class CelloDirectoryNode {
       senderHex,
       frame.session_id,
       /**
-       * ⚠️ THE ROSTER IS THE SESSION RECORD'S PAIR, NOT `[senderHex, absentPartyHex]`.
-       *
-       * `absentPartyHex` is derived as *"whichever of the two the sender is not"*, and its else-branch
-       * is `initiatorHex` — so for a submitter who is NEITHER participant that expression yields
-       * `[stranger, initiator]` and hands the stranger membership in the roster meant to exclude them.
-       * The two names on the session assignment are the authoritative pair; a stranger's own ctrl leaf
-       * is then refused as `seal_sender_not_participant`.
+       * The pair the session assignment names. With the submitter check above in place this is now
+       * EQUAL to `[senderHex, absentPartyHex]` for every input that reaches here — review H1 measured
+       * exactly that, and it is the honest reading: the two forms differ only for a submitter who is
+       * not a participant, and that case no longer arrives. Kept in this form because it says what it
+       * means without depending on a guard twenty lines up to make it true.
        */
       [Buffer.from(participants.initiatorHex, "hex"), Buffer.from(participants.targetHex, "hex")],
     );
@@ -4722,7 +4746,7 @@ export class CelloDirectoryNode {
     reportedRoot: Uint8Array,
     presentHex: string,
     sessionId: Uint8Array,
-    roster: readonly Uint8Array[],
+    roster: readonly [Uint8Array, Uint8Array],
   ): { ok: true; recomputedRoot: Uint8Array } | { ok: false; reason: string } {
     // (a) Rebuild the CLIENT-VERIFIABLE root and compare to the reported root. The client's
     // local SessionTree hashes each leaf as its content_hash (kind "hash"), NOT as
@@ -5425,9 +5449,20 @@ export class CelloDirectoryNode {
         const p = this.#pendingSessions.get(sessionIdHex);
         return p ? { initiatorHex: p.initiatorHex, targetHex: p.targetHex } : null;
       })();
-    const roster: [Uint8Array, Uint8Array] = known
+    /**
+     * ⚠️ NO SESSION RECORD MEANS `null`, NOT A ROSTER GUESSED FROM THE SUSPECT ARRAY — review H2.
+     *
+     * This used to fall back to `[pA, pB]`, the first two distinct senders of the relay's own leaf
+     * array. That still refused the right seals — three keys do not fit in a pair — but it refused
+     * them while NAMING THE WRONG KEY: on `[A, S, A, B]` the derived pair is `[A, S]`, so the
+     * intruder is inside the roster and the refusal accuses **B**, an actual participant. Handing
+     * `null` down instead makes the module say the only thing this node can honestly say without a
+     * session record — how many distinct signers there are, and that which one is the intruder is not
+     * derivable from here.
+     */
+    const roster: readonly [Uint8Array, Uint8Array] | null = known
       ? [Buffer.from(known.initiatorHex, "hex"), Buffer.from(known.targetHex, "hex")]
-      : [pA, pB];
+      : null;
     if (!known) {
       this.#logger?.info("seal.final_root.roster_unknown", {
         sessionId: sessionIdHex,
@@ -6163,6 +6198,19 @@ export class CelloDirectoryNode {
   // ─── Test-only helpers ───────────────────────────────────────────────────────
 
   /**
+   * Register an authenticated client stream without a libp2p handshake — review H4.
+   *
+   * `#notifySealRejected` and the sealed-certificate delivery both write to `#streams`, so with no
+   * stream registered a test can observe a refusal's RETURN VALUE and its LOG but never the frame the
+   * participants actually receive. That is the half of "the refusal reaches the operator" that says
+   * what the two people in the conversation are told, and it was untestable and therefore untested.
+   */
+  attachStreamForTest(pubkeyHex: string, stream: Stream): void {
+    if (process.env["NODE_ENV"] !== "test") throw new Error("test-only");
+    this.#streams.set(pubkeyHex, stream);
+  }
+
+  /**
    * PERSIST-023 test hook: seeds session state and triggers #processSealUnilateral
    * via a mock stream. Only available in NODE_ENV=test.
    *
@@ -6263,7 +6311,18 @@ export class CelloDirectoryNode {
     if (process.env["NODE_ENV"] !== "test") throw new Error("test-only");
     const sessionIdHex = Buffer.from(sessionId).toString("hex");
     this.#sessionLastActivity.set(sessionIdHex, this.#clock.now() - (this.#deliveryGraceSeconds + 1) * 1000);
-    this.#sessionParticipants.set(sessionIdHex, { initiatorHex: senderHex, targetHex: absentPartyHex });
+    /**
+     * ⚠️ NON-DESTRUCTIVE, AND THE SEAM WAS HIDING A SECURITY HOLE — review H1.
+     *
+     * This used to overwrite unconditionally with `{initiatorHex: senderHex, ...}`, which made the
+     * submitter a participant BY CONSTRUCTION. The one scenario that matters — a submitter who is in
+     * nobody's session — was therefore unconstructible through this seam, so the guard against it
+     * could not be tested and its absence could not be noticed. A caller that has already declared
+     * the roster (`restoreSessionParticipants`) now keeps it.
+     */
+    if (!this.#sessionParticipants.has(sessionIdHex)) {
+      this.#sessionParticipants.set(sessionIdHex, { initiatorHex: senderHex, targetHex: absentPartyHex });
+    }
     // Register the present party's stream so the seal_unilateral_confirmed frame is actually
     // delivered to the passed mockStream (a capturing stream can then decode the sent frame).
     this.#streams.set(senderHex, mockStream);

@@ -278,14 +278,17 @@ function bufEqual(a: Uint8Array, b: Uint8Array): boolean {
 export function verifyLeafProvenance(
   leaves: readonly RelaySealLeaf[],
   sessionId: Uint8Array,
-  participants?: readonly Uint8Array[],
+  participants: readonly [Uint8Array, Uint8Array] | null,
 ): { ok: true } | { ok: false; reason: SealFinalRootReason; detail: string } {
+  const distinctSenders = new Set<string>();
+
   for (let i = 0; i < leaves.length; i++) {
     const leaf = leaves[i]!;
     const senderHex = Buffer.from(leaf.s2.sender_pubkey).toString("hex");
     const who = `leaf ${i} (${leaf.kind}, sender ${senderHex.slice(0, 16)}…)`;
+    distinctSenders.add(senderHex);
 
-    if (participants !== undefined && !participants.some((p) => bufEqual(p, leaf.s2.sender_pubkey))) {
+    if (participants !== null && !participants.some((p) => bufEqual(p, leaf.s2.sender_pubkey))) {
       return {
         ok: false,
         reason: SEAL_FINAL_ROOT_REASONS.SENDER_NOT_PARTICIPANT,
@@ -309,6 +312,31 @@ export function verifyLeafProvenance(
       };
     }
   }
+
+  /**
+   * ⚠️ WITH NO ROSTER, COUNT — DO NOT ACCUSE — review H2.
+   *
+   * The first version fell back to the pair DERIVED from the leaf array (its first two distinct
+   * senders) and ran the same per-leaf test against it. That refuses the right seals for the wrong
+   * stated reason: on `[A, S, A, B]` the derived pair is `[A, S]`, so the intruder S is *in* the
+   * roster and the refusal names **B — a real participant — as the key that does not belong**. The
+   * verdict was right and the sentence the operator reads was a false accusation against the one
+   * party who had done nothing.
+   *
+   * What this node actually knows without a session record is a COUNT: a session has two
+   * participants, so three distinct signers means one of them does not belong — and which one is
+   * genuinely not derivable from here. Say that, rather than picking a name.
+   */
+  if (participants === null && distinctSenders.size > 2) {
+    return {
+      ok: false,
+      reason: SEAL_FINAL_ROOT_REASONS.SENDER_NOT_PARTICIPANT,
+      detail: `the leaf array carries ${String(distinctSenders.size)} distinct signers and this node holds no session record for it, `
+        + `so one of them does not belong and WHICH ONE CANNOT BE NAMED FROM HERE — every candidate roster is drawn from the same suspect array. `
+        + `Ask the node that assigned this session who its two participants are.`,
+    };
+  }
+
   return { ok: true };
 }
 
@@ -322,7 +350,7 @@ export function verifyLeafProvenance(
 export function verifySealFinalRoots(
   leaves: readonly RelaySealLeaf[],
   sessionId: Uint8Array,
-  participants?: readonly Uint8Array[],
+  participants: readonly [Uint8Array, Uint8Array] | null,
 ): SealFinalRootVerdict {
   /**
    * FIRST, AND OVER EVERY LEAF — `DOD-M15-LEAFPARTIES-1`.

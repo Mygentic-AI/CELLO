@@ -125,7 +125,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
       msgLeaf(0x11, 1), msgLeaf(0x22, 2), msgLeaf(0x33, 3),
       sealLeaf(root, 4, { sender: ALICE }), sealLeaf(root, 5, { sender: BOB }),
     ];
-    const verdict = verifySealFinalRoots(leaves, SESSION_ID);
+    const verdict = verifySealFinalRoots(leaves, SESSION_ID, null);
     expect(verdict.ok, "an honest seal must certify, or the check is a wall rather than a guard").toBe(true);
     expect(
       (verdict as { coverage?: string }).coverage,
@@ -150,7 +150,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
       msgLeaf(0x11, 1), /* 0x22 dropped by the relay */ msgLeaf(0x33, 3),
       sealLeaf(honestRoot, 4, { sender: ALICE }), sealLeaf(honestRoot, 5, { sender: BOB }),
     ];
-    const verdict = verifySealFinalRoots(tampered, SESSION_ID);
+    const verdict = verifySealFinalRoots(tampered, SESSION_ID, null);
     expect(verdict.ok, "a dropped message must not certify — the receipt would describe a conversation nobody had").toBe(false);
     expect((verdict as { reason: string }).reason).toBe(SEAL_FINAL_ROOT_REASONS.ROOT_DISAGREES);
   });
@@ -167,7 +167,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
       msgLeaf(0x22, 1), msgLeaf(0x11, 2), msgLeaf(0x33, 3),
       sealLeaf(honestRoot, 4, { sender: ALICE }), sealLeaf(honestRoot, 5, { sender: BOB }),
     ];
-    const verdict = verifySealFinalRoots(reordered, SESSION_ID);
+    const verdict = verifySealFinalRoots(reordered, SESSION_ID, null);
     expect(verdict.ok, "order is part of what was signed — same count, different conversation").toBe(false);
     expect((verdict as { reason: string }).reason).toBe(SEAL_FINAL_ROOT_REASONS.ROOT_DISAGREES);
   });
@@ -196,7 +196,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
       // The signed content_hash is untouched; only the bytes the relay hands over are swapped.
       { ...honest, content_bytes: forged },
     ];
-    const verdict = verifySealFinalRoots(leaves, SESSION_ID);
+    const verdict = verifySealFinalRoots(leaves, SESSION_ID, null);
     expect(verdict.ok, "a payload the client's signature does not cover must never be believed").toBe(false);
     expect(
       (verdict as { reason: string }).reason,
@@ -207,7 +207,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
   it("★ a payload for a DIFFERENT session is refused — a valid signature replayed elsewhere", () => {
     const root = expectedRoot([0x11]);
     const leaves: RelaySealLeaf[] = [msgLeaf(0x11, 1), sealLeaf(root, 2, { sessionId: OTHER_SESSION })];
-    const verdict = verifySealFinalRoots(leaves, SESSION_ID);
+    const verdict = verifySealFinalRoots(leaves, SESSION_ID, null);
     expect(verdict.ok).toBe(false);
     expect((verdict as { reason: string }).reason).toBe(SEAL_FINAL_ROOT_REASONS.SESSION_MISMATCH);
   });
@@ -228,7 +228,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
       msgLeaf(0x11, 1), msgLeaf(0x22, 2),
       sealLeaf(rootA, 3, { sender: ALICE }), sealLeaf(rootB, 4, { sender: BOB }),
     ];
-    const verdict = verifySealFinalRoots(leaves, SESSION_ID);
+    const verdict = verifySealFinalRoots(leaves, SESSION_ID, null);
     expect(verdict.ok, "two participants signing different roots cannot both be certified").toBe(false);
     /**
      * ⚠️ THIS ASSERTION USED TO ACCEPT EITHER VERDICT, AND THAT MADE IT HOLLOW. Review ran the revert
@@ -266,7 +266,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
       sealLeaf(root, 3, { sender: ALICE }),                    // new client: carries
       sealLeaf(root, 4, { sender: BOB, carry: false }),        // old client: does not
     ];
-    const verdict = verifySealFinalRoots(leaves, SESSION_ID);
+    const verdict = verifySealFinalRoots(leaves, SESSION_ID, null);
     expect(verdict.ok, "one good signature is still worth having — this must not be a refusal").toBe(true);
     expect(
       (verdict as { coverage: string }).coverage,
@@ -310,7 +310,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
       sealLeaf(currentRoot, 4, { sender: ALICE }),       // Alice's retry
       sealLeaf(currentRoot, 5, { sender: BOB }),
     ];
-    const verdict = verifySealFinalRoots(leaves, SESSION_ID);
+    const verdict = verifySealFinalRoots(leaves, SESSION_ID, null);
     expect(
       verdict.ok,
       "a superseded SEAL from a party that later re-sealed correctly must not be held against the relay",
@@ -336,7 +336,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
       sealLeaf(root, 3, { sender: ALICE }),                  // same party again
       sealLeaf(root, 4, { sender: BOB, carry: false }),      // the other party carries nothing
     ];
-    const verdict = verifySealFinalRoots(leaves, SESSION_ID);
+    const verdict = verifySealFinalRoots(leaves, SESSION_ID, null);
     expect(verdict.ok).toBe(true);
     expect(
       (verdict as { coverage: string }).coverage,
@@ -354,7 +354,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
      */
     const root = expectedRoot([0x11]);
     const leaves: RelaySealLeaf[] = [msgLeaf(0x11, 1), sealLeaf(root, 2, { sender: STRANGER })];
-    const verdict = verifySealFinalRoots(leaves, SESSION_ID, [ALICE, BOB]);
+    const verdict = verifySealFinalRoots(leaves, SESSION_ID, [ALICE, BOB] as const);
     expect(verdict.ok, "a key that is not in the conversation cannot seal it").toBe(false);
     expect((verdict as { reason: string }).reason).toBe(SEAL_FINAL_ROOT_REASONS.SENDER_NOT_PARTICIPANT);
 
@@ -363,7 +363,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
       msgLeaf(0x11, 1), sealLeaf(root, 2, { sender: ALICE }), sealLeaf(root, 3, { sender: BOB }),
     ];
     expect(
-      verifySealFinalRoots(honest, SESSION_ID, [ALICE, BOB]).ok,
+      verifySealFinalRoots(honest, SESSION_ID, [ALICE, BOB] as const).ok,
       "a guard that refuses the honest case is a wall",
     ).toBe(true);
   });
@@ -393,7 +393,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
       s2: { ...honest.s2, content_hash: ctrlHash(forgedPayload) } as typeof honest.s2,
       content_bytes: forgedPayload,
     };
-    const verdict = verifySealFinalRoots([msgLeaf(0x11, 1), rewritten], SESSION_ID);
+    const verdict = verifySealFinalRoots([msgLeaf(0x11, 1), rewritten], SESSION_ID, null);
     expect(
       verdict.ok,
       "a relay that rewrites both halves of its own envelope must not verify — that is the circle this unit exists to break",
@@ -409,7 +409,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
      */
     const root = expectedRoot([0x11]);
     const leaves: RelaySealLeaf[] = [msgLeaf(0x11, 1), sealLeaf(root, 2, { carry: false })];
-    const verdict = verifySealFinalRoots(leaves, SESSION_ID);
+    const verdict = verifySealFinalRoots(leaves, SESSION_ID, null);
     expect(verdict.ok, "nothing was carried, so nothing was verified").toBe(false);
     expect((verdict as { reason: string }).reason).toBe(SEAL_FINAL_ROOT_REASONS.NOT_CARRIED);
   });
@@ -428,7 +428,7 @@ describe("DOD-M15-SEALWIRE-1 bullets 3+4: the certified root is checked against 
       structure1_cbor: s1(ctrlHash(junk)),
       content_bytes: junk,
     };
-    const verdict = verifySealFinalRoots([msgLeaf(0x11, 1), leaf], SESSION_ID);
+    const verdict = verifySealFinalRoots([msgLeaf(0x11, 1), leaf], SESSION_ID, null);
     expect(verdict.ok).toBe(false);
     expect((verdict as { reason: string }).reason).toBe(SEAL_FINAL_ROOT_REASONS.PAYLOAD_MALFORMED);
   });

@@ -32,7 +32,7 @@
 
 import { describe, it, expect } from "vitest";
 import { randomBytes } from "node:crypto";
-import { Encoder } from "cbor-x";
+import { Encoder, decode } from "cbor-x";
 import { generateKeypair, buildMerkleTree, merkleRoot, buildRelayAckTbs } from "@cello-protocol/crypto";
 import { buildStructure2, encodeStructure2 } from "@cello-protocol/protocol-types";
 import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
@@ -50,6 +50,34 @@ function makeSpyLogger(sink: LogEntry[]): Logger {
   const mk = (level: string) => (event: string, ctx?: Record<string, unknown>) =>
     sink.push({ level, event, ctx: ctx ?? {} });
   return { info: mk("info"), warn: mk("warn"), error: mk("error"), debug: mk("debug") } as unknown as Logger;
+}
+
+/** Undo the length prefix `#sendFrame` writes, so a captured frame can be decoded. */
+function lpUnwrap(framed: Uint8Array): Uint8Array {
+  let i = 0, shift = 0, len = 0;
+  for (;;) {
+    const b = framed[i++]!;
+    len |= (b & 0x7f) << shift;
+    if ((b & 0x80) === 0) break;
+    shift += 7;
+  }
+  return framed.subarray(i, i + len);
+}
+
+/** A client stream that records every frame the directory sends it. */
+function capturingStream(): { stream: import("@libp2p/interface").Stream; frames: () => Array<Record<string, unknown>> } {
+  const captured: Uint8Array[] = [];
+  return {
+    stream: {
+      send: (b: Uint8Array | { slice(): Uint8Array }) => {
+        captured.push(b instanceof Uint8Array ? b : b.slice());
+      },
+    } as unknown as import("@libp2p/interface").Stream,
+    frames: () =>
+      captured
+        .map((f) => { try { return decode(lpUnwrap(f)) as Record<string, unknown>; } catch { return null; } })
+        .filter((f): f is Record<string, unknown> => f !== null),
+  };
 }
 
 function makeNoopRelay(): RelayAdapter {
@@ -163,6 +191,10 @@ describe("DOD-M15-LEAFPARTIES-1 (bilateral): every leaf is tied to the session's
         ],
         sessionId,
       );
+      // The participants' own stream, so the frame they receive can be read — not just the return.
+      const aStream = capturingStream();
+      directory.attachStreamForTest(hex(new Uint8Array(await a.getPublicKey())), aStream.stream);
+
       const result = await directory.processSeal(sessionId, seal);
       expect(result.ok, "a key outside the conversation must not appear under a certified root").toBe(false);
       expect((result as { reason: string }).reason).toBe("seal_sender_not_participant");
@@ -173,6 +205,24 @@ describe("DOD-M15-LEAFPARTIES-1 (bilateral): every leaf is tied to the session's
       expect(refused[0]!.level).toBe("error");
       expect(refused[0]!.ctx["reason"]).toBe("seal_sender_not_participant");
       expect(String(refused[0]!.ctx["guidance"] ?? "").length).toBeGreaterThan(80);
+
+      /**
+       * ⚠️ THE FRAME, NOT ONLY THE RETURN — review H4.
+       *
+       * `session_seal_rejected` is what the two people in the conversation actually see, and its
+       * reason is a CLOSED union that cannot carry `seal_sender_not_participant`. Telling them
+       * `merkle_root_mismatch` would send them off to compare transcripts with each other over what
+       * is really an injected leaf. Nothing asserted this, so reverting it stayed green.
+       */
+      const rejected = aStream.frames().find((f) => f["type"] === "session_seal_rejected");
+      expect(rejected, "the participants must be told the seal was refused").toBeTruthy();
+      expect(
+        rejected!["reason"],
+        "the two people in the conversation must not be told their roots disagree when a stranger's leaf was injected",
+      ).toBe("seal_leaves_invalid");
+
+      // And no certificate went out to anybody.
+      expect(aStream.frames().some((f) => f["type"] === "session_sealed")).toBe(false);
     });
   }, 20_000);
 
@@ -200,6 +250,22 @@ describe("DOD-M15-LEAFPARTIES-1 (bilateral): every leaf is tied to the session's
         logs.some((l) => l.event === "seal.final_root.roster_unknown"),
         "the degraded roster must still be announced — the refusal does not make the degradation go away",
       ).toBe(true);
+
+      /**
+       * ⚠️ THE DETAIL, BECAUSE THE REASON CODE ALONE PASSED FOR THE WRONG REASON — review H2.
+       *
+       * With a roster derived from the suspect array the pair here is [A, S] — the intruder is INSIDE
+       * it — so the refusal fired on B, a real participant, and told the operator B's key does not
+       * belong. Same reason code, false accusation. Assert what the operator READS.
+       */
+      const detail = String(logs.find((l) => l.event === "seal.final_root.refused")?.ctx["detail"] ?? "");
+      expect(detail, "with no session record the count is all this node knows").toContain("3 distinct signers");
+      expect(detail).toContain("CANNOT BE NAMED FROM HERE");
+      const bHex = hex(new Uint8Array(await b.getPublicKey()));
+      expect(
+        detail.includes(bHex.slice(0, 16)),
+        "a participant must never be named as the intruder",
+      ).toBe(false);
     });
   }, 20_000);
 
@@ -313,7 +379,14 @@ async function buildUnilateralCarry(
 }
 
 describe("DOD-M15-LEAFPARTIES-1 (unilateral): the absent-party seal is bound to the same pair", () => {
-  async function runUnilateral(specs: LeafSpec[], present: Kp, absent: Kp, logs: LogEntry[]): Promise<void> {
+  async function runUnilateral(
+    specs: LeafSpec[],
+    present: Kp,
+    absent: Kp,
+    logs: LogEntry[],
+    /** The session's REAL pair, when it differs from `[present, absent]` — the stranger case. */
+    assignedTo?: [Kp, Kp],
+  ): Promise<void> {
     const store = new InMemoryDirectoryStore();
     const { directory, stop } = await createDirectoryNode({
       keyProvider: generateKeypair(),
@@ -325,6 +398,7 @@ describe("DOD-M15-LEAFPARTIES-1 (unilateral): the absent-party seal is bound to 
     });
     try {
       const sessionId = new Uint8Array(randomBytes(16));
+      if (assignedTo) await registerRoster(directory, sessionId, assignedTo[0], assignedTo[1]);
       const carry = await buildUnilateralCarry(specs, present, generateKeypair(), sessionId);
       await directory.triggerSealUnilateralWithLeavesForTest(
         hex(new Uint8Array(await present.getPublicKey())),
@@ -347,6 +421,15 @@ describe("DOD-M15-LEAFPARTIES-1 (unilateral): the absent-party seal is bound to 
       logs.some((l) => l.event === "session.unilateral.verification.failed"),
       "an honest carry must not be refused",
     ).toBe(false);
+    /**
+     * ⚠️ ASSERT THE OUTCOME, NOT ITS SHADOW — review section 4. "No failure was logged" is satisfied
+     * by any early return, including one that never reached the verification at all. The receipt
+     * being written is the thing this test is named for.
+     */
+    expect(
+      logs.some((l) => l.event === "session.unilateral.notarized"),
+      "the honest carry must actually produce a notarized receipt",
+    ).toBe(true);
   }, 20_000);
 
   it("★★ a third key's message in the carry is refused — no notarization", async () => {
@@ -359,6 +442,36 @@ describe("DOD-M15-LEAFPARTIES-1 (unilateral): the absent-party seal is bound to 
     const failed = logs.filter((l) => l.event === "session.unilateral.verification.failed");
     expect(failed, "a carry containing a stranger's leaf must not be notarized").toHaveLength(1);
     expect(failed[0]!.ctx["reason"]).toBe("seal_sender_not_participant");
+    expect(logs.some((l) => l.event === "session.unilateral.notarized")).toBe(false);
+  }, 20_000);
+
+  it("★★★ A STRANGER CANNOT UNILATERALLY SEAL SOMEONE ELSE'S SESSION", async () => {
+    /**
+     * ⚠️ REVIEW H1 — A SECURITY HOLE, AND THE TEST SEAM WAS HIDING IT.
+     *
+     * Nothing on this path checked that the SUBMITTER is in the session. An authenticated stranger S
+     * sends `seal_unilateral` for A↔B's session carrying its own two leaves: `absentPartyHex` resolves
+     * to A by its else-branch, every signature is S's own and genuine, exactly one ctrl leaf is
+     * present and it IS from the submitter, and the reported root matches. The directory would sign a
+     * receipt over A and B's session id naming S as a party to it.
+     *
+     * It could not be tested before, because `triggerSealUnilateralWithLeavesForTest` overwrote
+     * `#sessionParticipants` with the submitter as initiator — making S a participant by construction.
+     * The seam is non-destructive now, so `assignedTo` states who the session really belongs to.
+     */
+    const logs: LogEntry[] = [];
+    const [a, b, stranger] = [generateKeypair(), generateKeypair(), generateKeypair()];
+    // S submits for A↔B's session, carrying a chain made entirely of S's own valid leaves.
+    await runUnilateral(
+      [{ key: stranger, kind: "msg" }, { key: stranger, kind: "ctrl" }],
+      stranger, a, logs, [a, b],
+    );
+    const failed = logs.filter((l) => l.event === "session.unilateral.verification.failed");
+    expect(failed, "a key outside the session must not be able to close it").toHaveLength(1);
+    expect(
+      failed[0]!.ctx["reason"],
+      "the truth is that the SUBMITTER is not in this session — naming a leaf would be one layer too deep",
+    ).toBe("unilateral_not_a_participant");
     expect(logs.some((l) => l.event === "session.unilateral.notarized")).toBe(false);
   }, 20_000);
 
