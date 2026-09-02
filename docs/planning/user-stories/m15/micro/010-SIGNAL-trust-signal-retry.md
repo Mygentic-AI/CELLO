@@ -132,10 +132,65 @@ or ingress lines.
 
 ## Review
 
-*(Reviewer verdict goes here. One quote. Not a transcript.)*
+**Work item 5 — the drain gap is CLOSED.** Verified at `cello-portal/src/server/trust/submission-ingress.ts`,
+`processRow`'s `if (auth.body.op === "refuse")` branch: it dispatches to `handleRefuse` *before* the
+mint path, records an outcome and acks, and `cello-portal-ingress-drain` (Cloud Scheduler, every
+minute) is what calls the route it lives on.
+
+**Reviewer verdict** (`cello-unit-reviewer`, one pass):
+
+> **SPEC: DEVIATIONS FOUND** — clause 8 missing (drain-gap answer nowhere), clause 2 unverified
+> (test uncommitted and unrun), clause 4 terminal state mislabelled. `[blocking]`
+> **SILENT FALLBACKS FOUND** — H1 (accepted-during-shutdown loses its only handle) and H2 (shutdown
+> drops the queue with no log, against an explicit promise) are both `[blocking]`.
+> **ERROR SUBSTITUTION FOUND** — H3 (`attempts_exhausted` for a node refusal) and M5
+> (`submission_refused_by_node` for a local condition) are `[blocking]`; both point the operator at
+> the directory for causes that are not there.
+> **HOLLOW TESTS FOUND** — the exhaustiveness claim has no teeth and its own comment denies it;
+> `is SERIAL` and `stop() leaves nothing armed` do not survive a narrow revert.
+> **REMOVALS PROVEN** — the single move preserves behavior and touches nothing signed or hashed.
+
+All nine findings fixed, one commit each. Clause 2's portal test was committed and run after the
+reviewer took its snapshot (24 passed; mutating away the ingress dedupe reddens it at "expected 2 to
+be 1" — the notary asked twice). Clause 8 is answered above.
+
+**Mutation record — 7 caught, and 2 SURVIVED first and were fixed:**
+
+| Mutation | Result |
+|---|---|
+| disable the enqueue call site | RED with the exact pre-fix payload |
+| remove the reconnect wake from `onConnected` | **SURVIVED** — the queue's own timer had delivered it; test rewritten to name the writer, wake pinned separately, then RED |
+| add `submission_refused_by_node` to the retryable set | RED in both clause-3 tests |
+| drop `in_flight` from `wallet_list_issued` | RED |
+| make a local precondition spend the attempt budget | **SURVIVED** — the exhaustion branch is guarded on `!localPrecondition`, so the miscount was invisible; a mixed-sequence test now pins `delivery.attempts`, then RED |
+| `localPrecondition = false` | RED in two tests |
+| disable the portal's ingress dedupe | RED — "expected 2 to be 1" |
+
+**Gate:** `pnpm run lint` and `pnpm run typecheck` both exit 0. `core/daemon` + `core/cli` +
+`core/adapter-claude-code`: **3511 passed, 5 skipped**. Portal `m10b-ingress-1-drain-loop`: 24
+passed. Directory `m10b-queue-1-v51-submission-queue` (real Postgres, `CELLO_ENV=local`): 9 passed —
+run rather than cited, because it is the per-node half of clause 2.
+
+**Bound worth stating:** clause 2's wording spans two layers and only one of them is cross-node. The
+submission queue is **not replicated** (M10B-D21), so two nodes genuinely hold two rows — "stored
+once" is a per-node property, and mint-once is the portal's. Both are now asserted where they live.
 
 ---
 
 ## Newly discovered
 
 *(One or two lines each. Do not act on them.)*
+
+- **The in-process signaling seam runs no reconnect behaviour at all.** Injecting `signalingConnect`
+  makes the daemon build `sharedSignaling`, which is constructed with **no `onConnected` callback**.
+  So on that seam the standing-receiver re-registration, the park drain and this retry are all
+  unreachable — any test that believes it exercised a reconnect there is reading a different writer.
+  POST-LAUNCH: it is a test-fidelity gap, not a production path (production always configures
+  `directoryEndpointResolver` and gets a per-agent manager that has the callback).
+
+- **`nat-reachability-reservation` R2 is host- and ordering-dependent.** "standing receiver binds
+  ROUTABLE by default" binds a real libp2p node on `0.0.0.0` and asserts a non-loopback `/ip4/` is
+  enumerated. It failed once inside a 334-file run and passed both alone and on a second identical
+  combined run; this machine has exactly one non-loopback IPv4. Nothing in this unit touches
+  transport binding. POST-LAUNCH: a test that asserts on host interface enumeration under load will
+  go red on a correct implementation.

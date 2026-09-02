@@ -755,7 +755,7 @@ CPU against a healthy idle of 0.3–0.4% for days.
 ### `DOD-M15-SAMEOP-1` — ✅ Same-operator standing does not depend on which node answered
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-SAMEOP-1`.
 
-### `DOD-M15-ENDORSE-RETRY-1` — ❌ A trust signal reaches the directory when one node is down
+### `DOD-M15-ENDORSE-RETRY-1` — ✅ A trust signal reaches the directory when one node is down
 `DOD-END-SUBMIT-1`'s handed-forward AC. Previously triaged ship-without; **in scope under the basic-
 value criterion** — "mint a trust signal and have it received" is advertised value.
 - Submission fails over to another node rather than failing and requiring the operator to re-run the
@@ -763,6 +763,14 @@ value criterion** — "mint a trust signal and have it received" is advertised v
 - **Verify at the same time** whether the refuse-op drain gap closed when `cello-portal-ingress-drain`
   shipped; nobody has checked since.
 - **Enforcer:** journey.
+
+> **Closed 2026-09-02** by micro work order `010-SIGNAL`. A send that reached no node is held and
+> re-sent on the SignalingManager's reconnect — the ruled failover — with the operator told it is
+> held rather than shown a bare failure; a refusal on the merits is never retried. Drain gap:
+> **closed**, verified at `submission-ingress.ts`'s `op === "refuse"` dispatch ahead of the mint
+> path. Reviewer found 9, all fixed; 7 mutations caught, 2 survived first and were fixed.
+> Full record → `micro/010-SIGNAL-trust-signal-retry.md`.
+> **Journey enforcer with a node down is NOT run** — this unit is unit- and live-daemon-tested only.
 
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
