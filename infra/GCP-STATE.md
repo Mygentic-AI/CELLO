@@ -265,6 +265,30 @@ policy against a metric that never arrives is indistinguishable from a healthy f
 
 ---
 
+## ⚠️ `terraform plan` IS NEVER CLEAN — five permanent no-op diffs (noticed 2026-09-02)
+
+A full `terraform plan` reports **`0 to add, 5 to change, 0 to destroy`** on a completely
+undisturbed tree. All five are Cloud Run services — `ops_agent`, `ops_dashboard`, `portal`,
+`seal_notifier`, `waitlist` — and every one shows the same two lines:
+
+```
+- manual_instance_count = 0 -> null
+- min_instance_count    = 0 -> null
+```
+
+The config sets `min_instance_count = 0` explicitly; the API omits the field when it is zero. The
+provider reads the absence as a change, applies nothing, and the diff returns on the next plan.
+
+**Why this is worth writing down rather than ignoring: it destroys "plan is clean" as a drift
+signal.** This file's own §8 rule is to verify against the running thing, and the cheapest form of
+that is a clean plan. Nobody can use it here — the honest check is now "5 to change, and all of them
+are these two lines". Anything else is real.
+
+**Not fixed here.** Removing `min_instance_count = 0` from five service definitions is a change to
+five running services for a cosmetic gain, and it belongs in a change that is already touching them.
+
+---
+
 ## Billing slot ledger (the 5-project cap is REAL)
 
 The billing account allows **max 5 linked projects** (`FAILED_PRECONDITION: Cloud billing quota
