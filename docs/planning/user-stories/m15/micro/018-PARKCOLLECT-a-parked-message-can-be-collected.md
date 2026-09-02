@@ -234,13 +234,126 @@ having fixed both has produced a review finding, not a bonus.
 ## Review
 
 ### Where this work lives
-*(worktree path, branch, and the `CELLO_PG_HOST_PORT` you used — so a second reader can reproduce
-the run rather than guess which Postgres it hit)*
+
+Lane A worked in the **main checkouts**, not a worktree — `/Users/andrep/Documents/code/trustless-cello`
+on branch `main`. `cello-client` was read-only for this order (Lane B held it concurrently), so
+**no cello-client build was run**. Postgres: the compose default port, `CELLO_PG_HOST_PORT` left
+unset.
+
+### Part 1 — the live check on the fleet: INCONCLUSIVE (not a verdict)
+
+**The live fleet's relay link was already dead before the park was ever attempted, so the run
+proves nothing about park/collect either way.**
+
+Sequence actually run, 2026-09-02, CELLO_Coder_1 → CELLO_Support, session
+`c46de797c971060edd455a12814b1a7b`, `transportMode: relay`:
+
+1. Real directory-brokered session opened between two online agents. ✅
+2. Message 1 sent while Support was online. It reached Support's inbox
+   (`unread_count: 1, last_seq: 1`) — **and came back `witnessed: false`**:
+
+   ```json
+   {"ok":true,"sequence_number":1,"delivered":true,"witnessed":false,
+    "guidance":"... the relay did not witness it, so the ordering authority has no copy of it ...
+    your record is now one leaf ahead of the relay's ..."}
+   ```
+
+3. `cello_set_agent_offline` → CELLO_Support. ✅
+4. **The park send was never made.** It was denied at the approval prompt, so no `content.park`
+   event exists for it and there is no response object to quote. There is no product-level refusal
+   in this record — the only rejection is the approval one.
+
+**Why this is inconclusive and not "LIVE: refused":** step 2 shows the relay had no copy of the very
+first message. Anything downstream of that is downstream of a dead relay link, which is a different
+fault from the one this order is about. Recording it as a refusal would attribute a relay-link
+failure to the vouching gate. The `witnessed: false` finding and the error loop that followed it are
+written up under *Newly discovered* 1–3.
+
+5. Session closed. Close returned **no receipt**, consistent with the divergence the send warned
+   about:
+
+   ```json
+   {"ok":true,"status":"seal_interrupted_pending",
+    "rootHex":"de8188eee20a5408657d22e84872dfd827a89d501c119f68935ad6944793fb3a"}
+   ```
+
+   The `session.key.announce.failed` loop was **still firing at ~4 Hz 26 seconds after this close
+   returned** (last observed 19:51:00.884Z).
+
+**So the deciding evidence is the fallback Part 1 already specifies** — the passing recover test,
+two real daemons as separate OS processes, its own relay, independent of the live fleet's health.
+Its result is below.
 
 ### The rest
-*(the live-check verdict with quoted log lines, the test run output, the mutation proof from
-DoD 4, the reviewer's verdict)*
+*(the fallback-run verdict, the test run output, the mutation proof from DoD 4, the reviewer's
+verdict)*
 
 ## Newly discovered
 
-*(anything found and NOT acted on, per rule 3 — MSG-8's stale tool name goes here at minimum)*
+*(anything found and NOT acted on, per rule 3)*
+
+### 1. A message reported as delivered was never witnessed by the relay — on a live relay-mode session
+
+**What the operator would see:** they send a message, their side says it went through, and the
+ordering authority has no copy of it. The conversation can no longer produce a receipt, and nothing
+told them that until they read the guidance text on the send itself.
+
+Observed 2026-09-02 on the live fleet, session `c46de797c971060edd455a12814b1a7b`
+(`transportMode: relay`), CELLO_Coder_1 → CELLO_Support, first message, both agents online:
+
+```json
+{"ok":true,"sequence_number":1,"delivered":true,"modified":false,"witnessed":false,
+ "guidance":"Delivered and in your transcript — but the relay did not witness it, so the ordering
+ authority has no copy of it ... your record is now one leaf ahead of the relay's ..."}
+```
+
+This fired on message **1**, before any park was attempted. It is why this order's live check is
+**inconclusive rather than negative** — the relay link was already dead at the first send, so
+nothing that happened afterwards is evidence about the park/collect path.
+
+**Not investigated, per rule 3.** It may or may not share a cause with finding 2.
+
+### 2. `session.key.announce.failed` retries in a hot loop, ~4×/second, and survives session close
+
+Same session. The daemon emitted this pair continuously from 19:50:34Z onward, roughly four times a
+second, and was **still emitting it at 19:51:00Z after `cello_close_session` returned**:
+
+```json
+{"level":"error","event":"session.key.announce.failed","agentName":"CELLO_Support",
+ "sessionId":"c46de797c971060edd455a12814b1a7b","correlationId":"61458320-...","reason":"stream_failed",
+ "error":"[object Object]",
+ "impact":"this side's half of the session key never reached the counterparty, so content stays
+  unencrypted by CELLO until a later connect succeeds"}
+```
+
+Two correlation IDs alternate — the session's own, and a literal `"revive-rekey"`. Three things are
+stacked here and only the third is already owned:
+
+- **The retry has no visible ceiling.** It ran for at least 27 seconds at ~4 Hz and did not stop when
+  the session closed.
+- **The stated impact is that content stays unencrypted by CELLO.** That is the announced consequence
+  in the daemon's own words; it is not something this order verified.
+- **`error: "[object Object]"`** — same shape as `DOD-M15-PARKERROR-1`, which is `019`'s line. Left
+  alone.
+
+**Not investigated, per rule 3.**
+
+### 3. Park pulls poll two relays every ~3s and one keeps returning the same entry
+
+Visible throughout the same window, unrelated to the session above:
+
+```json
+{"event":"content.park.pull.result","relayPeerId":"12D3KooWJXHpnWQhGk3jXBJYdXMmeLxEhRqzwZCYd1bxSUh4pg83","count":1}
+{"event":"content.park.pull.result","relayPeerId":"12D3KooWFpvG5ksTBoiMCfyy3n126AtpFNYGXB14R2335DAf1BYt","count":0}
+```
+
+One relay reports `count: 1` on every poll, every ~3 seconds, indefinitely — the same entry appears
+to be returned and never consumed. **Not investigated, per rule 3.** Recorded because it is on the
+park path this order is about, and because a pull that returns an entry forever is either a stuck
+entry or a watermark that never advances.
+
+### 4. `DOD-MSG-8` fails on a stale tool name
+
+The test calls `cello_get_transcript`. The tool is named `cello_transcript` today. The test is
+stale, not the product. Not this line, not touched — carried from this order's own *Not in scope*
+list so it survives outside this file.
