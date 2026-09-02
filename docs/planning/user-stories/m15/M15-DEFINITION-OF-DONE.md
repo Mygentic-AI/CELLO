@@ -953,54 +953,6 @@ Relay-audit Decision 5(b), with the PQ hook built in from the start.
 ### `DOD-M15-SEALWIRE-1` — ✅ The receipt is bound to the transcript
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-SEALWIRE-1`.
 
-### `DOD-M15-SEALWIRE-1` — bullets
-**One protocol change, not six. These cannot be split** — every one changes the same wire format or
-depends on the domain change, and shipping any alone leaves the two sides disagreeing about what a
-root means. Both repos; version-bump ACs on both sides.
-- **The bilateral certified root moves into the content-hash domain** (Decision 1(a)), as the
-  unilateral path already uses. Alpha is precisely when this is free.
-- **The client verifies the certified root against its own tree** before accepting or co-signing.
-  Today it takes the sealed root off the wire, confirms the directory signed *those bytes*, stores
-  it, and **discards the root it computed one step earlier** — so the receipt proves the directory
-  signed something, not that it signed your conversation. The worst moment is co-signing: **your key
-  signs a root you never checked.** Once both roots live in one domain this is a one-line comparison,
-  and root equality implies leaf-set equality, which also covers the missing bilateral leaf-count
-  check.
-- **The directory verifies the SEAL leaf's `final_root`** — and **the deferral comment is deleted in
-  the same diff.** Fixing one side of a mutual deferral and leaving the other half pointing at it is
-  how this gap was created.
-- **The directory's circular root check is replaced.** It rebuilds a root from the same leaf array
-  the relay supplied using the same code, so it validates arithmetic, not the relay, and cannot
-  detect a dropped or reordered leaf. Compare against something the relay did not supply.
-> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
-- **The sender's signature is stored with each leaf** (Decision 6(b)). Today the stored record has
-  **no sender signature and no sender field** — a transcript row holds the message and a direction,
-  and attribution comes entirely from local session state. The record must prove authorship
-  independently of whatever gate was in force when it was written; that matters the moment a
-  transcript is shown to anyone other than its owner.
-- **The content hash is salted**, from the same handshake. It is currently an unsalted SHA-256 of the
-  plaintext, so a relay holding the hashes can *guess* a short predictable message — "yes",
-  "approved", a price, a name — and confirm the guess.
-  > **FALLOUT, found 2026-08-24 running the spine lane (CELLO_Support):** `j-persist` fails at
-  > *"transcript message must have a committed msg leaf"*. **Not a defect and not a persistence
-  > failure** — the three leaves are there and the count assertion passes. The journey computes
-  > `sha256(0x00 ‖ content)` in its own fixture (`content-seal-fixture.ts:51`) and the daemon now
-  > computes `hmac-sha256(salt, 0x00 ‖ content)` when the session has a salt, so the lookup misses.
-  > **The fix is NOT to re-derive the salted hash in the test.** Import the daemon's own
-  > `contentHashFor(content, { alg, salt })` from `wire-content-hash.ts`, so the journey and the
-  > product agree BY CONSTRUCTION rather than by a second implementation that can drift — the same
-  > mistake `j-trust`'s hand-copied envelope type made. **Left for the salting lane:** which alg
-  > applies to a given leaf depends on whether the session held a salt when that message was
-  > written, and that is this bullet's design rather than a guess the journey lane should make.
-- **The dead `seal_attempt` path is deleted** — handler, tests, and the relay test asserting the
-  frame never appears. A fully written handler with no sender reads as abandoned work to anyone
-  auditing a public repo.
-- **The ten spine tests are replaced.** They assert both sides ended with the same sealed root; both
-  sides merely received the same bytes from the same certificate, so every one stays green if the
-  directory certifies a root over a completely different leaf set. Replace with each side's **own**
-  tree matching the certified root.
-- **Enforcer:** receipt.
-
 ### `DOD-M15-SEALPARTIES-1` — ✅ Both real participants approve before any signature exists
 > **Closed 2026-09-02.** The counterparty's approval already existed on the wire — each party's SEAL
 > ctrl leaf carries a signed `final_root` — and was OPTIONAL: `not_carried` and `coverage:"one"` both
