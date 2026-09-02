@@ -36,6 +36,25 @@ description: >
 
 ---
 
+## 📌 TWO THINGS THAT CHANGED AFTER THIS ORDER WAS WRITTEN — read before starting
+
+**1. `j-unilateral` is failing 2 of 3, on the counterparty-absent gate. That is this unit.** So you
+have a live target rather than only tests to write: the journey exists, it runs against the real
+binaries, and it is red on exactly the behaviour this order is about. `012-SEAL` fixed the
+registration defect that used to stop these journeys reaching the seal at all, so the seal path is
+now reachable — the remaining red is real.
+
+**2. Part of the solo path is already closed — do not rebuild it.** `014-LEAVES`'s review found and
+fixed a separate hole in the same handler: **a stranger could unilaterally seal a session they were
+not in**, because `#processSealUnilateral` never checked that the SUBMITTER is a participant. That
+now refuses with `unilateral_not_a_participant`.
+
+That is *who is asking*. **This order is about *whether the other party is actually gone*** — a
+different question in the same function. Read the existing check, build beside it, and do not
+duplicate it.
+
+---
+
 ## The problem, plainly
 
 If your counterparty disappears mid-conversation, you must still be able to close and get a receipt
