@@ -2,7 +2,7 @@
 name: 015-WITNESS — The relay verifies every hash as it passes, not when asked
 type: micro-work-order
 date: 2026-09-02
-status: open
+status: complete
 description: >
   The relay already receives every signed message hash and already holds both participants' real
   pubkeys. It checks nothing until seal time. Verify each hash against the two expected keys as it
@@ -145,19 +145,72 @@ participant key. Not who sent it. Not that anyone acted in bad faith. There is n
 check it against — fanning the hash sequence out to several relays is a separate line — and the
 operator-facing guidance says exactly that rather than implying a finding.
 
-**And the bound on the holding half:** an alert for an offline participant is held in the relay's
-memory and re-delivered on their next authenticated connection. A relay restart loses it. That is
-the same durability the delivery queue has, and it is worth naming rather than leaving as an implied
-guarantee.
+### The three bounds on the holding half, stated rather than implied
+
+Two of these came out of the fallback hunt, and both are limits I am choosing to accept rather than
+defects I am leaving — the difference matters, so they are written where a reader will meet them.
+
+1. **The relay's hold does not survive a relay restart.** An alert for an offline participant sits
+   in the relay's memory until they next authenticate. GCP rolls relay nodes on every deploy, so
+   anything still waiting dies with the process. The durable copy is the relay operator's log.
+2. **The client's notice does not survive a daemon restart.** `recordRelayWitnessAlert` holds the
+   list in memory, and the relay's copy is already gone by then (its queue drains destructively). So
+   an alert observed, delivered, and never read before a restart is lost from the inbox — the
+   daemon's own log still has it, and so does the relay's. **Persisting it needs a client-side
+   schema migration on operator machines, which is more than this order.** Recorded under *Newly
+   discovered* rather than built.
+3. **A cross-session replay is refused but not witnessed.** A participant lifting one of their OWN
+   validly-signed leaves out of another conversation is caught (`leaf_session_mismatch`) and refused
+   with a named reason, but no alert goes to the counterparty: the leaf verifies under a real
+   participant key, so `leaf_signed_by_neither_participant` would be a false statement about it and
+   a second alert reason is a wire change this order did not ask for. Also under *Newly discovered*.
 
 ---
 
 ## Review
 
-*(Reviewer verdict goes here. One quote. Not a transcript.)*
+`cello-unit-reviewer`, one pass:
+
+> **SPEC: DEVIATIONS FOUND** — clause 8 [blocking]: clause 3's operator surface has no test and so
+> was never made to fail on purpose … **HOLLOW TESTS FOUND** — [blocking]: "the alert does not close
+> the session" passes with the whole feature reverted … I am not rubber-stamping: F1 (the cap
+> inversion) and F3 (the unsigned alert) are the two that decide whether this unit does the job it
+> was written for.
+
+Nine findings, all fixed: F1 the client's notice cap kept the newest and handed back the mute button
+the relay's queue removes; F2 an alert could name any session, including one carried by another
+relay; F3 the alert was unsigned, so the recipient could not show anyone what the relay said; F4 a
+comment claimed a durability the code does not have; F5 two live refusal reasons lost their only
+tests when three were re-pointed; F6 a leaf signed for a DIFFERENT conversation was being sequenced
+here; F7 an unreadable alert reached no operator surface; F8 an undecodable frame was answered
+`signature_invalid`; F9 the guidance said nothing about what an absent alert means. Plus both
+blocking test findings and three LOWs.
+
+`cello-fallback-finder` (dispatched per §2d — this unit touches a verification path):
+
+> **SILENT FALLBACKS FOUND.** HIGH 1 is the blocking one — it is a live path (restart, then seal) on
+> which the relay's held observation is destroyed at both ends and the operator is shown a clean
+> inbox.
+
+HIGH 1 fixed (the unplaceable report now reaches the neutral surface); MEDIUM 2 and 3 and all three
+LOWs fixed; HIGH 2 and MEDIUM 1 are the bounds recorded above.
 
 ---
 
 ## Newly discovered
 
-*(One or two lines each. Do not act on them.)*
+---
+
+**A witness notice does not survive a daemon restart.** The alert list is in memory and the relay's
+copy is spliced away on delivery, so an observation delivered and not read before a restart is gone
+from the inbox. Persisting it needs a client-side schema migration. POST-LAUNCH: an operator loses a
+rare notice they still have in the daemon log, not the ability to communicate.
+
+**A cross-session replay attempt reaches no counterparty.** `leaf_session_mismatch` is refused and
+logged on the relay only. Alerting on it needs a second witness-alert reason on the wire.
+POST-LAUNCH: nothing is sequenced either way, so the record stays correct; what is missing is the
+independent notice.
+
+**`decodeStructure1` tolerates six OR seven elements** and the comment justifies it by "every client
+in the field today" (`DOD-M15-SUBMIT-ID-1`). Nothing names the deployment fact that would retire the
+six-element shape. Noted by the reviewer, not acted on.
