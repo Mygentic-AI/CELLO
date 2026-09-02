@@ -1544,10 +1544,27 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
 
   if (o["type"] === "seal_unilateral_too_early") {
     const session_id = toUint8Array(o["session_id"]);
-    const remaining_seconds = typeof o["remaining_seconds"] === "number" ? o["remaining_seconds"] : null;
     if (!session_id || session_id.length !== 16) return null;
-    if (remaining_seconds === null) return null;
-    return { type: "seal_unilateral_too_early", session_id, remaining_seconds };
+    /**
+     * ⚠️ A MISSING COUNTDOWN IS A VALID FRAME — `DOD-M15-UNILATERAL-1`.
+     *
+     * This used to `return null` without one, which classifies the frame as UNPARSEABLE. Two of the
+     * three refusals this frame now carries have no countdown by nature: the counterparty is
+     * present, or the high-stakes tier has no evidence that they left. Neither has a moment at which
+     * it becomes allowed, so neither can name one — and dropping the whole frame for that would turn
+     * a refusal the operator should hear into silence, which reaches them as a 30-second timeout
+     * naming our own wait.
+     *
+     * Absent and malformed stay distinguishable: a `remaining_seconds` that is PRESENT and not a
+     * number is still a malformed frame and still returns null.
+     */
+    const raw = o["remaining_seconds"];
+    if (raw !== undefined && typeof raw !== "number") return null;
+    return {
+      type: "seal_unilateral_too_early",
+      session_id,
+      ...(typeof raw === "number" ? { remaining_seconds: raw } : {}),
+    };
   }
 
   if (o["type"] === "seal_unilateral_confirmed") {

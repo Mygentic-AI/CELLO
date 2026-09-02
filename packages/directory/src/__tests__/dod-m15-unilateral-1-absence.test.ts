@@ -89,6 +89,43 @@ describe("DOD-M15-UNILATERAL-1 clause 1 — a REACHABLE counterparty is never se
     ).toBe(false);
   }, 20_000);
 
+  it("★★ the countdown-less refusal SURVIVES A ROUND TRIP — absent is not malformed", async () => {
+    /**
+     * The decoder used to `return null` for a `seal_unilateral_too_early` with no
+     * `remaining_seconds`, which classifies the frame as UNPARSEABLE. Two of the three refusals this
+     * frame now carries have no countdown by nature, so dropping them would turn a refusal the
+     * operator should hear into silence — and silence reaches them as the 30-second timeout that
+     * names our own wait rather than the cause. The live path decodes generically and never saw it,
+     * which is exactly how this would have survived.
+     *
+     * The exemplar values are the ones that separate the two readings: absent (valid), and present
+     * but not a number (still malformed).
+     */
+    const { decodeOutboundSignalingFrame } = await import("../directory-frames.js");
+    const { encodeSealUnilateralTooEarly } = await import("../directory-frames.js");
+    const sid = new Uint8Array(randomBytes(16));
+
+    const noCountdown = decodeOutboundSignalingFrame(
+      encodeSealUnilateralTooEarly({ type: "seal_unilateral_too_early", session_id: sid }),
+    );
+    expect(noCountdown, "a refusal with no countdown is a valid frame").not.toBeNull();
+    expect((noCountdown as { remaining_seconds?: number }).remaining_seconds).toBeUndefined();
+
+    const withCountdown = decodeOutboundSignalingFrame(
+      encodeSealUnilateralTooEarly({ type: "seal_unilateral_too_early", session_id: sid, remaining_seconds: 540 }),
+    );
+    expect((withCountdown as { remaining_seconds?: number }).remaining_seconds).toBe(540);
+
+    const { Encoder } = await import("cbor-x");
+    const junk = new Encoder({ tagUint8Array: false }).encode({
+      type: "seal_unilateral_too_early", session_id: sid, remaining_seconds: "soon",
+    }) as Uint8Array;
+    expect(
+      decodeOutboundSignalingFrame(junk),
+      "a countdown that is PRESENT and not a number is still malformed — absent and malformed stay apart",
+    ).toBeNull();
+  }, 20_000);
+
   it("the refusal carries an impact and a next step, not a bare cause code", async () => {
     const logs: LogEntry[] = [];
     const [a, b] = [generateKeypair(), generateKeypair()];
