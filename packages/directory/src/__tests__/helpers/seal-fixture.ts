@@ -13,12 +13,12 @@
 import { randomBytes } from "node:crypto";
 import { createHash } from "node:crypto";
 import { Encoder, decode } from "cbor-x";
-import { generateKeypair, buildMerkleTree, merkleRoot } from "@cello-protocol/crypto";
+import { generateKeypair, buildMerkleTree, merkleRoot, buildRelayAckTbs } from "@cello-protocol/crypto";
 import { buildStructure2, encodeStructure2, encodeSealPayload } from "@cello-protocol/protocol-types";
 import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
 import type { Logger } from "@cello-protocol/interfaces";
 import { createDirectoryNode, type RelayAdapter } from "../../directory-node.js";
-import type { RelaySealData } from "../../directory-types.js";
+import type { RelaySealData, SealUnilateralLeaf } from "../../directory-types.js";
 
 const ENC = new Encoder({ tagUint8Array: false });
 
@@ -197,3 +197,99 @@ export async function registerRoster(
     genesisTimestampMs: Date.now(),
   }]);
 }
+
+// ─── The unilateral half: the same leaf array, a different certifying path ─────────────────────
+
+export function makeGoneRelay(): RelayAdapter {
+  return {
+    recordAssignment: () => ({ ok: true as const }),
+    discardSession: () => {},
+    submitForSeal: () => ({ ok: false as const, reason: "not_implemented" }),
+    confirmSeal: () => {},
+    rejectSeal: () => {},
+    getSessionLiveness: async () => "gone" as const,
+  } as unknown as RelayAdapter;
+}
+
+/**
+ * A CLIENT-CARRIED unilateral chain the directory accepts today: every present-party leaf carries a
+ * valid relay receipt, sequences are contiguous 1..N, the content-hash root equals `reported_root`,
+ * and exactly one ctrl leaf — the present party's — closes it.
+ */
+export async function buildUnilateralCarry(
+  specs: LeafSpec[],
+  present: Kp,
+  relayKp: Kp,
+  sessionId: Uint8Array,
+): Promise<{ leaves: SealUnilateralLeaf[]; reportedRoot: Uint8Array }> {
+  const presentHex = hex(new Uint8Array(await present.getPublicKey()));
+  const relayId = hex(new Uint8Array(await relayKp.getPublicKey()));
+  const leaves: SealUnilateralLeaf[] = [];
+  const encoded: Array<{ kind: "msg" | "ctrl"; data: Uint8Array }> = [];
+  const contentHashes: Uint8Array[] = [];
+
+  for (let i = 0; i < specs.length; i++) {
+    const spec = specs[i]!;
+    const pub = new Uint8Array(await spec.key.getPublicKey());
+    const ch = new Uint8Array(randomBytes(32));
+    const prevRoot = i === 0 ? new Uint8Array(32) : merkleRoot(buildMerkleTree(encoded));
+    const s1 = ENC.encode([1, ch, pub, spec.signsSession ?? sessionId, 0, 100 + i]) as Uint8Array;
+    const s2 = buildStructure2(i + 1, pub, ch, new Uint8Array(await spec.key.sign(s1)), prevRoot);
+    if (!s2.ok) throw new Error(`buildStructure2 failed at leaf ${i}`);
+    const s2Cbor = encodeStructure2(s2.structure2);
+    const leaf: SealUnilateralLeaf = {
+      sequence_number: i + 1,
+      leaf_kind: spec.kind === "ctrl" ? 0x02 : 0x00,
+      structure2_cbor: s2Cbor,
+      structure1_cbor: s1,
+    };
+    if (hex(pub) === presentHex) {
+      leaf.relay_id = relayId;
+      leaf.relay_timestamp = 100 + i;
+      leaf.relay_signature = new Uint8Array(await relayKp.sign(buildRelayAckTbs(ch, i + 1, 100 + i)));
+    }
+    leaves.push(leaf);
+    encoded.push({ kind: spec.kind, data: s2Cbor });
+    contentHashes.push(ch);
+  }
+  return {
+    leaves,
+    reportedRoot: merkleRoot(buildMerkleTree(contentHashes.map((data) => ({ kind: "hash" as const, data })))),
+  };
+}
+
+export async function runUnilateral(
+  specs: LeafSpec[],
+  present: Kp,
+  absent: Kp,
+  logs: LogEntry[],
+  /** The session's REAL pair, when it differs from `[present, absent]` — the stranger case. */
+  assignedTo?: [Kp, Kp],
+): Promise<void> {
+  const store = new InMemoryDirectoryStore();
+  const { directory, stop } = await createDirectoryNode({
+    keyProvider: generateKeypair(),
+    relay: makeGoneRelay(),
+    relayEndpoint: { peer_id: "relay-peer", multiaddrs: [] },
+    store,
+    logger: makeSpyLogger(logs),
+    deliveryGraceSeconds: 0,
+  });
+  try {
+    const sessionId = new Uint8Array(randomBytes(16));
+    if (assignedTo) await registerRoster(directory, sessionId, assignedTo[0], assignedTo[1]);
+    const carry = await buildUnilateralCarry(specs, present, generateKeypair(), sessionId);
+    await directory.triggerSealUnilateralWithLeavesForTest(
+      hex(new Uint8Array(await present.getPublicKey())),
+      sessionId,
+      carry.reportedRoot,
+      hex(new Uint8Array(await absent.getPublicKey())),
+      carry.leaves,
+      { send: () => {} } as unknown as import("@libp2p/interface").Stream,
+    );
+  } finally {
+    await stop();
+  }
+}
+
+

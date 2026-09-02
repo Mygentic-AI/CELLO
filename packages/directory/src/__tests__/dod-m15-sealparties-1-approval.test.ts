@@ -35,6 +35,7 @@ import {
   capturingStream,
   hex,
   registerRoster,
+  runUnilateral,
   withDirectory,
   type LogEntry,
 } from "./helpers/seal-fixture.js";
@@ -217,5 +218,36 @@ describe("DOD-M15-SEALPARTIES-1: a bilateral seal needs BOTH participants' appro
       expect(refused, "the durable forensic record keeps its half — the response never replaces the log").toHaveLength(1);
       expect(String(refused[0]!.ctx["guidance"] ?? "").length).toBeGreaterThan(80);
     });
+  }, 20_000);
+
+  /**
+   * ⚠️ THE TRAP THIS ORDER NAMES, AND THE ONE THAT WOULD EAT THE UNIT.
+   *
+   * Requiring the second party's approval hands an ABSENT party a veto it never had. A counterparty
+   * who is offline, slow or hostile must not be able to destroy a receipt by never approving — the
+   * change makes a seal harder to FORGE and must not make it harder to OBTAIN.
+   *
+   * The counterbalance is that the absent case never reaches the bilateral path at all: with no
+   * second SEAL ctrl leaf there is no bilateral ceremony to refuse, and the honest party's close
+   * escalates to the SOLO seal, which requires exactly one ctrl leaf by design. This asserts the
+   * tightening did not leak across — `coverage: "one"` is a refusal on one path and the expected
+   * answer on the other, and no clock was invented here to make that so.
+   */
+  it("★★★ AN HONEST PARTY DOES NOT LOSE ITS RECEIPT WHEN THE OTHER SIDE IS ABSENT — the solo path is untouched", async () => {
+    const logs: LogEntry[] = [];
+    const [present, absent] = [generateKeypair(), generateKeypair()];
+    await runUnilateral(
+      [{ key: present, kind: "msg" }, { key: absent, kind: "msg" }, { key: present, kind: "ctrl" }],
+      present, absent, logs,
+    );
+    expect(
+      logs.some((l) => l.event === "session.unilateral.notarized"),
+      "the solo seal carries ONE participant's approval by definition — refusing it here would take " +
+        "a receipt away from the one party who did nothing wrong",
+    ).toBe(true);
+    expect(
+      logs.some((l) => l.event === "seal.final_root.refused"),
+      "the bilateral approval requirement must not fire on a path where the counterparty is gone",
+    ).toBe(false);
   }, 20_000);
 });
