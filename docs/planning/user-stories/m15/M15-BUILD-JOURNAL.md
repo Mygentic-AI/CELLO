@@ -9580,3 +9580,110 @@ baseline raised.
 
 Four on the work order, plus: **`cello_get_inclusion_proof` is already spoken for.** PERSIST-017
 specifies that name for the **MMR checkpoint** proof in this repo. Two different proofs, one name.
+
+---
+
+## Entry C10 (CELLO_Coder_1) — 2026-09-01/02: the fleet rolled to `7befcc95`, then 002–008 were attacked rather than asserted
+
+Two things happened in one night: the whole GCP fleet went onto the build carrying seven closed work
+orders, and then every one of those orders was tested **against the running system**. Andre's
+instruction was "prove prove prove", so nothing below rests on a unit test — the evidence is a
+production relay's disk, the fleet's own logs, or a live session.
+
+Full evidence document:
+[[2026-09-02_0000_live-proof-of-002-through-008-on-the-deployed-fleet]].
+
+### The deploy
+
+All five nodes on `directory|relay:7befcc9534d7830c9883797d0b208abdb0e8ede5`, verified by reading
+each RUNNING instance rather than its template. Order held: three directories first (they issue the
+online token), relays last (they demand it).
+
+**Four of the five had to leave their `-b` zone**, and this is the operational lesson worth carrying.
+`us-east1-b` and `europe-west1-b` were exhausted for **every type tried between them** —
+`e2-standard-2`, `c3-standard-4`, `n2-standard-2`, `e2-small` — each failing on the new instance's
+OWN insert operation. `us-east1-d` and `europe-west1-c` then took every node on the first attempt.
+`gcp-use1` was down ~40 minutes; the consortium never dropped below threshold.
+
+Two traps cost real time and are now in `GCP-STATE.md`:
+
+- **A throwaway capacity probe succeeding does NOT mean the MIG will succeed.** Four (zone, type)
+  pairs provisioned as hand-made probes minutes before the MIG failed on the same pair. Capacity was
+  flickering; one small create wins a transient slot where a MIG retrying steadily keeps missing.
+- **`lastAttempt.errors` on a managed instance can be STALE.** Three machine types all showed
+  `PROVISIONING → STOPPING`, which looks exactly like a boot failure and would have implicated the
+  new image. Querying each instance's OWN insert operation showed capacity exhaustion every time.
+  **Use the operation, not `lastAttempt`.**
+
+- **A relay is not a directory: its zone is not a free lever.** Each relay owns a **zonal** WAL disk
+  (`prevent_destroy = true`) holding in-flight frames. A zonal disk cannot follow its instance across
+  zones, so moving a relay means recreating it and dropping what it journalled. Done twice, guard
+  lifted and **restored in the same session both times** — acceptable only because there are no users.
+
+### What was proven, and how
+
+| order | claim | the observation |
+|---|---|---|
+| **008** | an unregistered key cannot hold a slot | throwaway keypair **connected** to both production relays, **refused** by both; 5 registered agents `reserved` on the same relays in the same minutes |
+| **007** | bodies are ciphertext on the wire | relay's own parked file: 777 ciphertext bytes, canary absent raw AND base64-decoded (5 needles), 36.4% printable; sender transcript holds the plaintext **20 ms earlier** |
+| **006** | the throwaway key is destroyed | conservation: minted 5, destroyed 4, outstanding 1 = **exactly 1 open session** |
+| **002** | a circuit address is not dialable by whoever learns it | stranger reached the relay, dial returned `PERMISSION_DENIED`; relay logged `no_session_assignment_names_both_peers`, binding count 0 |
+| **003** | the idle timer is on in production | both relays log `sessionIdleTimeoutMs = 86400000` — the value the binary used to drop |
+| **004** | the dead admin frames are gone | running container: `confirm_seal`/`reject_seal`/`record_assignment` **0 dispatch sites**; controls 3/1/2 |
+| **005** | checks act on their results | four observed acting: reservation gate, dial gate, content-hash cross-check refusing ingestion, exfil filter redacting |
+
+**008's failover was tested by a real outage rather than a fixture.** At 20:31:16 `Miss_Chelly_H`'s
+proof to the europe-west1 relay died mid-handshake — **that relay was being rolled at that minute**.
+Its client classified it `no_relay_verdict / tryAnotherRelay: true`, moved to the other relay instead
+of retrying the dead one, and recovered unattended at 20:35:03. That is the clause-9 path review had
+found untested.
+
+### The rule this entry is really about: a negative needs a positive control
+
+**Twice, a check returned a clean-looking answer that meant nothing, and both times the control
+caught it before it reached a report.**
+
+1. Grepping the relay container for deleted frame names returned **0 for everything** — including
+   `discard_session`, which MUST be present. The path was wrong; I had searched nothing. Without the
+   control the report would have read "all deleted, confirmed".
+2. `grep -c "salt.persist.failed"` returned **44**, which reads as a persistence fault. Those lines
+   were `content.cross_check.failed` whose *guidance text* mentions the string. Real persist
+   failures: **zero**.
+
+A third would have been the encryption proof itself: "the canary is absent from the relay" means
+nothing unless the relay demonstrably HOLDS that message. The filename timestamp
+(`…__1788295441346__`, 20 ms after the send) is what ties them together.
+
+### Not proven, stated rather than glossed
+
+`DOD-M15-EPHEMERAL-AUTH-1` stays 🟡. The ciphertext half is now measured on real infrastructure, but
+the two agents in that test share **one daemon process** — and the process boundary is exactly what
+that clause was written to demand. A cross-machine session the same night (Mac → Hermes EC2) did
+cross two daemons and parked at the relay, but its entry had been collected before it could be read.
+**What remains is one test: a cross-daemon message whose parked ciphertext is read off the relay
+before collection.**
+
+Also not tested: 007's claim that the throwaway key is *signed* so a relay cannot substitute its own.
+That needs an active man-in-the-middle against our own relay.
+
+### Found and fixed while proving
+
+- **The Hermes EC2 runbooks named a public IP that changed at a relaunch on 2026-08-19.** SSH to the
+  old address times out and looks exactly like a security-group problem — the rule was already there.
+  Both runbooks now carry the current address plus the lookup by instance ID, so the next change
+  self-corrects.
+- **`connect` shipped 73 MB it never imports.** Chasing "why hasn't `interfaces` been published in
+  three months" showed the answer is *nothing reads it* — and that `connect`, a shim that talks to
+  the daemon over a unix socket, declared four runtime dependencies its dist never imports. Measured:
+  `@libp2p`+`libp2p`+`@multiformats` **56 MB** (via `transport`), `@oqs/liboqs-js` **17 MB** (via
+  `crypto`) — 63% of a 116 MB install, downloaded on every version bump, for code that never
+  executes. `transport`, `interfaces` and `@libp2p/peer-id` removed; `crypto` moved to
+  devDependencies (one test imports it). This also retires the `interfaces` pin at `0.0.3`, which was
+  the tree's only non-workspace pin and had drifted from its local copy.
+
+### Two things left on the shelf
+
+- `relay.manifest.version.stale` fires at debug when `currentVersion == receivedVersion` — i.e. on
+  the no-op. The name says "stale" when nothing is wrong.
+- The three directories report manifest `currentVersion` of 21, 22 and 23. Possibly per-node by
+  design; **not confirmed either way, and not being claimed as drift.**

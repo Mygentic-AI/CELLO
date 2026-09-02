@@ -648,7 +648,16 @@ one could ship safely. **Neither of these is visible to `sealReadiness` today.**
 
 ### `DOD-M15-RELAYAUTH-1` — ✅ No relay service without a directory-issued assignment
 > **Closed 2026-09-01** (`002-RELAY`, with its third work item completed by `008-RELAY`). Two review
-> passes; pass 2 refused the merge on a gate that denied the LEGITIMATE first dial. Full entry —
+> passes; pass 2 refused the merge on a gate that denied the LEGITIMATE first dial.
+>
+> ✅ **PROVEN ADVERSARIALLY AGAINST PRODUCTION, 2026-09-02.** A stranger with a fresh keypair, holding
+> a REAL circuit address of a real reservation holder, tried to dial through it. It **reached the
+> relay** (so the refusal is not a network failure) and the dial returned
+> `failed to connect via relay with status PERMISSION_DENIED`. The relay's own record:
+> `relay.circuit.dial_denied`, `reason: no_session_assignment_names_both_peers`,
+> `destinationBindingCount: 0`. Both ends agree, and the reason is the specific one the gater emits —
+> this line's claim that "a circuit address is not dialable by whoever learns it" is now measured.
+> → Entry C10. Full entry —
 > verdicts, findings and what the fixes cost — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under
 > `DOD-M15-RELAYAUTH-1`. → Entry S15.
 
@@ -825,6 +834,13 @@ consumes.
 > so operators are running it.** The tag stays 🟡 for ONE thing only: the multi-process proof — see
 > `DOD-M15-EPHEMERAL-AUTH-1`. → Entry S15.
 >
+> **2026-09-02 — the LOCAL half (this line's own scope) is now proven against the running system, by
+> conservation rather than by a single event firing.** On the deployed build: `ephemeral.minted` 5,
+> `ephemeral.destroyed` 4, outstanding 1 — and the daemon reported **exactly 1 open session**. The
+> books balance, so no throwaway key outlives the session that minted it. Destruction was also
+> observed in sequence at close: `certificate.frontier.verified → session.seed.destroyed →
+> seal.completed → session.ephemeral.destroyed → session.node.destroyed`. → Entry C10.
+>
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
 ### `DOD-M15-EPHEMERAL-AUTH-1` — 🟡 The session ephemeral is bound to the agent's identity
@@ -849,6 +865,25 @@ consumes.
 > `../cello-client/core/daemon/dist/bin/cello-daemon.js` — the LOCAL build, not the published
 > package — so the process-boundary version needs no publish and no new infrastructure, only a
 > journey that asserts the wire bytes. → Entry S15.
+>
+> **2026-09-02 — THE WIRE BYTES ARE NOW MEASURED IN PRODUCTION, and this line is still 🟡. Read
+> which half moved.** Against the deployed fleet on `7befcc95`, a message was forced to park at the
+> us-east1 relay and the relay's OWN file was read off its disk: 777 ciphertext bytes in
+> `/mnt/disks/cello-wal/content/f8d518ca…/713ab930…__1788295441346__777.entry`. The plaintext
+> canary is absent from the raw file AND from the base64-decoded `ct` field (five needles, all
+> `False`); 36.4% of the decoded bytes are printable, against ~99% for English. The sender's
+> transcript holds the sentence in full at `createdAt 1788295441326` — **20 ms before** the relay
+> file's own timestamp, which is what ties the two observations to one message. **Readable at the
+> endpoint, opaque at the relay, measured rather than inferred.**
+>
+> **WHY THAT DOES NOT CLOSE IT.** The two agents in that test (`CELLO_Coder_1` → `CELLO_Support`)
+> live in **one daemon process**. So the ciphertext half is now proven on real infrastructure, and
+> the PROCESS BOUNDARY half is not — which is the exact thing this clause was written to demand. A
+> separate cross-machine session the same night (`CELLO_Coder_1` on the Mac → `Miss_Chelly_H` on
+> Hermes EC2) genuinely crossed two daemons on two machines and parked at the relay, but its parked
+> entry had already been collected and deleted before it could be read, so no bytes were captured
+> for it. **What remains is one test: a cross-daemon message whose parked ciphertext is read off the
+> relay before collection.** → Entry C10.
 >
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 Split from `DOD-M15-KEYAGREE-1` (review F6). The key agreement defeats a PASSIVE recorder — the
@@ -1041,6 +1076,13 @@ Parallel with Tier 4 — different disciplines, no shared files.
 > **left three problems behind** — including a rewritten header that would have led the next deletion
 > unit to break the ABSENT attestation. Full entry in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under
 > `DOD-M15-RELAYADMIN-DEAD-FRAMES-1`. → Entry S15.
+>
+> ✅ **VERIFIED IN THE RUNNING CONTAINER, 2026-09-02** — counting live dispatch sites
+> (`=== "x"` / `case "x"`) in `/app/packages/relay/dist` on the deployed relay, not textual mentions:
+> `confirm_seal` **0**, `reject_seal` **0**, `record_assignment` **0**; positive controls
+> `discard_session` **3**, `get_seal_leaves` **1**, `client_record_assignment` **2**. Counting raw
+> string hits instead would have reported `record_assignment: 34` and looked like a failure —
+> `client_record_assignment` contains it, and the rest are comments recording the removal. → Entry C10.
 
 ### `DOD-M15-RELAYADMIN-REPLAY-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was ❌ A directory admin frame cannot be replayed
 Split from `DOD-M15-RELAYADMIN-1` once its deletion premise was disproved and the handler was kept.
@@ -1067,6 +1109,13 @@ Split from `DOD-M15-RELAYADMIN-1` once its deletion premise was disproved and th
 > and **the Opus re-review did not** — the two new refusals were never heard, and `cello_send` told
 > the operator a message was *"sealed, witnessed and on its way"* when the relay had just refused to
 > witness it. Idle timer ruled to **24 hours** by Andre: a reclaimer, not a conversation timeout.
+>
+> ✅ **THE TIMER IS ON IN PRODUCTION, read off the running fleet's own boot log, 2026-09-02.** This
+> line exists because the timer was implemented and *the production binary never passed it*. Both
+> relays on `7befcc95` log: `relay.config.session_idle_timeout sessionIdleTimeoutMs = 86400000`,
+> `relay.config.idle_sweep maxIdleMs = 86400000 sweepIntervalMs = 3600000`,
+> `relay.config.circuit_limits` present, `relay.config.content_ttl contentTtlDays = 30`. The value
+> the binary used to drop is now in the config the relay reports for itself. → Entry C10.
 > Reservation-slot limiting is **not** unfinished business here — it outgrew a relay-only order and
 > is `DOD-M15-RELAYSLOTS-1` ✅. Full entry in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under
 > `DOD-M15-RELAYABUSE-1`. → Entry S15.
@@ -1088,6 +1137,26 @@ Split from `DOD-M15-RELAYADMIN-1` once its deletion premise was disproved and th
 > relay deployed in front of clients that do not prove before they ask refuses EVERY reservation**,
 > and every agent behind it is unreachable until it upgrades. **Client first, then relays.** The
 > client shipped 2026-09-01; the relay roll follows it.
+>
+> ✅ **DEPLOYED AND PROVEN ADVERSARIALLY AGAINST PRODUCTION, 2026-09-01/02.** The whole fleet is on
+> `7befcc95` (three directories, both relays), rolled in that order. The headline claim was then
+> attacked rather than asserted: **a freshly minted keypair connected to each production relay and
+> was refused a slot by both** — `relay-use1` with a live connection confirmed (`dialed_ok`, 1
+> connection), `relay-euw1` likewise. **Positive control taken in the same minutes:** five registered
+> agents (`CELLO_Coder_1`, `CELLO_Support`, `Miss_Chelly`, `CELLO_Coder_H`, `Miss_Chelly_H`) all read
+> `reachability: reserved` on those same relays — so the refusal is not "reservations are broken
+> tonight".
+>
+> Both ends of the handshake observed independently: client `prove.result proven: true`; relay
+> `relay.auth.reservation_proof` for `ce0fa3d0`/`f8d518ca`, and `relay.reservation.denied /
+> not_authenticated` at **debug** carrying the corrected impact text (review finding 3 — the happy
+> path must not be logged as an attack — running in production).
+>
+> **The failover was tested by a real outage, not a fixture.** At 20:31:16 `Miss_Chelly_H`'s proof to
+> the europe-west1 relay died mid-handshake (`Unexpected EOF`) **because that relay was being rolled
+> at that minute**. Its client classified it `no_relay_verdict / tryAnotherRelay: true`, moved to the
+> other relay instead of retrying the dead one, and held a reservation again at 20:35:03 — unattended.
+> That is the clause-9 path the review had found untested. → Entry C10.
 >
 > Full entry in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYSLOTS-1`. → Entry S15.
 
