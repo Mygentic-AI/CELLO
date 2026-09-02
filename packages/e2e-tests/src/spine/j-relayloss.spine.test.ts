@@ -391,6 +391,43 @@ describe("J-RELAYLOSS — kill a relay mid-conversation and watch (016-RELAYLOSS
     // Read the reservation state FIRST. The baseline had none; if the receiver acquired one by now
     // the kill can measure a real loss, and the number below means what it says rather than being
     // attributed to a state nobody checked.
+    /**
+     * ─── Q4 IS ASKED HERE, WHERE THE RESERVATION EXISTS ────────────────────────────────────────
+     *
+     * The receiver does not hold a circuit reservation for the first minutes of its life — measured,
+     * not assumed: the wait at the top of this run timed out at `retrying`, and by this phase the
+     * same receiver reports `reserved`. So the black hole at t0 could not measure a reservation
+     * loss, and asking there produced "not measured" rather than a number.
+     *
+     * The question does not change with the clock, so it is asked at the point where it can be
+     * answered. Both shapes are measured back to back against the SAME reserved receiver, which is
+     * the comparison the order asks for when it says to say which kill you tested: a mute relay has
+     * to be discovered by a timeout, a killed one closes its sockets and announces itself.
+     */
+    const preDeadline = Date.now() + 240_000;
+    while (reachOf() !== "reserved" && Date.now() < preDeadline) await sleep(3_000);
+    const reservedNow = reachOf() === "reserved";
+    record("Q4 standing_receiver_reachability before the timed kills", reservedNow ? "reserved" : reachOf());
+
+    if (reservedNow) {
+      // (a) MUTE: sockets open, nothing answers. The incident shape.
+      const tMute = Date.now();
+      cluster.relayIngress!.blackhole();
+      const lostMute = await waitForEventAfter(daemonA, /session\.standing_receiver\.reservation\.lost/, tMute, 180_000);
+      record("Q4 ms from a MUTE relay to the daemon noticing (the silent window)",
+        lostMute?.waitedMs ?? "NEVER within 180s");
+      record("Q4 the lost event on the mute path", lostMute?.raw ?? "(none)");
+      expect(lostMute, "a reserved receiver must eventually notice a relay that went mute").not.toBeNull();
+      cluster.relayIngress!.restore();
+      // Let it re-reserve, so the kill below is measured from the same starting state.
+      const reDeadline = Date.now() + 240_000;
+      while (reachOf() !== "reserved" && Date.now() < reDeadline) await sleep(3_000);
+      record("Q4 reachability after restoring the relay", reachOf());
+    } else {
+      record("Q4 ms from a MUTE relay to the daemon noticing", "not measured — receiver never reserved");
+    }
+
+    // (b) KILLED: the process is gone for everyone and the sockets close.
     record("Q4c standing_receiver_reachability just before the kill", reachOf());
     const t2 = Date.now();
     await cluster.relay.kill();
@@ -399,5 +436,5 @@ describe("J-RELAYLOSS — kill a relay mid-conversation and watch (016-RELAYLOSS
     record("Q4c ms from a KILLED relay process to reservation.lost", lostAfterKill?.waitedMs ?? "NEVER within 120s");
     record("Q4c reader-ended cause on the kill path",
       events(daemonA, /session\.relay\.reader\.ended/).at(-1)?.raw ?? "(never logged)");
-  }, 900_000);
+  }, 1_500_000);
 });

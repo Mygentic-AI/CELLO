@@ -173,6 +173,17 @@ anything in the screener.
 
 ## Review
 
+### Where this work lives
+
+Branch `m15/016-relayloss` in **both** repos, in paired worktrees at
+`~/wt-016-relayloss/{trustless-cello,cello-client}` — paired because the spine harness resolves
+cello-client as a sibling of the repo root, so the two cannot live under different parents.
+
+Everything was first committed to `main` while `013-ABSENCE` was working the same checkout, and the
+two lanes' commits interleaved. They have since been cherry-picked onto this branch and `main` holds
+none of them, which is what a publish from `main` wanted. Nothing here depends on the copies that
+still sit on `m15/013-absence`.
+
 ### How the experiment was run
 
 Two real daemons in separate OS processes, one real relay, one real directory, a session with
@@ -369,6 +380,14 @@ re-running them, not by assuming.
 The new unit test was mutated out, typechecked clean so the mutant genuinely compiled, and re-run
 alone: it reddens with *expected undefined to be false* on the exact response shape the live run
 recorded. Not a compile error and not a lint error.
+
+**One limit of that test split, stated because it is easy to miss.** The unit test can only ever
+produce `witnessed: false` — the fixture has no relay — so on its own it would stay green against an
+implementation that hardcoded `false`. What closes that hole is the journey asserting `true` and
+`false` against the same real relay minutes apart. **The journey lives in the spine lane, which the
+root gate deliberately does not run.** So the true-side pin is real evidence and is not a standing
+regression guard: it holds only as long as someone runs the lane. That is a property of the lane,
+not of this unit, and it is worth knowing before trusting the pair.
 
 *(Reviewer verdict goes here.)*
 
