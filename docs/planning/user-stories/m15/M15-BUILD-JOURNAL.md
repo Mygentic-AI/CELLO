@@ -10028,3 +10028,94 @@ the whole point of two tiers.
 cello-client (initiate opt-in param, legibility passthrough+surface). The client changes are
 source-only and exercised by the spine enforcer (BINS read `dist/`, not npm); the npm publish for
 real operators is a deploy step, not a close condition for this unit.
+
+## Entry 013b — 2026-09-02: 013-ABSENCE built; the solo seal could not co-sign itself, and the live journey proved it
+
+**Unit:** `DOD-M15-UNILATERAL-1` (013-ABSENCE). Branch `m15/013-absence`, both repos.
+
+### What the gate does now
+
+The solo seal used to run on `elapsedMs < graceMs` and nothing else. The gate now resolves the
+roster and the submitter FIRST (that ordering is load-bearing — there is no "absent party" to ask
+about until the sender is known to be one of the two), then asks the RELAY about that party:
+
+- **`alive` → refused, both tiers, at any age.** This is the defect the unit is named for.
+- **floor** — standard 600s, high-stakes 3600s — measured from session genesis, which is all that
+  value ever held.
+- **`unknown`** — standard proceeds (an honest party must not be stranded when the evidence channel
+  is silent); **high-stakes refuses**, which is the trade the opt-in buys.
+
+The liveness read moved from AFTER the seal decision (where it only coloured the receipt ABSENT vs
+DELIVERED) to BEFORE it, and the second query is gone.
+
+### The counterbalance, restated against the code
+
+Absence is a claim and the claimant benefits from it, so the evidence comes from the relay: it holds
+the counterparty's standing connection and reports a positive observation of it dropping, keyed by
+the counterparty's own pubkey. The sealer holds no switch over that. They cannot manufacture the
+other side's absence; they can only wait for it to become true.
+
+### THE THING THE LIVE JOURNEY FOUND, which unit tests could not
+
+`j-unilateral` stayed red after the directory-side gate was green and its 20 unit tests passed. The
+directory had verified the chain, recorded the counterparty ABSENT, and asked the present party to
+co-sign. **The present party refused to co-sign its own unilateral seal.**
+
+`verifyCertifiedRoot` gates co-signing on the carry being "self-evidently complete", and that
+predicate is the BILATERAL shape: contiguous sequences AND two SEAL control leaves from two distinct
+senders. A solo seal can never satisfy it — the counterparty is gone and never posts one, which is
+the entire premise of the path. So it answered `cannot_judge` every time, `session-ceremony.ts`
+refuses anything that is not `match`, the FROST ceremony never reached threshold, and the close came
+back `seal_unilateral_timeout` — the label that names our own wait rather than the cause. This
+milestone's founding error-fidelity defect, reproduced on the path that exists to fix it.
+
+**The fix is an ordering, not a loosening.** Completeness was only ever needed to separate two kinds
+of DISAGREEMENT — "my carry is behind" from "the directory certified something else". It answers
+nothing when the roots AGREE. So agreement is asked first: recomputed root AND leaf count both equal
+to what this daemon holds ⇒ the certificate is over this daemon's own leaves. Both values, because a
+matching root with a disagreeing count is a certificate contradicting itself, and accepting that
+would hand `leaf_count` back as an off-switch. Every disagreement still falls through to the
+unchanged completeness logic, and a short bilateral carry still says `cannot_judge` rather than
+accusing — pinned by a new test beside the solo one.
+
+**Recorded because it is the general lesson:** the unit tests were green on the property the unit is
+named for while the feature remained unusable end to end. Vitest green is necessary, never
+sufficient, and this is the cheapest demonstration of it the milestone has produced.
+
+### Clause status
+
+1. **Reachable is never sealed out** — directory unit tests; mutation C1 caught.
+2. **Absent is still sealed around** — unit tests + `j-unilateral` 3/3 live; mutation C2b caught.
+3. **Standard unchanged** — `gone` and `unknown` and a missing liveness method all still seal;
+   mutation C3 caught.
+4. **High-stakes opt-in / longer floor / refuses without evidence** — mutations C4, C4b caught; the
+   decoder is pinned against `1`, `"true"`, `"yes"`, `{}`, `[]`, `null`, `undefined`.
+5. **Artifact split** — `countersigned_through_seq`, recomputed after the absent party is named;
+   mutations C5, C5b caught; asserted live on the retrieved receipt.
+6. **Honest clock** — field and method renamed to genesis; mutations C6, C6b caught.
+7. **Made to fail** — nine mutations, each re-run ALONE, each required to COMPILE first. C2's first
+   form did NOT compile (type narrowing made the later `=== "gone"` unreachable) and was WIDENED
+   rather than counted, per §2 rule 4.
+8. **Enforcer** — `j-unilateral` 3/3 against the real binaries as separate OS processes.
+9. **Gates** — trustless-cello test/lint/typecheck all 0. cello-client lint/typecheck/build 0; see
+   the cross-lane note below for its one test failure.
+
+### 🚨 TWO LANES ARE SHARING ONE CHECKOUT AND THE COMMITS INTERLEAVED
+
+`016-RELAYLOSS` committed into BOTH repos while this branch was checked out, so its commits sit on
+`m15/013-absence`: `901bd9c7`, `72901b99`, `5f87081e` in trustless-cello and `194296a`, `032f5a5` in
+cello-client. Nothing was lost and nothing was rewritten — recorded so a reviewer reading this branch
+knows which commits belong to which unit.
+
+Two consequences already paid for:
+
+- The hidden-spine-lane counter went 38 → 39 because that lane added `j-relayloss.spine.test.ts`.
+  This unit's gate was red before it started. Counted here, naming the lane.
+- **cello-client's test gate has one failure that is not this unit's.**
+  `dod-m15-park-envelope-coded-error.test.ts` expects the park refusal's guidance to quote the
+  relay's own retry window ("about 45 seconds"). Commit `032f5a5` made that guidance conditional on
+  `wasWitnessed(placed)` (`session-content-handlers.ts:645`), and the rate-limited park is
+  unwitnessed by construction — so the upstream relay's own number is now discarded and replaced.
+  That is Invariant 3 pointing the other way: a downstream handler overwriting an upstream
+  descriptive value. **Not fixed here.** It is that lane's file, they are mid-review on that exact
+  commit, and editing an in-flight file in a shared checkout is how two agents corrupt each other.
