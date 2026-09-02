@@ -81,3 +81,18 @@ INSERT OR IGNORE immutability) is the store pattern.
 - **Gates:** 009 changes protocol-types → registry release + promotion (planner/Andre) before
   010; 010 → terraform apply + node roll + GCP-STATE.md (planner). 009's live enforcer is
   written in 009 but runs only once 010 exists — 009 may sit 🟡 on that line alone.
+
+## 2026-09-02 — Tier 2 micro orders 012–015 issued as DRAFTS (planner)
+
+Written in a quota tail WITHOUT a recon pass, so each carries `status: draft` and a **planner
+pre-issue checklist** of anchors to verify (document-frame dispatch as the copy-anchor for typed
+frames inside a session; the AEAD and key-agreement primitives sessions already use; the
+daemon's agentless outbound-session path; the agent_id accessor). **Not issuable until every
+box is ticked and tests are enumerated to exact assertions.** Design rulings taken now, from
+the log's own text: the join step and re-key travel inside ORDINARY sealed one-to-one sessions
+with the channel's ADMIN agent (the channel never converses; no new transport); open channels
+auto-admit at the admin's daemon, invite-only queues for the admin agent; group key = one AEAD
+key per channel with a generation counter, AD binds body to channel+seq+generation; eject on
+open channels is refused (member could rejoin), and in v1 admin and channel live on the same
+daemon; the subscription table is keyed on agent_id and carries the deferred IDENTITY-1
+refusal (SESSION_FROM_SUBSCRIBED_CHANNEL).
