@@ -16,24 +16,33 @@
  * over what it derived. Every fixture here is a real Ed25519-signed leaf set: a verifier that can
  * be satisfied by a fabricated signature is not a verifier.
  *
- * The wiring — that a client actually forwards these and that a directory actually calls this
- * before signing — is proved by `j-spine`'s DOD-SPINE-7 running the whole ceremony across separate
- * OS processes. A module test cannot see a call site that stopped calling.
+ * The wiring is proved TWICE, because a module test cannot see a call site that stopped calling:
+ * the last describe here drives the REAL `/cello/frost/1.0.0` stream handler over a real libp2p dial
+ * with a real K_local auth signature, and `j-spine`'s DOD-SPINE-7 runs the whole ceremony across
+ * separate OS processes. Deleting the call in `#handleFrostStream` leaves every module test green
+ * and reddens both.
  */
 
-import { describe, it, expect } from "vitest";
-import { randomBytes } from "node:crypto";
+import { setupV3Tests, createTestScope, describe, it, expect, beforeEach, afterEach } from "@claude-flow/testing";
+import { randomBytes, createHash } from "node:crypto";
+import { Encoder, decode as cborDecode } from "cbor-x";
+import * as lp from "it-length-prefixed";
 import { generateKeypair, buildMerkleTree, merkleRoot } from "@cello-protocol/crypto";
+import { createNode } from "@cello-protocol/transport";
 import { buildSealTbs } from "@cello-protocol/protocol-types";
-import { decode as cborDecode } from "cbor-x";
 import {
   isSealFramedMessage,
   verifySealCosignEvidence,
   SEAL_COSIGN_REASONS,
   SEAL_FROST_CONTEXT,
 } from "../seal-cosign-evidence.js";
-import { buildSeal, type Kp } from "./helpers/seal-fixture.js";
+import { createDirectoryNode } from "../directory-node.js";
+import { buildSeal, makeNoopRelay, type Kp } from "./helpers/seal-fixture.js";
 import type { RelaySealData } from "../directory-types.js";
+
+setupV3Tests();
+
+const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
 /** The leaf shape that rides a `frost_sign_request` — what the client forwards, verbatim. */
 function cosignLeaves(seal: RelaySealData): Array<Record<string, unknown>> {
@@ -210,6 +219,121 @@ describe("DOD-M15-SEALPARTIES-1: a co-signer reaches its own verdict from the le
     const verdict = verifySealCosignEvidence(msg, cosignLeaves(seal), CLOSE_TS + 1);
     expect(verdict.ok).toBe(false);
     expect(verdict.reason).toBe(SEAL_COSIGN_REASONS.ROOT_UNSUPPORTED);
+  });
+
+  /**
+   * ⚠️ AT THE WIRING, BECAUSE A MODULE TEST CANNOT SEE A CALL SITE THAT STOPPED CALLING.
+   *
+   * Everything above proves the verifier's verdicts. This drives the REAL `/cello/frost/1.0.0`
+   * stream handler over a REAL libp2p dial, with a REAL K_local auth signature — the same path a
+   * coordinating daemon uses — and asserts the answer that comes back off the wire. Deleting the
+   * call in `#handleFrostStream` leaves every test above green and this one red.
+   */
+  describe("over the real /cello/frost/1.0.0 stream", () => {
+    let scope = createTestScope();
+    beforeEach(() => { scope = createTestScope(); });
+    afterEach(() => scope.run(async () => {}));
+
+    /** SHA-256(domain ‖ pubkey ‖ epochId ‖ tail) — the directory's own `verifyFrostAuth` input. */
+    async function authSigFor(agentKey: Kp, epochId: string, tail: Uint8Array): Promise<Uint8Array> {
+      const pubkey = new Uint8Array(await agentKey.getPublicKey());
+      const h = new Uint8Array(
+        createHash("sha256")
+          .update(Buffer.concat([
+            Buffer.from("CELLO-FROST-AUTH-v1", "utf8"),
+            Buffer.from(pubkey),
+            Buffer.from(epochId, "utf8"),
+            Buffer.from(tail),
+          ]))
+          .digest(),
+      );
+      return new Uint8Array(await agentKey.sign(h));
+    }
+
+    /** Open one frost stream, send a sign request, and return the decoded response. */
+    async function signRequest(body: Record<string, unknown>, framedMsg: Uint8Array): Promise<Record<string, unknown>> {
+      const dirKey = generateKeypair();
+      const agentKey = generateKeypair();
+      const epochId = "epoch:1";
+      const { node: dirNode, stop } = await createDirectoryNode({
+        keyProvider: dirKey,
+        relay: makeNoopRelay(),
+        relayEndpoint: { peer_id: "12D3KooWUnused", multiaddrs: ["/ip4/127.0.0.1/tcp/1"] },
+      });
+      scope.addCleanup(stop);
+      const client = await createNode({ keyProvider: agentKey, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+      await client.start();
+      scope.addCleanup(() => client.stop());
+      await client.dial(dirNode.listenAddresses()[0]!);
+
+      const stream = await client.newStream(dirNode.getPeerId(), "/cello/frost/1.0.0");
+      const signTail = new Uint8Array(Buffer.concat([Buffer.from([0x01]), Buffer.from(framedMsg)]));
+      stream.send(lp.encode.single(CBOR_ENC.encode({
+        type: "frost_sign_request",
+        agentPubkey: Buffer.from(await agentKey.getPublicKey()).toString("hex"),
+        epochId,
+        framedMsg,
+        commitmentList: [],
+        ceremonyId: "ceremony-1",
+        peerIdString: client.getPeerId(),
+        authSig: await authSigFor(agentKey, epochId, signTail),
+        ...body,
+      }) as Uint8Array));
+
+      const iter = (lp.decode(stream) as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+      const r = await iter.next();
+      const v = r.value as Uint8Array | { slice(): Uint8Array };
+      return cborDecode(v instanceof Uint8Array ? v : v.slice()) as Record<string, unknown>;
+    }
+
+    it("★★★ the handler REFUSES a seal sign request with no leaves", async () => {
+      const [a, b] = [generateKeypair(), generateKeypair()];
+      const sessionId = new Uint8Array(randomBytes(16));
+      const seal = await honestSeal(a, b, sessionId);
+      const msg = framed(sessionId, certifiedRoot(seal), seal.leaves.length, CLOSE_TS);
+
+      const resp = await signRequest({}, msg);
+      expect(resp["type"]).toBe("frost_sign_response");
+      expect(
+        resp["ok"],
+        "the check must run BEFORE the share is touched — a node that signs first and judges after " +
+          "has already produced the artifact",
+      ).toBe(false);
+      expect(resp["reason"]).toBe(SEAL_COSIGN_REASONS.EVIDENCE_MISSING);
+      expect(String(resp["detail"] ?? "").length).toBeGreaterThan(10);
+    }, 30_000);
+
+    it("★★★ and REFUSES leaves that do not support the root it was asked to sign", async () => {
+      const [a, b] = [generateKeypair(), generateKeypair()];
+      const sessionId = new Uint8Array(randomBytes(16));
+      const seal = await honestSeal(a, b, sessionId);
+      const msg = framed(sessionId, certifiedRoot(seal), seal.leaves.length, CLOSE_TS);
+
+      const resp = await signRequest(
+        { seal_leaves: cosignLeaves(seal).filter((_, i) => i !== 1), seal_close_timestamp: CLOSE_TS },
+        msg,
+      );
+      expect(resp["ok"]).toBe(false);
+      expect(resp["reason"]).toBe(SEAL_COSIGN_REASONS.ROOT_UNSUPPORTED);
+    }, 30_000);
+
+    it("★★ a NON-seal ceremony still reaches the signer — the gate must not swallow the DKG", async () => {
+      /**
+       * The positive control. Without it, a check that refused EVERYTHING would pass both tests
+       * above and take the session ceremony, the DKG and the refresh down with it. This request has
+       * no share behind it, so `AGENT_NOT_BOOTSTRAPPED` is the signer's own answer — which is the
+       * point: it got past the seal gate and reached the signer.
+       */
+      const notASeal = new Uint8Array(
+        Buffer.concat([Buffer.from("cello-frost-session-establishment-v1", "utf8"), Buffer.from([0x00]), Buffer.from(randomBytes(32))]),
+      );
+      const resp = await signRequest({}, notASeal);
+      expect(resp["ok"]).toBe(false);
+      expect(
+        resp["reason"],
+        "a non-seal ceremony carries no leaves and must not be refused for not carrying them",
+      ).toBe("AGENT_NOT_BOOTSTRAPPED");
+    }, 30_000);
   });
 
   it("★ a ceremony that is NOT a seal is left alone — this check must not reach the DKG or a refresh", () => {
