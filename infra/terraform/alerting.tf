@@ -26,6 +26,12 @@ locals {
   # Anchored on jsonPayload.event so a substring match cannot widen it silently. `recovered=false`
   # is checked explicitly rather than "NOT recovered=true": a MISSING field must not alert, or a
   # future log line without it pages at 3am for nothing.
+  #
+  # ⚠️ EVERY CLAUSE HERE MUST KEEP MATCHING ON `jsonPayload`. Since the notifier learned a second
+  # payload shape it classifies on structure, and an entry with no `jsonPayload` object is neither
+  # shape — so it is ACKed and dropped in silence. Widening this filter to a `textPayload` event
+  # would therefore make it quieter, not louder, which is the opposite of what widening a filter
+  # looks like. Add the branch to `classifyPayload` in the same change.
   seal_unrecoverable_filter = <<-EOT
     resource.type="gce_instance"
     AND (
