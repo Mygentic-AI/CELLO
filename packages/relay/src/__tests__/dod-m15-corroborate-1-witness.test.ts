@@ -411,6 +411,77 @@ describe("DOD-M15-CORROBORATE-1: the relay verifies each hash at arrival and ale
     ).toBe(false);
   }, 60_000);
 
+  it("★★★ a relay that CANNOT SIGN names no identity — the warning survives, the claim does not", async () => {
+    /**
+     * ⚠️ THE PAIR IS ALL-OR-NOTHING, AND THIS IS WHY. A client refuses an alert that declares a
+     * `relay_id` and does not prove it — correctly. So a relay that names itself and then cannot
+     * sign would have every alert it sends thrown away, and the recipient would be told their
+     * witness layer was broken instead of what was actually observed. A transient signer failure
+     * would silently convert a real observation into a version-skew report.
+     *
+     * Driven through a signer that throws, which is what a KMS blip looks like from here.
+     */
+    const events: Captured[] = [];
+    const dirKp = generateKeypair();
+    const brokenSigner = generateKeypair();
+    const relayIdHex = Buffer.from(await brokenSigner.getPublicKey()).toString("hex");
+    const { node: relayNode, relay, stop } = await createRelayNode({
+      directoryPubkey: await dirKp.getPublicKey(),
+      logger: capturingLogger(events),
+      relayId: relayIdHex,
+      ackSigningKeyProvider: {
+        getPublicKey: () => brokenSigner.getPublicKey(),
+        sign: async () => { throw new Error("signer unavailable"); },
+      } as unknown as typeof brokenSigner,
+    });
+    scope.addCleanup(stop);
+
+    const kpA = generateKeypair();
+    const kpB = generateKeypair();
+    const pubA = await kpA.getPublicKey();
+    const pubB = await kpB.getPublicKey();
+    const sessionId = new Uint8Array(randomBytes(16));
+    const ts = Date.now();
+    expect(relay.recordAssignment({
+      session_id: sessionId, participant_a: pubA, participant_b: pubB, session_timestamp: ts,
+      directory_signature: await dirKp.sign(CBOR.encode([sessionId, pubA, pubB, ts > 0xffffffff ? BigInt(ts) : ts]) as Uint8Array),
+    }).ok).toBe(true);
+
+    const connect = async (kp: Keypair) => {
+      const cn = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+      await cn.start();
+      scope.addCleanup(async () => { await cn.stop(); });
+      await cn.dial(relayNode.listenAddresses()[0]!);
+      const stream = await cn.newStream(relayNode.getPeerId(), RELAY_PROTOCOL_ID);
+      const reader = new Reader(stream);
+      const nonce = (await reader.next())["nonce"] as Uint8Array;
+      const pubkey = await kp.getPublicKey();
+      const authMsg = new Uint8Array(Buffer.concat([Buffer.from("CELLO-RELAY-AUTH-v1", "utf8"), nonce, pubkey]));
+      send(stream, CBOR.encode({
+        type: "relay_auth_response", pubkey,
+        signature: await kp.sign(new Uint8Array(createHash("sha256").update(authMsg).digest())),
+        online_token: await testOnlineToken(dirKp, kp),
+      }));
+      expect((await reader.next())["type"]).toBe("relay_auth_ok");
+      return { stream, reader };
+    };
+    const a = await connect(kpA);
+    const b = await connect(kpB);
+
+    const forged = await makeLeaf(sessionId, kpA, generateKeypair());
+    send(a.stream, CBOR.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: 0x00, ...forged }));
+    await a.reader.next();
+
+    const alert = await b.reader.next();
+    expect(alert["type"], "the warning must still arrive — losing it is worse than losing its proof").toBe("session_witness_alert");
+    expect(alert["witness_signature"]).toBeUndefined();
+    expect(
+      alert["relay_id"],
+      "and NO identity is claimed, or the client refuses this and the operator hears nothing",
+    ).toBeUndefined();
+    expect(events.filter((e) => e.event === "relay.witness.sign.failed").length).toBe(1);
+  }, 60_000);
+
   it("★★ a relay with NO signing identity sends the alert anyway, unsigned and unnamed", async () => {
     /**
      * Losing the warning is strictly worse than losing its transferability, so a relay running

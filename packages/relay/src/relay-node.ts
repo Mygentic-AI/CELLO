@@ -2835,10 +2835,19 @@ export class CelloRelayNode {
      * leaves them in the position this unit exists to get them out of.
      *
      * Signed ONCE, before the loop: both recipients get the same observation about the same
-     * submission. A signing failure does NOT suppress the alert — an unsigned warning still reaches
-     * a person, and losing the warning is strictly worse than losing its transferability — but it is
-     * loud, because a relay that declares a `relay_id` and cannot sign is broken and the client will
-     * refuse what it sends.
+     * submission.
+     *
+     * ⚠️ **`relay_id` RIDES IF AND ONLY IF THE SIGNATURE DOES**, and that coupling is the whole
+     * point of the pair. A client refuses an alert that DECLARES an identity and does not prove it —
+     * correctly, because omitting the proof is the cheapest way to dodge it. So a relay that names
+     * itself and then cannot sign would have every alert it sends thrown away, and the recipient
+     * would be told their witness layer is broken instead of what was actually observed. Two ways to
+     * reach that state and both are real: a transient failure in the signer, and a relay configured
+     * with a `relayId` but no signing key at all.
+     *
+     * Naming no identity is the honest degradation: the observation still reaches a person, marked
+     * as something they cannot show anyone. Losing the warning is strictly worse than losing its
+     * transferability — and claiming an identity you cannot back is worse than both.
      */
     const observedAt = Date.now();
     let witnessSignature: Uint8Array | undefined;
@@ -2851,8 +2860,8 @@ export class CelloRelayNode {
         this.#logger.error("relay.witness.sign.failed", {
           sessionId: sessionKey,
           error: err instanceof Error ? err.message : String(err),
-          impact: "the alert is sent UNSIGNED, so a client that expects this relay to prove its own " +
-            "identity will refuse it and the recipients hear nothing. The observation is in this log either way.",
+          impact: "the alert is sent WITHOUT this relay's identity, so it still reaches both " +
+            "participants but they cannot show it to anyone. The observation is in this log either way.",
         });
       }
     }
@@ -2865,10 +2874,12 @@ export class CelloRelayNode {
         type: "session_witness_alert",
         session_id: sessionId,
         reason: "leaf_signed_by_neither_participant",
-        ...(this.#relayId !== null ? { relay_id: this.#relayId } : {}),
+        // Both, or neither. See the note above the signing block.
+        ...(witnessSignature !== undefined && this.#relayId !== null
+          ? { relay_id: this.#relayId, witness_signature: witnessSignature }
+          : {}),
         observed_at: observedAt,
         submitter_is_counterparty: submitterIsParticipant,
-        ...(witnessSignature !== undefined ? { witness_signature: witnessSignature } : {}),
       };
       const recipientStream = this.#streams.get(recipientHex);
       if (!recipientStream) {
