@@ -201,7 +201,12 @@ remaining daemon can.
 ### `DOD-M16-SUBSTATE-1` ❌ — subscription state, not contacts
 Subscriber-side table keyed `agent_id` + channel pubkey (decision 35). Not a contact; not shown in
 `cello_contacts`; tier gating does not apply (the join step is the gate). Moniker pattern reused
-for a local channel nickname on the subscription row.
+for a local channel nickname on the subscription row. **Carries one clause deferred from
+IDENTITY-1 (planner ruling, 2026-09-02):** a subscriber refuses inbound sessions from a pubkey it
+holds in subscription state as a channel — the subscriber's own join-time knowledge is the only
+trustworthy LOCAL source of a remote identity's channel-ness, so this receiver-side check lives
+with the state that makes it honest (the daemon-local halves shipped in micro order 006; the
+directory's broker refusal in 005).
 
 ---
 
