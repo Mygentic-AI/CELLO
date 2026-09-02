@@ -17,10 +17,14 @@ description: >
 
 # M16 Definition of Done — Broadcast Channels
 
+**Read [[M16-PROCEDURE]] first.** This document is the scoreboard; the procedure is how to work it.
+Evidence, proofs, reviewer verdicts and run output live in [[M16-BUILD-JOURNAL]], never here.
+
 **The design source is [[2026-08-23_1933_broadcast-channels-conclaves-and-encrypted-discovery]],
 decisions 1–35.** Every one of them is SETTLED — a line below that seems to leave a choice open is
-answered there first. This document is the scoreboard; evidence, proofs, reviewer verdicts and run
-output live in the M16 build journal, never here.
+answered there first. **The design log is planner-only reading** (M16-PROCEDURE §1): it records
+retired designs alongside live ones, and the coding agents on this milestone are weaker models that
+must never be asked to tell them apart.
 
 ## Position relative to launch
 
@@ -42,6 +46,17 @@ enough that losing one would silently change the meaning of the line.
 **Lines that name an enforcer are ✅ only when that enforcer ran as separate OS processes**, with
 the run output quoted. Vitest green is necessary, never sufficient. **The milestone does not close
 without the live multi-process smoke test at the bottom of this file.**
+
+**THE LINE COUNT IS FROZEN: 22 lines, the count this milestone opened with.** M15 more than
+doubled through mid-milestone findings; M16 does not. A finding enters this milestone only if an
+existing line is false without it — then it is a clause on that line's work order, not a new line.
+Everything else goes to the launch-gate intake (security, launch-relevant) or to the POST-M16
+BACKLOG at the foot of this file, same day, one line of reasoning. **When unclear, it goes OUT** —
+the deliberate opposite of M15's rule, because nothing downstream of this milestone is guarded by
+holding an unclear item in. **The counterweight is the severity screen** (keys/signing, data loss,
+unscreened context, a public claim made false): any finding that trips it is escalated to Andre as
+a one-line ask instead of backlogged, so a hard gate never buries an important catch. Only Andre
+adds a line, in writing, next to the new line itself. Full rule: M16-PROCEDURE §5a.
 
 ---
 
@@ -283,6 +298,16 @@ and two subscriber daemons as separate OS processes on at least two machines —
 5. A screening-corpus broadcast is blocked at the subscriber.
 
 Vitest green ≠ done. The run output lands in the build journal.
+
+---
+
+## POST-M16 BACKLOG
+
+Findings captured during the milestone that do not make an existing line false and did not trip
+the severity screen (M16-PROCEDURE §5a). Each entry: the five journal lines, the planner's one
+line of reasoning, the triage date. Real, worth doing, not this milestone. Triaged after close.
+
+*(empty at open — and the goal is that it grows while the tiers above do not)*
 
 ---
 
