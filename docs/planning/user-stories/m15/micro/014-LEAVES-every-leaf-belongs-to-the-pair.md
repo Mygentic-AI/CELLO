@@ -130,10 +130,139 @@ the relay's live checking (`015-WITNESS`); the MITM finding, which is already bo
 
 ## Review
 
-*(Reviewer verdict goes here. One quote. Not a transcript. The ANSWER to Part 1 goes here too.)*
+### The answer to Part 1: NO. It was not constrained — and what protected it was incidental.
+
+**Where the constraint actually lived.** A content leaf's sender was constrained in exactly one
+place in the whole system: the relay refuses a `hash_submit` whose authenticated sender is neither
+`participant_a` nor `participant_b` (`packages/relay/src/relay-node.ts:1854-1857`,
+`not_a_participant`). That is a live-path check at submit time.
+
+**Nothing re-checked it at certification.** Walking the seal path in order:
+
+1. `processSeal`'s per-leaf loop (`packages/directory/src/directory-node.ts:5255-5305`) verifies
+   `verify(s2.sender_pubkey, structure1_cbor, s2.sender_signature)`. That is **self-consistency**:
+   the leaf names a key and the signature holds under that key. It says nothing about whether the
+   key is in the conversation.
+2. `verifySealLeaves` (`directory-node.ts:6507`) examines only the closing ceremony pair and that
+   the ceremony closes the log. The trap in this order was right — its name is wider than its job.
+3. `verifySealFinalRoots` (`packages/directory/src/seal-final-root.ts`) had a
+   `SENDER_NOT_PARTICIPANT` check, and it sat behind `if (leaf.kind !== "ctrl") continue` **and**
+   behind `if (bytes === undefined) continue`. So it could never see a message leaf, and it did not
+   run at all when nothing was carried.
+
+**The thing that did catch an injected content leaf was arithmetic, not identity — and the
+protection was INCIDENTAL rather than deliberate.** An extra content leaf changes
+`rootOverNonCtrlLeaves`, so a participant's carried `final_root` stops matching and the verdict is
+`ROOT_DISAGREES`. Nobody wrote that to constrain leaf authorship; it falls out of the root
+comparison. Stating it in the words the order asks for: **this protection is incidental, and
+incidental protections are the ones refactors delete.**
+
+**And the attacker held its off-switch.** `content_bytes` is supplied by whoever assembles the leaf
+array. Omit it and the verdict is `NOT_CARRIED`, which `directory-node.ts:5425-5449` deliberately
+tolerates during the rollout — correctly, and with its own follow-on already named. So the party
+that injects the leaf is the same party that can turn off the only thing that would have noticed.
+That is the *who controls the absence* shape, reached from a second direction.
+
+**Who the adversary is, precisely.** Not only a rogue relay. `seal_submission` arrives on the
+directory-relay admin stream (`directory-node.ts:1200-1235`), which authenticates only
+`relay_register` — `validateSealSubmissionLeaves`' own header says the frame is *"accepted from any
+dialer"*. A stranger who knows a session id can hand a directory a leaf array.
+
+### The cross-session variant: also unconstrained, at BOTH layers.
+
+Structure 1's signed TBS is `[protocol_version, content_hash, sender_pubkey, session_id,
+last_seen_seq, timestamp]` — **the sender's own Ed25519 signature already says which conversation
+the leaf was produced for.** The check was available for free and nobody made it:
+
+- **Relay:** `#processHashSubmitLocked` decodes Structure 1 and checks `s1.sender_pubkey` against
+  the authenticated peer (`relay-node.ts:1948`) — and never compares `s1.session_id` to
+  `frame.session_id`.
+- **Directory:** `decodeStructure1Fields` (`directory-node.ts:6397`) decodes `session_id`,
+  length-validates it to 16 bytes, and **returns it to two loops that use only `content_hash` and
+  `last_seen_seq`.** The field was read and dropped.
+
+`prev_root` and `sequence_number` live in Structure 2, which the assembler builds, so the chain and
+causal checks cannot catch a graft either.
+
+### What could not be established from code alone
+
+- **Whether any live deployment has ever received a foreign leaf.** That needs the directories' logs,
+  not the source. Nothing in the tree records the sender set of a certified seal in a queryable form.
+- **Whether an honest client would notice after the fact.** Each side compares the certified root
+  against its own tree, so a graft should surface there — but that is the *client's* reaction to an
+  already-signed certificate, and I did not exercise it. The certificate is issued either way.
+- **The relay's own `s1.session_id` gap on the live path.** I traced that it is unchecked; I did not
+  establish what an honest counterparty's daemon does with a delivered leaf whose signed session id
+  is not the session it arrived on.
+
+### The fix
+
+`verifyLeafProvenance(leaves, sessionId, participants?)` in `seal-final-root.ts` checks two facts for
+**every** leaf: the sender is one of the session's two participants, and the leaf's own signed bytes
+name the session being sealed. It is the existing check widened, not a second one — the ctrl-only
+copy inside the payload loop is gone.
+
+- **Bilateral:** called first in `verifySealFinalRoots`, ahead of the carried-payload walk, so the
+  assembler cannot disable it by sending less.
+- **Unilateral:** called in `#verifyUnilateralChain` **after** the per-leaf signature loop. The
+  position is the precondition: until the signatures verify, `sender_pubkey` is a field the assembler
+  filled in, and asking whether it is a participant asks the assembler about itself.
+
+The refusal reaches the operator by three surfaces: the returned reason (`seal_sender_not_participant`
+/ `seal_leaf_session_mismatch`) travels to the relay, is stored as `seal_rejected_reason`, and comes
+back to the client on its next submit as `hash_submit_error{reason:"seal_refused", detail:<reason>}`;
+`session_seal_rejected` goes to the participants' streams; and `seal.final_root.refused` logs at
+error with the guidance string. The participants' frame now says `seal_leaves_invalid` rather than
+`merkle_root_mismatch` — telling two people their roots disagree, when the finding was a stranger's
+leaf, sends them to compare transcripts over an injection.
+
+### The bound, stated rather than claimed away
+
+When the adjudicating node did not assign the session, `#sessionParticipants` is empty and the roster
+falls back to the keys derived from the array under suspicion. There the **addition** of a third
+voice is still refused — three distinct keys do not fit in a pair of two — but a **substitution** is
+not. That is pre-existing and tracked as `DOD-M15-SEALROSTER-FEDERATED-1`. The session half holds on
+that path regardless: it is anchored to a signature the assembler cannot forge.
+
+### The test, and being made to fail on purpose
+
+`packages/directory/src/__tests__/dod-m15-leafparties-1.test.ts` — 8 tests through the **real**
+`processSeal` and the **real** unilateral handler, with **no SEAL payload carried anywhere**, which is
+the shape that certified.
+
+Two mutants, in an isolated worktree on a clean tree, each typechecked before running and each re-run
+alone:
+
+| Mutant | Result |
+|---|---|
+| Discard the bilateral verdict in `verifySealFinalRoots` | the 4 bilateral refusal tests red — all `expected true to be false` on `result.ok`, i.e. **the seal certified**. Honest case green. **All 3 unilateral tests green.** |
+| Discard the unilateral verdict in `#verifyUnilateralChain` | the 2 unilateral refusal tests red — `expected [] to have a length of 1`, i.e. **no verification failure was logged at all**. **All 5 bilateral tests green.** |
+
+Neither mutant's red came from the other's path, so the two call sites are independently covered.
+
+### Gate
+
+`packages/directory` suite 1167 passed / exit 0 · `pnpm run lint` exit 0 · `pnpm run typecheck`
+(`tsc --build`, emits) exit 0.
+
+### Reviewer verdict
+
+*(pending — `cello-unit-reviewer` in flight)*
 
 ---
 
 ## Newly discovered
 
 *(One or two lines each. Do not act on them.)*
+
+- **The relay never compares a leaf's SIGNED `session_id` to the session it is being submitted to.**
+  `#processHashSubmitLocked` checks `s1.sender_pubkey` against the authenticated peer and stops there,
+  so a participant can submit a leaf signed for another conversation and the relay witnesses it live.
+  The directory now refuses to certify such a seal, so the consequence is a conversation that cannot
+  seal rather than a false receipt — but the relay's own witness record is polluted.
+- **`s1.sender_pubkey` and `s2.sender_pubkey` are never compared at the directory.** Harmless today
+  (the signature must verify under `s2`'s copy, so the real author is `s2`'s), but the signed field is
+  read and dropped, which is the shape that produced this unit's defect.
+- **Every refusal on the unilateral seal path logs and returns with no frame to the client.** Not
+  introduced here — it is true of every reason on that path, including the pre-existing ones. The
+  present party sees a seal that simply never completes.
