@@ -24,8 +24,20 @@
 -- it, so there is no signal either could read to decide a conversation is consequential. The
 -- initiator declares it on `session_request` or the conversation is standard.
 --
--- Additive and nullable: no backfill, no rewrite of the sessions hash chain (the chain covers the
--- columns present when each row was written).
+-- ─── The hash chain, stated correctly ──────────────────────────────────────────────────────────
+-- An earlier draft of this comment said the chain "covers the columns present when each row was
+-- written". That describes the WRITER and not the VERIFIER, and the difference is the whole issue:
+-- `verifyChain` does `SELECT *` and rehashes every row with whatever columns exist NOW. So a new
+-- column that the writer hashes makes every pre-existing row fail verification, because those rows'
+-- stored hashes were computed without it.
+--
+-- `high_stakes` is therefore added to the sessions exclusion set in `hash-chain.ts`, alongside
+-- `initiator_pubkey_hex` and `target_pubkey_hex`, which were excluded by V29 for exactly this
+-- reason. The consequence is written out there and is real: the tier is stored and NOT
+-- tamper-evident. Chaining it properly requires rechaining every existing sessions row, which is
+-- its own unit.
+--
+-- Additive with a default: no backfill.
 
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS high_stakes BOOLEAN NOT NULL DEFAULT FALSE;
 

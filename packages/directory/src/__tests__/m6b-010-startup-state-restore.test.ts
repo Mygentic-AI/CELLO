@@ -196,7 +196,7 @@ describeIntegration("M6B-010: PgDirectoryStore startup state load", () => {
 
   it("AC-002: loadActiveSessionParticipants returns genesis timestamp as genesisTimestampMs", async () => {
     // Spec: genesisTimestampMs is derived from sessions.created_at (genesis time),
-    // not 0 or undefined. This allows #sessionLastActivity to be initialized correctly.
+    // not 0 or undefined. This allows #sessionGenesisAt to be initialized correctly.
     const logger = makeMockLogger();
     const store = new PgDirectoryStore(pool, logger, "test", "local");
     await store.loadProfiles();

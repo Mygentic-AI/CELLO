@@ -332,14 +332,21 @@ export interface SealLegibility {
    * prefix at all. Every seal this directory builds sets it, bilateral included — there both parties
    * signed through the end, so it lands at the last sequence they both reached.
    *
-   * ⚠️ **OPTIONAL ON THE TYPE, ALWAYS SET BY THE BUILDER, AND NEVER TRUSTED BY THE READER.** Optional
-   * only because a notification enqueued before this field existed is drained and re-encoded through
-   * the same shape; absence there means "an older queued frame", never "the boundary is unknown".
-   * It is also deliberately NOT folded into `canonicalLegibilityHash` — changing that hash is a
-   * lockstep break with the daemon's byte-identical mirror and would fail every bilateral seal
-   * mid-rollout. It does not need to be: every input is already bound, so the client recomputes this
-   * from the bound participants instead of reading it off the wire, and a tampered value on the wire
-   * changes nothing the client shows.
+   * ⚠️ **THE CLIENT DOES NOT READ THIS FIELD, AND THE REASON MATTERS** — review F2.
+   *
+   * It is NOT folded into `canonicalLegibilityHash`, and on the SOLO path the certificate binds no
+   * legibility at all — so nothing here is covered by the seal signature. An earlier version of this
+   * comment claimed the value was safe because "every input is already bound and the client
+   * recomputes it". That was false on exactly the path this field exists for: the absent party's
+   * frontier and every `last_authored_seq` reach the client unverified, so recomputing from them was
+   * arithmetic over somebody else's claim.
+   *
+   * The client therefore ignores this and derives the boundary from its OWN signed carry, where the
+   * counterparty's signature covers both inputs (`countersignedThroughSeqFromCarry`). This field is
+   * published for a reader that has the certificate and not the leaves; such a reader should treat
+   * it as the issuing directory's statement, which is what it is.
+   *
+   * Optional because a notification enqueued before the field existed drains through the same shape.
    */
   countersigned_through_seq?: number;
 }
@@ -600,7 +607,36 @@ export interface SealUnilateralTooEarly {
   session_id: Uint8Array;
   /** Omitted when the refusal has no countdown — presence and missing evidence are not clocks. */
   remaining_seconds?: number;
+  /**
+   * WHICH refusal this is — `DOD-M15-UNILATERAL-1`, review F1.
+   *
+   * ⚠️ **WITHOUT THIS THE OPERATOR IS TOLD SOMETHING FALSE.** The client's only reading of this
+   * frame was "the delivery-grace window has not elapsed", so a two-hour-old session refused
+   * because the counterparty is ONLINE was answered *"retry after the grace period"* — a window that
+   * expired 110 minutes earlier. The cause was on one directory node's log line and nowhere the
+   * operator looks. Errors name their cause, not their exit point.
+   *
+   * A closed set, so a new code cannot slip past the guidance switch as free-form text. Optional on
+   * the wire because absence must stay readable as the plain floor case.
+   */
+  cause?: SealUnilateralRefusalCause;
 }
+
+/**
+ * The three ways a solo seal can be refused as "not now" — `DOD-M15-UNILATERAL-1`.
+ *
+ * They share one frame because the client's BEHAVIOUR is identical for all three (the session is
+ * intact, do not force-abandon, retry later) and because a frame the client has no handler for
+ * becomes a 30-second timeout naming our own wait. They do NOT share guidance: what the operator
+ * should do next, and whether waiting will ever help, differ completely.
+ */
+export type SealUnilateralRefusalCause =
+  /** The floor has not elapsed. The one case with a real countdown. */
+  | "too_early"
+  /** The relay is holding the counterparty's connection right now. Waiting for a clock will not help. */
+  | "counterparty_present"
+  /** High-stakes, and the relay never observed the counterparty leave. May never become available. */
+  | "high_stakes_evidence_required";
 
 /**
  * SESSION-002 unilateral seal certificate. Carried on both seal_unilateral_confirmed

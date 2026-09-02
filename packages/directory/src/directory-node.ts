@@ -751,6 +751,14 @@ export class CelloDirectoryNode {
    *
    * Absent means STANDARD. That default is deliberate: the standard tier is what an honest party
    * falls back to, and it is the tier that never strands them.
+   *
+   * ⚠️ **THE TARGET IS NOT TOLD, AND IS HELD TO IT ANYWAY** — review F8. The flag rides the
+   * INITIATOR's `session_request` and is not forwarded on the assignment, so the counterparty is
+   * subject to a longer floor and a mandatory-evidence bar they never opted into and cannot see. It
+   * only ever constrains a SOLO seal, so the effect on them is mostly protective — they are harder
+   * to seal around — but the reverse holds too: they cannot seal around the initiator on the easier
+   * terms either, and nothing tells them why. Forwarding it means adding a field to the assignment,
+   * which is signed, so it belongs with the next assignment-TBS change rather than bolted on here.
    */
   readonly #sessionHighStakes = new Map<string, boolean>();
   // PERSIST-015: session_id_hex → unilateral seal record
@@ -4703,6 +4711,7 @@ export class CelloDirectoryNode {
         this.#sendFrame(stream, encodeSealUnilateralTooEarly({
           type: "seal_unilateral_too_early",
           session_id: frame.session_id,
+          cause: "counterparty_present",
         }));
       } catch { /* the refusal stands whether or not the frame lands */ }
       return;
@@ -4726,6 +4735,7 @@ export class CelloDirectoryNode {
           type: "seal_unilateral_too_early",
           session_id: frame.session_id,
           remaining_seconds: remainingSeconds,
+          cause: "too_early",
         }));
       } catch { /* */ }
       return;
@@ -4760,6 +4770,7 @@ export class CelloDirectoryNode {
         this.#sendFrame(stream, encodeSealUnilateralTooEarly({
           type: "seal_unilateral_too_early",
           session_id: frame.session_id,
+          cause: "high_stakes_evidence_required",
         }));
       } catch { /* */ }
       return;
