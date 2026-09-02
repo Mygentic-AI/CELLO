@@ -1001,7 +1001,19 @@ root means. Both repos; version-bump ACs on both sides.
   tree matching the certified root.
 - **Enforcer:** receipt.
 
-### `DOD-M15-SEALPARTIES-1` — ❌ Both real participants approve before any signature exists
+### `DOD-M15-SEALPARTIES-1` — ✅ Both real participants approve before any signature exists
+> **Closed 2026-09-02.** The counterparty's approval already existed on the wire — each party's SEAL
+> ctrl leaf carries a signed `final_root` — and was OPTIONAL: `not_carried` and `coverage:"one"` both
+> certified, and the field is supplied by the party assembling the leaves. A bilateral seal now
+> requires both, co-signing directories re-derive the root AND both approvals from the raw leaves
+> instead of signing what they are handed, and `session_seal_rejected` — which had no consumer
+> anywhere in the client — now answers both operators and still falls through to the solo seal.
+> Closes `DOD-M15-NOTCARRIED-REFUSE-1` with it. Enforcer: `j-spine` **7/7** as separate OS processes
+> (was 5/7 — see the Part 0 fix below). → Entry C12.
+>
+> ⚠️ **Ships client-first.** A directory with the co-sign gate plus a client that does not forward
+> the leaves refuses every seal for that agent, and clients cannot be rolled. See the order's
+> DEPLOYMENT ORDER section: publish, confirm every running agent, re-pin, then roll.
 The T-of-N log's Part 3 fix direction. Moves the trust anchor from *"the verifying directory node is
 honest"* to *"at least one of the two real participants is honest"* — a far more natural assumption
 for a communication protocol, and one that does not depend on directory behaviour at all.
@@ -2530,7 +2542,15 @@ on punctuation rather than as an ordering regression.
 
 ---
 
-### `DOD-M15-NOTCARRIED-REFUSE-1` — 🅿️ POST-LAUNCH BACKLOG. `not_carried` is the attacker's own off-switch, and it must stop being tolerated once the roll is done
+### `DOD-M15-NOTCARRIED-REFUSE-1` — ✅ CLOSED by `DOD-M15-SEALPARTIES-1`, 2026-09-02
+> **The tolerance is deleted, not trimmed.** A bilateral seal that arrives with `not_carried` — or
+> with only one participant's payload, which this line did not cover and which was the same hole one
+> leaf narrower — is refused as `seal_approval_missing`. There is no roll to protect: nothing is
+> registered against a client that predates the carry, so the older shape was deleted rather than
+> supported alongside the new one. The comment that argued for the tolerance is rewritten in place
+> rather than removed; it was right at the time and it names the price that ended it. → Entry C12.
+>
+> *Original entry, kept because its reasoning is what made the tolerance correct while it lasted:*
 **Raised by review pass 1 on `DOD-M15-SEALWIRE-1` bullets 3+4 (finding F4), filed rather than fixed
 because the gate is frozen and this is not a hole a customer reaches today.**
 

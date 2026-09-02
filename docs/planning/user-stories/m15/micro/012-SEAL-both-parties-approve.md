@@ -2,7 +2,7 @@
 name: 012-SEAL — Both real participants approve before any signature exists
 type: micro-work-order
 date: 2026-09-02
-status: open
+status: complete
 description: >
   Today only the closing party checks the receipt before signing. The counterparty checks after
   `session_sealed`, when the artifact is already durable and there is nothing to invalidate it. And
@@ -184,9 +184,52 @@ the threshold.
 
 ---
 
+## 🚨 DEPLOYMENT ORDER — CLIENT FIRST, AND IT IS NOT OPTIONAL
+
+**A directory carrying the co-sign gate plus a client that does not forward the leaves produces
+`SEAL_EVIDENCE_MISSING` from every share holder — threshold not met, no seal, bilateral or solo, for
+that agent.** Absence is refused by design (it is the party the check guards against who would omit
+it), so this does not self-heal.
+
+Clients are npm-installed per operator and cannot be rolled. So:
+
+1. Publish `cello-client` (`/cello-publish`), including the `@cello-protocol/protocol-types` bump
+   that carries `RegisterSuccess.online_token`, the two new `SealRejectionReason` codes and
+   `SessionSealRejected.detail`.
+2. Confirm every running agent is on it — the demo agent on EC2 and the Hermes box included.
+3. Re-pin `trustless-cello`'s `packages/directory` to the published versions and only then roll the
+   directory fleet.
+
+The local type widenings in `directory-frames.ts` and `directory-types.ts` each name the re-pin that
+retires them; the re-pin is step 3.
+
+---
+
 ## Review
 
-*(Reviewer verdict goes here. One quote. Not a transcript.)*
+`cello-unit-reviewer`, one full pass, on both repos' diffs. Its own summary of the two that mattered:
+
+> *"Two things are wrong, and one of them is the trap the order named. … **Did anything make a
+> receipt harder for an honest party?** Yes — F1. Not through the absent counterparty (your
+> structural argument there is correct and I could not break it), but through the *new listener*,
+> which turned every directory refusal from 'slow but escalates to a solo receipt' into 'fast and
+> terminal.'"*
+
+And on the co-signer, which is work item 2's whole point:
+
+> *"**Does the co-signer reach its own verdict?** Yes, for the root. Reconstruct-don't-parse is the
+> right call and the timestamp binding closes the one value it can't derive. But it never sees the
+> approvals, so it cannot judge the property the unit is named for."*
+
+Both fixed and mutation-checked. On the fixture edits it was explicit that nothing was weakened —
+*"All five checked line by line. No weakened assertions."* — and on the one inverted test, *"the old
+reasoning is preserved as a quotation, the new argument is stated, and the 'carries nothing' test now
+also asserts the tolerated INFO branch is gone rather than merely unused."*
+
+**A second pass on the FIX commits was dispatched and did not run** — it died on a session rate limit
+before reading anything, so there is no verdict from it and none is claimed. The fixes carry their
+own mutations instead: every-refusal-terminal-again reddens the escalation test, and the co-signer's
+approval check is exercised live by `j-spine` 7/7 across separate OS processes.
 
 ---
 
@@ -206,3 +249,12 @@ the threshold.
   `directory-node.test.ts` calls the shape *"reachable in production"*. The fix on record for the
   retry version of this is *last carried leaf per sender wins*; nothing re-submits a SEAL leaf when a
   late message lands.
+- **The identity row is written fire-and-forget, and the operator is told it landed.**
+  `#processRegisterRequest` calls `this.#store.setProfile(profile)` with no `await` and no `.catch`,
+  and the Pg store's insert is `void this.#pool.query(...)` whose failure is one
+  `adapter.write.failed` line. If it fails the agent is still sent `register_success` — and, since
+  this order, a signed relay token with it. The operator sees a healthy registration and the node has
+  no row; `already_registered` cannot recover it, because that answer depends on the row existing.
+  **Pre-existing**, and this unit takes a dependency on it twice (the token mint skips the profile
+  read *because* the write is not awaited, and the new send-failure text had to be reworded to stop
+  asserting the write landed).
