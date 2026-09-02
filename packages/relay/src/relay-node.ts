@@ -99,7 +99,7 @@ import type {
 } from "./relay-types.js";
 import type { RelayStore } from "./relay-store.js";
 import { InMemoryRelayStore } from "./relay-store.js";
-import { witnessLeafSignature } from "./leaf-witness.js";
+import { witnessLeafSignature, buildWitnessAlertTbs } from "./leaf-witness.js";
 import {
   encodeAuthChallenge,
   encodeAuthFailed,
@@ -2830,9 +2830,35 @@ export class CelloRelayNode {
     });
     protocolLog("RELAY", `witness alert — session ${truncHex(sessionKey)}: leaf signed by neither participant`);
 
+    /**
+     * SIGN IT — review F3. An unsigned alert is a rumour the recipient cannot show anyone, which
+     * leaves them in the position this unit exists to get them out of.
+     *
+     * Signed ONCE, before the loop: both recipients get the same observation about the same
+     * submission. A signing failure does NOT suppress the alert — an unsigned warning still reaches
+     * a person, and losing the warning is strictly worse than losing its transferability — but it is
+     * loud, because a relay that declares a `relay_id` and cannot sign is broken and the client will
+     * refuse what it sends.
+     */
+    const observedAt = Date.now();
+    let witnessSignature: Uint8Array | undefined;
+    if (this.#relayId !== null && this.#ackSigningKeyProvider !== null) {
+      try {
+        witnessSignature = await this.#ackSigningKeyProvider.sign(
+          buildWitnessAlertTbs(sessionId, "leaf_signed_by_neither_participant", observedAt, submitterIsParticipant),
+        );
+      } catch (err: unknown) {
+        this.#logger.error("relay.witness.sign.failed", {
+          sessionId: sessionKey,
+          error: err instanceof Error ? err.message : String(err),
+          impact: "the alert is sent UNSIGNED, so a client that expects this relay to prove its own " +
+            "identity will refuse it and the recipients hear nothing. The observation is in this log either way.",
+        });
+      }
+    }
+
     // Every participant EXCEPT whoever submitted it. The submitter already has the
     // `hash_submit_error`; these are the parties who would otherwise hear it only from them.
-    const observedAt = Date.now();
     for (const recipientHex of [aHex, bHex]) {
       if (recipientHex === submitterHex) continue;
       const alert: import("./relay-types.js").SessionWitnessAlert = {
@@ -2842,6 +2868,7 @@ export class CelloRelayNode {
         ...(this.#relayId !== null ? { relay_id: this.#relayId } : {}),
         observed_at: observedAt,
         submitter_is_counterparty: submitterIsParticipant,
+        ...(witnessSignature !== undefined ? { witness_signature: witnessSignature } : {}),
       };
       const recipientStream = this.#streams.get(recipientHex);
       if (!recipientStream) {

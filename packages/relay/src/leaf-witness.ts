@@ -17,7 +17,9 @@
  *
  * Content is not read and is not required: a signature verifies against a hash and a pubkey (INV-3).
  */
+import { createHash } from "node:crypto";
 import { verify } from "@cello-protocol/crypto";
+import { encodeCbor } from "@cello-protocol/protocol-types";
 
 export type LeafWitnessVerdict =
   /** The leaf verifies under one of the expected keys. `signer` is WHICH — never the frame's claim. */
@@ -42,4 +44,32 @@ export function witnessLeafSignature(
     if (verify(key, structure1Cbor, senderSignature)) return { ok: true, signer: key };
   }
   return { ok: false, reason: "leaf_signed_by_neither_participant" };
+}
+
+/**
+ * The bytes a relay signs when it reports what it witnessed — `DOD-M15-CORROBORATE-1` review F3.
+ *
+ * ⚠️ **MIRRORED CODEC.** `cello-client`'s `session-relay-client.ts` reconstructs these exact bytes to
+ * verify the signature. The two implementations MUST stay in sync, the same contract
+ * `encodeSessionLivenessResponse` carries — which is why both sides call `encodeCbor` from
+ * `@cello-protocol/protocol-types` rather than each configuring an encoder.
+ *
+ * A fixed-order ARRAY with a domain tag in slot 0, per that module's own rule: its map encoding
+ * follows insertion order and is not minimal, so no signed structure in CELLO is ever a map.
+ *
+ * ⚠️ **AND THE RECIPIENT IS DELIBERATELY NOT BOUND IN.** Both participants receive the same
+ * observation about the same submission, so one signature covers both and binding a recipient would
+ * buy nothing. What it does mean: an alert one participant holds is not distinguishable from the
+ * other's. That is fine for what this is — a statement about a session, not about a person.
+ */
+export const RELAY_WITNESS_DOMAIN = "CELLO-RELAY-WITNESS-v1";
+
+export function buildWitnessAlertTbs(
+  sessionId: Uint8Array,
+  reason: string,
+  observedAt: number,
+  submitterIsCounterparty: boolean,
+): Uint8Array {
+  const body = encodeCbor([RELAY_WITNESS_DOMAIN, sessionId, reason, observedAt, submitterIsCounterparty]);
+  return new Uint8Array(createHash("sha256").update(body).digest());
 }

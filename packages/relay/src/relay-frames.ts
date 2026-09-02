@@ -155,6 +155,7 @@ export function encodeSessionWitnessAlert(frame: SessionWitnessAlert): Uint8Arra
     ...(frame.relay_id !== undefined ? { relay_id: frame.relay_id } : {}),
     observed_at: frame.observed_at,
     submitter_is_counterparty: frame.submitter_is_counterparty,
+    ...(frame.witness_signature !== undefined ? { witness_signature: frame.witness_signature } : {}),
   });
 }
 

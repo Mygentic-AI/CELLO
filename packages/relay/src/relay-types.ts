@@ -478,6 +478,20 @@ export interface SessionWitnessAlert {
   observed_at: number;
   /** True iff the authenticated submitter was the recipient's counterparty; false = a third party. */
   submitter_is_counterparty: boolean;
+  /**
+   * The relay's own signature over this observation — review F3, and the difference between a
+   * witness and a rumour.
+   *
+   * Without it the recipient cannot show anyone what the relay said: "the relay told me" is exactly
+   * as unverifiable as the accusation this unit exists to corroborate. `relay_id` is the hex of the
+   * key that signs it (the same key behind every `hash_submit_ack`), so a recipient — or anyone they
+   * later show this to — checks it the way an ack receipt is checked.
+   *
+   * Absent only when this relay has no signing identity at all. A relay that DECLARES a `relay_id`
+   * and omits this is refused by the client: a claimed identity has to be proven, or omitting the
+   * proof is the cheapest way to dodge it.
+   */
+  witness_signature?: Uint8Array;
 }
 
 /**
