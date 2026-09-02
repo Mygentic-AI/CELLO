@@ -286,18 +286,35 @@ describe("DOD-M15-CORROBORATE-1: the relay verifies each hash at arrival and ale
     ).toEqual(["impact", "observation", "relayId", "sessionId", "submitterIsParticipant", "submitterPubkey"]);
   }, 60_000);
 
-  it("★★ a leaf CLAIMING the counterparty as sender is refused even though its signature is a real participant's", async () => {
+  it("★★ a leaf whose CLAIMED sender is not the party who signed it is refused, on that party's own connection", async () => {
     /**
-     * The check that replaced the old `verify(s1.sender_pubkey, …)` must be STRICTLY stronger, and
-     * this is the case that separates them: bytes that verify under participant A while the leaf
-     * names B as its author. Verifying against the two assignment keys alone would pass it; the
-     * signer must also be the party the leaf claims and the party on the connection.
+     * ⚠️ THE EXEMPLAR HERE IS CHOSEN FROM THE PREDICATE, NOT FROM INTENT, AND THE FIRST ONE WAS NOT.
+     *
+     * The obvious case — a leaf naming B, signed by A, sent on A's connection — is refused by the
+     * OLD pair of checks too (claimed sender ≠ authenticated connection), so asserting it proves
+     * only that something refused, not which. It survived the mutation that chains both claims
+     * through the frame's own `sender_pubkey`.
+     *
+     * The case that separates them is this one: the leaf names B, arrives on B's own authenticated
+     * connection, and is signed by A. `claimed === authenticated` holds, so the old pair lets it
+     * through and B gets a leaf attributed to B that A signed. Comparing both against the key the
+     * signature actually verified under is what refuses it.
+     *
+     * (Not reachable while A is honest — A never signs bytes naming B — which is exactly why it
+     * needs a test rather than an argument.)
      */
     const fx = await fixture();
     const misattributed = await makeLeaf(fx.sessionId, fx.kpB, fx.kpA); // claims B, signed by A
-    send(fx.a.stream, CBOR.encode({ type: "hash_submit", session_id: fx.sessionId, leaf_kind: 0x00, ...misattributed }));
-    const err = await fx.a.reader.next();
-    expect(err["type"]).toBe("hash_submit_error");
+    send(fx.b!.stream, CBOR.encode({ type: "hash_submit", session_id: fx.sessionId, leaf_kind: 0x00, ...misattributed }));
+    const err = await fx.b!.reader.next();
+    expect(err["type"], "accepting this would sequence a leaf attributed to B that A signed").toBe("hash_submit_error");
     expect(err["reason"]).toBe("sender_mismatch");
+
+    // And it took no position: B's next honest leaf is sequence 1.
+    const honest = await makeLeaf(fx.sessionId, fx.kpB, fx.kpB);
+    send(fx.b!.stream, CBOR.encode({ type: "hash_submit", session_id: fx.sessionId, leaf_kind: 0x00, ...honest }));
+    const ack = await fx.b!.reader.next();
+    expect(ack["type"]).toBe("hash_submit_ack");
+    expect(ack["sequence_number"]).toBe(1);
   }, 60_000);
 });
