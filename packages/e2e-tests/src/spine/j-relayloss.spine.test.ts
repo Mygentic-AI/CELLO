@@ -66,7 +66,7 @@ const RECORD: string[] = [];
 const record = (q: string, answer: unknown): void => {
   const text = typeof answer === "string" ? answer : JSON.stringify(answer);
   RECORD.push(`${q}: ${text}`);
-  // eslint-disable-next-line no-console -- this file's OUTPUT is its deliverable; it is not shipped code.
+  // This file's OUTPUT is its deliverable — the answers are read off the run, not off an assertion.
   console.log(`RECORD ${q}: ${text}`);
 };
 
@@ -127,7 +127,6 @@ afterAll(async () => {
   for (const dir of agentDirs) {
     try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
   }
-  // eslint-disable-next-line no-console -- the deliverable, gathered in one place for the write-up.
   console.log(`\n===== 016-RELAYLOSS ANSWERS =====\n${RECORD.join("\n")}\n=================================`);
 });
 
@@ -181,27 +180,39 @@ describe("J-RELAYLOSS — kill a relay mid-conversation and watch (016-RELAYLOSS
     expect(healthyUnwitnessed, "baseline: a witnessed send must not log own_leaf_unwitnessed").toBe(0);
 
     /**
-     * ─── WHAT THIS HARNESS CAN AND CANNOT MEASURE, established BEFORE the outage ────────────────
+     * ─── WAIT FOR A RESERVATION, do not merely observe its absence — review HIGH-3 ──────────────
      *
-     * The reachability half of `016-RELAYLOSS` is about losing a CIRCUIT RESERVATION. On loopback
-     * the receiver never takes one — every node here is directly dialable, so there is no NAT for a
-     * circuit to traverse — and the reservation watchdog only watches receivers that HAD one
-     * (`#reservationWatchdogTick` returns early otherwise). A journey that waited for
-     * `reservation.lost` here would wait forever and report the absence as a finding.
+     * The first version read the reservation state once, found `retrying`, and concluded that a
+     * loopback receiver never takes a circuit reservation at all, so questions 4 and 5 were
+     * unanswerable here. **The same run refuted that**: by its last phase the very same receiver
+     * reported `reserved`, and a killed relay produced a real `reservation.lost` — an event whose
+     * only emitter is unreachable unless the receiver genuinely held one.
      *
-     * So the state is READ and RECORDED rather than assumed, and it decides which questions this
-     * run can answer. The reachability numbers come from 32 days of the production daemon log
-     * instead, which is the better evidence for them anyway: real NAT, real relays, real WAN.
+     * The receiver does reserve on loopback. At the moment of the first read it had simply not been
+     * granted one yet. That is a TIMING state, and reading it once turned a fifty-second head start
+     * into a permanent conclusion about the topology — the shape this milestone keeps writing down,
+     * where an absence is treated as an answer without proving the observation could see anything.
+     *
+     * So the run now WAITS for the reservation and then measures the black-hole gap, which is
+     * exactly Part 1 question 4 and was answerable all along. Question 5 stays genuinely out of
+     * reach: it asks about a DIFFERENT relay, and this harness runs one.
      */
-    const baselineStatus = JSON.parse(cello(["status"], { CELLO_DIR: dirA }).stdout) as
-      { agents?: Array<{ name?: string; standing_receiver_reachability?: string }> };
-    const baselineReach = baselineStatus.agents?.find((a) => a.name === "agentA")?.standing_receiver_reachability;
-    const holdsReservation = baselineReach === "reserved";
-    record("Q0 baseline standing_receiver_reachability (loopback)", baselineReach ?? "(absent)");
-    record("Q4/Q5 measurable on this harness", holdsReservation
+    const reachOf = (): string => {
+      const s = JSON.parse(cello(["status"], { CELLO_DIR: dirA }).stdout) as
+        { agents?: Array<{ name?: string; standing_receiver_reachability?: string }> };
+      return s.agents?.find((a) => a.name === "agentA")?.standing_receiver_reachability ?? "(absent)";
+    };
+    const firstReach = reachOf();
+    const reserveDeadline = Date.now() + 180_000;
+    while (reachOf() !== "reserved" && Date.now() < reserveDeadline) await sleep(2_000);
+    const holdsReservation = reachOf() === "reserved";
+    record("Q0 standing_receiver_reachability at first read", firstReach);
+    record("Q0 standing_receiver_reachability after waiting", holdsReservation ? "reserved" : reachOf());
+    record("Q4 measurable on this harness", holdsReservation
       ? "yes — the receiver holds a reservation to lose"
-      : "NO — on loopback the receiver never takes a circuit reservation, so there is none to lose. "
-        + "The reachability half is answered from the production daemon log, not from this run.");
+      : "no — the receiver never became reserved within 180s");
+    record("Q5 measurable on this harness",
+      "NO — question 5 asks about a DIFFERENT relay and this harness runs one. Answered from the production log.");
 
     // ─── PHASE 2 — the relay stops answering ───────────────────────────────────────────────────
     const t0 = Date.now();
@@ -254,17 +265,24 @@ describe("J-RELAYLOSS — kill a relay mid-conversation and watch (016-RELAYLOSS
     const statusDuring = cello(["status"], { CELLO_DIR: dirA }).stdout.trim();
     record("Q6 cello status ~immediately after the relay died", statusDuring.slice(0, 900));
 
-    // Q4a/Q5 — only askable of a receiver that holds a reservation; see the note above.
+    /**
+     * Q4a — THE SILENT WINDOW for the black-hole shape: how long the agent is unreachable while
+     * still looking healthy. This is the number Part 1 question 4 asks for, and the first version
+     * of this journey declined to measure it on a premise its own last phase refuted.
+     */
     if (holdsReservation) {
-      const lost = await waitForEventAfter(daemonA, /session\.standing_receiver\.reservation\.lost/, t0, 120_000);
-      record("Q4a ms from relay death to reservation.lost (the silent window)", lost?.waitedMs ?? "NEVER within 120s");
+      const lost = await waitForEventAfter(daemonA, /session\.standing_receiver\.reservation\.lost/, t0, 150_000);
+      record("Q4a ms from a MUTE relay to reservation.lost (the silent window)", lost?.waitedMs ?? "NEVER within 150s");
       record("Q4a the lost event", lost?.raw ?? "(none)");
+      // CONTROL for this number specifically: an absence here would mean the receiver was never
+      // watched, not that the daemon was silent — and those read identically in a log.
+      expect(lost, "a receiver that HELD a reservation must notice the relay going mute").not.toBeNull();
       const rebuilt = await waitForEventAfter(daemonA, /session\.standing_receiver\.reachability/, t0, 90_000);
-      record("Q5 rebuild attempt after the loss", rebuilt?.raw ?? "(no rebuild observed within 90s)");
+      record("Q4a rebuild attempt after the loss", rebuilt?.raw ?? "(no rebuild observed within 90s)");
     } else {
-      record("Q4a ms from relay death to reservation.lost", "not measurable here — no reservation to lose (see Q4/Q5 note)");
-      record("Q5 rebuild against a different relay", "not measurable here — this harness runs ONE relay");
+      record("Q4a ms from a MUTE relay to reservation.lost", "not measured — the receiver never became reserved");
     }
+    record("Q5 rebuild against a different relay", "not measurable here — this harness runs ONE relay");
 
     // ─── PHASE 3 — THE SEVERITY QUESTION. Can the conversation still be closed and sealed? ──────
     // Both parties close while the relay is a black hole. This is the one that decides whether a
@@ -373,9 +391,7 @@ describe("J-RELAYLOSS — kill a relay mid-conversation and watch (016-RELAYLOSS
     // Read the reservation state FIRST. The baseline had none; if the receiver acquired one by now
     // the kill can measure a real loss, and the number below means what it says rather than being
     // attributed to a state nobody checked.
-    const preKill = JSON.parse(cello(["status"], { CELLO_DIR: dirA }).stdout) as typeof baselineStatus;
-    record("Q4c standing_receiver_reachability just before the kill",
-      preKill.agents?.find((a) => a.name === "agentA")?.standing_receiver_reachability ?? "(absent)");
+    record("Q4c standing_receiver_reachability just before the kill", reachOf());
     const t2 = Date.now();
     await cluster.relay.kill();
     record("T2 relay process SIGKILLed at", new Date(t2).toISOString());
