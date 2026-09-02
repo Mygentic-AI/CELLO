@@ -320,6 +320,30 @@ export interface SealFrontierLeaf {
   structure1_cbor: Uint8Array;
   sender_pubkey: Uint8Array;
   sender_signature: Uint8Array;
+  /**
+   * DOD-M15-SEALPARTIES-1 (fallback hunt, finding 1): the SEAL payload a ctrl leaf carries — the
+   * participant's own signed statement of the transcript root it is approving.
+   *
+   * Added because this projection is also the evidence a CO-SIGNING directory judges, and without it
+   * a co-signer is structurally unable to see whether both participants approved. It could then lend
+   * its share to a one-sided seal that the verifying directory should have refused — which leaves the
+   * unit's headline requirement resting on one node's reading after all, the exact condition the
+   * co-signer check exists to remove.
+   *
+   * Absent on a content leaf, and absent on a ctrl leaf whose payload the relay did not carry — the
+   * verifying directory refuses a BILATERAL seal in that case, and the co-signer refuses too.
+   */
+  content_bytes?: Uint8Array;
+  /**
+   * The leaf's domain, carried for the same reason as `content_bytes`: a co-signer computes the root
+   * over the NON-ctrl leaves to check the participants' approvals against it, exactly as
+   * `rootOverNonCtrlLeaves` does on the verifying node.
+   *
+   * Relay-supplied and unsigned, like the verifying node's own copy. Lying about it changes the
+   * non-ctrl root, so a wrong `kind` makes the participants' signed roots stop matching and the
+   * request is refused — it can cause a refusal, never an acceptance.
+   */
+  kind?: string;
 }
 
 /**

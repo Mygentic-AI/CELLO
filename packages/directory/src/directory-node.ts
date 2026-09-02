@@ -3615,11 +3615,14 @@ export class CelloDirectoryNode {
         agentPubkeyHex: frame.k_local_pubkey.slice(0, 16),
         correlationId: accountCorrelationId,
         error: error instanceof Error ? error.message : String(error),
-        impact: "the agent IS registered here — the profile is written — but its stream closed before " +
-          "the confirmation could be delivered, so it does not hold its agent_id or its relay online " +
+        impact: "the profile write for this agent was ISSUED here (it is not awaited, so this node " +
+          "cannot say from this point whether it landed) and the agent's stream closed before the " +
+          "confirmation could be delivered — so it holds neither its agent_id nor its relay online " +
           "token and will report itself unregistered.",
-        guidance: "The operator registers again: this node answers `already_registered` with the same " +
-          "agent_id and primary_pubkey, so nothing is duplicated and no second DKG runs.",
+        guidance: "The operator registers again. If the profile row landed, this node answers " +
+          "`already_registered` with the same agent_id and primary_pubkey, so nothing is duplicated " +
+          "and no second DKG runs; if it did not, the registration simply runs again. Check for an " +
+          "`adapter.write.failed` on agent_profiles around this timestamp to tell the two apart.",
       });
     }
   }
@@ -5679,10 +5682,20 @@ export class CelloDirectoryNode {
               : "merkle_root_mismatch";
       this.#notifySealRejected(sessionIdHex, sessionId, wireReason, {
         detail,
-        // The pair from the session record when this node holds one, else the pair the leaves name.
-        // Either beats the broadcast: a refusal is about one conversation and belongs to the two
-        // people in it, not to every agent that happens to be authenticated on this node.
-        recipients: roster ? [Buffer.from(roster[0]).toString("hex"), Buffer.from(roster[1]).toString("hex")] : participants,
+        /**
+         * ⚠️ THE PAIR FROM THE SESSION RECORD, OR NOBODY — fallback hunt, finding 3.
+         *
+         * This used to fall back to `participants`, derived from the sender keys of the leaf array
+         * UNDER SUSPICION. So a participant a relay EXCLUDED from the leaf set was also excluded
+         * from being told the seal was refused, and sat out the whole close window hearing that its
+         * counterparty never closed — precisely the failure clause 6 exists to remove, preserved for
+         * the one case that is adversarial.
+         *
+         * With no session record this node cannot address the pair, so it falls back to the
+         * broadcast every other refusal path here still uses. That leaks a session id to strangers
+         * (recorded under *Newly discovered* on the 012 order) and being told beats being silent.
+         */
+        recipients: roster ? [Buffer.from(roster[0]).toString("hex"), Buffer.from(roster[1]).toString("hex")] : undefined,
       });
       return { ok: false, reason };
     }
@@ -5690,6 +5703,14 @@ export class CelloDirectoryNode {
     this.#logger?.info("seal.final_root.verified", {
       sessionId: sessionIdHex,
       coverage: finalRoots.coverage,
+      /**
+       * ⚠️ `coverage: "both"` MEANS TWO DISTINCT KEYS, NOT TWO PARTICIPANTS — fallback hunt,
+       * finding 2. With no session record this node refuses only a THIRD distinct signer, so a relay
+       * that mints one ctrl leaf with a key it holds and copies the honest party's `final_root`
+       * produces `"both"`. Printing that without saying the roster was unknown is the strongest new
+       * claim in the unit, asserted by a node that cannot make it.
+       */
+      rosterKnown: roster !== null,
     });
 
     // The seal initiator authored the EARLIER of the two ceremony ctrl leaves. Derived from the
@@ -5803,6 +5824,11 @@ export class CelloDirectoryNode {
       structure1_cbor: l.structure1_cbor,
       sender_pubkey: l.s2.sender_pubkey,
       sender_signature: l.s2.sender_signature,
+      // DOD-M15-SEALPARTIES-1: the participants' approvals travel too, because this array is also
+      // what every co-signing directory judges. Stripped, a co-signer cannot see whether both
+      // parties approved and would sign a one-sided seal this node had already refused.
+      kind: l.kind,
+      ...(l.content_bytes ? { content_bytes: l.content_bytes } : {}),
     }));
 
     const sealVerifiedEvent: SealVerifiedWithLegibility = {

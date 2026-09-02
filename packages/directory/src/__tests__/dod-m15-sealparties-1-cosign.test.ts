@@ -44,12 +44,20 @@ setupV3Tests();
 
 const CBOR_ENC = new Encoder({ tagUint8Array: false });
 
-/** The leaf shape that rides a `frost_sign_request` — what the client forwards, verbatim. */
+/**
+ * The leaf shape that rides a `frost_sign_request` — what the client forwards, verbatim.
+ *
+ * Mirrors `directory-node.ts`'s `frontierLeaves` projection exactly, `kind` and `content_bytes`
+ * included. Those two are what let a co-signer see the participants' APPROVALS; a fixture that
+ * dropped them would test a co-signer weaker than the shipped one.
+ */
 function cosignLeaves(seal: RelaySealData): Array<Record<string, unknown>> {
   return seal.leaves.map((l) => ({
     structure1_cbor: l.structure1_cbor,
     sender_pubkey: l.s2.sender_pubkey,
     sender_signature: l.s2.sender_signature,
+    kind: l.kind,
+    ...(l.content_bytes ? { content_bytes: l.content_bytes } : {}),
   }));
 }
 
@@ -334,6 +342,106 @@ describe("DOD-M15-SEALPARTIES-1: a co-signer reaches its own verdict from the le
         "a non-seal ceremony carries no leaves and must not be refused for not carrying them",
       ).toBe("AGENT_NOT_BOOTSTRAPPED");
     }, 30_000);
+  });
+
+  /**
+   * ⚠️ REVIEW F2 — THE THING THE UNIT IS NAMED FOR, JUDGED BY THE THRESHOLD AND NOT BY ONE NODE.
+   *
+   * The first cut forwarded `{structure1_cbor, sender_pubkey, sender_signature}` only, so a co-signer
+   * could not see either participant's `final_root` and had nothing to disagree with. A verifying
+   * directory that skipped the two-approval check still got its threshold signature, which left the
+   * DoD line's claim — that the anchor "does not depend on directory behaviour at all" — false for
+   * exactly the half the line is about.
+   */
+  describe("the approvals, not only the root", () => {
+    it("★★★ a BILATERAL seal carrying only ONE participant's approval is refused", async () => {
+      const [a, b] = [generateKeypair(), generateKeypair()];
+      const sessionId = new Uint8Array(randomBytes(16));
+      const seal = await buildSeal(
+        [
+          { key: a, kind: "msg" }, { key: b, kind: "msg" },
+          { key: a, kind: "ctrl", carries: true },
+          { key: b, kind: "ctrl" },                    // ← B approved nothing
+        ],
+        sessionId,
+      );
+      const msg = framed(sessionId, certifiedRoot(seal), seal.leaves.length, CLOSE_TS);
+
+      const verdict = verifySealCosignEvidence(msg, cosignLeaves(seal), CLOSE_TS);
+      expect(
+        verdict.ok,
+        "a holder that signs here makes the two-approval rule optional for the node that skipped it",
+      ).toBe(false);
+      expect(verdict.reason).toBe(SEAL_COSIGN_REASONS.APPROVAL_UNSUPPORTED);
+      expect(String(verdict.detail)).toContain("1 participant approval");
+    });
+
+    it("★★★ an approval that describes a DIFFERENT transcript is refused", async () => {
+      const [a, b] = [generateKeypair(), generateKeypair()];
+      const sessionId = new Uint8Array(randomBytes(16));
+      const seal = await buildSeal(
+        [
+          { key: a, kind: "msg" }, { key: b, kind: "msg" },
+          { key: a, kind: "ctrl", carries: true },
+          { key: b, kind: "ctrl", carries: true, finalRoot: new Uint8Array(randomBytes(32)) },
+        ],
+        sessionId,
+      );
+      const msg = framed(sessionId, certifiedRoot(seal), seal.leaves.length, CLOSE_TS);
+
+      const verdict = verifySealCosignEvidence(msg, cosignLeaves(seal), CLOSE_TS);
+      expect(verdict.ok).toBe(false);
+      expect(verdict.reason).toBe(SEAL_COSIGN_REASONS.APPROVAL_UNSUPPORTED);
+      expect(String(verdict.detail)).toMatch(/approved a different transcript/);
+    });
+
+    it("★★★ a SOLO seal with ONE approval still signs — nothing here may cost an honest party a receipt", async () => {
+      /**
+       * The counterweight, and the reason the check is gated on the legibility tail at all. On the
+       * solo path exactly one ctrl leaf exists by design, because the counterparty is gone. A
+       * co-signer that demanded two would take the receipt away from the one party who did nothing
+       * wrong — the trap the order names, reproduced one layer down.
+       */
+      const [a, b] = [generateKeypair(), generateKeypair()];
+      const sessionId = new Uint8Array(randomBytes(16));
+      const seal = await buildSeal(
+        [{ key: a, kind: "msg" }, { key: b, kind: "msg" }, { key: a, kind: "ctrl", carries: true }],
+        sessionId,
+      );
+      // No legibility tail — which is exactly how a unilateral TBS differs from a bilateral one.
+      const msg = framed(sessionId, certifiedRoot(seal), seal.leaves.length, CLOSE_TS, false);
+
+      expect(verifySealCosignEvidence(msg, cosignLeaves(seal), CLOSE_TS)).toEqual({ ok: true });
+    });
+
+    it("★★ stripping the legibility tail to dodge the approval check gains nothing", async () => {
+      /**
+       * The discriminator is coordinator-controlled, so it has to be shown to be unprofitable rather
+       * than asserted to be safe. Stripping the tail does get past the approval check — and the
+       * message that then gets signed is NOT the message the verifying directory built, so its own
+       * signature check fails and no certificate exists. A refusal, never a usable one-sided seal.
+       */
+      const [a, b] = [generateKeypair(), generateKeypair()];
+      const sessionId = new Uint8Array(randomBytes(16));
+      const seal = await buildSeal(
+        [
+          { key: a, kind: "msg" }, { key: b, kind: "msg" },
+          { key: a, kind: "ctrl", carries: true }, { key: b, kind: "ctrl" },
+        ],
+        sessionId,
+      );
+      const withTail = framed(sessionId, certifiedRoot(seal), seal.leaves.length, CLOSE_TS, true);
+      const stripped = framed(sessionId, certifiedRoot(seal), seal.leaves.length, CLOSE_TS, false);
+
+      expect(verifySealCosignEvidence(withTail, cosignLeaves(seal), CLOSE_TS).ok).toBe(false);
+      expect(verifySealCosignEvidence(stripped, cosignLeaves(seal), CLOSE_TS).ok).toBe(true);
+      expect(
+        Buffer.from(stripped).equals(Buffer.from(withTail.subarray(0, stripped.length))),
+        "the signature obtained by stripping is over a SHORTER message than the bilateral TBS the " +
+          "verifying directory holds, so it cannot satisfy that node's own check",
+      ).toBe(true);
+      expect(stripped.length).toBeLessThan(withTail.length);
+    });
   });
 
   it("★ a ceremony that is NOT a seal is left alone — this check must not reach the DKG or a refresh", () => {

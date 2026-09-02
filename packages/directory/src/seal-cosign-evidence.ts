@@ -27,25 +27,34 @@
  * the framed message to be EXACTLY the seal TBS over those reconstructed values. A leaf set that
  * does not produce the root in front of it gets no share of this node's key.
  *
+ * And on a BILATERAL seal it re-derives **both participants' own signed transcript roots** from the
+ * carried SEAL payloads and requires two of them, agreeing with each other and with the leaves shown
+ * — the same arithmetic the verifying node runs, deliberately re-derived rather than trusted. Review
+ * F2: without it, the unit's headline requirement still rested on that one node, and a directory
+ * that skipped the check got its threshold signature anyway because the co-signers had nothing to
+ * disagree with.
+ *
  * ⚠️ **WHAT THIS DELIBERATELY DOES NOT CLAIM.** Two things are outside a co-signer's reach and
  * saying otherwise would be worse than not checking them:
  *
  *   1. **Membership.** With no session record for a session it did not broker — the normal federated
  *      case — this node cannot say WHICH two keys should be in the conversation, only that there are
- *      at most two. A substitution is invisible here (`DOD-M15-SEALROSTER-FEDERATED-1`).
- *   2. **The legibility tail.** The bilateral TBS carries a trailing 32-byte legibility hash, derived
- *      from relay-assigned sequence numbers this node never receives. It is checked for shape — 0 or
- *      32 bytes, nothing else — and its CONTENT rests on the verifying node alone.
+ *      at most two. A substitution is invisible here (`DOD-M15-SEALROSTER-FEDERATED-1`), and so is a
+ *      relay-minted ctrl leaf that copies the honest party's `final_root`.
+ *   2. **The legibility tail's CONTENT.** The bilateral TBS carries a trailing 32-byte legibility
+ *      hash, derived from relay-assigned sequence numbers this node never receives. Its presence is
+ *      load-bearing (it is what distinguishes a bilateral seal from a solo one, above) but what it
+ *      hashes rests on the verifying node alone.
  *
  * What the check does buy is the thing the unit is for: a directory that certifies a root over a
- * leaf set the participants never produced cannot get a threshold signature for it, because the
- * other holders rebuild the root themselves and refuse.
+ * leaf set the participants never produced, or over one they did not both approve, cannot get a
+ * threshold signature for it — the other holders rebuild both answers themselves and refuse.
  */
 
 import { createHash } from "node:crypto";
 import { decode as cborDecode } from "cbor-x";
 import { verify, buildMerkleTree, merkleRoot } from "@cello-protocol/crypto";
-import { buildSealTbs } from "@cello-protocol/protocol-types";
+import { buildSealTbs, decodeSealPayload } from "@cello-protocol/protocol-types";
 
 /** The FROST domain-separation context a conversation seal is signed under. */
 export const SEAL_FROST_CONTEXT = "cello-frost-seal-v1";
@@ -72,6 +81,15 @@ export const SEAL_COSIGN_REASONS = {
   ROOT_UNSUPPORTED: "SEAL_ROOT_UNSUPPORTED",
   /** The message is not a seal TBS at all — a wrong context, or a shape this node cannot read. */
   NOT_A_SEAL_TBS: "SEAL_TBS_UNREADABLE",
+  /**
+   * A BILATERAL seal where fewer than two participants carried a signed transcript root, or where a
+   * carried one does not describe the leaves presented.
+   *
+   * Review F2: without this a co-signer judged only the ROOT, so the unit's headline requirement —
+   * both participants approve — still rested on the single verifying node, and the DoD line's claim
+   * that the anchor "does not depend on directory behaviour at all" was false for that half.
+   */
+  APPROVAL_UNSUPPORTED: "SEAL_APPROVAL_UNSUPPORTED",
 } as const;
 
 export type SealCosignReason = (typeof SEAL_COSIGN_REASONS)[keyof typeof SEAL_COSIGN_REASONS];
@@ -90,6 +108,8 @@ export const SEAL_COSIGN_GUIDANCE: Record<SealCosignReason, string> = {
     "More than two keys signed leaves in a two-party conversation, so at least one of them does not belong. Which one cannot be named from this node — it did not broker this session and holds no roster for it. Ask the node that assigned the session who its participants are.",
   [SEAL_COSIGN_REASONS.ROOT_UNSUPPORTED]:
     "The leaves presented do not produce the root this node was asked to sign. Whoever built the certificate is describing a different conversation, or this one with leaves added, dropped or reordered. This is the check that makes a threshold signature mean something; nothing was signed.",
+  [SEAL_COSIGN_REASONS.APPROVAL_UNSUPPORTED]:
+    "A two-party seal was presented for signature without both participants' own signed transcript root, or with one that does not describe the leaves shown. This node did not contribute its share. Either the verifying directory skipped the two-approval check, or the record it built is not the one the participants approved — both are faults on that node or on the relay feeding it, not on the agent coordinating this ceremony.",
   [SEAL_COSIGN_REASONS.NOT_A_SEAL_TBS]:
     "A signature was requested under the seal context over bytes that are not a seal TBS. Nothing was signed. Compare builds with the coordinating agent; a persistent mismatch after that is an attempt to borrow the seal context for something else.",
 };
@@ -99,6 +119,10 @@ export interface CosignLeaf {
   structure1_cbor: Uint8Array;
   sender_pubkey: Uint8Array;
   sender_signature: Uint8Array;
+  /** The participant's SEAL payload, on a ctrl leaf that carried one. */
+  content_bytes?: Uint8Array;
+  /** Relay-supplied domain. Only ever narrows what this node will accept — see `SealFrontierLeaf`. */
+  kind?: string;
 }
 
 export interface CosignVerdict {
@@ -134,7 +158,15 @@ export function parseCosignLeaves(raw: unknown): CosignLeaf[] | null {
     const pk = toBytes(o["sender_pubkey"]);
     const sig = toBytes(o["sender_signature"]);
     if (!s1 || !pk || !sig) return null;
-    out.push({ structure1_cbor: s1, sender_pubkey: pk, sender_signature: sig });
+    const cb = toBytes(o["content_bytes"]);
+    const kind = typeof o["kind"] === "string" ? o["kind"] : undefined;
+    out.push({
+      structure1_cbor: s1,
+      sender_pubkey: pk,
+      sender_signature: sig,
+      ...(cb ? { content_bytes: cb } : {}),
+      ...(kind !== undefined ? { kind } : {}),
+    });
   }
   return out;
 }
@@ -198,7 +230,16 @@ export function verifySealCosignEvidence(
     return { ok: false, reason: SEAL_COSIGN_REASONS.EVIDENCE_MISSING, detail: "no close timestamp accompanied the leaves" };
   }
 
-  if (rawLeaves === undefined || rawLeaves === null) {
+  /**
+   * ⚠️ AN EMPTY ARRAY IS ABSENCE, NOT MALFORMATION — fallback hunt, finding 4.
+   *
+   * The client sends `frontier_leaves` or nothing, and "nothing" arrives here as `[]` from a
+   * coordinator whose frame carried none. Left to `parseCosignLeaves` that produced
+   * `EVIDENCE_MALFORMED`, whose guidance says *"compare builds … before suspecting anything worse"* —
+   * so the one case this module exists to catch was always filed as benign version skew, and
+   * `EVIDENCE_MISSING` was unreachable from the real wire.
+   */
+  if (rawLeaves === undefined || rawLeaves === null || (Array.isArray(rawLeaves) && rawLeaves.length === 0)) {
     return { ok: false, reason: SEAL_COSIGN_REASONS.EVIDENCE_MISSING, detail: "no leaves accompanied a seal signature request" };
   }
   const leaves = parseCosignLeaves(rawLeaves);
@@ -271,8 +312,102 @@ export function verifySealCosignEvidence(
       detail: `the ${String(leaves.length)} leaves presented produce root ${Buffer.from(root).toString("hex").slice(0, 16)}…, which is not what this signature would certify`,
     };
   }
+
+  /**
+   * 🚨 AND THE THING THE UNIT IS NAMED FOR: BOTH PARTICIPANTS APPROVED — review F2.
+   *
+   * Checking the root alone left the two-approval requirement resting on the single verifying node,
+   * which is the condition this whole check exists to remove. A directory that skipped it still got
+   * its threshold signature, because the co-signers had nothing to disagree with.
+   *
+   * ─── Which seals this applies to, and why the discriminator is safe ────────────────────────
+   *
+   * A BILATERAL TBS is bound to a legibility hash and a UNILATERAL one is not, so the 32-byte
+   * remainder measured above says which kind of seal this is. That is a value the coordinator could
+   * try to strip — and stripping it buys nothing: the message it would then get signed is not the
+   * message the verifying directory built, so the combined signature fails that node's own check and
+   * no certificate exists. It can produce a refusal, never a usable one-sided seal.
+   *
+   * On the SOLO path exactly one approval exists by design, because the counterparty is gone. This
+   * check does not run there — nothing here may make a receipt harder for an honest party to obtain.
+   */
+  if (framedMsg.length - expected.length === LEGIBILITY_HASH_BYTES) {
+    const approval = verifyBilateralApprovals(leaves, sessionId);
+    if (!approval.ok) return approval;
+  }
   return { ok: true };
 }
+
+/**
+ * Both participants' own signed transcript roots, checked against the leaves in front of this node.
+ *
+ * The same arithmetic `verifySealFinalRoots` runs on the verifying node — deliberately the same, so
+ * the two cannot reach different answers about the same bytes, and deliberately re-derived here
+ * rather than taken on trust, so this node's verdict is its own.
+ *
+ * Last carried leaf per sender wins, exactly as the verifying node resolves it: a party may retry
+ * its SEAL, and a superseded one is not evidence against anybody.
+ */
+function verifyBilateralApprovals(leaves: readonly CosignLeaf[], sessionId: Uint8Array): CosignVerdict {
+  const nonCtrl: Array<{ kind: "hash"; data: Uint8Array }> = [];
+  for (const leaf of leaves) {
+    if (leaf.kind === "ctrl") continue;
+    const signed = decodeSigned(leaf.structure1_cbor);
+    if (!signed) continue; // unreachable: every leaf decoded in the caller's loop
+    nonCtrl.push({ kind: "hash", data: signed.contentHash });
+  }
+  const expectedApprovalRoot = merkleRoot(buildMerkleTree(nonCtrl));
+
+  const bySender = new Map<string, Uint8Array>();
+  for (const leaf of leaves) {
+    if (leaf.kind !== "ctrl" || !leaf.content_bytes) continue;
+    const signed = decodeSigned(leaf.structure1_cbor);
+    if (!signed) continue;
+    // The payload must hash to the content the participant SIGNED — never to a relay envelope field.
+    if (!bufEqual(sealContentHash(leaf.content_bytes), signed.contentHash)) {
+      return {
+        ok: false,
+        reason: SEAL_COSIGN_REASONS.APPROVAL_UNSUPPORTED,
+        detail: "a SEAL payload does not hash to the content its participant signed, so that signature never covered it",
+      };
+    }
+    const payload = decodeSealPayload(leaf.content_bytes);
+    if (!payload || !bufEqual(payload.session_id, sessionId)) {
+      return {
+        ok: false,
+        reason: SEAL_COSIGN_REASONS.APPROVAL_UNSUPPORTED,
+        detail: "a SEAL payload is unreadable or names a different conversation",
+      };
+    }
+    bySender.set(Buffer.from(leaf.sender_pubkey).toString("hex"), payload.final_root);
+  }
+
+  if (bySender.size < 2) {
+    return {
+      ok: false,
+      reason: SEAL_COSIGN_REASONS.APPROVAL_UNSUPPORTED,
+      detail: `a two-party seal carried ${String(bySender.size)} participant approval(s); both are required before any signature exists`,
+    };
+  }
+  for (const [senderHex, approvedRoot] of bySender) {
+    if (!bufEqual(approvedRoot, expectedApprovalRoot)) {
+      return {
+        ok: false,
+        reason: SEAL_COSIGN_REASONS.APPROVAL_UNSUPPORTED,
+        detail: `participant ${senderHex.slice(0, 16)}… approved a different transcript than the leaves presented here describe`,
+      };
+    }
+  }
+  return { ok: true };
+}
+
+/** SHA-256(0x02 ‖ payload) — the participant's own SEAL content-hash derivation, reproduced exactly. */
+function sealContentHash(payload: Uint8Array): Uint8Array {
+  return new Uint8Array(createHash("sha256").update(new Uint8Array([LEAF_KIND_CTRL])).update(payload).digest());
+}
+
+/** The ctrl leaf kind byte, and the domain separator inside the SEAL content hash. */
+const LEAF_KIND_CTRL = 0x02;
 
 /** SHA-256 of the leaf set, for correlating a refusal with the request that produced it. */
 export function cosignEvidenceDigest(framedMsg: Uint8Array): string {
