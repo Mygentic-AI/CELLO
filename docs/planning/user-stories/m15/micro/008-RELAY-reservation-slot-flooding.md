@@ -22,7 +22,9 @@ description: >
 > 4. **500 lines, hard cap.** If this file is growing, you are writing detail nobody needs.
 >    Minimal without omitting anything. No scratchpad. No narration of what you tried.
 > 5. **Standard procedure still applies:** implement → review (`cello-unit-reviewer`) → fix every
->    finding → commit. Commit per fix, push after every commit.
+>    finding → commit. Commit per fix, push after every commit. **Closing a unit means flipping
+>    this file's `status:` frontmatter to `complete` in the SAME commit as the verdict** — the
+>    two are one fact, and eight orders in a row have shipped with them disagreeing.
 > 6. **Done is done.** When the Definition of Done below is met, stop. Do not look for more.
 
 ## 🔴 REOPENED 2026-09-01 — the order was met to the letter and failed its intent

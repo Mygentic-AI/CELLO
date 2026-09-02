@@ -759,6 +759,12 @@ ledger in the DoD: one row per claim, its current text, where it appears, and it
    per §2b. Fix EVERY finding; commit fixes.
 10. **Update docs** — flip the DoD tag (+ one-line evidence + journal pointer), journal entry. If
     the unit touched a claim, update its ledger row in the same commit.
+    **And for a micro work order: flip its `status:` frontmatter to `complete` IN THE SAME COMMIT as
+    the verdict.** Not a nicety — this has been missed on EIGHT consecutive orders (004, 005, 007,
+    008, 009, 010, 011), every one of which closed with `status: open` still in the file. The cost is
+    the one this milestone keeps paying: a finished order reads as untouched work, and the next
+    session either redoes it or waits on it. The verdict and the status are the same fact; if they
+    land in different commits, one of them is wrong for as long as that gap lasts.
 11. **Merge the branch** (§2e) — a reviewed-green unit does not sit on a branch.
 12. Back to 1.
 
