@@ -209,22 +209,33 @@ fix, and it is done** — the response now carries `witnessed` on every send, pl
 false case saying what happened and not to resend. Both values are pinned by tests against a real
 relay.
 
-**3 — Can the session still be closed and sealed? THE SEVERITY ANSWER.** **No, and the two sides are
-told different things.** Closing during the outage took ten seconds and then:
+**3 — Can the session still be closed and sealed? THE SEVERITY ANSWER.** **No — and the two sides are
+told different things, which is what makes it bad.** Closing during the outage took ten seconds and
+then:
 
 | Party | What the operator sees |
 |---|---|
 | One side | success, seal pending, with a root hex |
 | Other side | refused: the seal leaf could not reach the witness, retry when the relay is back |
 
-One party believes the close committed; the other knows it failed. The receipt did not appear during
-the outage, and **it did not appear on its own after the relay came back** — nothing retries a
-refused close.
+Neither seal leaf reached the witness. One party was told so; the other was told it worked.
 
-**4 — How long is the gap?** With a killed relay process, **17.0 seconds** from death to the daemon
-noticing. From production, an agent's typical gap without a working circuit is **3.6 seconds median,
-322 seconds at the 90th percentile**; the windows longer than an hour are all three agents beginning
-and ending within milliseconds of each other overnight, which is the laptop asleep, not a fault.
+The receipt did not appear during the outage and **did not appear on its own after the relay came
+back** — nothing retries a refused close. The refused side was then made to perform exactly the
+remedy its own message named, and **that did not recover it either**: its leaf is recorded now, and
+the answer becomes *the counterparty has not closed* — pointing at the party who did close, was told
+it succeeded, and has no reason to look.
+
+**So the receipt is not destroyed, but nothing gets it back on its own.** It needs the side that saw
+a success to close again, or the directory's grace window to expire into a unilateral seal. An
+operator following the guidance from the side that failed is walked into a dead end.
+
+**4 — How long is the gap?** With a killed relay process and a receiver confirmed to be holding a
+reservation at the moment of the kill, **17.0 seconds** from death to the daemon noticing. From
+production, across the three agents, a gap without a working circuit runs **3.6 to 4.8 seconds at
+the median and 322 to 371 seconds at the 90th percentile**; the windows longer than an hour are all
+three agents beginning and ending within milliseconds of each other overnight, which is the laptop
+asleep, not a fault.
 
 **5 — Does the rebuild succeed, against a different relay?** **Not answerable here** — this harness
 runs one relay. From production: **the second relay was asked 686 times and granted once.**
@@ -276,12 +287,44 @@ path, not this one. Fixing them here would grow a micro unit into a different un
 **Not published.** The fix is in the tree and reaches operators only through an npm publish, which is
 outside this system and is Andre's step.
 
+**The stop rule was NOT taken, and here is why that is the right call.** It fires when the indicated
+fix is a protocol change. What the measurement indicated was that the daemon already knows the fact
+and does not pass it to the agent — one field and one guidance string on a local response the daemon
+already builds. No wire format, no relay, no directory, nothing bilateral, nothing that a peer on an
+older build could misread. Moving a live session to a different witness relay *would* be the
+protocol change the rule is about, and nothing here does that or needs to.
+
 ### Recommendation on `SESSION-RELAY-PINNED-1`
 
 **It stays in the gate.** The line said to reclassify it to post-launch *if a conversation parks
-cleanly and still seals*. Measured, it does neither: every message costs a ten-second stall and
-silently leaves the record, and the session does not seal during the outage or recover on its own
-afterwards. The decision is Andre's; the evidence is above.
+cleanly and still seals*. Measured, it does neither. It does not park cleanly: every message costs a
+ten-second stall and leaves the record, and until this unit's fix it did so without saying anything.
+And it does not still seal: the session seals neither during the outage nor after the relay returns,
+the two parties are told contradictory things about their own close, and the remedy the failing side
+is given leads to a dead end that blames the other party.
+
+The fix this unit shipped closes the *silence* — an operator now sees a message go unwitnessed at
+the moment it happens, which is the earliest point anything could tell them. It does not close the
+seal half, and the seal half is the receipt, which is the product.
+
+**The decision is Andre's; the evidence is above.**
+
+### Gates
+
+| Repo | Result |
+|---|---|
+| cello-client | 299 files / 3087 tests pass; lint clean; typecheck clean; build clean, and the fix verified present in the BUILT artifact, not only in source |
+| trustless-cello | 189 files / 1932 tests pass; lint clean; typecheck clean |
+| the journey itself | passes against the rebuilt binary, with both `witnessed` values asserted |
+
+Two failures appeared in an earlier trustless-cello run and **neither was this unit's**. Both
+belonged to the `013-ABSENCE` lane working in the same checkout — a migration number and a spine-file
+count that my new journey happened to change. Both were re-run individually and pass. Attributed by
+re-running them, not by assuming.
+
+The new unit test was mutated out, typechecked clean so the mutant genuinely compiled, and re-run
+alone: it reddens with *expected undefined to be false* on the exact response shape the live run
+recorded. Not a compile error and not a lint error.
 
 *(Reviewer verdict goes here.)*
 
@@ -302,11 +345,12 @@ afterwards. The decision is Andre's; the evidence is above.
 
 1. **Closing during a relay outage tells the two sides opposite things.** One party's close returns
    success with a pending seal and a root; the other's is refused because the seal leaf could not
-   reach the witness. One of them believes the conversation is finished. **Post-launch or blocking is
-   Andre's call under the frozen gate.**
-2. **A close refused for an unreachable relay is never retried, and the receipt does not arrive on its
-   own after the relay returns.** The refusal tells the operator to retry, and only one of the two
-   parties ever sees it.
+   reach the witness. Neither leaf reached it. One of them believes the conversation is finished.
+   **Post-launch or blocking is Andre's call under the frozen gate.**
+2. **A close refused for an unreachable relay is never retried, and re-closing does not recover it.**
+   The refused side, doing exactly what its own guidance says once the relay is back, is then told the
+   *counterparty* has not closed — pointing at the party who did close and was told it worked. Only
+   that second party re-closing, or the grace window expiring, gets the receipt.
 3. **The receipt command's remedy does not work in this state.** Asked about the stuck session it says
    to close it — already done, and it returned success — and blames a named daemon defect that is not
    what happened here. A remedy that reads actionable and is not spends the reader's trust as well as
