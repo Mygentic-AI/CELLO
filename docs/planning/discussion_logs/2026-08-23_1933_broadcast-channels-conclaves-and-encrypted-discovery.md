@@ -3,7 +3,7 @@ name: Broadcast channels, conclaves, and encrypted discovery — a topic channel
 type: discussion
 date: 2026-08-23
 topics: [broadcast, conclave, topic-channels, listen-only, subscription, fan-out, attendance, delivery, doorbell, discovery, semantic-search, dcpe, encrypted-search, searchable-encryption, directory, relay, consortium, business-model, marketplace, agent-coordination, privacy, threat-model]
-status: exploratory
+status: decided
 description: >
   Design conversation on broadcast channels — a listen-only agent identity that fans messages out to
   every subscriber and cannot be replied to on-channel. Started as a missing affordance found while
@@ -28,7 +28,9 @@ description: >
   CELLO-operated conclave as sanctioning intermediary, and encrypted discovery using DCPE with
   per-group keys so a directory can serve semantic search over descriptors it cannot read. Records the
   business-model conclusion that fell out of it: relays are given away, directories are retained, and
-  consortium expansion works by inviting large operators to run a node.
+  consortium expansion works by inviting large operators to run a node. UPDATED 2026-09-02: every
+  open question ruled in a milestone-prep session (decisions 22–35 below); this log is now the
+  design source for M16.
 ---
 
 # Broadcast channels, conclaves, and encrypted discovery
@@ -791,28 +793,90 @@ Two edges to have answers ready for:
 21. **Relays are given away; directories are retained.** Consortium expansion by inviting large
     operators to run nodes.
 
+## Decisions taken 2026-09-02 — milestone-prep addendum (Andre)
+
+Every question left open on 2026-08-23, plus five decisions the log implied but never took, was
+ruled in one session to make this log the source for milestone creation (M16). Numbering continues
+from the list above.
+
+22. **Epoch cap: seal at 24 hours after the first unsealed message, or 1,000 messages, whichever
+    first. Empty epochs never seal.** 24h is the protocol maximum; a channel may declare a shorter
+    cap as a published property. Cost is at most one threshold signature per channel per day — cheap
+    for a bound on the equivocation window. **Subscriber-requested seals are honored, at most one
+    per channel per hour**; further requests are no-ops against the just-sealed root, so the request
+    cannot grind the directory.
+23. **Relay retention is relay-operator-capped; the publisher declares a TTL within the cap.**
+    Defaults: live content 72h, cap 7 days, sealed epochs 30 days. The operator always holds the
+    abuse handle — a publisher declaring retention is volunteering someone else's disk. The TTL
+    stays a published channel property so daemons can size their poll interval.
+24. **Retraction: supersede-only, no revoke — and the field is reserved on day one.** The artifact
+    format carries `supersedes: <seq>` from the first version (adding it later is the migration
+    trap). V1 semantics minimal: the subscriber daemon marks the earlier message superseded and
+    delivers both. True retraction is impossible in an append-only log and pretending otherwise
+    would undermine the CT claim.
+25. **Titles: plain UTF-8, control characters rejected, 200-character cap, validated at the
+    receiver** (and at publish for UX) — receiver-side because that is the only path-independent
+    enforcement point. **Titles pass through the injection screen**: digests render titles into
+    agent context without the body ever being opened, which makes them the premium injection
+    surface.
+26. **The conclave receives only in v1; the epoch-seal format carries an extension point for a
+    future co-signature.** Counter-signing gives the conclave a veto, coupling every sanctioned
+    channel's publishing to conclave availability — a bad trade before a single sanctioned channel
+    exists. When it returns, the co-signature goes on the *epoch root*, not per-message. Trigger:
+    when "sanctioned by CELLO" becomes a marketed claim.
+27. **One codepath: the artifact model only. No shared-key fleet tier is built, ever.** The
+    "works today" shared-key case is co-attendance, which is competing-consumer — it does not
+    broadcast, so there is nothing to preserve. The fleet case is simply a channel whose admin and
+    subscribers share an operator; two tiers would mean a migration the day a fleet channel wants
+    an outside subscriber.
+28. **Subscriber local retention: v1 keeps everything; pruning is parked with a trigger.** Highest
+    attendance ever observed is 2, and a busy hourly channel is ~9K small rows a year. The epoch
+    roots make pruning safe later with no format change. Trigger: first channel whose local store
+    crosses ~100K rows.
+29. **Fan-out at scale is OUT of the milestone.** Trigger: the first channel to pass ~50
+    subscribers.
+30. **Consortium governance is OUT of the milestone.** Trigger: before the second external
+    directory operator joins (the log's own line, now made explicit scope).
+31. **A channel IS a registered CELLO identity** — full registration ceremony, a `channel: true`
+    directory-profile flag, and an `admin_pubkey` binding to the creating agent, mutable only by
+    admin signature. This reuses registration, the profile (where listen-only flags already
+    belong), and the notarization path — and it *keeps the identity cost that is the spam defense*.
+    A cheap side-channel object type would quietly delete Part 7's argument. A channel is an agent
+    that publishes and never converses; receiver-side refusal enforces the "never converses."
+32. **Every channel's bodies are encrypted to a per-channel group key delivered at the join step.
+    Ejection on invite-only triggers a re-key** (new key encrypted per-member to remaining
+    subscribers — the publisher knows them, and it happens only on eject). "The relay never reads
+    content" is a load-bearing claim across the whole system; a plaintext broadcast body would
+    create a second, weaker posture. For open channels the encryption is a flex, not a protection
+    (anyone can join and get the key) — uniformity is the win, and re-keying is also the only thing
+    that makes ejection enforcement rather than advisory.
+33. **Broadcast bodies, titles, AND the join-time notification guidance all pass the same inbound
+    injection screen as session messages**, applied at the subscriber's daemon before anything
+    reaches agent context. One post lands in N agent contexts — the highest-leverage injection
+    vector in the system — and the receiver is the one honest participant always in the path. The
+    guidance text is included because it is publisher-authored prose explicitly designed to shape
+    the subscriber agent's behavior.
+34. **The one-party seal is a new receipt type, `channel-epoch-seal`** — shares the crypto, states
+    plainly what it proves (the publisher committed to this exact tree; the directory threshold
+    notarized its existence and timing) and what it does not (no counterparty approved the
+    contents). The two-party session seal's meaning is not touched — the same reasoning that killed
+    option C.
+35. **A subscription is not a contact.** New subscriber-side state keyed on `agent_id` + channel
+    pubkey, listed by channel tooling rather than mixed into `cello_contacts`. Tier gating does not
+    apply — a channel cannot initiate sessions, so the join step *is* the gate. The moniker pattern
+    is reused for local channel nicknames on the subscription row.
+
+The pattern across the rulings: reuse the existing primitive and keep the abuse handle, spend
+nothing on scale that does not exist yet, and reserve format fields now where adding them later
+would strand history.
+
 ## Open
 
-- **How long an epoch may stay open.** Publisher-triggered sealing is right — they know when a batch
-  is meaningful — but **the unsealed window is the equivocation window** (Part 4b), so the cap is a
-  security parameter rather than housekeeping. A subscriber needing provable evidence should also be
-  able to request a seal.
-- **The relay retention ceiling.** A publisher declaring long retention is volunteering someone
-  else's disk. Publisher-set or relay-operator-capped, and channels are otherwise a storage-abuse
-  vector with a legitimate-looking front door.
-- **Local retention on the subscriber.** A session ends and seals; a channel never does. A busy
-  channel over a year is unbounded local rows with no natural point to drop them. The epoch roots
-  make pruning artifacts safe — but the policy is unwritten.
-- **What a title may contain, and who validates it.** Titles are now load-bearing for notification
-  rules and digests, which makes them a surface a publisher can abuse — and a place injection lands.
-- **Retraction.** A signed artifact is permanent by design. You broadcast something wrong to five
-  hundred agents that act on it — is there a correction, a supersede, a revoke, and what does a
-  subscriber that already acted do with it? *The one that gets harder the longer it is left.*
-- **Whether the conclave counter-signs**, making sanction cryptographically checkable.
-- **Whether the shared-key fleet tier shares code with the stranger tier**, or stays a deliberately
-  separate simpler path.
-- **Attendance / fan-out at scale.** The highest attendance ever observed is 2.
-- **Governance rules for consortium membership**, needed before the second external operator.
+**Nothing remains open for milestone creation.** Items parked WITH triggers (not open, not
+forgotten): subscriber-side pruning (28), fan-out at scale (29), consortium governance (30),
+conclave counter-signing (26), DCPE encrypted discovery and any open discovery mechanism
+(decisions 17 and 20 above). Anonymous pull-only stays dropped (10); what would reopen it is
+recorded in Part 5.
 
 ---
 
