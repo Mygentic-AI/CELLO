@@ -235,10 +235,9 @@ having fixed both has produced a review finding, not a bonus.
 
 ### Where this work lives
 
-Lane A worked in the **main checkouts**, not a worktree — `/Users/andrep/Documents/code/trustless-cello`
-on branch `main`. `cello-client` was read-only for this order (Lane B held it concurrently), so
-**no cello-client build was run**. Postgres: the compose default port, `CELLO_PG_HOST_PORT` left
-unset.
+Lane A, **main checkouts**, not a worktree — `/Users/andrep/Documents/code/trustless-cello` on
+branch `main`. `cello-client` was read-only (Lane B held it), so **no cello-client build was run**.
+Postgres: the compose default port, `CELLO_PG_HOST_PORT` left unset.
 
 ### Part 1 — the live check on the fleet: INCONCLUSIVE (not a verdict)
 
@@ -259,15 +258,14 @@ Sequence actually run, 2026-09-02, CELLO_Coder_1 → CELLO_Support, session
    ```
 
 3. `cello_set_agent_offline` → CELLO_Support. ✅
-4. **The park send was never made.** It was denied at the approval prompt, so no `content.park`
-   event exists for it and there is no response object to quote. There is no product-level refusal
-   in this record — the only rejection is the approval one.
+4. **The park send was never made** — denied at the approval prompt, so no `content.park` event
+   exists for it and there is no response object to quote. The only rejection in this record is the
+   approval one; there is no product-level refusal.
 
-**Why this is inconclusive and not "LIVE: refused":** step 2 shows the relay had no copy of the very
-first message. Anything downstream of that is downstream of a dead relay link, which is a different
-fault from the one this order is about. Recording it as a refusal would attribute a relay-link
-failure to the vouching gate. The `witnessed: false` finding and the error loop that followed it are
-written up under *Newly discovered* 1–3.
+**Why this is inconclusive and not "LIVE: refused":** step 2 shows the relay had no copy of the
+first message, so everything after it is downstream of a dead relay link — a different fault from
+the one this order is about, and recording it as a refusal would pin a relay-link failure on the
+vouching gate. See *Newly discovered* 1–3.
 
 5. Session closed. Close returned **no receipt**, consistent with the divergence the send warned
    about:
@@ -286,8 +284,8 @@ Its result is below.
 
 ### Part 1 — THE DECIDING RUN (the fallback): **LIVE: parked and collected**
 
-Two real daemons as separate OS processes, their own relay, their own Postgres — independent of the
-live fleet's health, which is what makes it the verdict:
+Two real daemons as separate OS processes, own relay, own Postgres — independent of the live
+fleet's health, which is what makes it the verdict:
 
 ```
 ✓ src/spine/j-content.spine.test.ts (10 tests | 9 skipped) 66959ms
@@ -296,10 +294,9 @@ live fleet's health, which is what makes it the verdict:
 Test Files  1 passed (1) · Tests  1 passed | 9 skipped (10) · exit=0
 ```
 
-The park path demonstrably ran rather than being skipped: that test hard-asserts
-`content.park.deposited` and `content.recover.auto.completed` and reads the exact parked plaintext
-back. **A recipient CAN collect a parked message.** The operator's fear in the header of this order
-— told "parked, success", message never collectable — does not happen.
+The park path demonstrably ran: that test hard-asserts `content.park.deposited` and
+`content.recover.auto.completed` and reads the exact parked plaintext back. **A recipient CAN
+collect a parked message.** The fear in this order's header does not happen.
 
 **So this is 2A: the defect was in the TEST.** From the rewritten test's own run:
 
@@ -325,22 +322,21 @@ brokered, so the relay had never vouched B's key, so the pull was refused `not_a
 Test Files  1 passed (1) · Tests  1 passed | 9 skipped (10) · exit=0
 ```
 
-Three consecutive green runs after the review fixes. Whole file: 7 passed / 3 failed — the three
-reds are `DOD-MSG-5` and `DOD-MSG-7` (both on `content_park_deposit` returning
-`{"code":"internal_error","message":"[object Object]"}` — that is `019`'s line) and `DOD-MSG-8`
-(`MCP tool "cello_get_transcript" not found`). Left red on purpose. The reviewer confirmed
-independently that this order did not cause any of the three: they use fresh temp dirs and fresh
-keypairs and the diff's hunks do not reach them.
+Three consecutive green runs after the review fixes. Whole file: 7 passed / 3 failed — the reds are
+`DOD-MSG-5` and `DOD-MSG-7` (both on `content_park_deposit` returning
+`{"code":"internal_error","message":"[object Object]"}` — `019`'s line) and `DOD-MSG-8`
+(`MCP tool "cello_get_transcript" not found`). Left red on purpose; the reviewer confirmed
+independently that this order caused none of them — fresh temp dirs, fresh keypairs, and the diff's
+hunks do not reach them.
 
-**Build provenance for that run**, so it is reproducible rather than a claim: `cello-client` at
-`59b091f`, `core/daemon/dist/bin/cello-daemon.js` mtime `2026-09-02T06:45:02Z`. This order did not
-build or edit `cello-client` — Lane B held it — so the run is green *against that binary*.
+**Build provenance**, so the run is reproducible rather than a claim: `cello-client` at `59b091f`,
+`core/daemon/dist/bin/cello-daemon.js` mtime `2026-09-02T06:45:02Z`. This order did not build or
+edit `cello-client` (Lane B held it), so the run is green *against that binary*.
 
 ### DoD 4 — the mutation proof: a three-layer chain, each layer red for a named reason
 
-Run against the final post-review code, each mutation re-run alone, each typechecked first
-(`exit=0` — a mutant that fails to compile proves nothing), each restored with `git checkout --`
-and the tree verified clean after.
+Against the final post-review code; each re-run alone, each typechecked first (`exit=0` — a mutant
+that fails to compile proves nothing), each restored with the tree verified clean after.
 
 | Mutation | Red at | The reason |
 |---|---|---|
@@ -364,40 +360,36 @@ redundant line in the test, not a missing assertion; the collect half is guarded
 
 ### DoD 5 — gate
 
-`pnpm run typecheck` → `exit=0`. `pnpm run lint` → `exit=0` (5 warnings, all pre-existing in
-`j-stale-session.spine.test.ts`, untouched here). Run with `set -o pipefail`, exit codes read rather
-than output tails. Only `trustless-cello` was touched, so only its gate applies.
+`pnpm run typecheck` → `exit=0`. `pnpm run lint` → `exit=0` (5 warnings, all pre-existing in the
+untouched `j-stale-session.spine.test.ts`). Run under `set -o pipefail`, exit codes read rather than
+output tails. Only `trustless-cello` was touched, so only its gate applies.
 
 ### DoD 6 — reviewer's verdict, in its own words
 
 `cello-unit-reviewer`, one pass. Verdicts: **SPEC: DEVIATIONS FOUND**, **HOLLOW TESTS FOUND
 [blocking]**, **ERROR SUBSTITUTION FOUND [blocking]**, **NO SILENT FALLBACKS**, **REMOVALS PROVEN**,
-**COMPATIBILITY DEBT FOUND**. On whether it was a rubber stamp: *"I do not think this is one. Two
-HIGHs and a MEDIUM sit exactly where this milestone's expensive misses have lived — a barrier that
-cannot fail, a provenance claim nobody asserts, and a discarded response object on the offline
-path."*
+**COMPATIBILITY DEBT FOUND**. On rubber-stamping: *"I do not think this is one. Two HIGHs and a
+MEDIUM sit exactly where this milestone's expensive misses have lived — a barrier that cannot fail,
+a provenance claim nobody asserts, and a discarded response object on the offline path."*
 
-**Every finding fixed.** The one that matters most was mine and it was this milestone's own
+**Every finding fixed.** The one that matters most was mine, and it is this milestone's own
 signature defect:
 
 - **HIGH-1 — a barrier that could not fail.** I waited on `content.recover.auto.completed` by event
-  name. `drainOnce` emits it unconditionally and says so in its own comment, carrying
-  `"recovered":0,"refused":1,"refusedReasons":{"not_a_participant":1}` just as readily as a success.
-  **A vouching-gate regression — the exact thing this test exists to catch — would have satisfied
-  it.** Now matched on `"recovered":[1-9]`, with a catch that prints every sweep and names
-  `not_a_participant` as a relay refusal rather than an empty mailbox. The non-hollow form already
-  existed 646 lines below in the same file.
-- **HIGH-2 — nothing pinned the bytes to the park path.** True only via an argument about another
-  repo's code. Added a session-scoped `content.recovered` and the `"source":"park"` ordering
-  assertion.
-- **MED-1 — the parked send's response was discarded**, on the offline path, which is precisely the
-  half the operator's fear is about. An `ok:false` surfaced 25s later as a `waitForLine` timeout.
-  Now asserted, with the response in the message.
-- **MED-2 — `not.toContain(PAYLOAD)` could pass vacuously** against an escaping serializer, because
-  the payload is deliberately multibyte. Added an ASCII slice.
-- **MED-3 — the comment I had rewritten was itself wrong** about DOD-MSG-7's neighbours. Corrected.
-- **MED-5 / LOW-1 / LOW-2 / LOW-3** — duplicate-vs-sibling comment added, docblock present-tensed,
-  archaeology tails trimmed, decorative regex alternation dropped.
+  name. `drainOnce` emits it unconditionally — carrying
+  `"recovered":0,"refused":1,"refusedReasons":{"not_a_participant":1}` as readily as a success — so
+  **a vouching-gate regression, the exact thing this test exists to catch, would have satisfied
+  it.** Now `"recovered":[1-9]`, with a catch that prints every sweep and distinguishes a relay
+  refusal from an empty mailbox. The non-hollow form already existed 646 lines below.
+- **HIGH-2 — nothing pinned the bytes to the park path**, true only via an argument about another
+  repo's code. Added a session-scoped `content.recovered` + the `"source":"park"` assertion.
+- **MED-1 — the parked send's response was discarded**, on the very half the operator's fear is
+  about; an `ok:false` surfaced 25s later as a `waitForLine` timeout. Now asserted.
+- **MED-2 — `not.toContain(PAYLOAD)` could pass vacuously** against an escaping serializer, since
+  the payload is multibyte. Added an ASCII slice.
+- **MED-3 / MED-5 / LOW-1–3** — the comment I rewrote last commit was itself wrong about
+  DOD-MSG-7's neighbours; plus duplicate-vs-sibling note, docblock present-tensed, archaeology
+  tails trimmed, decorative regex alternation dropped.
 
 **Ruled deviation, recorded because an un-journaled one is blocking on its own.** The order says
 keep the test's name. I kept the tag `DOD-MSG-3 (transport)` (so the `-t` filter and the DoD tag
@@ -406,18 +398,16 @@ mechanism the test no longer uses. The reviewer ruled it **correct**: leaving *"
 recipient pulls"* on a test that no longer deposits or pulls is a false claim in the first place a
 reader looks.
 
-**Scope question, ruled: keep.** `not.toContain(PAYLOAD)` is not scope growth — the old test
-deposited a random blob that was never plaintext anywhere, so "the relay holds ciphertext only"
-could not fail. A real send makes genuine plaintext exist on both daemons, so the absence becomes
-assertable for the first time.
+**Scope question, ruled: keep.** `not.toContain(PAYLOAD)` is not scope growth — the old test's
+random blob was never plaintext anywhere, so "the relay holds ciphertext only" could not fail. A
+real send makes genuine plaintext exist on both daemons, so the absence becomes assertable at all.
 
 ### One thing that is NOT explained, and is not being called flaky
 
-One run failed at the **live** send (`msg1-online`, sent while B was still online) with
-`expected false to be true` and no reason attached — the assertion had no message. Three consecutive
-runs before and after were green. I did not attribute it to flakiness and I could not reproduce it.
-What I did instead: that assertion now captures the response and prints it, so if it recurs the
-reason is on the failure rather than lost. Recorded here so the next reader knows it happened.
+One run failed at the **live** send (`msg1-online`, while B was still online) with
+`expected false to be true` and no reason attached — that assertion had no message. Three
+consecutive runs before and after were green, and I could not reproduce it. Rather than attribute
+it, that assertion now captures and prints the response, so a recurrence names its own cause.
 
 ## Newly discovered
 
@@ -485,25 +475,23 @@ entry or a watermark that never advances.
 
 ### 4. The `content_park_pull` IPC handler now has NO caller in either repo
 
-Surfaced by the reviewer on this diff. Removing this order's two raw-IPC calls took away the last
-caller of the daemon's `content_park_pull` IPC method:
+Surfaced by the reviewer. Removing this order's two raw-IPC calls took away the last caller of the
+daemon's `content_park_pull` IPC method:
 
 ```
 $ grep -rn '"content_park_pull"' cello-client/core trustless-cello/packages   # excluding dist/
 cello-client/core/daemon/src/content-park.ts:680:    handlers.set("content_park_pull", …)
 ```
 
-That is the registration itself and nothing else. **Positive control** (because an empty grep is
-only evidence if the search could see): the same grep for `"content_park_recover"` returns **6**
-hits. The search had reach.
+The registration itself and nothing else. **Positive control** — because an empty grep is evidence
+only if the search could see — the same grep for `"content_park_recover"` returns **6** hits.
 
 Its own docblock already warns *"⚠️ THIS HANDLER HAS NO PRODUCTION CALLER, AND THAT IS WHY IT
-DRIFTED"* — this order removed its last test caller too. Note this is the IPC **method name**, not
-the `content_park_pull_request` wire frame, which is alive and load-bearing on the recover path.
-Its siblings are still called: `content_park_deposit` (5) and `content_park_recover` (5).
+DRIFTED"*; this order removed its last test caller too. This is the IPC **method name**, not the
+`content_park_pull_request` wire frame, which is alive on the recover path.
 
-**Deliberately NOT deleted here.** It lives in `cello-client`, which this order makes read-only and
-which Lane B holds. Rule 3 applies.
+**Deliberately NOT deleted here** — it lives in `cello-client`, read-only for this order and held
+by Lane B. Rule 3.
 
 ### 5. `DOD-MSG-8` fails on a stale tool name
 
