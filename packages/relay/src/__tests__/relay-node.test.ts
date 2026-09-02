@@ -508,8 +508,19 @@ describe("AC-002: seq=3 prev_root = Merkle root of leaves 1 and 2", () => {
 
 // ─── AC-003 ───────────────────────────────────────────────────────────────────
 
-describe("AC-003: sender_mismatch when Structure 1 pubkey != connection pubkey", () => {
-  it("relay rejects with sender_mismatch", async () => {
+/**
+ * ⚠️ THE ANSWER CHANGED, AND IT NAMES MORE THAN IT USED TO — `DOD-M15-CORROBORATE-1`.
+ *
+ * This frame is signed by a key belonging to neither participant. The relay used to answer
+ * `sender_mismatch`, which describes where the refusal surfaced — the claimed sender is not the
+ * party on the connection — while the stronger fact went unsaid: NOBODY IN THIS SESSION SIGNED
+ * THESE BYTES. The witness check runs first and says that instead.
+ *
+ * `sender_mismatch` is not dead. It fires for a leaf that IS signed by a participant and claims the
+ * other one, which is the case `dod-m15-corroborate-1-witness.test.ts` covers.
+ */
+describe("AC-003: a leaf signed by a key that is in no part of this session", () => {
+  it("relay refuses it, and names the cause rather than the exit point", async () => {
     const fix = await makeFixture();
     const cA = await makeClient(fix.relayAddr);
 
@@ -531,7 +542,7 @@ describe("AC-003: sender_mismatch when Structure 1 pubkey != connection pubkey",
 
     const resp = await rA.readDecoded();
     expect(resp["type"]).toBe("hash_submit_error");
-    expect(resp["reason"]).toBe("sender_mismatch");
+    expect(resp["reason"]).toBe("leaf_signed_by_neither_participant");
 
     sA.close().catch(() => {});
     await cA.node.stop(); await fix.relayStop();
@@ -540,8 +551,18 @@ describe("AC-003: sender_mismatch when Structure 1 pubkey != connection pubkey",
 
 // ─── AC-004 ───────────────────────────────────────────────────────────────────
 
-describe("AC-004: not_a_participant for client not in session", () => {
-  it("relay rejects with not_a_participant", async () => {
+/**
+ * ⚠️ ALSO RE-ANSWERED BY `DOD-M15-CORROBORATE-1`, and this one deliberately.
+ *
+ * C is not in the session AND signed the leaf with its own key, so both statements are true. The
+ * witness check runs ABOVE the participant gate on purpose: running it only for participants would
+ * make it optional for exactly the party it exists to catch, and `not_a_participant` alone tells the
+ * two people whose conversation it is nothing at all — they are now alerted.
+ *
+ * `not_a_participant` still fires for a stranger REPLAYING a leaf a participant really signed.
+ */
+describe("AC-004: a client not in the session, submitting a leaf it signed itself", () => {
+  it("relay refuses it as a leaf no participant signed", async () => {
     const fix = await makeFixture();
     const cA = await makeClient(fix.relayAddr);
     const cB = await makeClient(fix.relayAddr);
@@ -558,7 +579,7 @@ describe("AC-004: not_a_participant for client not in session", () => {
 
     const resp = await rC.readDecoded();
     expect(resp["type"]).toBe("hash_submit_error");
-    expect(resp["reason"]).toBe("not_a_participant");
+    expect(resp["reason"]).toBe("leaf_signed_by_neither_participant");
 
     sC.close().catch(() => {});
     await cA.node.stop(); await cB.node.stop(); await cC.node.stop(); await fix.relayStop();
@@ -1062,8 +1083,15 @@ describe("SI-002: concurrent submits from A and B yield strictly monotonic seq",
 
 // ─── SI-003 ───────────────────────────────────────────────────────────────────
 
-describe("SI-003: forged Structure 1 signature is rejected as signature_invalid", () => {
-  it("Structure 1 with wrong signature → signature_invalid", async () => {
+/**
+ * ⚠️ THIRD RE-ANSWERED CASE — `DOD-M15-CORROBORATE-1`. The refusal is unchanged; the WORD is.
+ *
+ * A leaf claiming A, signed by a forge key. `signature_invalid` said the frame did not check out
+ * against the key it carried; the witness check says the thing that actually matters, which is that
+ * it checks out against neither key in this session's directory-signed assignment.
+ */
+describe("SI-003: a forged Structure 1 signature is refused", () => {
+  it("Structure 1 with wrong signature → leaf_signed_by_neither_participant", async () => {
     const fix = await makeFixture();
     const cA = await makeClient(fix.relayAddr);
     const cB = await makeClient(fix.relayAddr);
@@ -1084,7 +1112,7 @@ describe("SI-003: forged Structure 1 signature is rejected as signature_invalid"
 
     const resp = await rA.readDecoded();
     expect(resp["type"]).toBe("hash_submit_error");
-    expect(resp["reason"]).toBe("signature_invalid");
+    expect(resp["reason"]).toBe("leaf_signed_by_neither_participant");
 
     sA.close().catch(() => {});
     await cA.node.stop(); await cB.node.stop(); await fix.relayStop();
