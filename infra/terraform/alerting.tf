@@ -280,6 +280,42 @@ variable "alert_operator_email" {
 #   gcloud alpha monitoring channels list --project cello-infra \
 #     --format='value(type,displayName,verificationStatus)'
 # `alpha`, not `beta`: there is no GA `gcloud monitoring channels` and `beta` is not installed.
+# ─── The Telegram route for node health ──────────────────────────────────────────────────────────
+#
+# THE SAME CHAT THE SEAL ALERTS ALREADY GO TO, and the same Cloud Run service. A Monitoring incident
+# and a Cloud Logging LogEntry share no fields, so the notifier classifies the payload and formats
+# each one on its own terms (`classifyPayload` / `formatIncident`).
+#
+# ONE TOPIC, NOT TWO, and the reason is the anti-flood guarantee rather than tidiness: the notifier
+# throttles per instance, in memory. A second topic and subscription would mean a second Throttle
+# with no knowledge of the first, so one fleet-wide event could spend both budgets and send twice
+# what either allows. Everything bound for that chat has to pass through one throttle.
+#
+# EMAIL IS KEPT ALONGSIDE IT. Telegram is what Andre actually reads; email is the route that keeps
+# working when a bot token is rotated, a chat is deleted, or the notifier is mid-deploy — and none
+# of those announce themselves. Two routes, one incident, and the throttle only governs the chat.
+resource "google_monitoring_notification_channel" "operator_telegram" {
+  display_name = "CELLO operator — node health (Telegram, via seal-notifier)"
+  type         = "pubsub"
+  project      = var.project_id
+
+  labels = {
+    topic = google_pubsub_topic.seal_alerts.id
+  }
+
+  depends_on = [google_pubsub_topic_iam_member.monitoring_notification_publisher]
+}
+
+# WITHOUT THIS THE CHANNEL IS CREATED SUCCESSFULLY AND PUBLISHES NOTHING — the same silent shape as
+# the sink writer above, and the same remedy. Monitoring publishes as its own service agent, not as
+# the policy's owner and not as this project's compute identity.
+resource "google_pubsub_topic_iam_member" "monitoring_notification_publisher" {
+  project = var.project_id
+  topic   = google_pubsub_topic.seal_alerts.name
+  role    = "roles/pubsub.publisher"
+  member  = "serviceAccount:service-${data.google_project.cello_infra.number}@gcp-sa-monitoring-notification.iam.gserviceaccount.com"
+}
+
 resource "google_monitoring_notification_channel" "operator_email" {
   display_name = "CELLO operator — node health"
   type         = "email"
@@ -359,7 +395,10 @@ resource "google_monitoring_alert_policy" "directory_cpu_sustained" {
     }
   }
 
-  notification_channels = [google_monitoring_notification_channel.operator_email.id]
+  notification_channels = [
+    google_monitoring_notification_channel.operator_telegram.id,
+    google_monitoring_notification_channel.operator_email.id,
+  ]
 
   # ONE mail when it opens and one when it closes — Monitoring does not re-notify while a condition
   # stays true, which is what makes a 51-hour incident a single message rather than the flood that
@@ -535,7 +574,10 @@ resource "google_monitoring_alert_policy" "directory_memory_ceiling" {
     }
   }
 
-  notification_channels = [google_monitoring_notification_channel.operator_email.id]
+  notification_channels = [
+    google_monitoring_notification_channel.operator_telegram.id,
+    google_monitoring_notification_channel.operator_email.id,
+  ]
 
   alert_strategy {
     auto_close = "86400s"

@@ -6,7 +6,7 @@
  * and an alert channel dies the first time it floods.
  */
 import { describe, it, expect } from "vitest";
-import { formatAlert, Throttle, type LogEntry } from "../format.js";
+import { formatAlert, formatIncident, classifyPayload, Throttle, type LogEntry } from "../format.js";
 
 function entry(payload: Record<string, unknown>, zone = "us-east1-b"): LogEntry {
   return { timestamp: "2026-08-19T14:00:00Z", resource: { labels: { zone } }, jsonPayload: payload };
@@ -153,5 +153,107 @@ describe("Throttle — alerting Andre will not mute", () => {
     expect(t.decide("c", 20).action).toBe("suppress");
     // New window — alerting must come back on its own. A throttle that latches is an outage.
     expect(t.decide("d", 1100).action).toBe("send");
+  });
+});
+
+/**
+ * MONITORING INCIDENTS — the second payload shape on the same topic.
+ *
+ * The node-health alert policies publish through a Pub/Sub notification channel into the SAME topic
+ * the log sink feeds. The two payloads have nothing in common, so the discriminator and the
+ * formatter are where this goes wrong, and both are tested here.
+ */
+describe("classifyPayload — the two shapes on one topic", () => {
+  it("a Monitoring incident is recognised as one", () => {
+    expect(classifyPayload({ incident: { incident_id: "x", state: "open" } })).toBe("incident");
+  });
+
+  it("a log entry is NOT mistaken for an incident", () => {
+    expect(classifyPayload({ jsonPayload: { event: "relay.seal.rejected" } })).toBe("log");
+  });
+
+  it("an unrecognisable payload is neither, so the caller can ACK it instead of retrying forever", () => {
+    expect(classifyPayload({ nonsense: true })).toBe("unknown");
+    expect(classifyPayload(null)).toBe("unknown");
+    // `incident` present but not an object is not an incident — a string here would otherwise
+    // reach the formatter and read every field off a primitive.
+    expect(classifyPayload({ incident: "open" })).toBe("unknown");
+  });
+});
+
+function incident(over: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    incident: {
+      incident_id: "0.abc123",
+      state: "open",
+      policy_name: "Directory node approaching its heap ceiling",
+      condition_name: "Directory node RSS over 60% of the V8 ceiling",
+      summary: "RSS for gcp-use1 is above the threshold of 2634547",
+      url: "https://console.cloud.google.com/monitoring/alerting/incidents/0.abc123",
+      started_at: 1_788_000_000,
+      observed_value: "2700000",
+      threshold_value: "2634547",
+      resource: { type: "gce_instance", labels: { zone: "us-east1-d", instance_id: "597" } },
+      metric: { type: "logging.googleapis.com/user/cello_directory_node_rss_kb", labels: { node_id: "gcp-use1" } },
+      documentation: { content: "A directory node's resident memory has passed 60%..." },
+      ...over,
+    },
+  };
+}
+
+describe("formatIncident — a node-health alert on a phone", () => {
+  it("leads with the POLICY NAME, because that is what says which of the two fired", () => {
+    const { text } = formatIncident(incident());
+    expect(text).toContain("Directory node approaching its heap ceiling");
+  });
+
+  it("names WHICH NODE, from the metric label rather than the opaque instance id", () => {
+    // node_id survives a roll; instance_id does not, and an operator cannot act on `597`.
+    const { text } = formatIncident(incident());
+    expect(text).toContain("gcp-use1");
+    expect(text).not.toContain("597");
+  });
+
+  it("carries the observed value AND the threshold — a number with nothing to compare it to is noise", () => {
+    const { text } = formatIncident(incident());
+    expect(text).toContain("2700000");
+    expect(text).toContain("2634547");
+  });
+
+  it("a CLOSED incident says RECOVERED and does not read as a new failure", () => {
+    const { text } = formatIncident(incident({ state: "closed", ended_at: 1_788_003_600 }));
+    expect(text).toContain("RECOVERED");
+    expect(text).not.toContain("🔴");
+  });
+
+  it("an OPEN incident is not dressed up as a recovery", () => {
+    const { text } = formatIncident(incident());
+    expect(text).not.toContain("RECOVERED");
+  });
+
+  it("carries the console link, because the next click is the whole affordance", () => {
+    const { text } = formatIncident(incident());
+    expect(text).toContain("https://console.cloud.google.com/monitoring/alerting/incidents/0.abc123");
+  });
+
+  it("open and closed for the SAME incident are different keys, so the recovery is never throttled away", () => {
+    const open = formatIncident(incident()).key;
+    const closed = formatIncident(incident({ state: "closed" })).key;
+    expect(open).not.toBe(closed);
+  });
+
+  it("two nodes breaching the same policy are different keys — one node's alert must not mute the other's", () => {
+    const a = formatIncident(incident()).key;
+    const b = formatIncident(incident({ metric: { type: "m", labels: { node_id: "gcp-euw1" } } })).key;
+    expect(a).not.toBe(b);
+  });
+
+  it("survives a payload missing every optional field rather than throwing on the alerting path", () => {
+    // A formatter that throws here turns a real incident into an undecodable message and the
+    // operator is told nothing at all.
+    const { text, key } = formatIncident({ incident: { state: "open" } });
+    expect(typeof text).toBe("string");
+    expect(text.length).toBeGreaterThan(0);
+    expect(key.length).toBeGreaterThan(0);
   });
 });

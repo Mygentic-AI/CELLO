@@ -170,3 +170,99 @@ export class Throttle {
     return { action: "send" };
   }
 }
+
+/**
+ * ── THE SECOND PAYLOAD SHAPE ─────────────────────────────────────────────────────────────────────
+ *
+ * The node-health alert policies (sustained CPU, heap ceiling) reach Telegram through a Pub/Sub
+ * NOTIFICATION CHANNEL that publishes into the SAME topic the log sink feeds. So one subscription
+ * and one service carry two payloads that share no fields at all.
+ *
+ * WHY ONE TOPIC RATHER THAN TWO: the destination is one Telegram chat, and the Throttle below is
+ * what stops that chat flooding. A second topic and subscription would mean a second Throttle with
+ * no knowledge of the first, so one fleet-wide event could spend both budgets and send twice what
+ * either allows. The anti-flood guarantee only means anything if everything bound for the chat
+ * passes through one.
+ */
+
+/** Which of the two shapes this is — or neither, which the caller ACKs rather than retrying. */
+export function classifyPayload(payload: unknown): "incident" | "log" | "unknown" {
+  if (typeof payload !== "object" || payload === null) return "unknown";
+  const o = payload as Record<string, unknown>;
+  // Checked as an OBJECT, not merely present. `incident: "open"` would otherwise reach the
+  // formatter, which would read every field off a string and send a message full of "unknown".
+  const incident = o["incident"];
+  if (typeof incident === "object" && incident !== null) return "incident";
+  const json = o["jsonPayload"];
+  if (typeof json === "object" && json !== null) return "log";
+  return "unknown";
+}
+
+function rec(v: unknown): Record<string, unknown> {
+  return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : {};
+}
+
+/**
+ * A Cloud Monitoring incident, as a person reads it on a phone.
+ *
+ * DELIBERATELY DOES NOT INLINE THE POLICY'S `documentation` BLOCK, which is where the remedy steps
+ * live. It runs past a thousand characters including a multi-line gcloud command, and this file's
+ * standing rule is that a notification which has to be scrolled is one that gets dismissed. The
+ * console link IS the affordance — one tap, and that documentation is the first thing on the page.
+ */
+export function formatIncident(payload: Record<string, unknown>): Formatted {
+  const inc = rec(payload["incident"]);
+  const closed = str(inc["state"]) === "closed";
+
+  const policy = str(inc["policy_name"]) ?? "a CELLO alert policy";
+  const condition = str(inc["condition_name"]);
+  const summary = str(inc["summary"]);
+  const url = str(inc["url"]);
+  const observed = str(inc["observed_value"]);
+  const threshold = str(inc["threshold_value"]);
+
+  const metricLabels = rec(rec(inc["metric"])["labels"]);
+  const resourceLabels = rec(rec(inc["resource"])["labels"]);
+
+  // node_id first, instance_name second, and instance_id NEVER. `node_id` survives a roll, so it is
+  // the identity an operator can act on; the numeric instance id is the one field here that names
+  // the machine while telling them nothing they can use.
+  const who = str(metricLabels["node_id"]) ?? str(metricLabels["instance_name"]);
+  const zone = str(resourceLabels["zone"]);
+
+  const lines: string[] = [];
+
+  if (closed) {
+    lines.push(`✅ CELLO RECOVERED — ${policy}`);
+    lines.push("This cleared on its own. Nothing to do — sent so the open alert is not left hanging.");
+  } else {
+    // 🟠 and not 🔴: both node-health policies are WARNING severity. In this chat 🔴 means a receipt
+    // was lost, and borrowing it for "a node is running hot" is how the red one stops meaning
+    // anything.
+    lines.push(`🟠 CELLO — ${policy}`);
+    if (condition) lines.push(condition);
+  }
+
+  lines.push("");
+  if (who) lines.push(`node:  ${who}`);
+  if (zone) lines.push(`where: ${zone}`);
+  // A measurement with nothing to compare it against is not information. Both or neither.
+  if (observed && threshold) lines.push(`value: ${observed}  (threshold ${threshold})`);
+  if (summary) {
+    lines.push("");
+    lines.push(summary);
+  }
+  if (url) {
+    lines.push("");
+    lines.push(url);
+  }
+
+  // STATE IS IN THE KEY, and it has to be: the per-key cooldown is 15 minutes, so an incident that
+  // opens and recovers inside that window would have its RECOVERY suppressed, leaving the chat
+  // believing a node is still sick. `who` is in the key for the same reason one scale down — one
+  // node breaching must never mute another node breaching the same policy.
+  return {
+    text: lines.join("\n"),
+    key: `${policy}|${who ?? zone ?? "-"}|${closed ? "closed" : "open"}`,
+  };
+}

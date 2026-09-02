@@ -22,7 +22,7 @@
  * Manager on the alerting path, so an outage there would silence alerts about the outage.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { formatAlert, Throttle, type LogEntry } from "./format.js";
+import { formatAlert, formatIncident, classifyPayload, Throttle, type LogEntry } from "./format.js";
 
 const PORT = Number(process.env["PORT"] ?? "8080");
 const BOT_TOKEN = process.env["TELEGRAM_BOT_TOKEN"] ?? "";
@@ -73,12 +73,16 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     }
     if (req.method !== "POST") { res.writeHead(405).end(); return; }
 
-    let entry: LogEntry;
+    // TWO PAYLOAD SHAPES ARRIVE HERE. The log sink delivers a Cloud Logging LogEntry; the node-health
+    // alert policies deliver a Monitoring incident through a Pub/Sub notification channel on the
+    // same topic. They share no fields, so the shape is decided once, here, and never guessed at
+    // downstream.
+    let payload: Record<string, unknown>;
     try {
       const envelope = JSON.parse(await readBody(req)) as { message?: { data?: string } };
       const data = envelope.message?.data;
       if (typeof data !== "string") throw new Error("no message.data");
-      entry = JSON.parse(Buffer.from(data, "base64").toString("utf8")) as LogEntry;
+      payload = JSON.parse(Buffer.from(data, "base64").toString("utf8")) as Record<string, unknown>;
     } catch (err: unknown) {
       // ACK. This message can never be parsed, so retrying replays the same failure until the
       // topic's retention expires. Logged loudly because a filter change could make this constant.
@@ -86,6 +90,18 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       res.writeHead(204).end();
       return;
     }
+
+    const shape = classifyPayload(payload);
+    if (shape === "unknown") {
+      // ACK for the same reason as undecodable: it parsed, but it is neither of the two things this
+      // service knows how to say out loud, and no number of retries will change that. Named
+      // separately from `undecodable` so the logs distinguish "not JSON" from "not ours" — those
+      // have different causes and send an investigator to different places.
+      log("seal.notifier.unrecognised", { keys: Object.keys(payload).slice(0, 8) });
+      res.writeHead(204).end();
+      return;
+    }
+    const entry = payload as LogEntry;
 
     if (BOT_TOKEN === "" || CHAT_ID === "") {
       // NACK. This is our own misconfiguration and it is fixable without losing the alert — a
@@ -99,11 +115,11 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       return;
     }
 
-    const { text, key } = formatAlert(entry);
+    const { text, key } = shape === "incident" ? formatIncident(payload) : formatAlert(entry);
     const decision = throttle.decide(key, Date.now());
 
     if (decision.action === "suppress") {
-      log("seal.notifier.suppressed", { key, event: entry.jsonPayload?.["event"] });
+      log("seal.notifier.suppressed", { key, shape, event: entry.jsonPayload?.["event"] });
       res.writeHead(204).end();
       return;
     }
@@ -115,7 +131,7 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
       res.writeHead(503).end();   // transient — retry
       return;
     }
-    log("seal.notifier.sent", { key, kind: decision.action, event: entry.jsonPayload?.["event"] });
+    log("seal.notifier.sent", { key, kind: decision.action, shape, event: entry.jsonPayload?.["event"] });
     res.writeHead(204).end();
   })();
 });
