@@ -326,19 +326,24 @@ describe("DOD-M15-CI-SKIPS-SILENT-1: files a project config hides never collect 
      * gate like every other spine file. It IS run, deliberately, by
      * `pnpm --filter @cello-protocol/e2e-tests test:spine` — the lane is hidden, not unrun.
      *
-     * `016-RELAYLOSS`'s `j-relayloss.spine.test.ts` is NOT counted here, and the reason is worth
-     * keeping: the two lanes shared a checkout, so that file appeared in `013-ABSENCE`'s working
-     * tree and this number was bumped to 39 on 013's branch. It does not belong to 013 and it is
-     * not on `main`, so merging 013 alone brings the count back to 38. **Whoever merges 016 bumps
-     * this to 39 in the same change as the file** — which is exactly what this guard is for.
+     * +1 on 2026-09-02: `j-relayloss.spine.test.ts` (`016-RELAYLOSS`), bumped on 016's own branch
+     * in the same change that carries the file — which is what the note left here asked for, and
+     * what this guard exists to force.
+     *
+     * The history is worth one line, because it is the guard working rather than the guard being
+     * noisy. The two lanes shared a checkout, so this file appeared in `013-ABSENCE`'s working tree
+     * and the count was bumped to 39 there first, for a file that was not 013's and was not on
+     * `main`. 016 then moved to its own branch off `main`, inheriting the 38, and this guard went
+     * red on exactly the lane that owed the change. It refused to let an added-but-unrun file pass
+     * unannounced through either lane.
      */
     expect(
       spine.length,
-      `The hidden lane is ${String(spine.length)} files, not 38. If files were ADDED, they are ` +
+      `The hidden lane is ${String(spine.length)} files, not 39. If files were ADDED, they are ` +
         `hidden too and nobody has run them — say so here. If files were REMOVED or wired into the ` +
         `gate, that is the outcome DOD-M15-SPINE-LANE-1 wanted; update the number and the DoD line ` +
         `together so the record moves with the code.`,
-    ).toBe(38);
+    ).toBe(39);
   });
 });
 
