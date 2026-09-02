@@ -18,6 +18,7 @@ import type {
   LeafDeliver,
   SessionLivenessQuery,
   SessionLivenessResponse,
+  SessionWitnessAlert,
   ClientRecordAssignment,
 } from "./relay-types.js";
 
@@ -137,6 +138,24 @@ export function encodeLeafDeliver(frame: LeafDeliver): Uint8Array {
  */
 export function encodeSessionInterrupted(frame: { type: "session_interrupted"; sessionId: string; reason: "peer_disconnected" | "timeout" }): Uint8Array {
   return ENC.encode({ type: frame.type, session_id: frame.sessionId, reason: frame.reason });
+}
+
+// ─── DOD-M15-CORROBORATE-1: the witness alert ─────────────────────────────────
+
+/**
+ * Encode a `session_witness_alert`. Snake_case on the wire like every other relay frame, binary
+ * `session_id`. `relay_id` rides only when this relay has a signing identity — additive, and a
+ * recipient that cannot name the witness is told so by its absence rather than by a placeholder.
+ */
+export function encodeSessionWitnessAlert(frame: SessionWitnessAlert): Uint8Array {
+  return ENC.encode({
+    type: frame.type,
+    session_id: frame.session_id,
+    reason: frame.reason,
+    ...(frame.relay_id !== undefined ? { relay_id: frame.relay_id } : {}),
+    observed_at: frame.observed_at,
+    submitter_is_counterparty: frame.submitter_is_counterparty,
+  });
 }
 
 // ─── CELLO-M7-SESSION-003: session-path liveness frames ────────────────────────

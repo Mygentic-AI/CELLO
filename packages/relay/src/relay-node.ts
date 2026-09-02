@@ -99,6 +99,7 @@ import type {
 } from "./relay-types.js";
 import type { RelayStore } from "./relay-store.js";
 import { InMemoryRelayStore } from "./relay-store.js";
+import { witnessLeafSignature } from "./leaf-witness.js";
 import {
   encodeAuthChallenge,
   encodeAuthFailed,
@@ -108,6 +109,7 @@ import {
   encodeLeafDeliver,
   encodeSessionInterrupted,
   encodeSessionLivenessResponse,
+  encodeSessionWitnessAlert,
   decodeInboundFrame,
 } from "./relay-frames.js";
 import { protocolLog, truncId, truncHex } from "./protocol-log.js";
@@ -1486,6 +1488,29 @@ export class CelloRelayNode {
             this.#store.enqueueDelivery(authedPubkeyHex, d);
           }
 
+          /**
+           * DOD-M15-CORROBORATE-1: witness alerts held while this participant was away. Drained on
+           * the same connection as the leaves, BEFORE the park notify, so an operator who was
+           * offline when the forged submit arrived still hears about it — the whole point of the
+           * unit is a record that does not depend on someone else choosing to pass it on.
+           */
+          const heldAlerts = this.#store.drainWitnessAlerts(authedPubkeyHex);
+          let alertsSent = 0;
+          for (const alert of heldAlerts) {
+            try {
+              await this.#sendFrame(stream, encodeSessionWitnessAlert(alert));
+              alertsSent++;
+            } catch { break; }
+          }
+          for (const alert of heldAlerts.slice(alertsSent)) {
+            this.#store.enqueueWitnessAlert(authedPubkeyHex, alert);
+          }
+          if (heldAlerts.length > 0) {
+            this.#logger.info("relay.witness.alert.drained", {
+              recipientPubkey: authedPubkeyHex, held: heldAlerts.length, delivered: alertsSent,
+            });
+          }
+
           // M7-MSG-001: notify a (re)connecting recipient that has parked content.
           // The notify rides the authenticated relay stream; the recipient then pulls
           // the ciphertext over the content-park protocol. Best-effort — a failure here
@@ -1853,6 +1878,33 @@ export class CelloRelayNode {
 
     const aHex = Buffer.from(state.assignment.participant_a).toString("hex");
     const bHex = Buffer.from(state.assignment.participant_b).toString("hex");
+
+    /**
+     * DOD-M15-CORROBORATE-1 — **CHECK THE HASH AS IT PASSES, BEFORE ANYTHING ELSE IS DECIDED.**
+     *
+     * The receiving client already refuses a message whose signature is not its counterparty's. That
+     * detection is real and it has one weakness: the client doing it is also the party best placed
+     * to fake it. A witness whose copy of what the sender signed never passes through the accuser's
+     * hands is what makes the difference, and the relay is already holding one.
+     *
+     * Deliberately ABOVE the participant check: a leaf signed by nobody in this session is worth
+     * seeing whoever submitted it, and running the check only for participants would make it
+     * optional for a stranger — the exact party it exists to catch.
+     */
+    const s1 = decodeStructure1(frame.structure1_cbor);
+    if (!s1) { await reply("signature_invalid"); return; }
+    const witness = witnessLeafSignature(
+      state.assignment.participant_a,
+      state.assignment.participant_b,
+      frame.structure1_cbor,
+      frame.sender_signature,
+    );
+    if (!witness.ok) {
+      await this.#flagUnwitnessedLeaf(sessionKey, frame.session_id, senderPubkeyHex, aHex, bHex);
+      await reply("leaf_signed_by_neither_participant");
+      return;
+    }
+
     if (senderPubkeyHex !== aHex && senderPubkeyHex !== bHex) {
       await reply("not_a_participant"); return;
     }
@@ -1880,8 +1932,7 @@ export class CelloRelayNode {
       // Look up the predecessor relay's public key from the directory (AC-005/AC-006).
       const lookup = await this.#directory.getRelayPublicKey(predecessorRelayId);
       if (!lookup.ok) {
-        const s1ForLog = decodeStructure1(frame.structure1_cbor);
-        const hashHex = s1ForLog ? Buffer.from(s1ForLog.content_hash).toString("hex").slice(0, 16) : "(unknown)";
+        const hashHex = Buffer.from(s1.content_hash).toString("hex").slice(0, 16);
         if (lookup.reason === "not_registered") {
           // AC-006: the directory answered, and it holds no key for this relay id.
           this.#logger.warn("relay.predecessor.unknown", { relayId: predecessorRelayId, hashHex });
@@ -1909,15 +1960,12 @@ export class CelloRelayNode {
 
       // Verify the predecessor ACK signature: verify(pubKey, buildRelayAckTbs(contentHash, seq, ts), sig)
       // The TBS is SHA-256(hash_bytes || seq_BE4 || ts_BE8) per PERSIST-012.
-      const s1Decoded = decodeStructure1(frame.structure1_cbor);
-      if (!s1Decoded) { await reply("signature_invalid"); return; }
-
-      const predecessorTbs = buildRelayAckTbs(s1Decoded.content_hash, predecessorSeq, predecessorTs);
+      const predecessorTbs = buildRelayAckTbs(s1.content_hash, predecessorSeq, predecessorTs);
       const pubKeyBytes = Buffer.from(pubKeyHex, "hex");
       const sigValid = verify(pubKeyBytes, predecessorTbs, predecessorSig);
       if (!sigValid) {
         // SI-002: signature invalid — reject unconditionally, no fallback.
-        const hashHex = Buffer.from(s1Decoded.content_hash).toString("hex").slice(0, 16);
+        const hashHex = Buffer.from(s1.content_hash).toString("hex").slice(0, 16);
         this.#logger.warn("relay.predecessor.unknown", { relayId: predecessorRelayId, hashHex });
         await reply("RELAY_PREDECESSOR_UNKNOWN"); return;
       }
@@ -1941,20 +1989,23 @@ export class CelloRelayNode {
       await reply("leaf_kind_invalid"); return;
     }
 
-    const s1 = decodeStructure1(frame.structure1_cbor);
-    if (!s1) { await reply("signature_invalid"); return; }
-
-    // Sender pubkey in Structure 1 must match the authenticated connection
+    /**
+     * WHO SIGNED IT IS NOW A KNOWN PARTICIPANT — bind the frame's two claims to that one fact.
+     *
+     * `witness` established which of the assignment's two keys these bytes verify under. The leaf
+     * must CLAIM that same participant as its sender, and it must arrive on that participant's own
+     * authenticated connection. Both comparisons are against `signerHex`, never against each other:
+     * chaining them through the frame's own `sender_pubkey` would let a leaf whose claimed sender
+     * is not its signer satisfy the pair.
+     *
+     * This REPLACES the standalone `verify(s1.sender_pubkey, ...)` that used to sit here — a check
+     * against a key supplied by the frame it was checking. It is strictly stronger, not a
+     * relaxation: everything that check refused is still refused here.
+     */
+    const signerHex = witness.signerIsA ? aHex : bHex;
     const s1PubkeyHex = Buffer.from(s1.sender_pubkey).toString("hex");
-    if (s1PubkeyHex !== senderPubkeyHex) {
+    if (s1PubkeyHex !== signerHex || senderPubkeyHex !== signerHex) {
       await reply("sender_mismatch"); return;
-    }
-
-    // Verify Structure 1 signature against the original CBOR bytes (frame.structure1_cbor).
-    // Re-encoding the decoded fields would change the timestamp representation (float64 vs uint64),
-    // breaking signature verification. Verify the exact bytes the sender signed.
-    if (!verify(s1.sender_pubkey, frame.structure1_cbor, frame.sender_signature)) {
-      await reply("signature_invalid"); return;
     }
 
     if (s1.last_seen_seq > state.seq_counter) {
@@ -2708,6 +2759,82 @@ export class CelloRelayNode {
           error: err instanceof Error ? err.message : String(err),
         });
       });
+    }
+  }
+
+  /**
+   * DOD-M15-CORROBORATE-1 — a leaf verified under NEITHER participant key. Say so, to the log AND
+   * to the participants who did not send it.
+   *
+   * ─── THE RELAY KEEPS RELAYING THIS SESSION. Decided here, with its reason. ────────────────────
+   *
+   * The submission was refused, so nothing entered the tree and the conversation record is intact —
+   * there is nothing left to protect it from. Cutting the session off would hand anyone who can
+   * authenticate and name a session id a way to kill any conversation with one frame: a false
+   * accusation is worse than a missed detection, and a false TEARDOWN is worse still because it
+   * costs the honest pair the thing they came for. Freezing is safe for a CLIENT, which limits only
+   * what that client trusts; a relay that stops carrying traffic imposes its verdict on both
+   * parties, and one relay is not the arbiter. So this relay reports and keeps working, and the
+   * decision about what to do with the session stays with the two clients.
+   *
+   * ⚠️ **THIS IS ONE WITNESS.** It establishes that this relay saw and refused that submission. It
+   * does not establish who sent it or that anyone acted in bad faith, and no wording on this path
+   * may imply otherwise. Corroboration needs the same hash sequence fanned out to several relays,
+   * which is a separate line and does not exist yet.
+   */
+  async #flagUnwitnessedLeaf(
+    sessionKey: string,
+    sessionId: Uint8Array,
+    submitterHex: string,
+    aHex: string,
+    bHex: string,
+  ): Promise<void> {
+    const submitterIsParticipant = submitterHex === aHex || submitterHex === bHex;
+    this.#logger.error("relay.witness.leaf_unwitnessed", {
+      sessionId: sessionKey,
+      submitterPubkey: submitterHex,
+      submitterIsParticipant,
+      ...(this.#relayId !== null ? { relayId: this.#relayId } : {}),
+      observation: "a submitted leaf verified against neither participant key in this session's directory-signed assignment; it was refused and nothing was sequenced",
+      impact: "this relay continues to carry the session — the leaf never entered the tree, and one relay's observation is not a verdict on either party",
+    });
+    protocolLog("RELAY", `witness alert — session ${truncHex(sessionKey)}: leaf signed by neither participant`);
+
+    // Every participant EXCEPT whoever submitted it. The submitter already has the
+    // `hash_submit_error`; these are the parties who would otherwise hear it only from them.
+    const observedAt = Date.now();
+    for (const recipientHex of [aHex, bHex]) {
+      if (recipientHex === submitterHex) continue;
+      const alert: import("./relay-types.js").SessionWitnessAlert = {
+        type: "session_witness_alert",
+        session_id: sessionId,
+        reason: "leaf_signed_by_neither_participant",
+        ...(this.#relayId !== null ? { relay_id: this.#relayId } : {}),
+        observed_at: observedAt,
+        submitter_is_counterparty: submitterIsParticipant,
+      };
+      const recipientStream = this.#streams.get(recipientHex);
+      if (!recipientStream) {
+        // Offline. HELD, not dropped — whoever submits forged leaves also chooses when, so an
+        // alert that evaporates while the victim is away is one the attacker can time away.
+        this.#store.enqueueWitnessAlert(recipientHex, alert);
+        continue;
+      }
+      try {
+        await this.#sendFrame(recipientStream, encodeSessionWitnessAlert(alert));
+        this.#logger.info("relay.witness.alert.delivered", {
+          sessionId: sessionKey, recipientPubkey: recipientHex, submitterIsParticipant,
+        });
+      } catch (err: unknown) {
+        this.#streams.delete(recipientHex);
+        this.#store.enqueueWitnessAlert(recipientHex, alert);
+        this.#logger.warn("relay.witness.alert.send_failed", {
+          sessionId: sessionKey,
+          recipientPubkey: recipientHex,
+          error: err instanceof Error ? err.message : String(err),
+          impact: "held for this recipient's next authenticated connection",
+        });
+      }
     }
   }
 

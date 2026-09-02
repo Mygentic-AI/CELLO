@@ -5,7 +5,7 @@
  * InMemoryRelayStore: in-process implementation for M1 testing.
  */
 
-import type { RelaySessionState, SessionAssignment } from "./relay-types.js";
+import type { RelaySessionState, SessionAssignment, SessionWitnessAlert } from "./relay-types.js";
 import type { Logger } from "@cello-protocol/interfaces";
 
 // No-op logger used when no logger is injected into InMemoryRelayStore.
@@ -29,6 +29,20 @@ export interface RelayStore {
 
   /** Drain the pending queue for a pubkey. Returns [] if none. */
   drainDeliveries(pubkeyHex: string): Array<{ session_id: Uint8Array; leaf_kind: number; sequence_number: number; structure2_cbor: Uint8Array; structure1_cbor: Uint8Array }>;
+
+  /**
+   * DOD-M15-CORROBORATE-1: hold a witness alert for a participant with no live stream, so it is
+   * delivered when they next authenticate. Keyed by recipient pubkey, like the delivery queue.
+   *
+   * ⚠️ **DROPS THE NEWEST WHEN FULL, not the oldest** — the opposite of `enqueueDelivery`, and
+   * deliberately. Whoever submits forged leaves also chooses WHEN, so an attacker who could push
+   * earlier alerts out of a bounded queue would have a mute button: submit while the victim is
+   * offline, then flood. The first alert is the one that matters and it is the one that survives.
+   */
+  enqueueWitnessAlert(pubkeyHex: string, alert: SessionWitnessAlert): void;
+
+  /** Drain the pending witness alerts for a pubkey. Returns [] if none. */
+  drainWitnessAlerts(pubkeyHex: string): SessionWitnessAlert[];
 
   /**
    * CELLO-M7-SESSION-003: record that a session recipient's standing relay
@@ -81,10 +95,14 @@ export interface RelayStore {
 }
 
 const DELIVERY_QUEUE_BOUND = 256;
+/** DOD-M15-CORROBORATE-1. Small on purpose: the first alert carries the whole signal. */
+const WITNESS_ALERT_QUEUE_BOUND = 16;
 
 export class InMemoryRelayStore implements RelayStore {
   readonly #sessions = new Map<string, RelaySessionState>();
   readonly #deliveryQueues = new Map<string, Array<{ session_id: Uint8Array; leaf_kind: number; sequence_number: number; structure2_cbor: Uint8Array; structure1_cbor: Uint8Array }>>();
+  // DOD-M15-CORROBORATE-1: witness alerts held for a participant with no live stream.
+  readonly #witnessAlertQueues = new Map<string, SessionWitnessAlert[]>();
   // CELLO-M7-SESSION-003: per-recipient session-path liveness, keyed by recipient
   // pubkey (same key as #deliveryQueues). Absence of an entry means 'unknown'.
   readonly #liveness = new Map<string, { liveness: "alive" | "gone"; observedAt: number }>();
@@ -143,6 +161,32 @@ export class InMemoryRelayStore implements RelayStore {
     if (!queue || queue.length === 0) return [];
     const items = queue.splice(0);
     return items;
+  }
+
+  // ─── DOD-M15-CORROBORATE-1: witness alerts for an offline participant ───────
+
+  enqueueWitnessAlert(pubkeyHex: string, alert: SessionWitnessAlert): void {
+    let queue = this.#witnessAlertQueues.get(pubkeyHex);
+    if (!queue) {
+      queue = [];
+      this.#witnessAlertQueues.set(pubkeyHex, queue);
+    }
+    if (queue.length >= WITNESS_ALERT_QUEUE_BOUND) {
+      // Keep the oldest — see the interface JSDoc for why this bound drops the newest.
+      this.#logger.warn("relay.witness.queue.full", {
+        pubkeyHex: pubkeyHex.slice(0, 16),
+        held: queue.length,
+        impact: "this alert was dropped; the earlier ones for this recipient are kept and still deliver",
+      });
+      return;
+    }
+    queue.push(alert);
+  }
+
+  drainWitnessAlerts(pubkeyHex: string): SessionWitnessAlert[] {
+    const queue = this.#witnessAlertQueues.get(pubkeyHex);
+    if (!queue || queue.length === 0) return [];
+    return queue.splice(0);
   }
 
   // ─── CELLO-M7-SESSION-003: session-path liveness ────────────────────────────

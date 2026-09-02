@@ -282,7 +282,15 @@ export type HashSubmitErrorReason =
    */
   | "submit_malformed"
   /** DOD-M15-RELAYABUSE-1: per-peer or per-sender-pubkey hash_submit rate exceeded. */
-  | "rate_limited";
+  | "rate_limited"
+  /**
+   * DOD-M15-CORROBORATE-1: the leaf verified against NEITHER participant key in this session's
+   * directory-signed assignment, checked at arrival. It replaces the `signature_invalid` this case
+   * used to get: that word said the frame was internally inconsistent, when what actually happened
+   * is that nobody in this conversation signed those bytes. The participants other than the
+   * submitter are told separately (`session_witness_alert`).
+   */
+  | "leaf_signed_by_neither_participant";
 
 export interface HashSubmitError {
   type: "hash_submit_error";
@@ -439,6 +447,31 @@ export interface SessionLivenessResponse {
   counterparty_pubkey: Uint8Array;
   liveness: "alive" | "gone" | "unknown";
   observed_at: number;
+}
+
+/**
+ * DOD-M15-CORROBORATE-1 — what this relay saw, told to the participants who did not send it.
+ *
+ * Emitted when a submitted leaf verifies against NEITHER key in the session's directory-signed
+ * assignment. It is an OBSERVATION, not a verdict: it says this relay refused that submission and
+ * nothing else, because one relay is one witness. The recipient is every participant OTHER than the
+ * authenticated submitter — the submitter already has the `hash_submit_error`, and the whole point
+ * is that the other side learns it from a party the submitter's client cannot silence.
+ *
+ * No pubkey of the submitter rides here. `submitter_is_counterparty` is the only fact the recipient
+ * needs to act, and naming a key would turn an observation into an accusation this relay has no
+ * standing to make alone.
+ */
+export interface SessionWitnessAlert {
+  type: "session_witness_alert";
+  session_id: Uint8Array;            // 16 bytes
+  reason: "leaf_signed_by_neither_participant";
+  /** WHICH witness. Absent when this relay runs without a signing identity. */
+  relay_id?: string;
+  /** Unix ms at which this relay observed the submission. */
+  observed_at: number;
+  /** True iff the authenticated submitter was the recipient's counterparty; false = a third party. */
+  submitter_is_counterparty: boolean;
 }
 
 /**
