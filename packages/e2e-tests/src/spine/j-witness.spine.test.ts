@@ -23,7 +23,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { Encoder, decode } from "cbor-x";
 import * as lp from "it-length-prefixed";
-import { FileKeyProvider, generateKeypair } from "@cello-protocol/crypto";
+import { FileKeyProvider, generateKeypair, verify } from "@cello-protocol/crypto";
+import { encodeCbor } from "@cello-protocol/protocol-types";
 import { createNode, type CelloNode } from "@cello-protocol/transport";
 import { mintOnlineToken, ONLINE_TOKEN_ISSUE_LIFETIME_MS } from "@cello-protocol/interfaces";
 import { RELAY_PROTOCOL_ID } from "@cello-protocol/relay";
@@ -146,6 +147,36 @@ describe("J-WITNESS: the live relay flags a leaf nobody in the session signed, w
     expect(alert["reason"]).toBe("leaf_signed_by_neither_participant");
     expect(Buffer.from(alert["session_id"] as Uint8Array)).toEqual(Buffer.from(sessionId));
     expect(alert["submitter_is_counterparty"]).toBe(true);
+
+    /**
+     * ── AND B CAN SHOW IT TO SOMEONE. ──
+     *
+     * The DEPLOYED relay signs the observation with the key `relay_id` names — the same key behind
+     * every `hash_submit_ack` — so B holds a statement it can hand to a third party rather than a
+     * rumour. Verified here against the running process's OWN key file, read independently, which is
+     * the only place this can be proven end to end.
+     */
+    const relayKp = await FileKeyProvider.load(join(cluster.tmpDir, "relay-key"));
+    const relayPubkey = await relayKp.getPublicKey();
+    expect(
+      alert["relay_id"],
+      "relay_id must BE the signing key, or a third party has nothing to check it against",
+    ).toBe(Buffer.from(relayPubkey).toString("hex"));
+    const tbs = new Uint8Array(
+      createHash("sha256")
+        .update(encodeCbor([
+          "CELLO-RELAY-WITNESS-v1",
+          alert["session_id"] as Uint8Array,
+          alert["reason"] as string,
+          alert["observed_at"] as number,
+          alert["submitter_is_counterparty"] as boolean,
+        ]))
+        .digest(),
+    );
+    expect(
+      verify(relayPubkey, tbs, alert["witness_signature"] as Uint8Array),
+      "the running relay's signature must verify — this is the mirrored TBS, rebuilt independently",
+    ).toBe(true);
 
     // ── And the relay operator's own process wrote the durable half. ──
     expect(

@@ -25,7 +25,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { Encoder, decode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import type { Stream } from "@libp2p/interface";
-import { generateKeypair } from "@cello-protocol/crypto";
+import { generateKeypair, verify } from "@cello-protocol/crypto";
+import { encodeCbor } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
 import type { Logger } from "@cello-protocol/interfaces";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
@@ -34,7 +35,6 @@ import { testOnlineToken } from "./helpers/online-token.js";
 setupV3Tests();
 
 const CBOR = new Encoder({ tagUint8Array: false });
-const RELAY_ID = "relay-witness-under-test";
 
 type Keypair = ReturnType<typeof generateKeypair>;
 interface Captured { level: string; event: string; ctx: Record<string, unknown> }
@@ -87,13 +87,21 @@ describe("DOD-M15-CORROBORATE-1: the relay verifies each hash at arrival and ale
   afterEach(() => scope.run(async () => {}));
 
   /** A relay with a real directory key, a real assignment, and A + B authenticated to it. */
-  async function fixture(opts: { connectB?: boolean } = {}) {
+  async function fixture(opts: { connectB?: boolean; unsignedWitness?: boolean } = {}) {
     const events: Captured[] = [];
     const dirKp = generateKeypair();
+    /**
+     * A SIGNING IDENTITY, because production has one — the relay signs every `hash_submit_ack` with
+     * it and `relayId` is its public half in hex. Without it here the whole suite would exercise the
+     * unsigned shape, which is the configuration no deployed relay runs. `unsignedWitness` opts back
+     * out for the one test that is about a relay with no identity at all.
+     */
+    const relayAckKp = generateKeypair();
+    const relayIdHex = Buffer.from(await relayAckKp.getPublicKey()).toString("hex");
     const { node: relayNode, relay, stop } = await createRelayNode({
       directoryPubkey: await dirKp.getPublicKey(),
       logger: capturingLogger(events),
-      relayId: RELAY_ID,
+      ...(opts.unsignedWitness === true ? {} : { relayId: relayIdHex, ackSigningKeyProvider: relayAckKp }),
     });
     scope.addCleanup(stop);
 
@@ -134,7 +142,7 @@ describe("DOD-M15-CORROBORATE-1: the relay verifies each hash at arrival and ale
 
     const a = await connect(kpA);
     const b = opts.connectB === false ? undefined : await connect(kpB);
-    return { events, dirKp, relay, relayNode, kpA, kpB, sessionId, a, b, connect };
+    return { events, dirKp, relay, relayNode, kpA, kpB, sessionId, a, b, connect, relayAckKp, relayIdHex };
   }
 
   it("★★★ a participant's leaf signed by a THIRD key is refused AT SUBMISSION, and B — who reports nothing — is told by the relay", async () => {
@@ -164,7 +172,7 @@ describe("DOD-M15-CORROBORATE-1: the relay verifies each hash at arrival and ale
     expect(alert["reason"]).toBe("leaf_signed_by_neither_participant");
     expect(Buffer.from(alert["session_id"] as Uint8Array)).toEqual(Buffer.from(fx.sessionId));
     expect(alert["submitter_is_counterparty"], "it was A's authenticated connection that submitted it").toBe(true);
-    expect(alert["relay_id"], "one witness, and it must be nameable — 'a relay said so' is not a record").toBe(RELAY_ID);
+    expect(alert["relay_id"], "one witness, and it must be nameable — 'a relay said so' is not a record").toBe(fx.relayIdHex);
     expect(typeof alert["observed_at"]).toBe("number");
 
     // DETECTED AT SUBMISSION, NOT AT SEAL: the forged leaf took no position in the tree, so A's
@@ -277,7 +285,7 @@ describe("DOD-M15-CORROBORATE-1: the relay verifies each hash at arrival and ale
 
     const alert = await fx.b!.reader.next();
     expect(Object.keys(alert).sort()).toEqual(
-      ["observed_at", "reason", "relay_id", "session_id", "submitter_is_counterparty", "type"],
+      ["observed_at", "reason", "relay_id", "session_id", "submitter_is_counterparty", "type", "witness_signature"],
     );
     const flagged = fx.events.find((e) => e.event === "relay.witness.leaf_unwitnessed")!;
     expect(
@@ -351,6 +359,72 @@ describe("DOD-M15-CORROBORATE-1: the relay verifies each hash at arrival and ale
     }));
     const err = await fx.a.reader.next();
     expect(err["reason"]).toBe("submit_malformed");
+  }, 60_000);
+
+  it("★★★ THE ALERT IS SIGNED by the key `relay_id` names — review F3", async () => {
+    /**
+     * Without this the recipient can only pass the observation on as "the relay told me", which is
+     * exactly as unverifiable as the accusation it is supposed to corroborate. The TBS is rebuilt
+     * here from the wire fields rather than imported from the builder under test — an independent
+     * reconstruction is what catches a drift; calling the same function would only prove it equals
+     * itself.
+     */
+    const fx = await fixture();
+    const forged = await makeLeaf(fx.sessionId, fx.kpA, generateKeypair());
+    send(fx.a.stream, CBOR.encode({ type: "hash_submit", session_id: fx.sessionId, leaf_kind: 0x00, ...forged }));
+    await fx.a.reader.next();
+
+    const alert = await fx.b!.reader.next();
+    const tbs = new Uint8Array(
+      createHash("sha256")
+        .update(encodeCbor([
+          "CELLO-RELAY-WITNESS-v1",
+          alert["session_id"] as Uint8Array,
+          alert["reason"] as string,
+          alert["observed_at"] as number,
+          alert["submitter_is_counterparty"] as boolean,
+        ]))
+        .digest(),
+    );
+    expect(
+      verify(await fx.relayAckKp.getPublicKey(), tbs, alert["witness_signature"] as Uint8Array),
+      "the observation must be provable to someone who was not there",
+    ).toBe(true);
+    expect(
+      alert["relay_id"],
+      "and `relay_id` must BE that key, so a third party knows what to check it against",
+    ).toBe(Buffer.from(await fx.relayAckKp.getPublicKey()).toString("hex"));
+
+    // The signature must cover the CLAIM, not just the session: flipping the one field that says
+    // who submitted it must break it.
+    const flipped = new Uint8Array(
+      createHash("sha256")
+        .update(encodeCbor([
+          "CELLO-RELAY-WITNESS-v1", alert["session_id"] as Uint8Array, alert["reason"] as string,
+          alert["observed_at"] as number, !(alert["submitter_is_counterparty"] as boolean),
+        ]))
+        .digest(),
+    );
+    expect(
+      verify(await fx.relayAckKp.getPublicKey(), flipped, alert["witness_signature"] as Uint8Array),
+      "a signature that did not cover who submitted it would let the claim be rewritten under it",
+    ).toBe(false);
+  }, 60_000);
+
+  it("★★ a relay with NO signing identity sends the alert anyway, unsigned and unnamed", async () => {
+    /**
+     * Losing the warning is strictly worse than losing its transferability, so a relay running
+     * without an identity still speaks — and says nothing it cannot back, which is why `relay_id`
+     * is absent rather than a placeholder.
+     */
+    const fx = await fixture({ unsignedWitness: true });
+    const forged = await makeLeaf(fx.sessionId, fx.kpA, generateKeypair());
+    send(fx.a.stream, CBOR.encode({ type: "hash_submit", session_id: fx.sessionId, leaf_kind: 0x00, ...forged }));
+    await fx.a.reader.next();
+    const alert = await fx.b!.reader.next();
+    expect(alert["type"]).toBe("session_witness_alert");
+    expect(alert["relay_id"]).toBeUndefined();
+    expect(alert["witness_signature"]).toBeUndefined();
   }, 60_000);
 
   it("★★ a leaf whose CLAIMED sender is not the party who signed it is refused, on that party's own connection", async () => {
