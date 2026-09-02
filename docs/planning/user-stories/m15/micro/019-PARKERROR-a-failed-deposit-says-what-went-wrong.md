@@ -34,6 +34,28 @@ description: >
 
 ---
 
+## Where this work lives — ⚠️ YOU EDIT THE OTHER REPO
+
+**Every file this order changes is in `cello-client`, not in the repo this order file sits in.**
+That is the single most likely way to lose twenty minutes here.
+
+- **`cello-client`** → `/Users/andrep/Documents/code/cello-client`
+  Paths beginning `core/…` are here. **All seven files you touch are here:**
+  `core/daemon/src/error-message.ts` (new), `core/daemon/src/ipc-server.ts`,
+  `core/daemon/src/session-relay-client.ts`, `core/daemon/src/daemon.ts`,
+  `core/daemon/src/session-node-manager.ts`, `core/daemon/src/reconnect-drain.ts`,
+  `core/daemon/src/content-park.ts`.
+  **The gate runs here:** `pnpm run test` / `pnpm run lint` / `pnpm run typecheck`, plus
+  `pnpm run build` (this repo HAS a separate build — unlike trustless-cello).
+- **`trustless-cello`** → `/Users/andrep/Documents/code/trustless-cello`
+  Paths beginning `packages/…` and `docs/…` are here. **You edit nothing here.** You only
+  (a) run the spine test in Part 3 from this root, and (b) update this order file at the end.
+
+If `core/daemon/src/ipc-server.ts` does not resolve, you are in `trustless-cello`. It is not
+missing; you are in the wrong repo.
+
+---
+
 ## What the operator lives through
 
 1. They send a message to a counterparty whose agent is offline.
@@ -176,6 +198,18 @@ like the bug you are fixing; it is the last resort, not the first choice.
 **A test that asserts only "not [object Object]" is hollow.** It passes against a helper that
 returns the empty string. Assert the message actually contains the thrown object's content.
 
+**Two lanes share this laptop, and ANOTHER ORDER IS RUNNING RIGHT NOW.** `018-PARKCOLLECT` is in a
+second worktree, it runs spine tests too, and **it is rewriting the very file you run in Part 3**
+(`j-content.spine.test.ts`). Your worktree is a separate checkout so its edits cannot reach you —
+but the **database can**. The spine harness drops and re-migrates its databases, so two lanes
+against one Postgres re-migrate the same server to two different heads and produce a bogus
+`migration.out.of.date` red that is not your bug. **Export a `CELLO_PG_HOST_PORT` unique to your
+worktree** (the compose file reads it precisely for this; 5433 is the default, so take another) and
+set `DATABASE_URL` to match.
+
+**The other lane owns `DOD-MSG-3 (transport)`.** It fails in the same file you are running, on
+`not_a_participant`. It is `018`'s, and its cause is unrelated to yours. Leave it red.
+
 **Part 3 is the whole reason this order exists.** An order that fixes the formatting and stops has
 done the easy half. The finding is the deliverable.
 
@@ -183,8 +217,12 @@ done the easy half. The finding is the deliverable.
 
 ## Review
 
-*(the coder fills this in — the mutation proof from DoD 4, the verbatim error text from Part 3,
-the reviewer's verdict)*
+### Where this work lives
+*(worktree path, branch, and the `CELLO_PG_HOST_PORT` you used — so a second reader can reproduce
+the run rather than guess which Postgres it hit)*
+
+### The rest
+*(the mutation proof from DoD 4, the verbatim error text from Part 3, the reviewer's verdict)*
 
 ## Newly discovered
 

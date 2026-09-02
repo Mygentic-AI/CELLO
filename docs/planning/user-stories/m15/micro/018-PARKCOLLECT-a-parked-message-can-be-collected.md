@@ -36,6 +36,21 @@ description: >
 
 ---
 
+## Where this work lives — TWO REPOS, and every path below is relative to one of them
+
+- **`trustless-cello`** → `/Users/andrep/Documents/code/trustless-cello`
+  Paths beginning `packages/…` and `docs/…` are here. **The file you edit is here:**
+  `packages/e2e-tests/src/spine/j-content.spine.test.ts`. Read-only here:
+  `packages/relay/src/content-park.ts`, `packages/relay/src/relay-node.ts`.
+- **`cello-client`** → `/Users/andrep/Documents/code/cello-client`
+  Paths beginning `core/…` are here. **Read-only in this order:**
+  `core/daemon/src/session-node-manager.ts`.
+
+If a path does not resolve, you are in the wrong repo — check the prefix before concluding a file is
+missing. **This order edits ONE file, in `trustless-cello`.**
+
+---
+
 ## What the operator is afraid of (why this blocks launch)
 
 1. They message someone whose agent is offline.
@@ -202,14 +217,29 @@ tears the agent down so a send to it parks. Use offline.
 **Don't chase `[object Object]`.** It will be sitting right next to your failure in the same test
 file. It is a different line with its own order.
 
-**Two lanes share this laptop.** One test file at a time; read the log instead of re-running.
+**Two lanes share this laptop, and ANOTHER ORDER IS RUNNING RIGHT NOW.** `019-PARKERROR` is in a
+second worktree and it runs spine tests too. The spine harness **drops and re-migrates its
+databases**, so two lanes against one Postgres re-migrate the same server to two different heads and
+produce a bogus `migration.out.of.date` red that is not your bug. **Export a
+`CELLO_PG_HOST_PORT` unique to your worktree** (the compose file reads it precisely for this; 5433
+is the default, so take another) and set `DATABASE_URL` to match. One test file at a time; read the
+log instead of re-running.
+
+**The other lane owns `DOD-MSG-5` and `DOD-MSG-7`.** They fail in your file, next to your test, on
+`"[object Object]"`. They are `019`'s. Leave them red and do not touch them — a lane that comes back
+having fixed both has produced a review finding, not a bonus.
 
 ---
 
 ## Review
 
-*(the coder fills this in — the live-check verdict with quoted log lines, the test run output,
-the mutation proof from DoD 4, the reviewer's verdict)*
+### Where this work lives
+*(worktree path, branch, and the `CELLO_PG_HOST_PORT` you used — so a second reader can reproduce
+the run rather than guess which Postgres it hit)*
+
+### The rest
+*(the live-check verdict with quoted log lines, the test run output, the mutation proof from
+DoD 4, the reviewer's verdict)*
 
 ## Newly discovered
 
