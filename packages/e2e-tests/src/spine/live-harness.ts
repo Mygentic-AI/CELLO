@@ -243,6 +243,72 @@ export class Proc {
   }
 }
 
+/**
+ * A relay outage that is a BLACK HOLE, not a close — `016-RELAYLOSS`.
+ *
+ * Killing the relay process makes the kernel close every socket, and a client that observes a close
+ * takes the fast path: the reader ends immediately, in-flight submits settle, the re-dial starts.
+ * That is the recoverable blip, not the incident. The shape that costs an operator their afternoon
+ * is a relay that STOPS ANSWERING — the VM wedges, the network partitions, the process is alive and
+ * mute — where every timeout must expire before anything downstream learns a thing.
+ *
+ * So the relay binds an internal port and this forwards to it. `blackhole()` stops moving bytes in
+ * both directions while holding every socket open, and hangs new dials; `restore()` resumes
+ * forwarding and destroys the stalled sockets, which is what a healed partition looks like from the
+ * client (the connection is gone and the next attempt is a fresh dial).
+ */
+export interface RelayIngress {
+  /** Stop answering. Sockets stay open, bytes stop moving, new dials hang. */
+  blackhole: () => void;
+  /** Start answering again; the sockets stalled through the outage are destroyed. */
+  restore: () => void;
+  stop: () => Promise<void>;
+}
+
+function startRelayIngressProxy(listenPort: number, upstreamPort: number): Promise<RelayIngress> {
+  const pairs = new Set<{ down: import("node:net").Socket; up: import("node:net").Socket | null }>();
+  let holed = false;
+  const server = createServer((down) => {
+    const pair: { down: import("node:net").Socket; up: import("node:net").Socket | null } = { down, up: null };
+    pairs.add(pair);
+    // A socket error must never take the test process down — a black hole destroys sockets by design.
+    down.on("error", () => { /* expected during an outage */ });
+    down.on("close", () => { pairs.delete(pair); pair.up?.destroy(); });
+    // Held, not refused: a dial into a black hole hangs, it does not get ECONNREFUSED. Refusing
+    // would hand the client a fast, unambiguous answer — the very thing the outage denies it.
+    if (holed) return;
+    const up = createConnection({ host: "127.0.0.1", port: upstreamPort });
+    pair.up = up;
+    up.on("error", () => { down.destroy(); });
+    up.on("close", () => { down.destroy(); });
+    down.pipe(up);
+    up.pipe(down);
+  });
+  return new Promise((res, rej) => {
+    server.once("error", rej);
+    server.listen(listenPort, "127.0.0.1", () => {
+      res({
+        blackhole: () => {
+          holed = true;
+          // PAUSE, never destroy: pausing the readable half stalls the flow while the TCP connection
+          // stays established, which is what a mute peer looks like. Destroying would be a close.
+          for (const p of pairs) { p.down.pause(); p.up?.pause(); }
+        },
+        restore: () => {
+          holed = false;
+          for (const p of pairs) { p.down.destroy(); p.up?.destroy(); }
+          pairs.clear();
+        },
+        stop: async () => {
+          for (const p of pairs) { p.down.destroy(); p.up?.destroy(); }
+          pairs.clear();
+          await new Promise<void>((r) => server.close(() => r()));
+        },
+      });
+    });
+  });
+}
+
 /** Extract the first `adapter.initialised / ListenAddr` multiaddr (with /p2p/) from a proc. */
 export function listenMultiaddr(proc: Proc, opts: { ws?: boolean } = {}): string {
   for (const line of proc.output.split("\n")) {
@@ -439,6 +505,8 @@ export interface SpineCluster {
   /** J-SIG recovery: re-spawn an identical directory (node 0) on the same bootstrap URL. */
   restartDirectory: () => Promise<Proc>;
   relayMultiaddr: string;
+  /** Present only with `relayIngressProxy` — black-hole / restore the client-facing relay path. */
+  relayIngress?: RelayIngress;
   directoryUrl: string; // http://127.0.0.1:<healthPort> — node 0's CELLO_DIRECTORY_URL
   /** `/internal/*` base URLs, one per node — present only when `internalApiKey` was passed. */
   internalApiUrls: string[];
@@ -610,6 +678,19 @@ export interface StartSpineClusterOpts {
    * own condition rather than inventing a test-only one.
    */
   internalApiKey?: string;
+  /**
+   * `016-RELAYLOSS`: put a controllable ingress in front of the relay so a journey can black-hole
+   * it mid-conversation. The relay binds an internal port; the advertised `relayMultiaddr` — the
+   * one the directory hands clients — points at the proxy. Off by default and inert when unset;
+   * with it set, `cluster.relayIngress` is present. See `RelayIngress` for why a black hole rather
+   * than a kill.
+   *
+   * ⚠️ CLIENT-FACING ONLY, and the journey that uses it says so. `relay_register` gives the
+   * directory the relay's own listen address, so the directory→relay control path does NOT run
+   * through here and survives the outage. That makes any measured outcome the OPTIMISTIC one: what
+   * the client cannot do here, it certainly cannot do when the relay is gone for everyone.
+   */
+  relayIngressProxy?: boolean;
 }
 
 /**
@@ -668,10 +749,12 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
   // (every directory spawned so far + the relay) and remove tmpDir, so we never orphan a
   // node — an orphan holds ports/locks and corrupts the next run.
   let relay: Proc | undefined;
+  let relayIngress: RelayIngress | undefined;
   const spawnedDirs: Proc[] = [];
   const abort = async (err: unknown): Promise<never> => {
     for (const d of spawnedDirs) await d.stop();
     if (relay) await relay.stop();
+    if (relayIngress) await relayIngress.stop();
     try {
       rmSync(tmpDir, { recursive: true, force: true });
     } catch {
@@ -696,6 +779,9 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
     const relayPeerId = await peerIdFromTransportSeed(relaySeed);
     const relayPort = await freePort();
     const relayMultiaddr = `/ip4/127.0.0.1/tcp/${relayPort}/p2p/${relayPeerId}`;
+    // `relayIngressProxy`: the relay binds somewhere else and the advertised port is the proxy's.
+    // Without the option this is the relay's own port and nothing is inserted.
+    const relayBindPort = opts.relayIngressProxy ? await freePort() : relayPort;
 
     // ── Directories (start FIRST). Each is a sovereign node: own signing key + transport
     // key (→ distinct PeerID) + health port + listen port + DATABASE_URL. Each node's env
@@ -854,10 +940,12 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
       CELLO_DIRECTORY_MULTIADDR: directoryMultiaddr,
       CELLO_RELAY_KEY_FILE: join(tmpDir, "relay-key"),
       CELLO_RELAY_TRANSPORT_KEY_HEX: relaySeedHex,
-      CELLO_RELAY_LISTEN_ADDR: `/ip4/127.0.0.1/tcp/${relayPort}`,
+      CELLO_RELAY_LISTEN_ADDR: `/ip4/127.0.0.1/tcp/${relayBindPort}`,
       CELLO_RELAY_HEALTH_PORT: String(await freePort()),
     });
     await relay.waitForLine(/"adapterName":"ListenAddr"/, 20_000);
+    // AFTER the relay is listening, so the first forwarded dial has something to reach.
+    if (opts.relayIngressProxy) relayIngress = await startRelayIngressProxy(relayPort, relayBindPort);
 
     const relayRef = relay;
     // The directory set is replaceable (J-SIG recovery): liveDirs always points at the live
@@ -873,9 +961,11 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
       return next;
     };
 
+    const ingressRef = relayIngress;
     const stop = async (): Promise<void> => {
       for (const d of liveDirs) await d.stop();
       await relayRef.stop();
+      if (ingressRef) await ingressRef.stop();
       try {
         rmSync(tmpDir, { recursive: true, force: true });
       } catch {
@@ -895,6 +985,7 @@ export async function startSpineCluster(opts: StartSpineClusterOpts = {}): Promi
       },
       restartDirectory,
       relayMultiaddr,
+      ...(ingressRef ? { relayIngress: ingressRef } : {}),
       directoryAeIdentities: aeIdentities,
       directoryUrl: directoryUrls[0],
       directoryUrls,
