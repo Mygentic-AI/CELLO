@@ -134,8 +134,12 @@ the relay's live checking (`015-WITNESS`); the MITM finding, which is already bo
 
 **Where the constraint actually lived.** A content leaf's sender was constrained in exactly one
 place in the whole system: the relay refuses a `hash_submit` whose authenticated sender is neither
-`participant_a` nor `participant_b` (`packages/relay/src/relay-node.ts:1854-1857`,
-`not_a_participant`). That is a live-path check at submit time.
+`participant_a` nor `participant_b` — `#processHashSubmitLocked` in `packages/relay/src/relay-node.ts`,
+reason `not_a_participant`. That is a live-path check at submit time.
+
+> ⚠️ Cited by FUNCTION and REASON, not by line. `015-WITNESS` landed in this file while this unit was
+> blocked on the shared test slot and moved that gate from 1854 to 1908, adding a signature-based
+> witness check above it. A line number in a shared checkout is stale by the time it is read.
 
 **Nothing re-checked it at certification.** Walking the seal path in order:
 
