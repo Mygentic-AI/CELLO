@@ -1,28 +1,21 @@
 /**
  * Seal-alert notifier — Pub/Sub push → Telegram.
  *
- * The last link in the chain that ends "nothing watches anything". A log sink filters the fleet's
- * UNRECOVERABLE seal failures into a topic; this reads them and sends one legible message.
+ * The last link in the chain that ends "nothing watches anything". Two producers feed one chat: a
+ * log sink filtering the fleet's UNRECOVERABLE seal failures, and the node-health alert policies
+ * publishing Monitoring incidents through a Pub/Sub notification channel.
  *
- * ── THE ACK CONTRACT, WHICH IS THE ONLY SUBTLE PART ──────────────────────────────────────────────
- * Pub/Sub retries anything that is not 2xx, forever, with backoff. So the status code decides
- * whether a failure is retried or dropped, and getting it backwards is how you either lose alerts
- * silently or hammer Telegram in a loop:
+ * THIS FILE IS PLUMBING ONLY — socket, secrets, and the Telegram call. Every decision lives in
+ * `handler.ts` (which shape, which formatter, which HTTP status) and in `format.ts` (what a person
+ * reads), because both of those are testable and a `createServer` callback is not.
  *
- *   2xx on a message we CANNOT ever process (undecodable, not our shape) — retrying a malformed
- *        message just replays the same failure until the topic's retention expires.
- *   2xx on a message we deliberately SUPPRESSED — it was handled; throttling is a decision, not an
- *        error.
- *   5xx ONLY when Telegram itself failed — that is transient and worth retrying, and it is the one
- *        case where dropping the message would lose a real alert.
- *
- * ── WHAT THIS DOES NOT DO ────────────────────────────────────────────────────────────────────────
  * It never reads a secret at request time — both are loaded once at boot from the environment,
- * which Cloud Run populates from Secret Manager. A per-request secret fetch would put Secret
- * Manager on the alerting path, so an outage there would silence alerts about the outage.
+ * which Cloud Run populates from Secret Manager. A per-request fetch would put Secret Manager on
+ * the alerting path, so an outage there would silence the alerts about the outage.
  */
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { formatAlert, formatIncident, classifyPayload, Throttle, type LogEntry } from "./format.js";
+import { Throttle } from "./format.js";
+import { handleEnvelope } from "./handler.js";
 
 const PORT = Number(process.env["PORT"] ?? "8080");
 const BOT_TOKEN = process.env["TELEGRAM_BOT_TOKEN"] ?? "";
@@ -73,66 +66,15 @@ const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     }
     if (req.method !== "POST") { res.writeHead(405).end(); return; }
 
-    // TWO PAYLOAD SHAPES ARRIVE HERE. The log sink delivers a Cloud Logging LogEntry; the node-health
-    // alert policies deliver a Monitoring incident through a Pub/Sub notification channel on the
-    // same topic. They share no fields, so the shape is decided once, here, and never guessed at
-    // downstream.
-    let payload: Record<string, unknown>;
-    try {
-      const envelope = JSON.parse(await readBody(req)) as { message?: { data?: string } };
-      const data = envelope.message?.data;
-      if (typeof data !== "string") throw new Error("no message.data");
-      payload = JSON.parse(Buffer.from(data, "base64").toString("utf8")) as Record<string, unknown>;
-    } catch (err: unknown) {
-      // ACK. This message can never be parsed, so retrying replays the same failure until the
-      // topic's retention expires. Logged loudly because a filter change could make this constant.
-      log("seal.notifier.undecodable", { reason: err instanceof Error ? err.message : String(err) });
-      res.writeHead(204).end();
-      return;
-    }
-
-    const shape = classifyPayload(payload);
-    if (shape === "unknown") {
-      // ACK for the same reason as undecodable: it parsed, but it is neither of the two things this
-      // service knows how to say out loud, and no number of retries will change that. Named
-      // separately from `undecodable` so the logs distinguish "not JSON" from "not ours" — those
-      // have different causes and send an investigator to different places.
-      log("seal.notifier.unrecognised", { keys: Object.keys(payload).slice(0, 8) });
-      res.writeHead(204).end();
-      return;
-    }
-    const entry = payload as LogEntry;
-
-    if (BOT_TOKEN === "" || CHAT_ID === "") {
-      // NACK. This is our own misconfiguration and it is fixable without losing the alert — a
-      // redeploy with the secrets bound will deliver the retry. Acking here would discard real
-      // alerts for as long as the misconfiguration lasted, silently.
-      log("seal.notifier.unconfigured", {
-        hasToken: BOT_TOKEN !== "", hasChatId: CHAT_ID !== "",
-        impact: "alert NOT delivered and NOT acked; Pub/Sub will retry once secrets are bound",
-      });
-      res.writeHead(503).end();
-      return;
-    }
-
-    const { text, key } = shape === "incident" ? formatIncident(payload) : formatAlert(entry);
-    const decision = throttle.decide(key, Date.now());
-
-    if (decision.action === "suppress") {
-      log("seal.notifier.suppressed", { key, shape, event: entry.jsonPayload?.["event"] });
-      res.writeHead(204).end();
-      return;
-    }
-
-    const outgoing = decision.action === "notice" ? decision.text : text;
-    const sent = await sendTelegram(outgoing);
-    if (!sent.ok) {
-      log("seal.notifier.send.failed", { key, reason: sent.reason });
-      res.writeHead(503).end();   // transient — retry
-      return;
-    }
-    log("seal.notifier.sent", { key, kind: decision.action, shape, event: entry.jsonPayload?.["event"] });
-    res.writeHead(204).end();
+    const status = await handleEnvelope(await readBody(req), {
+      botToken: BOT_TOKEN,
+      chatId: CHAT_ID,
+      throttle,
+      now: () => Date.now(),
+      send: sendTelegram,
+      log,
+    });
+    res.writeHead(status).end();
   })();
 });
 

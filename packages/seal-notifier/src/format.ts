@@ -135,8 +135,25 @@ export class Throttle {
     this.#maxPerWindow = opts?.maxPerWindow ?? 8;
   }
 
-  /** `send` — deliver it. `suppress` — drop silently. `notice` — deliver THIS text instead. */
-  decide(key: string, now: number): { action: "send" | "suppress" } | { action: "notice"; text: string } {
+  /**
+   * `send` — deliver it. `suppress` — drop silently. `notice` — deliver THIS text instead.
+   *
+   * PRIORITY EXISTS BECAUSE ONE CHAT NOW CARRIES TWO CLASSES OF ALERT, and without it the less
+   * serious one can starve the more serious one. The global cap is 8 an hour across ALL keys. Node
+   * health sends TWO messages per incident (open and close), so a capacity-stalled roll — three
+   * nodes, two policies, both states — is 12 messages against that cap, and a `relay.seal.rejected`
+   * arriving behind them would be dropped. A lost receipt is the most serious thing this channel
+   * carries; it must not be silenced by a hot node.
+   *
+   * `critical` therefore bypasses the GLOBAL CAP ONLY. It still respects the per-key cooldown, so
+   * one repeatedly-failing link cannot flood on its own — which is the limit that was actually
+   * protecting against a flood in the first place.
+   */
+  decide(
+    key: string,
+    now: number,
+    priority: "critical" | "normal" = "normal",
+  ): { action: "send" | "suppress" } | { action: "notice"; text: string } {
     if (now - this.#windowStart >= this.#windowMs) {
       this.#windowStart = now;
       this.#sentThisWindow = 0;
@@ -150,7 +167,7 @@ export class Throttle {
       return { action: "suppress" };
     }
 
-    if (this.#sentThisWindow >= this.#maxPerWindow) {
+    if (priority !== "critical" && this.#sentThisWindow >= this.#maxPerWindow) {
       this.#suppressedThisWindow += 1;
       if (this.#noticeSent) return { action: "suppress" };
       this.#noticeSent = true;
@@ -178,11 +195,16 @@ export class Throttle {
  * NOTIFICATION CHANNEL that publishes into the SAME topic the log sink feeds. So one subscription
  * and one service carry two payloads that share no fields at all.
  *
- * WHY ONE TOPIC RATHER THAN TWO: the destination is one Telegram chat, and the Throttle below is
- * what stops that chat flooding. A second topic and subscription would mean a second Throttle with
- * no knowledge of the first, so one fleet-wide event could spend both budgets and send twice what
- * either allows. The anti-flood guarantee only means anything if everything bound for the chat
- * passes through one.
+ * WHY ONE TOPIC RATHER THAN TWO: one destination, one service, one thing to keep alive. A second
+ * topic would add a subscription and an IAM binding that can rot independently, for no gain.
+ *
+ * ⚠️ AN EARLIER VERSION OF THIS COMMENT GAVE A DIFFERENT AND FALSE REASON — that two topics would
+ * mean two Throttles and a doubled budget. They would not: `throttle` is a module-level singleton
+ * and the service is pinned to `max_instance_count = 1`, so two subscriptions onto the SAME service
+ * share the SAME budget. A second budget needs a second SERVICE, not a second topic. Rewritten
+ * rather than deleted because the wrong reason argued the opposite of the real trade-off, which is
+ * this: one shared route means node health and seal failures draw on one global cap. That is why
+ * `decide()` takes a priority — see the Throttle below.
  */
 
 /** Which of the two shapes this is — or neither, which the caller ACKs rather than retrying. */
@@ -206,20 +228,27 @@ function rec(v: unknown): Record<string, unknown> {
  * A Cloud Monitoring incident, as a person reads it on a phone.
  *
  * DELIBERATELY DOES NOT INLINE THE POLICY'S `documentation` BLOCK, which is where the remedy steps
- * live. It runs past a thousand characters including a multi-line gcloud command, and this file's
- * standing rule is that a notification which has to be scrolled is one that gets dismissed. The
- * console link IS the affordance — one tap, and that documentation is the first thing on the page.
+ * live: measured at 1,231 and 1,332 characters, and this file's standing rule is that a
+ * notification which has to be scrolled is one that gets dismissed. The console link IS the
+ * affordance — one tap, and that documentation is the first thing on the page.
  */
 export function formatIncident(payload: Record<string, unknown>): Formatted {
   const inc = rec(payload["incident"]);
   const closed = str(inc["state"]) === "closed";
 
-  const policy = str(inc["policy_name"]) ?? "a CELLO alert policy";
+  // NOT a plausible-sounding default. `policy_name` is always present in a real incident, so the
+  // only way to reach this is a payload that is not what we think it is — and a fallback reading
+  // like an ordinary headline would hide exactly that. Absence has to look like absence.
+  const policy = str(inc["policy_name"]) ?? "⚠️ UNNAMED POLICY — payload missing policy_name";
   const condition = str(inc["condition_name"]);
   const summary = str(inc["summary"]);
   const url = str(inc["url"]);
   const observed = str(inc["observed_value"]);
   const threshold = str(inc["threshold_value"]);
+
+  // READ, not assumed. Both node-health policies are WARNING today, but the payload carries this
+  // and a future CRITICAL policy on this channel must not render as a warning.
+  const critical = str(inc["severity"])?.toUpperCase() === "CRITICAL";
 
   const metricLabels = rec(rec(inc["metric"])["labels"]);
   const resourceLabels = rec(rec(inc["resource"])["labels"]);
@@ -233,13 +262,40 @@ export function formatIncident(payload: Record<string, unknown>): Formatted {
   const lines: string[] = [];
 
   if (closed) {
-    lines.push(`✅ CELLO RECOVERED — ${policy}`);
-    lines.push("This cleared on its own. Nothing to do — sent so the open alert is not left hanging.");
+    // ⚠️ DO NOT SAY "RECOVERED, NOTHING TO DO" — Monitoring closing an incident is not the same as
+    // the thing being fixed. Both policies carry `auto_close = 86400s`, and the memory condition
+    // carries EVALUATION_MISSING_DATA_ACTIVE, so a directory process that DIES stops emitting,
+    // opens an incident, stays dead, and has that incident auto-closed 24 hours later. Claiming
+    // recovery there would announce health on the single failure most worth being told about.
+    //
+    // `started_at`/`ended_at` are unix seconds and both are in the payload, so the two cases are
+    // distinguishable for free rather than guessed at.
+    const started = Number(inc["started_at"]);
+    const ended = Number(inc["ended_at"]);
+    const autoClosed = Number.isFinite(started) && Number.isFinite(ended) && ended - started >= 86_400;
+
+    if (autoClosed) {
+      lines.push(`⌛ CELLO — ${policy}: incident AUTO-CLOSED after 24h`);
+      lines.push("This is NOT a recovery. Monitoring times incidents out; the condition may still hold.");
+      lines.push("Check the node before assuming it is well.");
+    } else {
+      lines.push(`✅ CELLO RECOVERED — ${policy}`);
+      lines.push("The condition returned to normal. Sent so the open alert is not left hanging.");
+    }
+  } else if (!observed) {
+    // ⚠️ AN ABSENT MEASUREMENT IS A DIFFERENT FAILURE, AND THE POLICY NAME DESCRIBES THE WRONG ONE.
+    // This is the EVALUATION_MISSING_DATA_ACTIVE path: the node has reported nothing. Leading with
+    // "approaching its heap ceiling" would send an operator to read a memory trend for a process
+    // that is not running. The `value:` line also vanishes on this path, taking with it the one
+    // structural cue that this is not a threshold breach — so the headline has to carry it.
+    lines.push(`🟠 CELLO — ${who ?? "a directory node"} has STOPPED REPORTING`);
+    lines.push("Monitoring has no data for it. The usual cause is the directory process being dead");
+    lines.push("or crash-looping — check that it is running before reading anything into the policy.");
+    lines.push(`(raised by: ${policy})`);
   } else {
-    // 🟠 and not 🔴: both node-health policies are WARNING severity. In this chat 🔴 means a receipt
-    // was lost, and borrowing it for "a node is running hot" is how the red one stops meaning
-    // anything.
-    lines.push(`🟠 CELLO — ${policy}`);
+    // 🔴 only when the payload SAYS critical. In this chat 🔴 means something was actually lost, and
+    // spending it on "a node is running hot" is how the red one stops meaning anything.
+    lines.push(`${critical ? "🔴" : "🟠"} CELLO — ${policy}`);
     if (condition) lines.push(condition);
   }
 
@@ -261,6 +317,11 @@ export function formatIncident(payload: Record<string, unknown>): Formatted {
   // opens and recovers inside that window would have its RECOVERY suppressed, leaving the chat
   // believing a node is still sick. `who` is in the key for the same reason one scale down — one
   // node breaching must never mute another node breaching the same policy.
+  //
+  // ⚠️ THIS RESTS ON AN INVARIANT NOBODY WOULD OTHERWISE SEE: a re-open needs a full `duration` of
+  // violation, and both policies' durations (3,600 s and 1,800 s) EXCEED the 15-minute cooldown, so
+  // open→closed→open cannot collapse onto a suppressed key. A future policy with a duration shorter
+  // than the cooldown breaks that silently — the chat's last word would be RECOVERED on a sick node.
   return {
     text: lines.join("\n"),
     key: `${policy}|${who ?? zone ?? "-"}|${closed ? "closed" : "open"}`,

@@ -193,7 +193,7 @@ function incident(over: Record<string, unknown> = {}): Record<string, unknown> {
       started_at: 1_788_000_000,
       observed_value: "2700000",
       threshold_value: "2634547",
-      resource: { type: "gce_instance", labels: { zone: "us-east1-d", instance_id: "597" } },
+      resource: { type: "gce_instance", labels: { zone: "us-east1-d", instance_id: "8675309" } },
       metric: { type: "logging.googleapis.com/user/cello_directory_node_rss_kb", labels: { node_id: "gcp-use1" } },
       documentation: { content: "A directory node's resident memory has passed 60%..." },
       ...over,
@@ -207,23 +207,52 @@ describe("formatIncident — a node-health alert on a phone", () => {
     expect(text).toContain("Directory node approaching its heap ceiling");
   });
 
-  it("names WHICH NODE, from the metric label rather than the opaque instance id", () => {
-    // node_id survives a roll; instance_id does not, and an operator cannot act on `597`.
+  it("names WHICH NODE on its own line, from the metric label rather than the opaque instance id", () => {
+    // ASSERTS THE EXACT LINE. `gcp-use1` also appears inside the fixture's own `summary`, so a bare
+    // toContain stays green with the `node:` line deleted entirely — which is precisely the
+    // implementation this test exists to forbid, one that never reads metric.labels.
     const { text } = formatIncident(incident());
-    expect(text).toContain("gcp-use1");
-    expect(text).not.toContain("597");
+    expect(text).toContain("node:  gcp-use1");
+    // node_id survives a roll; the numeric instance id names the machine and tells nobody anything.
+    expect(text).not.toContain("8675309");
   });
 
   it("carries the observed value AND the threshold — a number with nothing to compare it to is noise", () => {
+    // The exact line again: `2634547` is in the fixture's summary too, so asserting it alone passes
+    // with the threshold stripped out of the value line.
     const { text } = formatIncident(incident());
-    expect(text).toContain("2700000");
-    expect(text).toContain("2634547");
+    expect(text).toContain("value: 2700000  (threshold 2634547)");
   });
 
-  it("a CLOSED incident says RECOVERED and does not read as a new failure", () => {
+  it("a CLOSED incident that really recovered says RECOVERED", () => {
+    // One hour open: a genuine recovery, not a timeout.
     const { text } = formatIncident(incident({ state: "closed", ended_at: 1_788_003_600 }));
-    expect(text).toContain("RECOVERED");
-    expect(text).not.toContain("🔴");
+    expect(text).toContain("✅ CELLO RECOVERED");
+    expect(text).toContain("returned to normal");
+  });
+
+  it("an incident AUTO-CLOSED after 24h must NOT be reported as a recovery", () => {
+    // THE FAILURE THIS PREVENTS: a directory process dies, stops emitting, the missing-data
+    // condition opens an incident, the node stays dead, and Monitoring times the incident out 24h
+    // later. Saying \"recovered, nothing to do\" there announces health on the single failure most
+    // worth being told about.
+    const { text } = formatIncident(incident({ state: "closed", started_at: 1_788_000_000, ended_at: 1_788_086_400 }));
+    expect(text).toContain("AUTO-CLOSED");
+    expect(text).toContain("NOT a recovery");
+    expect(text).not.toContain("✅ CELLO RECOVERED");
+  });
+
+  it("a missing measurement is reported as a node that STOPPED REPORTING, not as a heap breach", () => {
+    // The EVALUATION_MISSING_DATA_ACTIVE path. Leading with the policy name would send an operator
+    // to read a memory trend for a process that is not running.
+    const { text } = formatIncident(incident({ observed_value: undefined, threshold_value: undefined }));
+    expect(text).toContain("gcp-use1 has STOPPED REPORTING");
+    expect(text).not.toMatch(/^🟠 CELLO — Directory node approaching/m);
+  });
+
+  it("renders 🔴 when the payload says CRITICAL, rather than assuming every policy is a warning", () => {
+    expect(formatIncident(incident({ severity: "CRITICAL" })).text).toContain("🔴");
+    expect(formatIncident(incident()).text).toContain("🟠");
   });
 
   it("an OPEN incident is not dressed up as a recovery", () => {
@@ -251,9 +280,10 @@ describe("formatIncident — a node-health alert on a phone", () => {
   it("survives a payload missing every optional field rather than throwing on the alerting path", () => {
     // A formatter that throws here turns a real incident into an undecodable message and the
     // operator is told nothing at all.
-    const { text, key } = formatIncident({ incident: { state: "open" } });
-    expect(typeof text).toBe("string");
-    expect(text.length).toBeGreaterThan(0);
+    const { text, key } = formatIncident({ incident: { state: "open", observed_value: "1", threshold_value: "0" } });
+    // AND says the policy name is missing rather than inventing a plausible one. A fallback that
+    // reads like an ordinary headline hides the fact that the payload was not what we thought.
+    expect(text).toContain("UNNAMED POLICY");
     expect(key.length).toBeGreaterThan(0);
   });
 });
