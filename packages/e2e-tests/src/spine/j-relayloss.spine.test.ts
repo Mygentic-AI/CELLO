@@ -230,6 +230,16 @@ describe("J-RELAYLOSS — kill a relay mid-conversation and watch (016-RELAYLOSS
     // Q2b — the operator surface. Does anything they can READ name the missing witness?
     record("Q2b does the send response name the missing witness",
       JSON.stringify(outageSend).includes("witness") ? "yes" : "NO — the word 'witness' is absent from the response");
+    /**
+     * THE FIX'S TEETH, and the pair is what makes them teeth. `witnessed` must be TRUE on the send
+     * the relay really witnessed and FALSE on the one it did not — asserted against the same relay,
+     * minutes apart, with nothing between them but the outage. A test that only ever saw the false
+     * case would be satisfied by a hardcoded false; this one would not.
+     */
+    expect(healthySend["witnessed"], `the witnessed send must say so: ${JSON.stringify(healthySend)}`).toBe(true);
+    expect(outageSend["witnessed"], `the unwitnessed send must say so: ${JSON.stringify(outageSend)}`).toBe(false);
+    expect(String(outageSend["guidance"] ?? ""), "and must tell the operator what it means")
+      .toMatch(/did not witness/i);
 
     /**
      * CONTROL, and the one the whole run rests on. The black hole reached the client if and only if
@@ -332,9 +342,40 @@ describe("J-RELAYLOSS — kill a relay mid-conversation and watch (016-RELAYLOSS
     record("Q3b DID THE SEAL COMPLETE ONCE THE RELAY CAME BACK", typeof rootAfter === "string" ? `YES ${rootAfter}` : "NO");
     record("Q3b last sealed-receipt answer after recovery", sealedAfter);
 
+    /**
+     * Q3c — THE QUESTION THAT SETS THE SEVERITY, and it is not the same as Q3b.
+     *
+     * "It did not seal on its own" and "the receipt is gone" are very different products, and only
+     * one of them is a launch blocker. B's close was REFUSED during the outage with
+     * `relay_submit_timeout` and guidance saying to retry once the relay is reachable — so the
+     * receipt may be one manual step away rather than lost. Nothing retries it automatically; this
+     * measures whether the step the guidance names actually works.
+     */
+    const reclose = (await connB.call("cello_close_session", { cello_session_id: sidB })) as Record<string, unknown>;
+    record("Q3c B re-closes after recovery (the remedy its own guidance named)", reclose);
+    let sealedRetry: unknown = "(never)";
+    const retryDeadline = Date.now() + 150_000;
+    while (Date.now() < retryDeadline) {
+      const r = (await connA.call("cello_sealed_receipt", { cello_session_id: sidA })) as
+        { ok?: boolean; sealed_root?: string };
+      sealedRetry = r;
+      if (r.ok === true && typeof r.sealed_root === "string") break;
+      await sleep(2_000);
+    }
+    const rootRetry = (sealedRetry as { sealed_root?: string }).sealed_root;
+    record("Q3c DOES A MANUAL RE-CLOSE RECOVER THE RECEIPT",
+      typeof rootRetry === "string" ? `YES ${rootRetry}` : "NO — the receipt is not recoverable by re-closing");
+    record("Q3c last sealed-receipt answer after the re-close", sealedRetry);
+
     // ─── PHASE 5 — the other kill shape, for contrast: the process is genuinely gone ────────────
     // A close, not a black hole. Recorded separately because the two are different incidents and
     // the order asks which was tested.
+    // Read the reservation state FIRST. The baseline had none; if the receiver acquired one by now
+    // the kill can measure a real loss, and the number below means what it says rather than being
+    // attributed to a state nobody checked.
+    const preKill = JSON.parse(cello(["status"], { CELLO_DIR: dirA }).stdout) as typeof baselineStatus;
+    record("Q4c standing_receiver_reachability just before the kill",
+      preKill.agents?.find((a) => a.name === "agentA")?.standing_receiver_reachability ?? "(absent)");
     const t2 = Date.now();
     await cluster.relay.kill();
     record("T2 relay process SIGKILLed at", new Date(t2).toISOString());
