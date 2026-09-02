@@ -826,7 +826,7 @@ argument: a wire and schema change is cheapest against an empty database and nev
 `DOD-M15-KEYAGREE-1` **must precede** `DOD-M15-SEALWIRE-1`; it produces both outputs the seal change
 consumes.
 
-### `DOD-M15-KEYAGREE-1` — 🟡 CELLO owns its own confidentiality guarantee
+### `DOD-M15-KEYAGREE-1` — ✅ CELLO owns its own confidentiality guarantee
 > **BOTH halves are now written and reviewed.** `006-CRYPTO` (local: mint per session, memory only,
 > destroyed at teardown and shutdown — one Opus pass, six findings, three blocking, all fixed, 17
 > mutants) and `007-CRYPTO` (wire: exchange, sign, verify, encrypt the body — one Opus pass, fourteen
@@ -843,7 +843,7 @@ consumes.
 >
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
-### `DOD-M15-EPHEMERAL-AUTH-1` — 🟡 The session ephemeral is bound to the agent's identity
+### `DOD-M15-EPHEMERAL-AUTH-1` — ✅ The session ephemeral is bound to the agent's identity
 > **Written and reviewed** (`007-CRYPTO`, 2026-09-01 — one Opus pass, fourteen findings, five
 > blocking a publish, all addressed). The throwaway key is signed with the agent's Ed25519 identity,
 > the peer's is verified **before** anything derives, missing/malformed/mismatched all take one
@@ -876,14 +876,24 @@ consumes.
 > file's own timestamp, which is what ties the two observations to one message. **Readable at the
 > endpoint, opaque at the relay, measured rather than inferred.**
 >
-> **WHY THAT DOES NOT CLOSE IT.** The two agents in that test (`CELLO_Coder_1` → `CELLO_Support`)
-> live in **one daemon process**. So the ciphertext half is now proven on real infrastructure, and
-> the PROCESS BOUNDARY half is not — which is the exact thing this clause was written to demand. A
-> separate cross-machine session the same night (`CELLO_Coder_1` on the Mac → `Miss_Chelly_H` on
-> Hermes EC2) genuinely crossed two daemons on two machines and parked at the relay, but its parked
-> entry had already been collected and deleted before it could be read, so no bytes were captured
-> for it. **What remains is one test: a cross-daemon message whose parked ciphertext is read off the
-> relay before collection.** → Entry C10.
+> ✅ **CLOSED 2026-09-02 on Andre's ruling, and the ruling is right.** This clause exists to make one
+> claim demonstrable: **we run the relays, so "we cannot read your traffic" cannot be asserted.** That
+> is now measured against the relay, in its own process, on another machine — encryption happened on
+> a laptop, and a host in us-east1 holds 777 bytes that contain none of it.
+>
+> The wording said "two daemons in separate processes" as a way of ruling out a shared heap faking
+> the result. **The production measurement rules that out more strongly than the wording asked**: the
+> observer is a different process on a different continent-scale network path, with no memory shared
+> with the sender at all. What differed from the letter is that the two AGENTS sat in one daemon —
+> and the agents are not the adversary this clause is about. The relay is.
+>
+> **What was attempted and abandoned, so nobody re-runs it:** a spine journey with two daemons whose
+> parked ciphertext is read off the relay. Its ciphertext assertion PASSED on every run. What did not
+> work was scaffolding — a positive control nobody asked for (bring the recipient back and decrypt)
+> that drags in the whole offline-recovery subsystem, and a relay change that made the mailbox
+> durable for EVERY spine cluster and broke eight J-CONTENT journeys in one run. All reverted; the
+> tree is clean. If it is ever wanted, the observation point is the relay's content store and the
+> control to use is the content-hash linkage, not recovery. → Entry C10.
 >
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 Split from `DOD-M15-KEYAGREE-1` (review F6). The key agreement defeats a PASSIVE recorder — the

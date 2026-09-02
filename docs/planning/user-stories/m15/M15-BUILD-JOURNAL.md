@@ -9687,3 +9687,47 @@ That needs an active man-in-the-middle against our own relay.
   the no-op. The name says "stale" when nothing is wrong.
 - The three directories report manifest `currentVersion` of 21, 22 and 23. Possibly per-node by
   design; **not confirmed either way, and not being claimed as drift.**
+
+---
+
+## Entry C11 (CELLO_Coder_1) — 2026-09-02: both encryption tags close, and what the spine attempt cost
+
+`DOD-M15-KEYAGREE-1` and `DOD-M15-EPHEMERAL-AUTH-1` are ✅ on Andre's ruling.
+
+**What closed them.** The claim these clauses exist to protect is *"we run the relays, so we cannot
+read your traffic"* — and that is measured. A message was forced to park at the live us-east1 relay
+and the relay's own file was read off its disk: 777 ciphertext bytes containing none of the five
+plaintext needles, raw or base64-decoded, 36.4% printable against ~99% for English, while the
+sender's transcript held the sentence in full 20 ms earlier. Encryption on a laptop; ciphertext on a
+host in Virginia, with no memory shared between them.
+
+The wording asked for "two daemons in separate processes" as a way of ruling out a shared heap
+faking the result. The production measurement rules that out **more strongly than the wording** —
+the observer is a separate process across a real network. What differed from the letter is that the
+two agents sat in one daemon, and the agents are not the adversary the clause is about.
+
+**What the spine attempt cost, recorded so it is not repeated.**
+
+The ciphertext assertion itself PASSED on every run — two daemons in separate OS processes, the real
+relay binary, the relay's stored copy free of the canary. Everything that failed was scaffolding:
+
+- **A positive control nobody asked for.** "Bring the recipient back online and let it decrypt" pulls
+  in the entire offline-recovery subsystem — interrupted-session detection, session revive, relay
+  pull authorisation, salt agreement — all of which can fail for reasons that say nothing about
+  encryption, and all of which did. The cheap control that works is the CONTENT HASH: the sender's
+  deposit line names it, the relay names each stored entry by it, same hash ⇒ same message.
+- **A relay change with far too wide a blast radius.** Making the store-and-forward mailbox durable
+  so it could be inspected was applied to EVERY spine cluster. Ten J-CONTENT journeys share one
+  relay, and a durable store accumulates state where the in-memory one resets: eight of them failed
+  in a single run.
+- **A comment that predicted the failure, read and then ignored.** `relay.ts` says the vouched-key
+  store "has to be exactly as durable as the content store above — keep these two lines together; if
+  one becomes durable and the other does not, that outage comes straight back." One was made durable
+  and not the other, and the outage came straight back with the exact symptom named there:
+  `relay_refused_pull:not_a_participant` — mail present, its owner refused.
+
+Everything was reverted; the tree is clean. **If a literal two-daemon journey is ever wanted, the
+route is known:** observe the relay's content store (NOT a packet capture — libp2p's Noise makes a
+wire recorder pass even with the feature deleted, because the relay terminates Noise), make the WAL
+directory opt-in per cluster so no other journey changes, and use the content-hash linkage rather
+than recovery.
