@@ -5290,6 +5290,10 @@ export class CelloDirectoryNode {
     // retained as the in-process duplicate guard (durable dedup is the DB constraint).
     this.#sessionParticipants.delete(sessionIdHex);
     this.#sessionGenesisAt.delete(sessionIdHex);
+    // DOD-M15-UNILATERAL-1: the tier is per-session state and evicts with the rest of it. Left
+    // behind it would grow without bound on a long-running node, and — the sharper half — a future
+    // session id colliding with a retired one would inherit a tier nobody asked for.
+    this.#sessionHighStakes.delete(sessionIdHex);
   }
 
   /**

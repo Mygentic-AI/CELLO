@@ -454,6 +454,50 @@ describe("DOD-M15-UNILATERAL-1 clause 6 — the elapsed-time source measures wha
     }
   }, 20_000);
 
+  it("★★ the tier is EVICTED with the rest of the session's state, not left to accumulate", async () => {
+    /**
+     * `#sessionHighStakes` is per-session state and its siblings — the roster and the genesis
+     * timestamp — are both deleted when a seal completes. Left behind, it grows without bound on a
+     * long-running node, and a later session id colliding with a retired one would inherit a tier
+     * nobody asked for. Asserted through the same accessor the gate reads.
+     */
+    const logs: LogEntry[] = [];
+    const [a, b] = [generateKeypair(), generateKeypair()];
+    const store = await import("@cello-protocol/interfaces/stubs");
+    const { directory, stop } = await createDirectoryNode({
+      keyProvider: generateKeypair(),
+      relay: makeLivenessRelay("gone"),
+      relayEndpoint: { peer_id: "relay-peer", multiaddrs: [] },
+      store: new store.InMemoryDirectoryStore(),
+      logger: makeSpyLogger(logs),
+      deliveryGraceSeconds: 0,
+      highStakesGraceSeconds: 0,
+    });
+    const cap = capturingStream();
+    let sessionIdHex = "";
+    try {
+      const sessionId = new Uint8Array(randomBytes(16));
+      sessionIdHex = hex(sessionId);
+      const carry = await buildUnilateralCarry(CONVERSATION(a, b), a, generateKeypair(), sessionId);
+      await directory.triggerSealUnilateralWithLeavesForTest(
+        hex(new Uint8Array(await a.getPublicKey())),
+        sessionId,
+        carry.reportedRoot,
+        hex(new Uint8Array(await b.getPublicKey())),
+        carry.leaves,
+        cap.stream,
+        { highStakes: true },
+      );
+      expect(notarized(logs), "precondition: the seal must actually complete for eviction to run").toBe(true);
+      expect(
+        directory.getSessionHighStakesForTest(sessionIdHex),
+        "the tier must not outlive the session it belongs to",
+      ).toBe(false);
+    } finally {
+      await stop();
+    }
+  }, 20_000);
+
   it("★★ the HIGH-STAKES opt-in survives a restart — it is restored with the roster, never re-inferred", async () => {
     /**
      * A directory restart that forgot the tier would judge the conversation at the standard bar: a
