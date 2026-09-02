@@ -260,8 +260,15 @@ the moment of each:
 
 | The relay… | Time until the daemon notices |
 |---|---|
-| is **killed** — process gone, sockets close | **14.0 to 17.0 seconds** (three runs, one sample each) |
-| goes **mute** — alive, sockets held open, answers nothing | **not within 180 seconds**, and `cello status` reported it healthy throughout |
+| is **killed** — process gone, sockets close | **14 to 26 seconds** (four runs, one sample each) |
+| goes **mute** — alive, sockets held open, answers nothing | **44 seconds in one run; not within 180 seconds in another** |
+
+**The mute number is unstable, and that instability is itself the finding.** Two runs of the same
+code against the same harness: once the daemon noticed in 44 seconds, once it had not noticed after
+three minutes. A killed relay is consistently a handful of seconds. I first wrote the mute row as a
+flat "not within 180 seconds" on the strength of one run; the next run refuted it, which is the
+second time in this unit that one sample became a claim. What holds across both is the comparison —
+a mute relay costs multiples of a killed one, and sometimes far more.
 
 The order's own trap note said to kill the relay convincingly, because "the incident shape is a relay
 that stops answering". It was right, and the gap between the two is the reason: a killed relay
@@ -454,6 +461,44 @@ That is the same rule as HIGH-1 and Invariant 3 — a downstream layer replacing
 upstream message — and it is the third time this unit produced that shape in its own fix. Composed
 rather than chosen, and pinned by a test in the file whose edit broke it.
 
+### Second pass — the fixes were checked, and half of two of them had been applied
+
+Pass two (the cap) verified the closures and found that three of my corrections had been made in one
+place and not in their twin. The pattern is worth more than the instances:
+
+> Both are this unit's own corrections applied to one half of a pair.
+
+- **The assertion I argued against, still standing.** I removed an `expect` on the mute-detection
+  event from one phase, with a paragraph on why asserting a *question* rather than a *control* was
+  the error — and left the same assertion, with a tighter bound, in an earlier phase. It was green
+  only because that phase's precondition is usually false, so it almost never ran. Both sites now
+  record.
+- **A comment asserting the wrong value of the field beside it.** I documented the diverged return as
+  reporting `witnessed: undefined` without the fix. It reports `true` — divergence is reached only
+  when the relay *did* assign a sequence. The value was right and my explanation of it was wrong,
+  which is how the next reader inherits a wrong model.
+- **A test named for a branch it never reaches.** That same test claimed to cover the diverged
+  response; the fixture has no relay, so divergence is unreachable and it was a duplicate of its
+  predecessor. It failed the revert test. Renamed to what it exercises, with the diverged branch left
+  to the journey, where a real relay exists.
+- **"No action is needed" survived on one path** and was then contradicted three words later by the
+  unwitnessed note — the same false reassurance I had removed from its sibling. Now conditional, and
+  that path carries the same close-now remedy the other two do.
+- **A sentence that was simply false:** the guidance said the counterparty's record "cannot gain"
+  an unwitnessed message. It can — the receiving side appends unwitnessed content in arrival order,
+  deliberately, so that the relay is not a precondition for reading your mail. What is lost is the
+  independent proof, not the message.
+- **The tool description over-claimed.** "Every answer carries `witnessed`" — `cello_send` has about
+  a dozen returns and five place a leaf. An agent taking it literally would read a governance block
+  as an unwitnessed send. Now scoped, with the meaning of absence stated.
+
+**Residual, accepted rather than fixed, and recorded so it is not mistaken for covered:** the
+composition test pins the shared function, not the call site. Reverting the call site to ignore the
+composer keeps it green. The `013-ABSENCE` park test does exercise the real call site and pins that
+upstream survives there — which is the regression that actually happened — so what is unpinned is
+narrower: that the unwitnessed note is *appended* at that call site. The two-pass cap is reached, so
+this carries forward rather than earning a third pass.
+
 ---
 
 ## Newly discovered
@@ -487,13 +532,15 @@ rather than chosen, and pinned by a test in the file whose edit broke it.
    standing receiver comes to hand while reporting the failure under the agent it was draining for. On
    a one-agent daemon they coincide; on a three-agent daemon they need not, and the log then attributes
    a failure to an agent that was not involved.
-5. **A MUTE relay is not noticed for at least three minutes, while a killed one is noticed in
-   fifteen seconds — and `cello status` reads healthy the whole time.** The watchdog tests whether the
-   connection to the relay is open, and a relay that stops answering without closing anything leaves
-   it open. The agent keeps advertising a circuit nobody can be reached through. **This is the fifth
-   item and the most serious of them**; it is the exact failure the standing-receiver design names as
-   its reason to exist, surviving in the one shape that does not slam a door. Not investigated and
-   not fixed, per the trip-wire.
-5. *(Not an item — a question the data raises and does not settle.)* The second relay granted 1 of 686
-   fallback requests. Whether that is the relay or the client's already-failing state cannot be
-   separated from this log, because the fallback only ever runs when the client is already failing.
+5. **A MUTE relay takes multiples longer to notice than a killed one, and how much longer is not
+   stable** — 44 seconds in one run, still unnoticed after three minutes in another, against 14–26
+   seconds for a kill. The watchdog tests whether the connection to the relay is open, and a relay
+   that stops answering without closing anything leaves it open, so detection falls to whatever
+   timeout fires first. The agent keeps advertising a circuit nobody can reach it through meanwhile.
+   **This is the fifth item and the most serious of them** — it is the failure the standing-receiver
+   design names as its reason to exist, surviving in the one shape that does not slam a door. Not
+   investigated and not fixed, per the trip-wire.
+*(Not an item — a question the data raises and does not settle.)* The second relay is asked only
+after the first has failed, and across 32 days it holds 1.7% of reservations (51 of 3,022) against
+690 refusals. Whether that is the relay refusing or the client's already-failing state cannot be
+separated from this log, because the fallback only ever runs when the client is already failing.

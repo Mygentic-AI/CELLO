@@ -253,10 +253,15 @@ describe("J-RELAYLOSS — kill a relay mid-conversation and watch (016-RELAYLOSS
       .toMatch(/did not witness/i);
 
     /**
-     * CONTROL, and the one the whole run rests on. The black hole reached the client if and only if
-     * a send that was witnessed before the outage is unwitnessed after it. This replaces
-     * `reservation.lost` as the control precisely because that event cannot fire on loopback — an
-     * absence there would have proved nothing about the proxy, which is the trap this avoids.
+     * CONTROL, and the one the whole run rests on: a send that was witnessed before the outage is
+     * unwitnessed after it. Nothing but the proxy changed between the two, so this is direct
+     * evidence the black hole reached the client.
+     *
+     * It is the right control because it is POSITIVE — it observes something happening. An earlier
+     * version justified it as "`reservation.lost` cannot fire on loopback", which is false: phase 5
+     * of this same file measures that event on loopback. The control was right and its stated
+     * reason was not, which is its own kind of defect — a reader trusting the reason would conclude
+     * the reachability half is unmeasurable here, and it is not.
      */
     expect(outageUnwitnessed, "the outage must actually reach the client: the send must go unwitnessed")
       .toBeGreaterThan(healthyUnwitnessed);
@@ -270,17 +275,26 @@ describe("J-RELAYLOSS — kill a relay mid-conversation and watch (016-RELAYLOSS
      * still looking healthy. This is the number Part 1 question 4 asks for, and the first version
      * of this journey declined to measure it on a premise its own last phase refuted.
      */
+    /**
+     * ⚠️ RECORDED, NOT ASSERTED — and this is the second place that needed saying, review HIGH-A.
+     *
+     * Phase 5 removed an `expect(...).not.toBeNull()` on this exact event, with three paragraphs on
+     * why asserting it mistakes a QUESTION for a CONTROL. The same assertion survived here, with a
+     * tighter bound, labelled "CONTROL for this number specifically" — and it was green only because
+     * `holdsReservation` is usually false this early, so it almost never ran. The moment the
+     * receiver reserves faster, or someone closes the mute-detection gap this unit recorded, it
+     * would have gone red for the unit's own headline finding.
+     *
+     * Applying a correction to one of a pair is how the pair drifts. Both sites now record.
+     */
     if (holdsReservation) {
       const lost = await waitForEventAfter(daemonA, /session\.standing_receiver\.reservation\.lost/, t0, 150_000);
-      record("Q4a ms from a MUTE relay to reservation.lost (the silent window)", lost?.waitedMs ?? "NEVER within 150s");
+      record("Q4a ms from a MUTE relay to reservation.lost (the silent window)", lost?.waitedMs ?? "NOT within 150s");
       record("Q4a the lost event", lost?.raw ?? "(none)");
-      // CONTROL for this number specifically: an absence here would mean the receiver was never
-      // watched, not that the daemon was silent — and those read identically in a log.
-      expect(lost, "a receiver that HELD a reservation must notice the relay going mute").not.toBeNull();
       const rebuilt = await waitForEventAfter(daemonA, /session\.standing_receiver\.reachability/, t0, 90_000);
       record("Q4a rebuild attempt after the loss", rebuilt?.raw ?? "(no rebuild observed within 90s)");
     } else {
-      record("Q4a ms from a MUTE relay to reservation.lost", "not measured — the receiver never became reserved");
+      record("Q4a ms from a MUTE relay to reservation.lost", "not measured here — the receiver was not yet reserved at t0; measured in phase 5 instead");
     }
     record("Q5 rebuild against a different relay", "not measurable here — this harness runs ONE relay");
 
