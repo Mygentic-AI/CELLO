@@ -1035,14 +1035,25 @@ T-of-N log Decisions 1 and 2, plus its Part 4.
   obvious way around the whole fix — wait out the timer, or engineer the appearance of
   unreachability. **Do not ship these far apart.**
 
-### `DOD-M15-LEAFPARTIES-1` — ❌ Every content leaf is constrained to the session's two participants
-The one question the T-of-N log left explicitly open. `verifySealLeaves` constrains only the final
-two SEAL control leaves to be from two distinct participants; whether every **earlier content** leaf
-is independently constrained to that same pair — as opposed to merely being internally
-self-consistent — was never confirmed.
-- **Verify first, then close if needed.** It did not change the MITM finding's bound, because in
-  that scenario the two participants the record shows are simply A and M throughout. It is still a
-  distinct unresolved question.
+### `DOD-M15-LEAFPARTIES-1` — ✅ Every content leaf is constrained to the session's two participants
+> **Closed 2026-09-02** (`014-LEAVES`). **The answer to the open question was NO — it was not
+> constrained**, and what stood in for the constraint was *incidental*: an injected leaf changed the
+> root, so the roots stopped matching. Nobody wrote that as a protection. **And the injector held its
+> off-switch** — omit `content_bytes` and the verdict is `NOT_CARRIED`, which is deliberately
+> tolerated. The adversary was not only a rogue relay: `seal_submission` is accepted from any dialer
+> who knows a session id.
+>
+> **Cross-session grafting was unconstrained at BOTH layers** — Structure 1 already signs the
+> `session_id`, and neither the relay nor the directory compared it. The check was free and never made.
+>
+> Fixed by widening the existing check rather than adding a second: `verifyLeafProvenance` verifies,
+> for every leaf, that the sender is one of the two participants and that the leaf's own signed bytes
+> name the session being sealed — on the bilateral path *before* the carried-payload walk, so the
+> assembler cannot disable it by sending less.
+>
+> **The review found a live hole this unit had walked past: a stranger could unilaterally seal a
+> session they were not in.** Proven by reverting — the directory signs a receipt over two people's
+> conversation naming a third. A test seam had been making that case unconstructible. → journal.
 
 ### `DOD-M15-INCLUSION-1` — ✅ An operator can prove a message sits under a sealed root
 > **Closed.** `cello_get_inclusion_proof` takes the MESSAGE and returns a proof against the root the
@@ -1195,25 +1206,22 @@ resistance at seal, evidenced absence for `DOD-M15-UNILATERAL-1`, and the corrob
 - **Fits the cost model:** relays are meant to be cheap, stateless and numerous specifically so this
   redundancy is affordable; directories are the few, database-backed, anti-entropy-meshed tier.
 
-### `DOD-M15-CORROBORATE-1` — ❌ The relay verifies every hash proactively, not on request
-T-of-N log Decision 4. **The defense-in-depth answer to `DOD-M15-FRAME-1`'s own new attack surface**:
-the party best positioned to detect a wrong-signer event is the receiving client, which can itself be
-compromised and could weaponize "signature mismatch" as a false accusation.
-- **Freezing locally is always safe unilaterally** — it limits only what that client trusts. What
-  must **not** be asserted unilaterally is the accusatory record.
-- **The relay is the corroborating witness for a precise reason: its copy of what the sender signed
-  never passes through the receiving client at all.** A compromised receiver cannot touch, edit or
-  suppress it.
-- **Proactive, not on-demand.** The relay is bound to the session with both participants' real
-  pubkeys and already receives every signed hash; checking each against the two expected keys costs
-  nothing new and **does not depend on the accusing client's cooperation or honesty** — which is
-  precisely what closes the compromised-detector gap. Detection is not enforcement: alert the
-  affected daemon, and consider refusing to keep relaying a session it has flagged.
-- **No new cryptography** — the identical check the directory already performs at seal time,
-  triggered early. **Stays inside the blind-witness design**: verifying a signature against a known
-  pubkey never requires reading content.
-- One relay is one witness; this becomes a decentralized detection layer only with
-  `DOD-M15-RELAYFANOUT-1`.
+### `DOD-M15-CORROBORATE-1` — ✅ The relay verifies every hash proactively, not on request
+> **Closed 2026-09-02** (`015-WITNESS`). The relay now verifies each submitted hash against the two
+> expected participant keys **as it arrives**, not at seal time — the same check the directory
+> already ran, triggered early, with no new cryptography and no content read. That closes the gap
+> `FRAME-1` opened: the party best placed to notice a forged message is the receiving client, which
+> is also the party best placed to fabricate the accusation. **The clause the unit existed for is
+> asserted: the relay flags it even when the receiving client reports nothing at all.**
+>
+> **Ruled and written down, because the order asked for the choice rather than the code implying it:
+> a flagged session KEEPS BEING RELAYED.** The submission is refused before a sequence is allocated,
+> so nothing entered the tree and there is nothing left to protect — while a teardown would let
+> anyone who can name a session id end any conversation with one frame. A false teardown is worse
+> than a false accusation, and needs no accusation at all.
+>
+> **One relay is one witness, and the wording says only that.** It becomes a detection layer with
+> `DOD-M15-RELAYFANOUT-1`, not before. → journal.
 
 ### `DOD-M15-DIRAUTH-1` — ✅ Directory authentication cannot be silently skipped
 > ### ✅ CLOSED 2026-08-24 — its own stated condition is met.
