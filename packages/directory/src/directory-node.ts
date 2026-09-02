@@ -141,6 +141,13 @@ import type {
 import { buildSealLegibility, bindLegibilityToTbs, findSealCeremonyPair } from "./seal-legibility.js";
 import { verifySealFinalRoots, verifyLeafProvenance, SEAL_FINAL_ROOT_REASONS, SEAL_FINAL_ROOT_GUIDANCE, type SealFinalRootReason } from "./seal-final-root.js";
 import type { SealRejectionWireReason } from "./directory-types.js";
+import {
+  isSealFramedMessage,
+  verifySealCosignEvidence,
+  cosignEvidenceDigest,
+  SEAL_COSIGN_REASONS,
+  SEAL_COSIGN_GUIDANCE,
+} from "./seal-cosign-evidence.js";
 import { WALL_CLOCK } from "./directory-types.js";
 import type { DirectoryStore } from "@cello-protocol/interfaces";
 import { mintOnlineToken, ONLINE_TOKEN_ISSUE_LIFETIME_MS } from "@cello-protocol/interfaces";
@@ -1557,6 +1564,50 @@ export class CelloDirectoryNode {
           ));
           await stream.close();
           return;
+        }
+
+        /**
+         * 🚨 A SECOND OPINION THAT CAN SEE THE EVIDENCE — `DOD-M15-SEALPARTIES-1`, work item 2.
+         *
+         * Everything above this point is about the REQUESTER: it proved possession of K_local, it
+         * holds no suspension, and no rival ceremony is running. None of it is about WHAT this node
+         * is being asked to sign, and until now nothing was: the message was opaque bytes, and this
+         * node signed them. Three signatures then rested on one node's reading of the leaves, which
+         * is cryptographic weight without judgement and defeats the point of a threshold.
+         *
+         * On the seal ceremony the leaves now travel with the request, and this node rebuilds the
+         * root and the leaf count from them and requires the message to be exactly the seal TBS over
+         * what it derived. See `seal-cosign-evidence.ts` for what that does and does not establish.
+         *
+         * ABSENT IS NOT FINE: a request under the seal context with no leaves is refused, because
+         * the party that would omit them is the party this check exists to catch.
+         */
+        if (isSealFramedMessage(signFramedMsg)) {
+          const verdict = verifySealCosignEvidence(signFramedMsg, req["seal_leaves"], req["seal_close_timestamp"]);
+          if (!verdict.ok) {
+            const reason = verdict.reason ?? SEAL_COSIGN_REASONS.EVIDENCE_MALFORMED;
+            this.#logger?.error("frost.seal.cosign.refused", {
+              agentShort: agentPubkey?.slice(0, 16),
+              epochId,
+              ceremonyId,
+              reason,
+              detail: verdict.detail,
+              messageDigest: cosignEvidenceDigest(signFramedMsg),
+              impact: "this node did NOT contribute its share, so the seal cannot reach its threshold and no certificate exists. It was asked to sign a root the leaves it was shown do not produce.",
+              guidance: SEAL_COSIGN_GUIDANCE[reason],
+            });
+            stream.send(lp.encode.single(
+              CBOR_ENC.encode({ type: "frost_sign_response", ok: false, reason, detail: verdict.detail })
+            ));
+            await stream.close();
+            return;
+          }
+          this.#logger?.info("frost.seal.cosign.verified", {
+            agentShort: agentPubkey?.slice(0, 16),
+            epochId,
+            ceremonyId,
+            messageDigest: cosignEvidenceDigest(signFramedMsg),
+          });
         }
 
         const result = await this.#frostHandler.signRawMessage({
@@ -4723,12 +4774,22 @@ export class CelloDirectoryNode {
       frontierLeaves,
     });
 
-    const sealVerifiedEvent: SealVerified = {
+    /**
+     * DOD-M15-SEALPARTIES-1: the unilateral seal_verified carries the signed leaves too.
+     *
+     * Not for the frontier re-derivation (this frame has no legibility to check) but because the
+     * present party is about to coordinate a FROST ceremony, and every co-signing node now refuses
+     * to sign a seal root it has not seen the leaves for. Omitting them here would make the solo
+     * path the one shape that still gets a signature on trust — which is precisely the escape hatch
+     * this order and `013-ABSENCE` are sequenced together to avoid.
+     */
+    const sealVerifiedEvent: SealVerified & { frontier_leaves: import("./directory-types.js").SealFrontierLeaf[] } = {
       type: "seal_verified",
       session_id: frame.session_id,
       sealed_root: recomputedRoot,
       leaf_count: leafCount,
       timestamp: close_timestamp,
+      frontier_leaves: frontierLeaves,
     };
     const presentStream = this.#streams.get(senderHex);
     if (presentStream) {
