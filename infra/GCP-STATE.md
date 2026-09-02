@@ -621,7 +621,80 @@ probe.
 The relay logs the redial and the seal still fails, and `relay.directory.dial.failed` has **never**
 appeared — so the dial does not throw, yet nothing is repaired. That is the gap `7838bbeb` measures.
 
-## 🟢 CURRENT — WHOLE FLEET ON `7befcc95` (008-RELAY gate), ALL 5 ROLLED (2026-09-01)
+## 🟢 CURRENT — WHOLE FLEET ON `7e9c56f4` (the seal block: 012/013/014/015), ALL 5 ROLLED (2026-09-02)
+
+**Every node confirmed by reading the RUNNING instance's metadata, not the template or the tag.**
+
+| node | instance NOW | replaced | zone | machine type | image |
+|---|---|---|---|---|---|
+| `gcp-use1` | `cello-gcp-use1-ng8r` | `cello-gcp-use1-4cgj` | `us-east1-d` | `n2-standard-2` | `directory:7e9c56f4` |
+| `gcp-usc1` | `cello-gcp-usc1-rw59` | `cello-gcp-usc1-wzhk` | `us-central1-a` | `e2-standard-2` | `directory:7e9c56f4` |
+| `gcp-euw1` | `cello-gcp-euw1-1kwt` | `cello-gcp-euw1-6n5v` | `europe-west1-c` | `e2-standard-2` | `directory:7e9c56f4` |
+| `gcp-relay-use1` | `cello-gcp-relay-use1-2k09` | `cello-gcp-relay-use1-l9r8` | `us-east1-d` | `n2-standard-2` | `relay:7e9c56f4` |
+| `gcp-relay-euw1` | `cello-gcp-relay-euw1-t2gh` | `cello-gcp-relay-euw1-hw5h` | `europe-west1-c` | `e2-small` | `relay:7e9c56f4` |
+
+**Moved off `7befcc95`** (the 008-RELAY gate roll of 2026-09-01).
+
+**What shipped.** The seal block — `012-SEAL` (both participants approve before any signature
+exists; co-signing directories receive raw leaves and reach their own verdict), `013-ABSENCE`
+(sealing alone needs evidenced absence and a two-tier grace, not a bare stopwatch), `014-LEAVES`
+(every leaf's sender must be a session participant and its signed bytes must name the session being
+sealed), `015-WITNESS` (the relay verifies each submitted hash against the two participant keys as
+it arrives). Plus `012`'s Part 0, which was a live registration defect: the directory answered the
+signaling handshake before the agent's profile row existed, correctly refused the relay credential,
+and nothing ever asked again — so a freshly registered agent held no credential for the life of its
+daemon.
+
+### Order, and why
+
+**Relays first, directories second.** The relay legs accept and forward; the directory legs are the
+ones that start REFUSING (a seal without both approvals, or with a leaf outside the pair). Rolling
+the directory first would open a window where it demands what no relay carries. Directories were
+then rolled `usc1` → `euw1` → `use1`, primary last.
+
+### Capacity probe — run BEFORE anything was deleted, all four (zone, machine-type) pairs
+
+```
+✅ us-east1-d / n2-standard-2
+✅ europe-west1-c / e2-small
+✅ us-central1-a / e2-standard-2
+✅ europe-west1-c / e2-standard-2
+```
+All probes created and deleted cleanly. No `ZONE_RESOURCE_POOL_EXHAUSTED`, no `QUOTA_EXCEEDED`.
+
+### Health signals used, and the windows they were read over
+
+- **Directory** — `antientropy.round.(started|completed)` grouped by `resource.labels.zone`, over a
+  **4-minute** window after each roll. Final state: 16 / 16 / 16 across `europe-west1-c`,
+  `us-central1-a`, `us-east1-d`.
+- **Relay** — `relay.health.check.passed` grouped by `relayId`, over a **3-minute** window. Final
+  state: 18 / 18.
+- Immediately after the `euw1` directory roll the same query read **12** for that zone against 16
+  elsewhere. That is the node not yet having filled the window, not a sick node — the standing
+  warning about short windows, observed again. It settled to 16.
+
+### Schema
+
+`V64__sessions_high_stakes.sql` (013's high-stakes tier) applied on the first directory to roll —
+`migration.starting` → `migration.complete` in `us-central1-a`. `ops_agent_expected_migration_version`
+was already bumped 63 → 64 by the 013 lane **in the same commit as the migration**, which is the
+discipline §4 asks for; nothing was owed here.
+
+### ⚠️ The deployed tag is `7e9c56f4`, and `main` moved past it during the roll
+
+`016-RELAYLOSS` merged as `acd402f1` while the images were building. **It is not in these images and
+does not need to be**: in this repo 016 changes only a spine journey, the live harness, one test and
+its own order file — no `packages/directory/src` or `packages/relay/src` at all. Recorded because
+the tag no longer equals `main`, and the next person comparing them should not read that as drift.
+
+**016's real code change is client-side** (`session-content-handlers.ts`, `session-node-manager.ts`,
+`cello-mcp.ts`) and is **NOT in the published npm packages** — the client cascade
+(`cli@0.0.191` / `connect@0.0.159` / `daemon@0.0.184`) was published and promoted before 016 merged.
+**A second client publish is owed.**
+
+---
+
+## SUPERSEDED — WHOLE FLEET ON `7befcc95` (008-RELAY gate), ALL 5 ROLLED (2026-09-01)
 
 **Every node confirmed by reading the RUNNING instance, not the template.** Three directory zones
 and both relays reporting healthy in a rolling 2-minute window at the end of the roll.
