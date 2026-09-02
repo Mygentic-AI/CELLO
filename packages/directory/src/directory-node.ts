@@ -4524,7 +4524,16 @@ export class CelloDirectoryNode {
       frame.reported_root,
       senderHex,
       frame.session_id,
-      [Buffer.from(senderHex, "hex"), Buffer.from(absentPartyHex, "hex")],
+      /**
+       * ⚠️ THE ROSTER IS THE SESSION RECORD'S PAIR, NOT `[senderHex, absentPartyHex]`.
+       *
+       * `absentPartyHex` is derived as *"whichever of the two the sender is not"*, and its else-branch
+       * is `initiatorHex` — so for a submitter who is NEITHER participant that expression yields
+       * `[stranger, initiator]` and hands the stranger membership in the roster meant to exclude them.
+       * The two names on the session assignment are the authoritative pair; a stranger's own ctrl leaf
+       * is then refused as `seal_sender_not_participant`.
+       */
+      [Buffer.from(participants.initiatorHex, "hex"), Buffer.from(participants.targetHex, "hex")],
     );
     if (!verifyResult.ok) {
       this.#logger?.error("session.unilateral.verification.failed", {
