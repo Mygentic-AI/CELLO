@@ -188,11 +188,18 @@ the record.
   directory→relay control path did not run through the hole and stayed up. Every outcome below is
   therefore the *optimistic* one: what the client could not do here, it certainly cannot do when the
   relay is gone for everyone.
-- **The reachability half could not be measured on this harness.** On loopback the receiver never
-  takes a circuit reservation — every node is directly dialable, so there is no NAT for a circuit to
-  cross — and the watchdog only watches receivers that had one. This was read from the daemon before
-  the outage rather than assumed. Those questions are answered from 32 days of the production daemon
-  log instead, which is better evidence for them anyway: real NAT, real relays, real distance.
+- **Question 5 — a rebuild against a *different* relay — cannot be measured here**, because this
+  harness runs one relay. It is answered from 32 days of the production daemon log instead.
+
+> **A bound I claimed here was wrong, and the run itself refuted it.** The first write-up said a
+> loopback receiver never takes a circuit reservation at all, so the whole reachability half was
+> unmeasurable. That came from reading the state once, early, finding "retrying", and treating a
+> fifty-second head start as a fact about how the transport works. The same run later reported the
+> same receiver as `reserved` and produced a real lost-reservation event on the killed relay. The
+> receiver does reserve on loopback. Question 4 was answerable all along and is now measured; only
+> question 5 was ever genuinely out of reach. Recorded rather than quietly corrected, because
+> treating an absence as an answer without proving the observation could see anything is the failure
+> this milestone keeps catching, and this is an instance of it in the unit that was measuring.
 
 ### The six answers
 
@@ -237,8 +244,12 @@ the median and 322 to 371 seconds at the 90th percentile**; the windows longer t
 three agents beginning and ending within milliseconds of each other overnight, which is the laptop
 asleep, not a fault.
 
-**5 — Does the rebuild succeed, against a different relay?** **Not answerable here** — this harness
-runs one relay. From production: **the second relay was asked 686 times and granted once.**
+**5 — Does the rebuild succeed, against a different relay?** The *different relay* half is not
+answerable here — this harness runs one. From production: the second relay **is** used, and rarely.
+It is named in **51 of 3,022** lost-reservation events, so it granted at least 51 reservations —
+1.7% of them — while being refused on 690 attempts. (An earlier draft of this section said "granted
+once"; that was a misreading of my own analysis script, corrected after review. A loss event can
+only be logged for a relay that actually granted, which is what pins the 51.)
 
 **6 — What is the operator told?** Before the fix, on the message path: nothing. On the close path:
 one side gets a correct, actionable refusal and the other gets a success. And the receipt command,
@@ -249,15 +260,27 @@ happened.
 ### Part 2 — the churn, explained
 
 **Why so many lost reservations?** They are not that many failures. Over 32 days there were 3,022
-lost-reservation lines, and they group into **746 episodes**. Inside an episode the client rebuilds
-on a thirty-second grid and each failed rebuild writes another line, so a twenty-minute blip writes
-about forty of them. The count measures watchdog ticks during blips, not relay deaths.
+lost-reservation lines, and they group into **746 episodes**. Three things multiply an episode into
+lines, and the first is the biggest:
 
-**And more than half of the episodes are the client's own network, not the relay.** In 52% of them
-the daemon also lost its directory connection within a minute of the episode starting. Against a
-time-shuffled control that figure is 4%, so the association is real and not an artifact of a signal
-that is always on. The outcome is bimodal: 1,589 reservations died within one watchdog tick, and
-1,516 lasted more than fifteen minutes.
+- **Three agents share the daemon.** One network event writes one line each: 579 of the 746 episodes
+  span two or three agents.
+- **One bad day.** 14 August alone contributes 1,218 lines — 40% of the entire month.
+- **Long episodes retry on a grid.** Inside an episode the client rebuilds every thirty seconds and
+  each failure writes another line. This is real but it is the *minority* case: 653 of 746 episodes
+  contain three lines or fewer.
+
+So the honest decomposition is roughly 746 distinct loss episodes, multiplied by the agent count,
+plus one very bad day — not 3,022 relay failures.
+
+**And more than half the episodes are the client's own network, not the relay.** In 52% of them the
+daemon lost its directory connection within a minute of the episode starting. A control drawing the
+same number of timestamps uniformly at random over the same span lands at 4%, so the association is
+far too strong to be an artifact of a signal that is simply always on. (That control is uniform
+random, not a shuffle preserving the daily rhythm of the series, so it flatters the contrast
+somewhat — the margin is wide enough to survive that, and the weaker claim is the one to rely on.)
+The outcome is bimodal: 1,589 reservations died within one watchdog tick, and 1,516 lasted more than
+fifteen minutes.
 
 **Why did one relay hold 99% when two were asked?** The premise is wrong twice, and both are
 checkable.
@@ -266,20 +289,41 @@ checkable.
    grants. The field in the log that reads `reservationsRequested: 2` is the size of the candidate
    *list*, not a count of requests — that one mis-named field is the whole reason "the client
    already requests a reservation with every relay it knows" looked true.
-2. **The fallback did not help when it ran.** The second relay is only reached when the first has
-   already failed. That happened 686 times and it granted a reservation once. This does **not**
-   establish that the second relay is broken: those 686 moments are exactly the moments when the
-   client was already failing at everything, so the two explanations are not separated by this data.
+2. **The fallback is reached rarely and carries little.** The second relay is only asked once the
+   first has failed. It ends up holding 1.7% of reservations — 51 of 3,022 — against 690 refusals.
+   It is not dead; it is a thin slice. And the moments it gets asked are exactly the moments the
+   client is already failing at everything, so this data cannot separate "that relay refuses" from
+   "the client's network is down", and it should not be read as either.
 
-**What that means for adding relays:** the dominant failure is on the client's side of the wire, and
-the one fallback that exists rescued 1 of 686 opportunities. A third relay does not address either
-finding.
+**What that means for adding relays:** the dominant failure is on the client's side of the wire —
+more than half the episodes take the directory link down with them — so a third relay does not
+address it. That is an argument about where the failure is, not a claim that the second relay is
+useless.
 
 ### Part 3 — what was fixed, and what was deliberately not
 
 **Fixed:** a send that the relay did not witness now says so in the response the agent reads, with
-guidance. The relay-dispatch guidance also stops asserting "witnessed" unconditionally — it was
-claiming the exact property that had just been lost, as the reason not to worry.
+guidance, on **all five** of `cello_send`'s return paths. The relay-dispatch guidance also stops
+asserting "witnessed" unconditionally — it was claiming the exact property that had just been lost,
+as the reason not to worry.
+
+**Three defects in the fix itself were found in review and are worth recording, because two of them
+were the very thing this unit exists to remove.**
+
+1. **The guidance told the operator to do the one thing that makes the loss permanent** — "send the
+   next message normally, ordering re-establishes itself." It does not. The record is now a leaf
+   ahead of the relay's, so the next witnessed message marks the session diverged and unsealable.
+   A reassuring sentence asserting a property already lost, written into the fix for exactly that
+   defect.
+2. **The field was on two of five return paths.** The two most important were missing: the diverged
+   path, reachable *only* after this defect, so the condition the guidance said to watch for could
+   never be observed; and the durably-queued path, which is the one production takes when the relay
+   is also the transport, where it was answering "No action needed" for a leaf nobody recorded.
+3. **Making that queued guidance conditional discarded the relay's own retry window** — caught by the
+   `013-ABSENCE` lane, deterministically, in a test it already owned. A rate-limited park is
+   unwitnessed by construction, so the specific upstream message ("try again in about 45 seconds")
+   was replaced with this unit's generic text. Both facts are true and the operator needs both, so
+   they are now composed: upstream verbatim, this unit's note appended.
 
 **Not fixed, deliberately:** the close asymmetry and the receipt's misleading remedy are the seal
 path, not this one. Fixing them here would grow a micro unit into a different unit's work.
