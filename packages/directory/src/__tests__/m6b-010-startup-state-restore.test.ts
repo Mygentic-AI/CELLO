@@ -14,7 +14,7 @@
  * SI-001 (integration): Expired connection requests (expires_at <= NOW()) are
  *   not loaded by loadActiveConnectionRequests.
  *
- * AC-002 (integration): After restart, #sessionLastActivity is initialized to the
+ * AC-002 (integration): After restart, #sessionGenesisAt is initialized to the
  *   session genesis timestamp from the sessions table (not 0 or undefined).
  *   - Create a session via writeSessionWithParticipants
  *   - Create a new PgDirectoryStore and call loadActiveSessionParticipants
@@ -27,7 +27,7 @@
  *   - Sessions that have been sealed (in seal_notarizations) are NOT returned
  *
  * AC-004 (unit): restorePendingConnectionRequests, restoreSessionParticipants,
- *   restoreSessionLastActivity methods exist on CelloDirectoryNode and log
+ *   restoreSessionGenesis methods exist on CelloDirectoryNode and log
  *   adapter.state.loaded with { stateType, count }.
  *
  * Interpretation notes:
@@ -410,10 +410,12 @@ describe("M6B-010: CelloDirectoryNode restore methods (AC-004)", () => {
     await stop();
   });
 
-  it("restoreSessionLastActivity populates lastActivity from genesis timestamp and logs adapter.state.loaded", async () => {
-    // Spec: restoreSessionLastActivity initializes #sessionLastActivity to the genesis
-    // timestamp (not 0 or undefined). Logs adapter.state.loaded with
-    // { stateType: 'session_last_activity', count }.
+  it("restoreSessionGenesis populates the solo-seal floor from the genesis timestamp and logs adapter.state.loaded", async () => {
+    // Spec: restoreSessionGenesis initializes #sessionGenesisAt to the genesis timestamp (not 0 or
+    // undefined). Logs adapter.state.loaded with { stateType: 'session_genesis', count }.
+    //
+    // Renamed by DOD-M15-UNILATERAL-1: the method and the field used to say "last activity" and
+    // have only ever held session genesis. The value is unchanged; the claim it makes is not.
     const logger = makeMockLogger();
     const dirKp = generateKeypair();
 
@@ -436,12 +438,12 @@ describe("M6B-010: CelloDirectoryNode restore methods (AC-004)", () => {
     const sessionId = randomBytes(16).toString("hex");
     const genesisTimestampMs = Date.now() - 30_000;
 
-    directory.restoreSessionLastActivity([
+    directory.restoreSessionGenesis([
       { sessionId, initiatorHex: randomBytes(32).toString("hex"), targetHex: randomBytes(32).toString("hex"), genesisTimestampMs },
     ]);
 
     const loadedEvent = logger.infoEvents.find(
-      (e) => e.event === "adapter.state.loaded" && e.context["stateType"] === "session_last_activity",
+      (e) => e.event === "adapter.state.loaded" && e.context["stateType"] === "session_genesis",
     );
     expect(loadedEvent).toBeDefined();
     expect(loadedEvent!.context["count"]).toBe(1);
@@ -449,7 +451,7 @@ describe("M6B-010: CelloDirectoryNode restore methods (AC-004)", () => {
     await stop();
   });
 
-  it("AC-002: restoreSessionLastActivity uses genesis timestamp — grace period check is correct after restart", async () => {
+  it("AC-002: restoreSessionGenesis uses the genesis timestamp — grace period check is correct after restart", async () => {
     // Spec: After restart with genesisTimestampMs = T (60s ago), a unilateral seal attempt
     // with deliveryGraceSeconds=600 is correctly REJECTED as premature (60s < 600s).
     // This verifies that lastActivity=genesis (not 0) prevents immediate unilateral seal
@@ -483,7 +485,7 @@ describe("M6B-010: CelloDirectoryNode restore methods (AC-004)", () => {
     const targetHex = randomBytes(32).toString("hex");
 
     // Restore with genesis timestamp (simulating post-restart startup)
-    directory.restoreSessionLastActivity([
+    directory.restoreSessionGenesis([
       { sessionId: sessionIdHex, initiatorHex, targetHex, genesisTimestampMs },
     ]);
     directory.restoreSessionParticipants([
@@ -491,8 +493,8 @@ describe("M6B-010: CelloDirectoryNode restore methods (AC-004)", () => {
     ]);
 
     // Verify that getRestoredLastActivity returns the genesis time (not 0 or undefined)
-    const lastActivity = directory.getRestoredLastActivityForTest(sessionIdHex);
-    expect(lastActivity).toBe(genesisTimestampMs);
+    const restoredGenesis = directory.getRestoredGenesisForTest(sessionIdHex);
+    expect(restoredGenesis).toBe(genesisTimestampMs);
 
     // AC-002 core: invoke #processSealUnilateral using the RESTORED state (without pre-seeding
     // the timestamp to pass the grace period). With genesisTimestampMs = 60s ago and

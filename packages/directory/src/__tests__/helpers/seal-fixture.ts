@@ -201,14 +201,33 @@ export async function registerRoster(
 // ─── The unilateral half: the same leaf array, a different certifying path ─────────────────────
 
 export function makeGoneRelay(): RelayAdapter {
-  return {
+  return makeLivenessRelay("gone");
+}
+
+/**
+ * A relay that reports a chosen liveness for the counterparty — `DOD-M15-UNILATERAL-1`.
+ *
+ * The three answers are not interchangeable and the solo-seal gate treats each differently:
+ *   `gone`    — the relay POSITIVELY observed the counterparty's standing connection drop. The only
+ *               answer that satisfies the high-stakes tier.
+ *   `alive`   — the relay is holding that connection right now. Refused in BOTH tiers: a reachable
+ *               counterparty is never sealed out, however old the session is.
+ *   `unknown` — the relay never tracked them, or the query failed. Standard proceeds (an honest
+ *               party must not be stranded); high-stakes refuses rather than falling back to time.
+ *
+ * `omitted` builds a relay with NO `getSessionLiveness` at all — an in-process adapter that does not
+ * implement it. The handler must read that as `unknown`, not crash and not as consent.
+ */
+export function makeLivenessRelay(liveness: "alive" | "gone" | "unknown" | "omitted"): RelayAdapter {
+  const base = {
     recordAssignment: () => ({ ok: true as const }),
     discardSession: () => {},
     submitForSeal: () => ({ ok: false as const, reason: "not_implemented" }),
     confirmSeal: () => {},
     rejectSeal: () => {},
-    getSessionLiveness: async () => "gone" as const,
-  } as unknown as RelayAdapter;
+  };
+  if (liveness === "omitted") return base as unknown as RelayAdapter;
+  return { ...base, getSessionLiveness: async () => liveness } as unknown as RelayAdapter;
 }
 
 /**
@@ -258,26 +277,49 @@ export async function buildUnilateralCarry(
   };
 }
 
+/**
+ * What a solo-seal run can vary — `DOD-M15-UNILATERAL-1` added everything below `assignedTo`.
+ *
+ * Defaults reproduce the pre-013 run exactly: counterparty `gone`, standard tier, a zero floor and
+ * a session backdated just past it. So every existing caller keeps testing what it tested.
+ */
+export interface RunUnilateralOpts {
+  /** The session's REAL pair, when it differs from `[present, absent]` — the stranger case. */
+  assignedTo?: [Kp, Kp];
+  /** What the relay says about the absent party. Default `gone`. */
+  liveness?: "alive" | "gone" | "unknown" | "omitted";
+  /** Put the session in the HIGH-STAKES tier. Default standard. */
+  highStakes?: boolean;
+  /** The STANDARD tier's floor, in seconds. Default 0. */
+  graceSeconds?: number;
+  /** The HIGH-STAKES tier's floor, in seconds. Default 3600 (the production value). */
+  highStakesGraceSeconds?: number;
+  /** How old the session is. Default: the standard floor + 1s. */
+  sessionAgeMs?: number;
+}
+
 export async function runUnilateral(
   specs: LeafSpec[],
   present: Kp,
   absent: Kp,
   logs: LogEntry[],
-  /** The session's REAL pair, when it differs from `[present, absent]` — the stranger case. */
-  assignedTo?: [Kp, Kp],
-): Promise<void> {
+  opts: RunUnilateralOpts = {},
+): Promise<{ frames: Array<Record<string, unknown>> }> {
   const store = new InMemoryDirectoryStore();
+  const graceSeconds = opts.graceSeconds ?? 0;
   const { directory, stop } = await createDirectoryNode({
     keyProvider: generateKeypair(),
-    relay: makeGoneRelay(),
+    relay: makeLivenessRelay(opts.liveness ?? "gone"),
     relayEndpoint: { peer_id: "relay-peer", multiaddrs: [] },
     store,
     logger: makeSpyLogger(logs),
-    deliveryGraceSeconds: 0,
+    deliveryGraceSeconds: graceSeconds,
+    ...(opts.highStakesGraceSeconds !== undefined ? { highStakesGraceSeconds: opts.highStakesGraceSeconds } : {}),
   });
+  const cap = capturingStream();
   try {
     const sessionId = new Uint8Array(randomBytes(16));
-    if (assignedTo) await registerRoster(directory, sessionId, assignedTo[0], assignedTo[1]);
+    if (opts.assignedTo) await registerRoster(directory, sessionId, opts.assignedTo[0], opts.assignedTo[1]);
     const carry = await buildUnilateralCarry(specs, present, generateKeypair(), sessionId);
     await directory.triggerSealUnilateralWithLeavesForTest(
       hex(new Uint8Array(await present.getPublicKey())),
@@ -285,11 +327,16 @@ export async function runUnilateral(
       carry.reportedRoot,
       hex(new Uint8Array(await absent.getPublicKey())),
       carry.leaves,
-      { send: () => {} } as unknown as import("@libp2p/interface").Stream,
+      cap.stream,
+      {
+        ...(opts.highStakes !== undefined ? { highStakes: opts.highStakes } : {}),
+        ...(opts.sessionAgeMs !== undefined ? { sessionAgeMs: opts.sessionAgeMs } : {}),
+      },
     );
   } finally {
     await stop();
   }
+  return { frames: cap.frames() };
 }
 
 

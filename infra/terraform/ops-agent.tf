@@ -299,9 +299,12 @@ variable "ops_agent_image_tag" {
 
 variable "ops_agent_expected_migration_version" {
   type        = string
-  default     = "63"
+  default     = "64"
   description = "Schema version the ops agent asserts. Bump with every new V{N} migration — a stale value crash-loops it on a fresh deploy."
 }
+
+# 63 → 64 on 2026-09-02, with V64 sessions.high_stakes (DOD-M15-UNILATERAL-1), in the same commit as
+# the migration for the reason the 2026-08-22 note gives.
 
 # 62 → 63 on 2026-08-22, with V63 otp_send_log (DOD-M15-SIGNUP-DURABLE-1). Bumped in the same commit
 # as the migration, which is the only ordering that does not reproduce the drift documented below —

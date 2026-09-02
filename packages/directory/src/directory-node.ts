@@ -138,7 +138,7 @@ import type {
   SealVerifiedWithLegibility,
   SealLegibility,
 } from "./directory-types.js";
-import { buildSealLegibility, bindLegibilityToTbs, findSealCeremonyPair } from "./seal-legibility.js";
+import { buildSealLegibility, bindLegibilityToTbs, findSealCeremonyPair, countersignedThroughSeq } from "./seal-legibility.js";
 import { verifySealFinalRoots, verifyLeafProvenance, SEAL_FINAL_ROOT_REASONS, SEAL_FINAL_ROOT_GUIDANCE, type SealFinalRootReason } from "./seal-final-root.js";
 import type { SealRejectionWireReason } from "./directory-types.js";
 import {
@@ -484,8 +484,15 @@ export interface DirectoryNodeOptions {
   packageCborInterceptor?: (cbor: Uint8Array) => Uint8Array;
   /** Structured logger injected at the composition root */
   logger?: Logger;
-  /** PERSIST-015: seconds after last activity before unilateral seal is allowed. Default: 600. */
+  /** PERSIST-015: seconds a session must have been open before a solo seal is allowed. Default: 600. */
   deliveryGraceSeconds?: number;
+  /**
+   * `DOD-M15-UNILATERAL-1`: the HIGH-STAKES tier's floor, in seconds. Default: 3600.
+   *
+   * A starting point rather than a hard number — it is the tier's minimum age, and the tier's real
+   * teeth are that the relay's positive `gone` observation is MANDATORY there, not the extra hour.
+   */
+  highStakesGraceSeconds?: number;
   /**
    * PERSIST-017: MmrStore for appending sealed sessions to the MMR staging table.
    * When provided, appendSeal() is called after every successful SealNotarization
@@ -705,26 +712,47 @@ export class CelloDirectoryNode {
 
   // PERSIST-015: delivery grace period (seconds) before unilateral seal is allowed
   readonly #deliveryGraceSeconds: number;
+  // DOD-M15-UNILATERAL-1: the high-stakes tier's (longer) floor, in seconds.
+  readonly #highStakesGraceSeconds: number;
   /**
-   * PERSIST-015: `session_id_hex` → the timestamp the unilateral delivery-grace window runs from.
+   * PERSIST-015 / `DOD-M15-UNILATERAL-1`: `session_id_hex` → **when the session opened.**
    *
-   * ⚠️ THE NAME IS WIDER THAN THE BEHAVIOUR, AND THE GAP IS SECURITY-RELEVANT. It says *last
-   * activity*; it holds *session start*. Two writers outside the `NODE_ENV=test` hooks — session
-   * creation, and the restart restore which seeds it with `genesisTimestampMs` — and **nothing
-   * refreshes it while a session is running.** (Review pass 2 counted four `set` sites: the other
-   * two are `*ForTest` helpers on this class that deliberately backdate past the grace window, and
-   * are `NODE_ENV !== "test"` guarded. The property holds; my sentence did not, and a reader
-   * grep-checking it would have found it false.) So the grace period a unilateral seal must outwait is measured from when
-   * the session opened, not from when the two sides last spoke: a conversation that has been busy
-   * for an hour is as eligible for a unilateral seal as one that went quiet immediately.
+   * ⚠️ **IT WAS CALLED `#sessionLastActivity` AND IT NEVER HELD LAST ACTIVITY.** Two writers outside
+   * the `NODE_ENV=test` hooks — session creation, and the restart restore that seeds it with
+   * `genesisTimestampMs` — and nothing refreshed it while a session ran. Under Option B the
+   * directory never sees message traffic at all (the relay witnesses leaves and the client carries
+   * them at seal time), so there is no traffic here to refresh from and there never was. The name
+   * was the whole defect: a reader checking whether the unilateral gate required silence found a
+   * field that said so, and a value that measured session AGE.
    *
-   * `DOD-M15-SEALWIRE-1` bullet 7 did not cause this. The PERSIST-014 `seal_attempt` handler
-   * contained the only mid-session refresh, and that handler had no sender, so the refresh could
-   * never fire — the deletion removed a writer that was already unreachable. Recorded here rather
-   * than left implicit, because the previous comment narrated what the code used to do and a reader
-   * would have to reconstruct what it now does.
+   * **What changed with `013-ABSENCE`, and it is the part that matters.** This value is no longer
+   * asked the question it could not answer. It is a MINIMUM-AGE FLOOR and nothing more; *"has the
+   * counterparty gone?"* is now answered by `#counterpartyPresence` — the relay's own positive
+   * observation of the other side's standing connection, read from a party the sealing side does
+   * not control. A busy conversation is no longer sealable just because it is old: a reachable
+   * counterparty is refused however far past this floor the session is.
+   *
+   * `DOD-M15-SEALWIRE-1` bullet 7 did not cause the original gap. The PERSIST-014 `seal_attempt`
+   * handler held the only mid-session refresh and had no sender, so it could never fire; deleting
+   * it removed a writer that was already unreachable.
    */
-  readonly #sessionLastActivity = new Map<string, number>();
+  readonly #sessionGenesisAt = new Map<string, number>();
+
+  /**
+   * `DOD-M15-UNILATERAL-1`: `session_id_hex` → whether this conversation opted in to the
+   * HIGH-STAKES seal tier.
+   *
+   * **Opt-in is the only way in, and that is a design constraint rather than a simplification.**
+   * Nothing in this infrastructure can safely infer that a conversation is consequential: the relay
+   * is deliberately blind to content and the directory never sees it. So the tier is declared by the
+   * initiator on `session_request`, recorded here, and persisted on the sessions row — because a
+   * directory restart that silently dropped the flag would downgrade a high-stakes session to the
+   * standard bar without anybody being told, which is the failure this whole unit exists to remove.
+   *
+   * Absent means STANDARD. That default is deliberate: the standard tier is what an honest party
+   * falls back to, and it is the tier that never strands them.
+   */
+  readonly #sessionHighStakes = new Map<string, boolean>();
   // PERSIST-015: session_id_hex → unilateral seal record
   readonly #unilateralSeals = new Map<string, { sealed_root: Uint8Array; sealed_at: number; submitter_hex: string }>();
   // PERSIST-015: pubkey_hex → pending notifications for absent party
@@ -812,6 +840,7 @@ export class CelloDirectoryNode {
     this.#requireConnectionGate = opts.requireConnectionGate ?? false;
     this.#packageCborInterceptor = opts.packageCborInterceptor;
     this.#deliveryGraceSeconds = opts.deliveryGraceSeconds ?? 600;
+    this.#highStakesGraceSeconds = opts.highStakesGraceSeconds ?? 3600;
     this.#mmrStore = opts.mmrStore;
     this.#notificationQueue = opts.notificationQueue;
     this.#relayPoolManager = opts.relayPoolManager;
@@ -2545,14 +2574,14 @@ export class CelloDirectoryNode {
             continue;
           }
           // M7-WIRE-001 AC-002: Reject session_request missing initiator session Peer ID
-          const parsedReq = parsed as { connection_id?: string; relay_rtt?: Record<string, number>; initiator_session_peer_id?: string; initiator_session_addrs?: string[]; transport_mode?: "direct" | "relay"; wants_session_offer?: boolean; moniker?: string; trust_signals?: Array<{ hash: string; blob: Uint8Array }> };
+          const parsedReq = parsed as { connection_id?: string; relay_rtt?: Record<string, number>; initiator_session_peer_id?: string; initiator_session_addrs?: string[]; transport_mode?: "direct" | "relay"; wants_session_offer?: boolean; moniker?: string; trust_signals?: Array<{ hash: string; blob: Uint8Array }>; high_stakes?: boolean };
           if (!parsedReq.initiator_session_peer_id || !parsedReq.initiator_session_addrs || parsedReq.initiator_session_addrs.length === 0) {
             this.#sendFrame(stream, encodeSessionRequestError({ type: "session_request_error", reason: "session_request_missing_peer_id" }));
             continue;
           }
           // Run concurrently — ceremony_result frames must be processed by this same loop
           // while #processSessionRequest is suspended awaiting the ceremony round-trip.
-          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"), parsedReq.connection_id, parsedReq.relay_rtt, parsedReq.initiator_session_peer_id, parsedReq.initiator_session_addrs, parsedReq.transport_mode, parsedReq.wants_session_offer === true, parsedReq.moniker, parsedReq.trust_signals);
+          void this.#processSessionRequest(stream, authedPubkeyHex!, Buffer.from(parsed.target_pubkey).toString("hex"), parsedReq.connection_id, parsedReq.relay_rtt, parsedReq.initiator_session_peer_id, parsedReq.initiator_session_addrs, parsedReq.transport_mode, parsedReq.wants_session_offer === true, parsedReq.moniker, parsedReq.trust_signals, parsedReq.high_stakes === true);
         } else if (parsed.type === "discovery_lookup") {
           // Cross-node item 1: answer "where is agent X?" from fully-replicated state. Post-auth on
           // the agent's home inbound stream. Advisory — the target node's own #streams check stays
@@ -4001,6 +4030,12 @@ export class CelloDirectoryNode {
     // DOD-PRESENT-1: trust signals the initiator wishes to present. The directory runs two dumb
     // checks (membership + active status) and forwards survivors on the assignment. Nothing stored.
     presentedSignals?: Array<{ hash: string; blob: Uint8Array }>,
+    /**
+     * `DOD-M15-UNILATERAL-1`: the initiator opted this conversation in to the HIGH-STAKES seal
+     * tier. Recorded on the session and persisted; it changes only what a SOLO seal requires later,
+     * never how the session is set up.
+     */
+    highStakes = false,
   ): Promise<void> {
     protocolLog("SESS", `Session request: ${truncHex(initiatorHex)} → ${truncHex(targetHex)}`);
     // D2 observability: one correlationId per session-request flow, threaded into the
@@ -4407,8 +4442,11 @@ export class CelloDirectoryNode {
       });
       // PERSIST-015: preserve participants beyond stream closure for SEAL_UNILATERAL absent-party lookup
       this.#sessionParticipants.set(sessionIdHex, { initiatorHex, targetHex });
-      // PERSIST-015: record session creation time as initial last_activity_at
-      this.#sessionLastActivity.set(sessionIdHex, this.#clock.now());
+      // PERSIST-015: when the session opened — the solo seal's minimum-age FLOOR, nothing more.
+      this.#sessionGenesisAt.set(sessionIdHex, this.#clock.now());
+      // DOD-M15-UNILATERAL-1: the seal tier the initiator asked for. Only ever set from the
+      // decoded `=== true`; every other input leaves this standard.
+      if (highStakes) this.#sessionHighStakes.set(sessionIdHex, true);
       // M6B-010 AC-002/AC-003: persist participants to sessions table so they survive restart.
       // Uses writeSessionWithParticipants rather than writeSession so both pubkeys are stored.
       //
@@ -4430,14 +4468,16 @@ export class CelloDirectoryNode {
         this.#frostHandler.nodeId,
         initiatorHex,
         targetHex,
+        highStakes,
       ).catch((err: unknown) => {
         this.#logger?.error("session.persist.failed", {
           sessionId: truncHex(sessionIdHex),
           nodeId: this.#frostHandler.nodeId,
           reason: err instanceof Error ? err.message : String(err),
           impact:
-            "session participants will not survive a directory restart, and the sessions hash " +
-            "chain has no row for this session",
+            "session participants will not survive a directory restart, the sessions hash chain " +
+            "has no row for this session, and a HIGH-STAKES opt-in would be lost with it — after a " +
+            "restart that conversation would be judged at the standard bar",
         });
       });
 
@@ -4531,33 +4571,13 @@ export class CelloDirectoryNode {
       return; // Already sealed — ignore duplicate
     }
 
-    // SI-001: compute elapsed time from directory's own records
-    const lastActivity = this.#sessionLastActivity.get(sessionIdHex);
-    if (lastActivity == null) {
+    // SI-001: the session must be one this directory knows about.
+    const genesisAt = this.#sessionGenesisAt.get(sessionIdHex);
+    if (genesisAt == null) {
       // Unknown session — silently reject without leaking session existence
       return;
     }
     const now = this.#clock.now();
-    const elapsedMs = now - lastActivity;
-    const graceMs = this.#deliveryGraceSeconds * 1000;
-
-    if (elapsedMs < graceMs) {
-      // AC-002: too early — reject with remaining time
-      const remainingSeconds = Math.ceil((graceMs - elapsedMs) / 1000);
-      const tooEarlyFrame = encodeSealUnilateralTooEarly({
-        type: "seal_unilateral_too_early",
-        session_id: frame.session_id,
-        remaining_seconds: remainingSeconds,
-      });
-      this.#logger?.info("relay.seal.unilateral.rejected", {
-        sessionId: sessionIdHex,
-        lastActivity,
-        elapsedMs,
-        remainingSeconds,
-      });
-      try { this.#sendFrame(stream, tooEarlyFrame); } catch { /* */ }
-      return;
-    }
 
     // ── SESSION-002: verify the reported root, then FROST-notarize with B ABSENT ──
     // (Gap 1 fix — the directory no longer stores frame.reported_root on faith.)
@@ -4565,6 +4585,10 @@ export class CelloDirectoryNode {
     // Identify the present (submitting) party and the ABSENT counterparty. #sessionParticipants
     // persists beyond stream closure (set when the session was established); fall back to the
     // pending-session record if the stream is still open.
+    //
+    // `DOD-M15-UNILATERAL-1` MOVED THIS ABOVE THE TIME GATE, and the order is load-bearing: the
+    // presence check below asks the relay about the ABSENT party, and until the roster is resolved
+    // and the submitter is known to be in it, there is no absent party to ask about.
     const participants = this.#sessionParticipants.get(sessionIdHex)
       ?? (() => {
         const p = this.#pendingSessions.get(sessionIdHex);
@@ -4607,6 +4631,139 @@ export class CelloDirectoryNode {
     const absentPartyHex = participants.initiatorHex === senderHex
       ? participants.targetHex
       : participants.initiatorHex;
+    const absentPubkey = Buffer.from(absentPartyHex, "hex");
+
+    /**
+     * ═══ `DOD-M15-UNILATERAL-1` — "THEY HAVE GONE" NEEDS EVIDENCE, NOT A STOPWATCH ═══
+     *
+     * **What this replaces.** The only test for the counterparty being gone was
+     * `elapsedMs < graceMs` against a value that holds session GENESIS — no presence check of any
+     * kind. A fully reachable person who took eleven minutes over a reply could be sealed out from
+     * under them, and the receipt recorded them absent. Nothing had checked.
+     *
+     * **Why the relay is the authority and not this side.** Absence is a claim, and the party
+     * claiming it is the party who benefits. Evidence the sealer supplies about the counterparty is
+     * not evidence. `getSessionLiveness` is the relay's own POSITIVE observation of the other side's
+     * standing connection, keyed by the counterparty's pubkey — the sealer holds no switch over it.
+     * They cannot manufacture the other side's absence; they can only wait for it to be true.
+     *
+     * **Time is a floor, never the whole test.** The floor still runs from genesis, and that is all
+     * it is now: a minimum age. The question it used to be asked — *has the other side gone?* — is
+     * answered here, by somebody else.
+     */
+    const highStakes = this.#sessionHighStakes.get(sessionIdHex) === true;
+    const floorSeconds = highStakes ? this.#highStakesGraceSeconds : this.#deliveryGraceSeconds;
+    const floorMs = floorSeconds * 1000;
+    const tier = highStakes ? "high_stakes" : "standard";
+
+    /**
+     * The relay's verdict, read ONCE and reused for the attestation below — it used to be fetched
+     * after the seal had already been decided, purely to colour the receipt.
+     *
+     * A transport failure yields `unknown`, never a fabricated `gone`. What `unknown` then MEANS is
+     * the difference between the two tiers, and it is the whole reason there are two.
+     */
+    let livenessState: "alive" | "gone" | "unknown" = "unknown";
+    try {
+      livenessState = this.#relay.getSessionLiveness
+        ? await this.#relay.getSessionLiveness(absentPubkey)
+        : "unknown";
+    } catch {
+      livenessState = "unknown";
+    }
+
+    const elapsedMs = now - genesisAt;
+
+    /**
+     * 🚨 CLAUSE 1 — A REACHABLE COUNTERPARTY IS NEVER SEALED OUT, IN EITHER TIER.
+     *
+     * This is the defect the unit is named for. `alive` is the relay saying it is holding that
+     * party's standing connection right now, so they are not gone by any reading, and no amount of
+     * elapsed time makes them gone. Refused before the floor is even consulted, because the floor
+     * has nothing to say about a party who is present.
+     */
+    if (livenessState === "alive") {
+      this.#logger?.info("relay.seal.unilateral.rejected", {
+        sessionId: sessionIdHex,
+        cause: "counterparty_present",
+        tier,
+        elapsedMs,
+        floorSeconds,
+        absentPartyPubkey: truncHex(absentPartyHex),
+        impact: "NO certificate was signed, and the session is untouched. The counterparty is reachable on the relay right now, so a solo seal — which records them ABSENT — would put a false statement on a permanent record.",
+        guidance: "Nothing is wrong. A solo seal is for a counterparty who has left; this one is here. Close normally and let the seal complete bilaterally, or retry the solo close if they later go offline.",
+        correlationId,
+      });
+      // Reuses `seal_unilateral_too_early` DELIBERATELY, with no countdown attached. It is the
+      // frame the client already understands as "not now, the session is fine, retry later" — and
+      // that instruction is correct here. A new frame type would reach a client that has no handler
+      // for it, which is the 30-second `seal_unilateral_timeout` that names our own wait. The true
+      // cause lives in the line above, which is the forensic record.
+      try {
+        this.#sendFrame(stream, encodeSealUnilateralTooEarly({
+          type: "seal_unilateral_too_early",
+          session_id: frame.session_id,
+        }));
+      } catch { /* the refusal stands whether or not the frame lands */ }
+      return;
+    }
+
+    // CLAUSE 3/4 — the floor. Standard 600s as before; high-stakes starts at 3600s.
+    if (elapsedMs < floorMs) {
+      const remainingSeconds = Math.ceil((floorMs - elapsedMs) / 1000);
+      this.#logger?.info("relay.seal.unilateral.rejected", {
+        sessionId: sessionIdHex,
+        cause: "too_early",
+        tier,
+        genesisAt,
+        elapsedMs,
+        floorSeconds,
+        remainingSeconds,
+        correlationId,
+      });
+      try {
+        this.#sendFrame(stream, encodeSealUnilateralTooEarly({
+          type: "seal_unilateral_too_early",
+          session_id: frame.session_id,
+          remaining_seconds: remainingSeconds,
+        }));
+      } catch { /* */ }
+      return;
+    }
+
+    /**
+     * 🚨 CLAUSE 4 — HIGH-STAKES REFUSES WITHOUT EVIDENCE RATHER THAN DEGRADING TO TIME-ONLY.
+     *
+     * `unknown` means the relay never observed this counterparty at all — no positive statement
+     * either way. The STANDARD tier proceeds on it, and that is the safe direction there: an honest
+     * party whose evidence channel is unavailable must not be stranded unable to close, which is the
+     * failure mode this feature exists to prevent in the first place.
+     *
+     * High-stakes is the OPT-IN that buys the opposite trade. Somebody declared this conversation
+     * consequential, so a receipt asserting the other side was absent is only issued when a third
+     * party actually saw them leave. Falling back to the clock here would make the tier decorative.
+     */
+    if (highStakes && livenessState !== "gone") {
+      this.#logger?.warn("relay.seal.unilateral.rejected", {
+        sessionId: sessionIdHex,
+        cause: "high_stakes_evidence_required",
+        tier,
+        liveness: livenessState,
+        elapsedMs,
+        floorSeconds,
+        absentPartyPubkey: truncHex(absentPartyHex),
+        impact: "NO certificate was signed. This conversation opted in to the high-stakes tier, where a receipt may only record the counterparty ABSENT if the relay actually observed them leave. It has observed nothing, so the record stays open rather than asserting something unproven.",
+        guidance: "Wait and retry: the evidence appears once the counterparty's relay connection drops. If they never connected to a relay for this session, no solo receipt will ever be issued at this tier — close bilaterally with them instead.",
+        correlationId,
+      });
+      try {
+        this.#sendFrame(stream, encodeSealUnilateralTooEarly({
+          type: "seal_unilateral_too_early",
+          session_id: frame.session_id,
+        }));
+      } catch { /* */ }
+      return;
+    }
 
     // FED-OPTIONB-SEAL-001 (Option B): rebuild the signed-leaf chain OFFLINE from the CLIENT-CARRIED
     // seal_leaves — the directory NO LONGER dials the relay's getSealLeaves. #reconstructCarriedSealLeaves
@@ -4669,21 +4826,18 @@ export class CelloDirectoryNode {
     const leafCount = leafData.leaves.length;
     const close_timestamp = now;
     const presentPubkey = Buffer.from(senderHex, "hex");
-    const absentPubkey = Buffer.from(absentPartyHex, "hex");
 
-    // DOD-LIVE-2: the counterparty attestation comes FROM THE RELAY (the session-path
-    // liveness authority), never self-asserted. gone → ABSENT (a positive disconnect was
-    // observed); alive or unknown → DELIVERED (reachable, or never-tracked fail-safe). The
-    // seal completes either way — this is a timeout-driven unilateral seal; the liveness
-    // only colours how the counterparty is recorded (never whether the seal happens).
-    let livenessState: "alive" | "gone" | "unknown" = "unknown";
-    try {
-      livenessState = this.#relay.getSessionLiveness
-        ? await this.#relay.getSessionLiveness(absentPubkey)
-        : "unknown";
-    } catch {
-      livenessState = "unknown";
-    }
+    /**
+     * DOD-LIVE-2: the counterparty attestation comes FROM THE RELAY (the session-path liveness
+     * authority), never self-asserted. `gone` → ABSENT (a positive disconnect was observed);
+     * `unknown` → DELIVERED (the never-tracked fail-safe).
+     *
+     * ⚠️ **`alive` NO LONGER REACHES THIS LINE** — `DOD-M15-UNILATERAL-1`. It used to, and that is
+     * the defect: a reachable counterparty was sealed anyway and merely recorded DELIVERED rather
+     * than ABSENT, so liveness "only coloured how the counterparty is recorded (never whether the
+     * seal happens)". It now decides whether the seal happens, at the gate above, and this reads
+     * the verdict that gate already obtained rather than asking the relay a second time.
+     */
     const attestation: "ABSENT" | "DELIVERED" = livenessState === "gone" ? "ABSENT" : "DELIVERED";
     this.#logger?.info("session.unilateral.attestation", {
       sessionId: sessionIdHex,
@@ -4723,6 +4877,15 @@ export class CelloDirectoryNode {
         attestation_mode: "absent",
       });
     }
+    /**
+     * `DOD-M15-UNILATERAL-1` — RECOMPUTED NOW THAT BOTH PARTIES ARE NAMED, and the order matters.
+     *
+     * `buildSealLegibility` derives participants from leaf AUTHORS, so on a solo close where the
+     * counterparty only ever received, it sees one party and would report the whole transcript
+     * mutually signed — the precise conflation clause 5 exists to prevent. The boundary is only
+     * meaningful once the absent party is in the list, which is the line above.
+     */
+    legibility.countersigned_through_seq = countersignedThroughSeq(legibility.participants);
 
     // M8B FINDING-5 (cascade-2): the SIGNED leaves the legibility's frontiers were derived from —
     // the SAME shape + source as the bilateral processSeal path (directory-node.ts processSeal). The
@@ -5126,7 +5289,7 @@ export class CelloDirectoryNode {
     // Evict per-session maps (bounded growth on long-running nodes). #unilateralSeals is
     // retained as the in-process duplicate guard (durable dedup is the DB constraint).
     this.#sessionParticipants.delete(sessionIdHex);
-    this.#sessionLastActivity.delete(sessionIdHex);
+    this.#sessionGenesisAt.delete(sessionIdHex);
   }
 
   /**
@@ -6460,7 +6623,7 @@ export class CelloDirectoryNode {
     if (process.env["NODE_ENV"] !== "test") throw new Error("test-only");
     const sessionIdHex = Buffer.from(sessionId).toString("hex");
     // Pre-seed session state: last activity far enough in the past to pass the grace period
-    this.#sessionLastActivity.set(sessionIdHex, this.#clock.now() - (this.#deliveryGraceSeconds + 1) * 1000);
+    this.#sessionGenesisAt.set(sessionIdHex, this.#clock.now() - (this.#deliveryGraceSeconds + 1) * 1000);
     this.#sessionParticipants.set(sessionIdHex, { initiatorHex: senderHex, targetHex: absentPartyHex });
     void this.#processSealUnilateral(mockStream, senderHex, {
       type: "seal_unilateral",
@@ -6495,9 +6658,9 @@ export class CelloDirectoryNode {
   /**
    * Test hook: invoke #processSealUnilateral using the CURRENT session state (no pre-seeding).
    *
-   * Unlike triggerSealUnilateralForTest, this method does not override #sessionLastActivity
+   * Unlike triggerSealUnilateralForTest, this method does not override #sessionGenesisAt
    * or #sessionParticipants. The caller must have already seeded the state (e.g. via
-   * restoreSessionLastActivity + restoreSessionParticipants). This allows AC-002 to verify
+   * restoreSessionGenesis + restoreSessionParticipants). This allows AC-002 to verify
    * that the grace period check uses the restored genesis timestamp correctly.
    *
    * Returns the raw frame bytes sent to mockStream (the seal_unilateral_too_early frame),
@@ -6533,10 +6696,22 @@ export class CelloDirectoryNode {
     absentPartyHex: string,
     sealLeaves: import("./directory-types.js").SealUnilateralLeaf[],
     mockStream: import("@libp2p/interface").Stream,
+    /**
+     * `DOD-M15-UNILATERAL-1`. `highStakes` puts this session in the opt-in tier, and `sessionAgeMs`
+     * states how old it is instead of taking the default backdate.
+     *
+     * ⚠️ **THE DEFAULT BACKDATE IS THE STANDARD FLOOR + 1s, WHICH IS NOT PAST THE HIGH-STAKES ONE.**
+     * A high-stakes case that wants to reach the tier's evidence check has to say how old it is, or
+     * it stops at the floor and never exercises the thing it was written for. That is exactly the
+     * exemplar trap — a value chosen from intent rather than from the predicate it has to satisfy.
+     */
+    opts?: { highStakes?: boolean; sessionAgeMs?: number },
   ): Promise<void> {
     if (process.env["NODE_ENV"] !== "test") throw new Error("test-only");
     const sessionIdHex = Buffer.from(sessionId).toString("hex");
-    this.#sessionLastActivity.set(sessionIdHex, this.#clock.now() - (this.#deliveryGraceSeconds + 1) * 1000);
+    const ageMs = opts?.sessionAgeMs ?? (this.#deliveryGraceSeconds + 1) * 1000;
+    this.#sessionGenesisAt.set(sessionIdHex, this.#clock.now() - ageMs);
+    if (opts?.highStakes) this.#sessionHighStakes.set(sessionIdHex, true);
     /**
      * ⚠️ NON-DESTRUCTIVE, AND THE SEAM WAS HIDING A SECURITY HOLE — review H1.
      *
@@ -6621,67 +6796,83 @@ export class CelloDirectoryNode {
     initiatorHex: string;
     targetHex: string;
     genesisTimestampMs: number;
+    /**
+     * `DOD-M15-UNILATERAL-1`: the HIGH-STAKES opt-in, read back from the sessions row.
+     *
+     * Restored HERE, alongside the roster, because the two are read together by the solo-seal gate
+     * and a restart that recovered one without the other would judge a high-stakes conversation at
+     * the standard bar and tell nobody.
+     */
+    highStakes?: boolean;
   }>): void {
+    let highStakesCount = 0;
     for (const session of sessions) {
       this.#sessionParticipants.set(session.sessionId, {
         initiatorHex: session.initiatorHex,
         targetHex: session.targetHex,
       });
+      if (session.highStakes === true) {
+        this.#sessionHighStakes.set(session.sessionId, true);
+        highStakesCount++;
+      }
     }
     this.#logger?.info("adapter.state.loaded", {
       stateType: "session_participants",
       count: sessions.length,
+      highStakesCount,
     });
   }
 
   /**
-   * Restore session last activity from genesis timestamps.
+   * Restore each session's genesis timestamp — the solo seal's minimum-age floor.
    *
-   * M6B-010 AC-002: called at startup with rows returned by
-   * PgDirectoryStore.loadActiveSessionParticipants(). Initializes #sessionLastActivity
-   * to the session genesis timestamp (sessions.created_at in milliseconds).
+   * ⚠️ **THIS WAS `restoreSessionLastActivity`, AND THE NAME WAS THE DEFECT** —
+   * `DOD-M15-UNILATERAL-1`. It never restored last activity; it seeds `sessions.created_at`,
+   * because that is the only timestamp the row has. Under Option B the directory sees no message
+   * traffic at all, so there is no "last activity" for it to hold and there never was. The method
+   * now says what it does, and the question it used to be read as answering — *has the counterparty
+   * gone?* — is answered at the seal gate by the relay's own observation instead.
    *
-   * Using the genesis timestamp prevents two failure modes:
-   *   1. lastActivity=0 would make every restored session immediately eligible for
-   *      unilateral seal (since Date.now() - 0 >> deliveryGraceSeconds).
-   *   2. lastActivity=undefined/missing would cause a NaN comparison and always
-   *      pass the grace period check.
-   *
-   * By setting lastActivity=genesisTimestampMs, a session that was 30 minutes old
-   * at restart will still require deliveryGraceSeconds more seconds before a
-   * unilateral seal can succeed — which is the correct behavior.
-   *
-   * Pseudocode:
-   *   for each session in sessions:
-   *     #sessionLastActivity.set(sessionId, genesisTimestampMs)
-   *   logger.info("adapter.state.loaded", { stateType: "session_last_activity", count })
+   * Genesis rather than 0 or undefined still matters for the reasons M6B-010 AC-002 recorded: `0`
+   * would put every restored session instantly past the floor, and `undefined` would make the
+   * comparison NaN and pass it unconditionally. A session 30 minutes old at restart still owes the
+   * remainder of its floor.
    */
-  restoreSessionLastActivity(sessions: Array<{
+  restoreSessionGenesis(sessions: Array<{
     sessionId: string;
     initiatorHex: string;
     targetHex: string;
     genesisTimestampMs: number;
   }>): void {
     for (const session of sessions) {
-      this.#sessionLastActivity.set(session.sessionId, session.genesisTimestampMs);
+      this.#sessionGenesisAt.set(session.sessionId, session.genesisTimestampMs);
     }
     this.#logger?.info("adapter.state.loaded", {
-      stateType: "session_last_activity",
+      stateType: "session_genesis",
       count: sessions.length,
     });
   }
 
   /**
-   * Test accessor: returns the last activity timestamp for a session ID.
+   * Test accessor: the restored genesis timestamp for a session ID.
    *
-   * M6B-010 AC-002: verifies that restoreSessionLastActivity correctly seeds
-   * #sessionLastActivity with genesisTimestampMs (not 0 or undefined).
+   * M6B-010 AC-002: verifies that restoreSessionGenesis seeds `#sessionGenesisAt` with
+   * genesisTimestampMs (not 0 or undefined).
    *
    * Only available in test/local environments.
    */
-  getRestoredLastActivityForTest(sessionIdHex: string): number | undefined {
+  getRestoredGenesisForTest(sessionIdHex: string): number | undefined {
     if (process.env["NODE_ENV"] !== "test") throw new Error("test-only");
-    return this.#sessionLastActivity.get(sessionIdHex);
+    return this.#sessionGenesisAt.get(sessionIdHex);
+  }
+
+  /**
+   * Test accessor: whether a session is recorded as HIGH-STAKES (`DOD-M15-UNILATERAL-1`).
+   * Only available in test/local environments.
+   */
+  getSessionHighStakesForTest(sessionIdHex: string): boolean {
+    if (process.env["NODE_ENV"] !== "test") throw new Error("test-only");
+    return this.#sessionHighStakes.get(sessionIdHex) === true;
   }
 
   /**
@@ -7051,6 +7242,10 @@ export interface CreateDirectoryNodeOptions {
    */
   deliveryGraceSeconds?: number;
   /**
+   * `DOD-M15-UNILATERAL-1`: the HIGH-STAKES tier's floor in seconds. Default: 3600 (1 hour).
+   */
+  highStakesGraceSeconds?: number;
+  /**
    * PERSIST-017: MmrStore for appending sealed sessions to the MMR staging table.
    * When provided, appendSeal() is called after every successful SealNotarization.
    */
@@ -7145,6 +7340,7 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     packageCborInterceptor: opts.packageCborInterceptor,
     logger: opts.logger,
     deliveryGraceSeconds: opts.deliveryGraceSeconds,
+    highStakesGraceSeconds: opts.highStakesGraceSeconds,
     mmrStore: opts.mmrStore,
     notificationQueue: opts.notificationQueue,
     relayPoolManager: opts.relayPoolManager,

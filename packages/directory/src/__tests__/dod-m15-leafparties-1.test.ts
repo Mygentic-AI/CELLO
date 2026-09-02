@@ -277,7 +277,7 @@ describe("DOD-M15-LEAFPARTIES-1 (unilateral): the absent-party seal is bound to 
     // S submits for A↔B's session, carrying a chain made entirely of S's own valid leaves.
     await runUnilateral(
       [{ key: stranger, kind: "msg" }, { key: stranger, kind: "ctrl" }],
-      stranger, a, logs, [a, b],
+      stranger, a, logs, { assignedTo: [a, b] },
     );
     const failed = logs.filter((l) => l.event === "session.unilateral.verification.failed");
     expect(failed, "a key outside the session must not be able to close it").toHaveLength(1);

@@ -1275,8 +1275,11 @@ if (store instanceof PgDirectoryStore) {
 //       before the restart (AC-001 / SI-001).
 //   (2) #sessionParticipants ← sessions table (unsealed sessions with participant data)
 //       Enables PERSIST-015 unilateral seal absent-party lookup after restart (AC-003).
-//   (3) #sessionLastActivity ← sessions.created_at as genesis timestamp
-//       Prevents grace period from resetting to zero on restart (AC-002).
+//   (3) #sessionGenesisAt ← sessions.created_at as genesis timestamp
+//       Prevents the solo-seal floor from resetting to zero on restart (AC-002).
+//   (4) #sessionHighStakes ← sessions.high_stakes, restored with the roster in (2)
+//       A restart that dropped it would judge a high-stakes conversation at the standard bar
+//       (DOD-M15-UNILATERAL-1).
 if (store instanceof PgDirectoryStore) {
   try {
     const activeRequests = await store.loadActiveConnectionRequests();
@@ -1291,10 +1294,10 @@ if (store instanceof PgDirectoryStore) {
   try {
     const activeSessions = await store.loadActiveSessionParticipants();
     result.directory.restoreSessionParticipants(activeSessions);
-    result.directory.restoreSessionLastActivity(activeSessions);
+    result.directory.restoreSessionGenesis(activeSessions);
   } catch (err: unknown) {
     logger.error("adapter.state.load.failed", {
-      stateType: "session_participants_and_last_activity",
+      stateType: "session_participants_and_genesis",
       reason: describeCause(err),
     });
   }

@@ -669,6 +669,15 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     // carried through this typed allowlist decoder or the directory's offer branch
     // (which reads parsedReq.wants_session_offer) never fires.
     const wants_session_offer = o["wants_session_offer"] === true ? true : undefined;
+    /**
+     * `DOD-M15-UNILATERAL-1`: the HIGH-STAKES seal tier, opted into by the initiator.
+     *
+     * Strict `=== true`, like `wants_session_offer` above and for a sharper reason: every other
+     * value — absent, `1`, `"true"`, `null` — means STANDARD, which is the tier that never strands
+     * an honest party. A permissive read here would let a malformed frame silently opt a
+     * conversation into a tier that can refuse it a receipt.
+     */
+    const high_stakes = o["high_stakes"] === true ? true : undefined;
     // MONIKER-2 AC1b: bounded pass-through (string, 1–64 chars). The directory does NOT judge the
     // charset — the receiver is the validation authority; junk is merely size-bounded here.
     const moniker =
@@ -697,6 +706,7 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
     if (initiator_session_addrs !== undefined) result.initiator_session_addrs = initiator_session_addrs;
     if (transport_mode !== undefined) result.transport_mode = transport_mode;
     if (wants_session_offer !== undefined) result.wants_session_offer = wants_session_offer;
+    if (high_stakes !== undefined) result.high_stakes = high_stakes;
     if (moniker !== undefined) result.moniker = moniker;
     if (trust_signals !== undefined) result.trust_signals = trust_signals;
     return result;
@@ -1005,12 +1015,19 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
 
 // ─── PERSIST-015: Unilateral seal response encoders ──────────────────────────
 
+/**
+ * `DOD-M15-UNILATERAL-1`: `remaining_seconds` is OMITTED, never zero, when there is no countdown.
+ *
+ * Two of the three refusals this frame now carries are not about time at all — the counterparty is
+ * present, or the high-stakes tier has no evidence that they left — and neither has a moment at
+ * which it becomes allowed. Sending `0` would make the client's guidance read *"available in ~0s"*,
+ * which is a promise nothing keeps. Absent means "no countdown"; the client already reads the field
+ * as optional and falls back to guidance that does not name a time.
+ */
 export function encodeSealUnilateralTooEarly(frame: SealUnilateralTooEarly): Uint8Array {
-  return ENC.encode({
-    type: frame.type,
-    session_id: frame.session_id,
-    remaining_seconds: frame.remaining_seconds,
-  });
+  const obj: Record<string, unknown> = { type: frame.type, session_id: frame.session_id };
+  if (frame.remaining_seconds !== undefined) obj["remaining_seconds"] = frame.remaining_seconds;
+  return ENC.encode(obj);
 }
 
 // ─── CELLO-M7-UPGRADE-001 (DOD-UP-1): seal upgrade response encoders ──────────

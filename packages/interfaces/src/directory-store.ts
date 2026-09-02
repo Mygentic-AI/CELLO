@@ -560,6 +560,14 @@ export interface DirectoryStore {
     owningNodeId: string,
     initiatorPubkeyHex: string,
     targetPubkeyHex: string,
+    /**
+     * `DOD-M15-UNILATERAL-1`: the conversation opted in to the HIGH-STAKES solo-seal tier.
+     *
+     * Persisted because it is the only thing that survives a directory restart to say so, and a
+     * restart that forgot it would silently judge the session at the standard bar. Optional and
+     * defaulting to false: absent means standard, which is the tier that never strands a party.
+     */
+    highStakes?: boolean,
   ): Promise<void>;
 
   /**

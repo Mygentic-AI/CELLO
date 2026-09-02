@@ -2615,6 +2615,7 @@ export class PgDirectoryStore implements DirectoryStore {
     owningNodeId: string,
     initiatorPubkeyHex: string,
     targetPubkeyHex: string,
+    highStakes = false,
   ): Promise<void> {
     // DOD-M15-CHAINROUNDTRIP-1 — canonicalise ONCE, at the top, and use it everywhere below.
     // Production passes the undashed hex form; the `uuid` column returns the dashed one. Every use
@@ -2634,9 +2635,9 @@ export class PgDirectoryStore implements DirectoryStore {
     // Update participant columns if the session already exists (e.g. from writeSession)
     if (existing.rows.length > 0) {
       await this.#pool.query(
-        `UPDATE sessions SET initiator_pubkey_hex = $1, target_pubkey_hex = $2
-         WHERE session_id = $3 AND owning_node_id = $4`,
-        [initiatorPubkeyHex, targetPubkeyHex, sessionId, owningNodeId],
+        `UPDATE sessions SET initiator_pubkey_hex = $1, target_pubkey_hex = $2, high_stakes = $3
+         WHERE session_id = $4 AND owning_node_id = $5`,
+        [initiatorPubkeyHex, targetPubkeyHex, highStakes, sessionId, owningNodeId],
       );
       return;
     }
@@ -2645,12 +2646,13 @@ export class PgDirectoryStore implements DirectoryStore {
       owning_node_id: owningNodeId,
       initiator_pubkey_hex: initiatorPubkeyHex,
       target_pubkey_hex: targetPubkeyHex,
+      high_stakes: highStakes,
     };
     const columns = [
-      "session_id", "owning_node_id", "initiator_pubkey_hex", "target_pubkey_hex", "chain_hash",
+      "session_id", "owning_node_id", "initiator_pubkey_hex", "target_pubkey_hex", "high_stakes", "chain_hash",
     ];
-    const values: unknown[] = [sessionId, owningNodeId, initiatorPubkeyHex, targetPubkeyHex, ""];
-    const chainHashIndex = 4;
+    const values: unknown[] = [sessionId, owningNodeId, initiatorPubkeyHex, targetPubkeyHex, highStakes, ""];
+    const chainHashIndex = 5;
     await this.insertWithChain("sessions", record, columns, values, chainHashIndex);
   }
 
@@ -2682,12 +2684,14 @@ export class PgDirectoryStore implements DirectoryStore {
     initiatorHex: string;
     targetHex: string;
     genesisTimestampMs: number;
+    highStakes: boolean;
   }>> {
     const result = await this.#pool.query<{
       session_id: string;
       initiator_pubkey_hex: string;
       target_pubkey_hex: string;
       genesis_ms: string;
+      high_stakes: boolean | null;
     }>(
       // DATE_PART avoids EXTRACT(EPOCH FROM ...) which confuses the schema-completeness
       // static analyzer (regex /FROM\s+(\w+)/ matches 'FROM s.created_at' → 's').
@@ -2695,6 +2699,7 @@ export class PgDirectoryStore implements DirectoryStore {
       `SELECT session_id::text AS session_id,
               initiator_pubkey_hex,
               target_pubkey_hex,
+              high_stakes,
               DATE_PART('epoch', created_at) * 1000 AS genesis_ms
        FROM sessions
        WHERE initiator_pubkey_hex <> ''
@@ -2714,6 +2719,9 @@ export class PgDirectoryStore implements DirectoryStore {
       initiatorHex: row.initiator_pubkey_hex,
       targetHex: row.target_pubkey_hex,
       genesisTimestampMs: Math.round(parseFloat(row.genesis_ms)),
+      // DOD-M15-UNILATERAL-1: NULL (a row written before the column existed) is STANDARD, which is
+      // the tier that never strands a party — never read an unknown as the stricter one.
+      highStakes: row.high_stakes === true,
     }));
   }
 }

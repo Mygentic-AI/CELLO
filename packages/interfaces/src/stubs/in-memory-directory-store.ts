@@ -442,6 +442,7 @@ export class InMemoryDirectoryStore implements DirectoryStore {
     owningNodeId: string,
     _initiatorPubkeyHex: string,
     _targetPubkeyHex: string,
+    _highStakes?: boolean,
   ): Promise<void> {
     // In-memory stub: store ownership; participant persistence is a Pg-only feature.
     this.#sessionOwners.set(sessionId, owningNodeId);

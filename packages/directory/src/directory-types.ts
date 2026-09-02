@@ -157,6 +157,14 @@ export interface SessionRequest {
    */
   relay_rtt?: Record<string, number>;
   /**
+   * `DOD-M15-UNILATERAL-1`: opt in to the HIGH-STAKES seal tier for this conversation.
+   *
+   * Absent (the default) is STANDARD. Nothing in this infrastructure can infer the answer — the
+   * relay is deliberately blind to content and the directory never sees it — so the initiator says
+   * so or the conversation is standard.
+   */
+  high_stakes?: boolean;
+  /**
    * M7-WIRE-001 AC-001: Initiator's ephemeral session libp2p Peer ID.
    * Required by handler — if absent, directory rejects with 'session_request_missing_peer_id'.
    * Optional at parse level for backward compat with pre-M7 frames.
@@ -307,6 +315,33 @@ export interface SealLegibility {
   disclaimer: string;
   participants: SealLegibilityParticipant[];
   final_message: SealLegibilityFinalMessage;
+  /**
+   * `DOD-M15-UNILATERAL-1`: **WHERE THE RECEIPT STOPS BEING AS STRONG AS A BILATERAL ONE.**
+   *
+   * A solo seal is not uniformly weaker than a bilateral seal, and reading it that way loses most
+   * of what it proves. Everything up to and including this sequence number is covered by BOTH
+   * parties' signatures — it is exactly as strong as a bilateral seal over the same messages.
+   * Everything ABOVE it is the uncountersigned tail: composed, submitted and witnessed, but never
+   * signed for by the party who had already gone.
+   *
+   * The value is the highest sequence the absent party themselves signed. It is a derived boundary,
+   * published so no consumer has to derive it — and so none can mistake the tail for the prefix,
+   * which is the mistake that turns "they never answered this" into "they agreed to this".
+   *
+   * `0` says the counterparty signed nothing in this conversation, so there is no mutually-signed
+   * prefix at all. Every seal this directory builds sets it, bilateral included — there both parties
+   * signed through the end, so it lands at the last sequence they both reached.
+   *
+   * ⚠️ **OPTIONAL ON THE TYPE, ALWAYS SET BY THE BUILDER, AND NEVER TRUSTED BY THE READER.** Optional
+   * only because a notification enqueued before this field existed is drained and re-encoded through
+   * the same shape; absence there means "an older queued frame", never "the boundary is unknown".
+   * It is also deliberately NOT folded into `canonicalLegibilityHash` — changing that hash is a
+   * lockstep break with the daemon's byte-identical mirror and would fail every bilateral seal
+   * mid-rollout. It does not need to be: every input is already bound, so the client recomputes this
+   * from the bound participants instead of reading it off the wire, and a tampered value on the wire
+   * changes nothing the client shows.
+   */
+  countersigned_through_seq?: number;
 }
 
 /**
@@ -550,12 +585,21 @@ export interface SealUnilateral {
 }
 
 /**
- * seal_unilateral_too_early: directory → client, when grace period hasn't elapsed.
+ * seal_unilateral_too_early: directory → client, when a solo seal is not allowed yet.
+ *
+ * `DOD-M15-UNILATERAL-1` widened what this answers. It is now the ONE "not now, the session is
+ * intact, retry later" answer for all three refusals the gate can reach — the floor has not
+ * elapsed, the counterparty is demonstrably present, or the high-stakes tier has no evidence that
+ * they left. One frame because the client's behaviour is identical in all three (wait, retry, do
+ * not force-abandon) and because a frame the client has no handler for becomes a 30-second
+ * `seal_unilateral_timeout` that names our own wait instead of the cause. WHICH of the three it was
+ * is on the directory's `relay.seal.unilateral.rejected` line, under `cause`.
  */
 export interface SealUnilateralTooEarly {
   type: "seal_unilateral_too_early";
   session_id: Uint8Array;
-  remaining_seconds: number;
+  /** Omitted when the refusal has no countdown — presence and missing evidence are not clocks. */
+  remaining_seconds?: number;
 }
 
 /**
