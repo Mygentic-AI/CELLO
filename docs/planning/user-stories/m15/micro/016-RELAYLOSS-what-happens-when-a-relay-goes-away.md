@@ -173,10 +173,148 @@ anything in the screener.
 
 ## Review
 
-*(Reviewer verdict goes here. One quote. Not a transcript. The Part 1 ANSWERS go here too.)*
+### How the experiment was run
+
+Two real daemons in separate OS processes, one real relay, one real directory, a session with
+messages flowing. The relay was **black-holed** mid-conversation: it kept every socket open and
+stopped moving bytes, and new dials hung. That shape was chosen deliberately — killing the process
+closes its sockets, and a client that sees a close takes the fast path, which is the recoverable
+blip rather than the incident. The killed-process shape was measured too, separately, so both are on
+the record.
+
+**Two bounds, stated up front because they change how the answers read.**
+
+- **The outage is client-facing only.** The relay tells the directory its own address, so the
+  directory→relay control path did not run through the hole and stayed up. Every outcome below is
+  therefore the *optimistic* one: what the client could not do here, it certainly cannot do when the
+  relay is gone for everyone.
+- **The reachability half could not be measured on this harness.** On loopback the receiver never
+  takes a circuit reservation — every node is directly dialable, so there is no NAT for a circuit to
+  cross — and the watchdog only watches receivers that had one. This was read from the daemon before
+  the outage rather than assumed. Those questions are answered from 32 days of the production daemon
+  log instead, which is better evidence for them anyway: real NAT, real relays, real distance.
+
+### The six answers
+
+**1 — Does the send succeed, park, stall, or fail?** It **stalls for ten seconds and then reports
+success.** Not a park, not a failure. Ten seconds is the hash-submit timeout expiring, and the
+counterparty receives the message normally, because content travels the direct path and only the
+*witness* goes through the relay.
+
+**2 — Is the message witnessed? Was anything said?** **No, and nothing the operator could read.**
+The response was byte-identical to the healthy send that preceded it, down to a `sequence_number`
+that looks like a receipt and is a local index. The daemon knew: it logged the loss at ERROR with an
+accurate consequence and an accurate remedy, into a file the agent cannot open. **This is the unit's
+fix, and it is done** — the response now carries `witnessed` on every send, plus guidance on the
+false case saying what happened and not to resend. Both values are pinned by tests against a real
+relay.
+
+**3 — Can the session still be closed and sealed? THE SEVERITY ANSWER.** **No, and the two sides are
+told different things.** Closing during the outage took ten seconds and then:
+
+| Party | What the operator sees |
+|---|---|
+| One side | success, seal pending, with a root hex |
+| Other side | refused: the seal leaf could not reach the witness, retry when the relay is back |
+
+One party believes the close committed; the other knows it failed. The receipt did not appear during
+the outage, and **it did not appear on its own after the relay came back** — nothing retries a
+refused close.
+
+**4 — How long is the gap?** With a killed relay process, **17.0 seconds** from death to the daemon
+noticing. From production, an agent's typical gap without a working circuit is **3.6 seconds median,
+322 seconds at the 90th percentile**; the windows longer than an hour are all three agents beginning
+and ending within milliseconds of each other overnight, which is the laptop asleep, not a fault.
+
+**5 — Does the rebuild succeed, against a different relay?** **Not answerable here** — this harness
+runs one relay. From production: **the second relay was asked 686 times and granted once.**
+
+**6 — What is the operator told?** Before the fix, on the message path: nothing. On the close path:
+one side gets a correct, actionable refusal and the other gets a success. And the receipt command,
+asked about the stuck session, tells the operator to close it — which they have already done, and
+which returned success — and attributes the state to a named daemon defect that is not what
+happened.
+
+### Part 2 — the churn, explained
+
+**Why so many lost reservations?** They are not that many failures. Over 32 days there were 3,022
+lost-reservation lines, and they group into **746 episodes**. Inside an episode the client rebuilds
+on a thirty-second grid and each failed rebuild writes another line, so a twenty-minute blip writes
+about forty of them. The count measures watchdog ticks during blips, not relay deaths.
+
+**And more than half of the episodes are the client's own network, not the relay.** In 52% of them
+the daemon also lost its directory connection within a minute of the episode starting. Against a
+time-shuffled control that figure is 4%, so the association is real and not an artifact of a signal
+that is always on. The outcome is bimodal: 1,589 reservations died within one watchdog tick, and
+1,516 lasted more than fifteen minutes.
+
+**Why did one relay hold 99% when two were asked?** The premise is wrong twice, and both are
+checkable.
+
+1. **The client never asks two.** It walks its relays in order and returns at the first one that
+   grants. The field in the log that reads `reservationsRequested: 2` is the size of the candidate
+   *list*, not a count of requests — that one mis-named field is the whole reason "the client
+   already requests a reservation with every relay it knows" looked true.
+2. **The fallback did not help when it ran.** The second relay is only reached when the first has
+   already failed. That happened 686 times and it granted a reservation once. This does **not**
+   establish that the second relay is broken: those 686 moments are exactly the moments when the
+   client was already failing at everything, so the two explanations are not separated by this data.
+
+**What that means for adding relays:** the dominant failure is on the client's side of the wire, and
+the one fallback that exists rescued 1 of 686 opportunities. A third relay does not address either
+finding.
+
+### Part 3 — what was fixed, and what was deliberately not
+
+**Fixed:** a send that the relay did not witness now says so in the response the agent reads, with
+guidance. The relay-dispatch guidance also stops asserting "witnessed" unconditionally — it was
+claiming the exact property that had just been lost, as the reason not to worry.
+
+**Not fixed, deliberately:** the close asymmetry and the receipt's misleading remedy are the seal
+path, not this one. Fixing them here would grow a micro unit into a different unit's work.
+
+**Not published.** The fix is in the tree and reaches operators only through an npm publish, which is
+outside this system and is Andre's step.
+
+### Recommendation on `SESSION-RELAY-PINNED-1`
+
+**It stays in the gate.** The line said to reclassify it to post-launch *if a conversation parks
+cleanly and still seals*. Measured, it does neither: every message costs a ten-second stall and
+silently leaves the record, and the session does not seal during the outage or recover on its own
+afterwards. The decision is Andre's; the evidence is above.
+
+*(Reviewer verdict goes here.)*
 
 ---
 
 ## Newly discovered
 
-*(One or two lines each. Do not act on them.)*
+> ### ⚠️ THE SPAWN TRIP-WIRE FIRED — four items, and none of them was started.
+>
+> **What I was doing:** `016-RELAYLOSS`, the two open relay lines, converting them from guesses into
+> numbers and fixing what the numbers showed. That is finished and reviewed.
+>
+> **Is the vein still producing PRODUCTION DEFECTS, or has it turned into test hygiene?** Production
+> defects. All four are things an operator meets: two are what they are told during an outage, one is
+> a log that names the wrong agent, one is a relay that will not grant. None is a test-only artifact.
+>
+> **The decision to continue is Andre's, not mine.** Nothing below has been started.
+
+1. **Closing during a relay outage tells the two sides opposite things.** One party's close returns
+   success with a pending seal and a root; the other's is refused because the seal leaf could not
+   reach the witness. One of them believes the conversation is finished. **Post-launch or blocking is
+   Andre's call under the frozen gate.**
+2. **A close refused for an unreachable relay is never retried, and the receipt does not arrive on its
+   own after the relay returns.** The refusal tells the operator to retry, and only one of the two
+   parties ever sees it.
+3. **The receipt command's remedy does not work in this state.** Asked about the stuck session it says
+   to close it — already done, and it returned success — and blames a named daemon defect that is not
+   what happened here. A remedy that reads actionable and is not spends the reader's trust as well as
+   their time.
+4. **The parked-content drain logs the wrong agent.** It dials the relay from whichever agent's
+   standing receiver comes to hand while reporting the failure under the agent it was draining for. On
+   a one-agent daemon they coincide; on a three-agent daemon they need not, and the log then attributes
+   a failure to an agent that was not involved.
+5. *(Not an item — a question the data raises and does not settle.)* The second relay granted 1 of 686
+   fallback requests. Whether that is the relay or the client's already-failing state cannot be
+   separated from this log, because the fallback only ever runs when the client is already failing.
