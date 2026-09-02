@@ -9813,3 +9813,19 @@ change moves only *when* a directory issues it — never *who* checks it. The re
 `002`/`008` installed is untouched, and the issuing predicate is not loosened: at `register_success`
 the directory has just completed a real DKG registration for that key, which is a strictly stronger
 proof than the profile read the auth path uses.
+
+### Part 0 — RESULT: both named seal journeys now reach the seal
+
+| journey | before | after |
+|---|---|---|
+| `j-spine` | 5 passed / 2 failed — DOD-SPINE-6 (send/receive) and DOD-SPINE-7 (bilateral seal) | **7 passed / 0 failed** |
+| `j-unilateral` | died at relay auth | reaches and exercises the seal; **2 failed / 1 passed**, both failures on the counterparty-ABSENT gate |
+
+`j-unilateral`'s two remaining failures are `DOD-M15-UNILATERAL-1` — *"notarized must record ABSENT"*
+and the attestation that goes with it — which is `013-ABSENCE`'s subject and is named
+**out of scope** by this order. Nothing in that run mentions `relay_unavailable` or
+`relay.auth.online_token.missing` any more; the only `online_token` lines left are four
+`not_issued` at auth time, which is the correct answer for a key that is mid-registration.
+
+**The stop rule was not needed.** The fix is two commits, one per repo, and it does not touch relay
+authentication: the relay's check is unchanged and the issuing predicate is not loosened.
