@@ -1,0 +1,216 @@
+---
+name: 018-PARKCOLLECT — A parked message can actually be collected
+type: micro-work-order
+date: 2026-09-02
+status: open
+description: >
+  The spine lane says a recipient cannot collect a parked message — the relay refuses with
+  not_a_participant. The SAME run shows the real send-to-offline path collecting fine, twice. This
+  order runs the live check the DoD demands, records the verdict, and fixes what the verdict says —
+  which the trace below predicts is the TEST, not the relay. Source: DOD-M15-PARKCOLLECT-1.
+---
+
+# **<ins>MICRO</ins>** WORK ORDER 018-PARKCOLLECT — Can a parked message be collected?
+
+> ## THE RULES OF A MICRO WORK ORDER
+>
+> 1. **Read [[M15-PROCEDURE]] IN FULL before you start.** It binds you — the gate, the review
+>    dispatch, the invariants, how tests are run. **Do not read `M15-DEFINITION-OF-DONE.md` or
+>    `M15-BUILD-JOURNAL.md`**; this order carries everything you need from them.
+> 2. **MICRO means small.** One mission. Follow it to its end. **Never grow the mission.**
+> 3. **Found something else?** Write it under *Newly discovered* at the foot of this file and
+>    **keep going**. Do not fix it. Do not investigate it.
+> 4. **500 lines, hard cap.**
+> 5. **Standard procedure still applies:** implement → review (`cello-unit-reviewer`) → fix every
+>    finding → commit. Commit per fix, push after every commit. **Closing a unit means flipping
+>    this file's `status:` frontmatter to `complete` in the SAME commit as the verdict.**
+> 6. **Done is done.** When the Definition of Done below is met, stop.
+
+> ## ⛔ THE ONE THING YOU MUST NOT DO
+>
+> **Do not weaken, bypass, or add an exception to the relay's vouching gate** — the check in
+> `packages/relay/src/content-park.ts` that refuses a pull with `not_a_participant`. That gate is
+> `DOD-M15-RELAYAUTH-1`, closed on 2026-09-01 after two review passes. It exists so that a key never
+> named by a directory-signed session cannot collect mail. **If your fix touches that `if`, you have
+> fixed the wrong thing.** The evidence below says the gate is right and the test is wrong.
+
+---
+
+## What the operator is afraid of (why this blocks launch)
+
+1. They message someone whose agent is offline.
+2. The relay accepts it. Their side says **parked — success.**
+3. The recipient comes online and collects.
+4. The relay refuses: `relay_refused_pull:not_a_participant`.
+5. The message sits there. **The sender was told it worked.**
+
+If that is what happens live, it is a silent one-way drop on the offline path — the worst shape this
+milestone hunts. **Your first job is to find out whether it happens live.** The trace says no.
+
+---
+
+## What the trace established (read this; do not re-derive it)
+
+**The failing test does not send a message. It fabricates one.**
+`packages/e2e-tests/src/spine/j-content.spine.test.ts`, test **"DOD-MSG-3 (transport)"**
+(line ~108). Look at lines 131–149:
+
+```ts
+const sessionId = randomBytes(16).toString("hex");      // ← a session NOBODY brokered
+...
+await ipcCall(dirA, "content_park_deposit", { ..., sessionId, ... });   // raw IPC, no session
+await ipcCall(dirB, "content_park_pull",    { ..., recipientPubkey: pubB });
+```
+
+No `cello_initiate_session`. No directory. No assignment ever presented to the relay. So agent B's
+key has **never been named by a directory-signed assignment this relay has seen** — which is,
+word for word, what the refusal means. The gate refuses it **deterministically**, every time.
+
+**The relay vouches a key in exactly one place:** `packages/relay/src/relay-node.ts` lines ~995–1001,
+when a client presents a directory-signed session assignment. It vouches **both** participants
+regardless of which one presented. The store behind it is durable outside `local` env
+(`bin/relay.ts` ~177). Nothing else adds to it. A fabricated session never reaches it.
+
+**The real path is green in the same run.** Two tests in the same file, same 2026-09-02 receipt,
+both **PASSED**:
+
+- **"DOD-MSG-3/4 (recover)"** (line ~209): A initiates a real session with B, sends while B is
+  online, **B's daemon is killed**, A sends again → parks. B restarts, `cello_start_agent`
+  auto-recovers, `content.recover.auto.completed` fires, the message traverses the inbound funnel.
+- **"DOD-MSG-4 (auto-recover)"** (line ~732): same, with no explicit recover call at all.
+
+Both work because a real send parks on the **session's own relay**
+(`session-node-manager.ts` `#parkContent`, ~line 2147: `entry.relayPeerId` from the session's
+active node) — the relay that vouched both parties when the assignment was presented.
+
+**Why the test passed on 23 August and fails now:** the vouching gate was added on 2026-08-31
+(`RELAYAUTH-1`). Before it, any key that could prove ownership could pull. The test relied on that.
+
+**Who else uses the raw IPC calls:** nobody. `content_park_deposit` / `content_park_pull` /
+`content_park_recover` have **no callers** in `core/cli`, `core/adapter-claude-code`, or
+`core/client` (grep, 2026-09-02). They are test/diagnostic surfaces, not a user path.
+
+**So the prediction is: harness artifact, not product defect.** You still run the live check — the
+DoD requires it, and the lane has diverged from live before.
+
+---
+
+## Part 1 — THE LIVE CHECK (do this first; minutes)
+
+One real send to an offline agent, one collection, on the live fleet. **The park path only fires for
+an EXISTING session whose counterparty goes offline** — a brand-new session to an offline agent is
+refused up front with `counterparty_offline`, which is a different thing. So the sequence matters:
+
+1. In Claude Code, `cello_use_agent` → **`CELLO_Coder_1`**.
+2. `cello_initiate_session` → target **`CELLO_Support`** (both online, same daemon — that is a real
+   directory-brokered session over the real relay; each agent has its own receiver node).
+3. `cello_send` one message, `signal: "over"`. Confirm it arrives (`cello_inbox` as CELLO_Support).
+4. `cello_set_agent_offline` → **`CELLO_Support`**.
+5. As CELLO_Coder_1, `cello_send` a **second** message, `signal: "over"`. Note the response.
+6. **Prove it parked** — `grep 'content.park' ~/.cello/daemon.log | tail -5`. You must see a
+   `content.park.deposit` (or `.received`-class) event for this session. **If you see no park event
+   at all, the send went direct and this check proved nothing** — go to the fallback below.
+7. `cello_start_agent` → **`CELLO_Support`**, then `cello_use_agent` → CELLO_Support.
+8. `grep 'content.recover' ~/.cello/daemon.log | tail -5` — expect `content.recover.auto.completed`.
+   Then `cello_inbox` — the second message is there.
+9. `grep 'content.park.pull.refused' ~/.cello/daemon.log` — expect **nothing**.
+10. `cello_close_session` to seal. Do not leave it open.
+
+**Fallback if step 6 shows no park event:** run the passing recover test alone, which is the same
+sequence with two real daemons as separate OS processes:
+
+    cd /Users/andrep/Documents/code/trustless-cello
+    pnpm --filter @cello-protocol/e2e-tests exec vitest run --config vitest.spine.config.ts \
+      src/spine/j-content.spine.test.ts -t "DOD-MSG-3/4 \(recover\)"
+
+Docker must be running; the harness brings up its own Postgres. Both repos must be freshly built
+(`pnpm run typecheck` here — it emits; `pnpm run build` in cello-client).
+
+**Record the verdict in this file's Review section**, with the log lines quoted:
+*"LIVE: parked and collected"* or *"LIVE: refused"*. That sentence decides Part 2.
+
+---
+
+## Part 2 — FIX WHAT THE VERDICT SAYS
+
+### 2A — If LIVE collected (the predicted outcome): fix the TEST
+
+Rewrite **"DOD-MSG-3 (transport)"** to exercise the real path. It must stop fabricating a session.
+The shape is already in the same file — mirror **"DOD-MSG-3/4 (recover)"** lines ~209–260:
+
+- `cello_initiate_session` from A to B while both are online, and `await` B's `new_session`.
+- `cello_send` once while B is online.
+- `await daemonB.kill()`.
+- `cello_send` the parked message. Assert the deposit via the relay's own log
+  (`content.park.received`), as the test already does at line ~161.
+- Restart B (`cello login` under `CELLO_DIR: dirB`, `cello_start_agent`), wait for
+  `content.recover.auto.completed`, then assert the **exact bytes** came back — keep the test's
+  original assertion that B receives what A deposited; that is the property the test exists for.
+- Delete the raw `content_park_deposit` / `content_park_pull` calls from this test.
+
+**Keep the test's name and its DoD tag.** The fixture is `live-harness.ts`; extend it if you need a
+helper, never write a new harness.
+
+Then, in `M15-DEFINITION-OF-DONE.md` under `DOD-M15-PARKCOLLECT-1`, add one line:
+*"Live check 2026-09-0X: parked and collected. Harness artifact — the test fabricated a session the
+directory never brokered, which the vouching gate correctly refuses. Test rewritten to a real send."*
+Flip the tag when review closes.
+
+### 2B — If LIVE refused: STOP and report
+
+Then the trace above is wrong and this is a product defect. **Do not fix it in this order.** Write
+exactly what you observed — the daemon log around the refusal, which relay the content parked on
+(`relayPeerId` in the `content.park` event), and which relay B pulled from — under *Newly
+discovered*, mark this file `status: blocked`, and hand it back. The fix is a design question
+(which relay vouches the recipient, and when), not a micro unit.
+
+---
+
+## Definition of Done
+
+1. The live check ran, and its verdict is written in the Review section with the log lines quoted.
+2. **2A:** "DOD-MSG-3 (transport)" is green through a real directory-brokered send, with the raw
+   IPC deposit/pull removed from it, and the exact-bytes assertion kept. Run that one file, quote
+   the result. **2B:** the file is `status: blocked` with the evidence written down.
+3. **The vouching gate in `content-park.ts` is untouched.** State this explicitly in the Review.
+4. The new test fails when it should: temporarily comment out the second `cello_send` (the parked
+   one) and confirm the test goes red on "B must receive the parked entry". Restore it.
+5. Gate passes (test / lint / typecheck) in every repo touched.
+6. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below.
+
+**Not in scope — record, do not touch:**
+- **`DOD-MSG-5` and `DOD-MSG-7`** fail on `content_park_deposit` returning `"[object Object]"`.
+  That is `DOD-M15-PARKERROR-1`, a separate line. Leave them red.
+- **`DOD-MSG-8`** fails on `MCP tool "cello_get_transcript" not found`. The tool is named
+  `cello_transcript` today; the test is stale. Not this line. Note it under *Newly discovered*.
+- Anything about relays restarting, draining, or handing over.
+
+---
+
+## Traps recorded before you start
+
+**The obvious fix is the forbidden one.** Making the pull succeed by loosening `isVouched` makes
+the test green in five minutes and reopens `RELAYAUTH-1`. The reviewer will refuse it.
+
+**A same-daemon session is real.** CELLO_Coder_1 and CELLO_Support share a daemon; that is not a
+loopback shortcut — each agent runs its own receiver node and the session goes through the
+directory and the relay. But step 6 is how you *prove* the park path ran. No park event, no proof.
+
+**`cello_set_agent_offline` is not "away".** Away (`cello_contact_set_away`) auto-replies. Offline
+tears the agent down so a send to it parks. Use offline.
+
+**Don't chase `[object Object]`.** It will be sitting right next to your failure in the same test
+file. It is a different line with its own order.
+
+**Two lanes share this laptop.** One test file at a time; read the log instead of re-running.
+
+---
+
+## Review
+
+*(the coder fills this in — the live-check verdict with quoted log lines, the test run output,
+the mutation proof from DoD 4, the reviewer's verdict)*
+
+## Newly discovered
+
+*(anything found and NOT acted on, per rule 3 — MSG-8's stale tool name goes here at minimum)*
