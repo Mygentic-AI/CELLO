@@ -410,14 +410,43 @@ describe("J-RELAYLOSS — kill a relay mid-conversation and watch (016-RELAYLOSS
     record("Q4 standing_receiver_reachability before the timed kills", reservedNow ? "reserved" : reachOf());
 
     if (reservedNow) {
-      // (a) MUTE: sockets open, nothing answers. The incident shape.
+      /**
+       * (a) MUTE: sockets held open, nothing answers. The incident shape.
+       *
+       * ⚠️ **THIS IS A RECORDED MEASUREMENT, NOT AN ASSERTION, AND THE DIFFERENCE IS DELIBERATE.**
+       *
+       * I first wrote `expect(lostMute).not.toBeNull()` here, on the assumption that a reserved
+       * receiver must eventually notice a mute relay. The run refuted it: nothing was logged within
+       * 180 seconds, while the SAME receiver notices a KILLED relay in 14-17. That is not a test
+       * problem — it is the answer to Part 1 question 4 for the shape the order calls the real
+       * incident, and it is the most important number this journey produces.
+       *
+       * Asserting it would have been mis-classifying a QUESTION as a CONTROL. A control is something
+       * that must hold for the run to mean anything at all; how long the daemon takes to notice is
+       * the thing under measurement. The control that the black hole genuinely reached the client is
+       * the unwitnessed leaf earlier in this run, and the kill measurement below.
+       *
+       * Recording it rather than asserting it is therefore not a weakened assertion — the number IS
+       * the finding, and burying it in a red test would have hidden it.
+       */
       const tMute = Date.now();
       cluster.relayIngress!.blackhole();
-      const lostMute = await waitForEventAfter(daemonA, /session\.standing_receiver\.reservation\.lost/, tMute, 180_000);
+      // What the OPERATOR sees while this is happening — the "looks perfectly healthy" half.
+      const seen: string[] = [];
+      const lostMute = await Promise.race([
+        waitForEventAfter(daemonA, /session\.standing_receiver\.reservation\.lost/, tMute, 300_000),
+        (async () => {
+          for (let i = 0; i < 5; i++) {
+            await sleep(60_000);
+            seen.push(`${(i + 1) * 60}s:${reachOf()}`);
+          }
+          return null;
+        })(),
+      ]);
       record("Q4 ms from a MUTE relay to the daemon noticing (the silent window)",
-        lostMute?.waitedMs ?? "NEVER within 180s");
-      record("Q4 the lost event on the mute path", lostMute?.raw ?? "(none)");
-      expect(lostMute, "a reserved receiver must eventually notice a relay that went mute").not.toBeNull();
+        lostMute?.waitedMs ?? "NOT WITHIN 300s — a lower bound, not a measurement of when it ends");
+      record("Q4 what `cello status` reported during the mute outage", seen.join(" "));
+      record("Q4 the lost event on the mute path", lostMute?.raw ?? "(none within 300s)");
       cluster.relayIngress!.restore();
       // Let it re-reserve, so the kill below is measured from the same starting state.
       const reDeadline = Date.now() + 240_000;

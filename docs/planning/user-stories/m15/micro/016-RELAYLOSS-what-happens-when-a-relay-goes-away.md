@@ -254,9 +254,27 @@ succeeded, and has no reason to look.
 a success to close again, or the directory's grace window to expire into a unilateral seal. An
 operator following the guidance from the side that failed is walked into a dead end.
 
-**4 — How long is the gap?** With a killed relay process and a receiver confirmed to be holding a
-reservation at the moment of the kill, the daemon notices in **14.0 to 17.0 seconds** — three runs,
-one sample each, quoted as the range they actually span rather than as a single figure.
+**4 — How long is the gap? THE TWO KILLS COST WILDLY DIFFERENT AMOUNTS, AND THE REAL INCIDENT IS THE
+EXPENSIVE ONE.** Both measured against the same receiver, confirmed to be holding a reservation at
+the moment of each:
+
+| The relay… | Time until the daemon notices |
+|---|---|
+| is **killed** — process gone, sockets close | **14.0 to 17.0 seconds** (three runs, one sample each) |
+| goes **mute** — alive, sockets held open, answers nothing | **not within 180 seconds**, and `cello status` reported it healthy throughout |
+
+The order's own trap note said to kill the relay convincingly, because "the incident shape is a relay
+that stops answering". It was right, and the gap between the two is the reason: a killed relay
+announces itself by closing its sockets, and the client is watching for exactly that. A mute relay
+closes nothing, so the connection the watchdog checks stays open and reads healthy. **The agent goes
+on advertising a circuit through a relay that answers nothing, and nothing tells it.** That is the
+silent loss of inbound reachability the whole standing-receiver design exists to prevent, still
+reachable through the one failure mode that does not slam a door.
+
+**I asserted the opposite before measuring it.** The first version of this phase asserted the daemon
+must notice, which made the run red for a product behaviour rather than a regression. The assertion
+was mis-classified: how long the daemon takes to notice is one of the six questions, not a control on
+the experiment. It is now recorded, not asserted, and the number is the finding.
 
 From production, across the three agents, a gap without a working circuit runs **3.6 to 4.8 seconds
 at the median and 322 to 371 seconds at the 90th percentile**. The windows longer than an hour are
@@ -408,20 +426,48 @@ root gate deliberately does not run.** So the true-side pin is real evidence and
 regression guard: it holds only as long as someone runs the lane. That is a property of the lane,
 not of this unit, and it is worth knowing before trusting the pair.
 
-*(Reviewer verdict goes here.)*
+### Reviewer verdict
+
+`cello-unit-reviewer`, one pass over both repos, the run artifacts, and the production log — which it
+re-analysed rather than transcribed, which is how three of my own numbers were caught:
+
+> **Blocking before close: HIGH-1, HIGH-2, HIGH-3.** MEDIUM-4 is a factual correction to the
+> write-up and should go in the same pass, because the recommendation leans on it.
+
+**All ten findings fixed.** The three blocking ones were the substantive part, and two of them were
+this unit's own defect turned back on itself:
+
+| Finding | Disposition |
+|---|---|
+| HIGH-1 — the new guidance named the act that makes the loss permanent | fixed; guidance now says ordering does not repair itself, and a test asserts the false promise is absent |
+| HIGH-2 — `witnessed` on two of five return paths | fixed; all five, through one helper, so the response and the log cannot disagree |
+| HIGH-3 — a bound the run itself refuted | fixed; the run waits for the reservation and measures the gap instead of declaring it unmeasurable |
+| MEDIUM-4 — "the second relay granted once in 686" | corrected to at least 51; the conclusion rewritten onto evidence that holds |
+| MEDIUM-5 — a remedy the runs showed was inert | `cello status` dropped from the guidance |
+| MEDIUM-6 — churn mechanism did not match the distribution | rewritten: three agents, one bad day, and grid retry as the minority case |
+| LOW-7/8/9/10 | control described accurately; stale comment gone; lint directives removed; the field documented in the tool description |
+
+**And one the reviewer did not catch, which the `013-ABSENCE` lane did.** My HIGH-2 fix made the
+queued path's guidance conditional on witnessing, which discarded the relay's own retry window,
+because a rate-limited park is unwitnessed by construction. Their test caught it deterministically.
+That is the same rule as HIGH-1 and Invariant 3 — a downstream layer replacing a more specific
+upstream message — and it is the third time this unit produced that shape in its own fix. Composed
+rather than chosen, and pinned by a test in the file whose edit broke it.
 
 ---
 
 ## Newly discovered
 
-> ### ⚠️ THE SPAWN TRIP-WIRE FIRED — four items, and none of them was started.
+> ### ⚠️ THE SPAWN TRIP-WIRE FIRED — five items, and none of them was started.
 >
 > **What I was doing:** `016-RELAYLOSS`, the two open relay lines, converting them from guesses into
 > numbers and fixing what the numbers showed. That is finished and reviewed.
 >
 > **Is the vein still producing PRODUCTION DEFECTS, or has it turned into test hygiene?** Production
-> defects. All four are things an operator meets: two are what they are told during an outage, one is
-> a log that names the wrong agent, one is a relay that will not grant. None is a test-only artifact.
+> defects, and the newest is the worst of them. Item 5 — a mute relay going unnoticed for minutes
+> while status reads healthy — is the failure the reachability design exists to prevent. None of the
+> five is a test-only artifact: two are what an operator is told during an outage, one is a log
+> naming the wrong agent, one is a relay that will not grant, one is silent unreachability.
 >
 > **The decision to continue is Andre's, not mine.** Nothing below has been started.
 
@@ -441,6 +487,13 @@ not of this unit, and it is worth knowing before trusting the pair.
    standing receiver comes to hand while reporting the failure under the agent it was draining for. On
    a one-agent daemon they coincide; on a three-agent daemon they need not, and the log then attributes
    a failure to an agent that was not involved.
+5. **A MUTE relay is not noticed for at least three minutes, while a killed one is noticed in
+   fifteen seconds — and `cello status` reads healthy the whole time.** The watchdog tests whether the
+   connection to the relay is open, and a relay that stops answering without closing anything leaves
+   it open. The agent keeps advertising a circuit nobody can be reached through. **This is the fifth
+   item and the most serious of them**; it is the exact failure the standing-receiver design names as
+   its reason to exist, surviving in the one shape that does not slam a door. Not investigated and
+   not fixed, per the trip-wire.
 5. *(Not an item — a question the data raises and does not settle.)* The second relay granted 1 of 686
    fallback requests. Whether that is the relay or the client's already-failing state cannot be
    separated from this log, because the fallback only ever runs when the client is already failing.
