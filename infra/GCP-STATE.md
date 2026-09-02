@@ -193,6 +193,36 @@ alert reads as coverage:
 > require it), but no mail has ever actually been sent through it. One click closes it: Console →
 > Alerting → Notification channels → the email row → **Send test notification**.
 
+> ### 📟 THE TELEGRAM ROUTE — live and drilled, 2026-09-02
+> | | |
+> |---|---|
+> | Notification channel | `notificationChannels/9300118276468112821` (type `pubsub` → `cello-seal-alerts`) |
+> | Notifier image | `seal-notifier:a54137bf5496e71ba3272fc9b1756a61c42be6db` |
+> | Both policies | 2 channels each: Telegram + email |
+>
+> **Deploy order is load-bearing and is written on the channel resource itself.** The notifier image
+> must ship BEFORE the channel exists, because Terraform cannot see what code is inside an image
+> tag. With the old notifier, a Monitoring incident fell through to the seal formatter and rendered
+> as *"🟠 CELLO — a connection repair FAILED / the next seal over this link will fail"* — a directory
+> node's CPU announced as a relay fault. It misdirects rather than degrades.
+>
+> **Three drills, all delivered**, each proving something different:
+> - an ordinary open incident — renders node, zone, observed value against threshold, console link;
+> - a node with **no data** — leads with *"gcp-use1 has STOPPED REPORTING"* rather than the policy's
+>   own name, which describes heap growth and would send an operator to read a memory trend for a
+>   process that is not running;
+> - an incident **auto-closed after 24h** — says *"AUTO-CLOSED … This is NOT a recovery"*. The naive
+>   version said *"RECOVERED. This cleared on its own. Nothing to do."*, which on the missing-data
+>   path means announcing health for a node that has been dead for a day.
+>
+> The open and closed drills logged **different throttle keys** (`…|open`, `…|closed`) 300 ms apart,
+> which is the live proof that a recovery cannot be swallowed by the 15-minute per-key cooldown.
+>
+> **A lost receipt outranks a hot node.** One chat, one in-memory throttle, a global cap of 8 an
+> hour. Node health sends two messages per incident, so a capacity-stalled roll across three nodes
+> and two policies is twelve against that cap — enough to silence a `relay.seal.rejected` arriving
+> behind them. That event now bypasses the global cap while keeping its own per-key cooldown.
+
 > ### 🥾 A BOOTSTRAP STEP TERRAFORM DOES NOT OWN — the Monitoring notification service agent
 > The first apply of the Pub/Sub notification channel **failed**:
 > `Error 400: Service account service-955736313934@gcp-sa-monitoring-notification.iam.gserviceaccount.com does not exist.`

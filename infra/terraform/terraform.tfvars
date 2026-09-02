@@ -179,4 +179,4 @@ waitlist_image_tag = "waitlist-a12fd1a3"
 ops_dashboard_image_tag = "ops-e6d0f32"
 
 # Seal-alert notifier (M12 Tier P5 / DOD-M12-SEAL-ALERT-1). No :latest exists; SHAs are pinned.
-seal_notifier_image_tag = "fde98c745690147630df7637297ea63ca5e743de"
+seal_notifier_image_tag = "a54137bf5496e71ba3272fc9b1756a61c42be6db"
