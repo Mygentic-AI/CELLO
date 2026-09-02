@@ -250,19 +250,23 @@ locals {
   directory_rss_alert_kb = floor(local.directory_heap_ceiling_mb * 0.60 * 1024)
 }
 
-# ─── Where a person is actually told ─────────────────────────────────────────────────────────────
+# ─── Where a person is actually told: BOTH Telegram and email ────────────────────────────────────
 #
-# EMAIL, NOT THE TELEGRAM PATH ABOVE, AND THAT IS A DELIBERATE CHOICE RATHER THAN THE EASY ONE.
-# The seal notifier parses Cloud Logging's LogEntry shape directly — `jsonPayload.event` and
-# `resource.labels.zone` (see packages/seal-notifier/src/format.ts). A Monitoring incident carries
-# neither, so an alert policy pointed at that Pub/Sub topic would arrive in Telegram as
-# "unknown_event in unknown-zone": a notification that fires correctly and names nothing, which is
-# the same "reads as coverage" failure this file was written to avoid. Making it work means
-# changing the notifier, which is a different unit.
+# Node-health alerts go to the Telegram chat that already carries the seal alerts, and to email.
+# Both are named in infra/GCP-STATE.md, because a route nobody writes down is a route nobody knows
+# exists.
 #
-# The cost of a second route is that nobody knows it exists, so it is named in infra/GCP-STATE.md
-# alongside the Telegram one. Two routes, both written down: node health arrives by email, a lost
-# receipt arrives on Telegram.
+# ⚠️ THIS BLOCK USED TO SAY "EMAIL, NOT THE TELEGRAM PATH ABOVE", and gave a real reason: the
+# notifier parsed Cloud Logging's LogEntry shape directly, so a Monitoring incident pointed at that
+# topic arrived as "unknown_event in unknown-zone" — worse than nothing, since it announced a RELAY
+# repair failure for a DIRECTORY problem. That was true until the notifier learned the second shape
+# (`classifyPayload` / `formatIncident`). Rewritten rather than deleted because the reason it gave
+# is still the reason the notifier must ship BEFORE the channel below — see the ordering warning
+# there.
+#
+# EMAIL IS KEPT ALONGSIDE, not replaced. It is the route that still works when the bot token is
+# rotated, the chat is deleted, or the notifier is mid-deploy, and none of those announce
+# themselves. Email delivery does not traverse Cloud Run, so the two routes fail independently.
 variable "alert_operator_email" {
   type        = string
   default     = "andre@mygentic.ai"
@@ -294,6 +298,20 @@ variable "alert_operator_email" {
 # EMAIL IS KEPT ALONGSIDE IT. Telegram is what Andre actually reads; email is the route that keeps
 # working when a bot token is rotated, a chat is deleted, or the notifier is mid-deploy — and none
 # of those announce themselves. Two routes, one incident, and the throttle only governs the chat.
+# 🚨 DEPLOY ORDER IS LOAD-BEARING: SHIP THE NOTIFIER IMAGE BEFORE THIS CHANNEL EXISTS.
+# Terraform cannot see what code is inside an image tag, so nothing here can enforce it. If a policy
+# starts publishing incidents while the OLD notifier is running, the incident falls through to
+# `formatAlert` and an operator's phone reads:
+#     🟠 CELLO — a connection repair FAILED
+#     No receipt lost yet; the next seal over this link will fail.
+# A directory node burning CPU, announced as a relay fault — it does not degrade, it misdirects. It
+# also poisons the throttle with the key `unknown_event|unknown-zone|-`, collapsing every incident
+# from both policies onto one key so the second inside 15 minutes is dropped.
+#
+#   1. build the image        (infra/cloudbuild/seal-notifier.yaml, submitted by hand — the trigger
+#                              does not fire, M12-P11)
+#   2. bump seal_notifier_image_tag and apply google_cloud_run_v2_service.seal_notifier
+#   3. only then apply this channel and the policies that reference it
 resource "google_monitoring_notification_channel" "operator_telegram" {
   display_name = "CELLO operator — node health (Telegram, via seal-notifier)"
   type         = "pubsub"
@@ -309,6 +327,19 @@ resource "google_monitoring_notification_channel" "operator_telegram" {
 # WITHOUT THIS THE CHANNEL IS CREATED SUCCESSFULLY AND PUBLISHES NOTHING — the same silent shape as
 # the sink writer above, and the same remedy. Monitoring publishes as its own service agent, not as
 # the policy's owner and not as this project's compute identity.
+#
+# ⚠️ THE AGENT DOES NOT EXIST UNTIL SOMETHING ASKS FOR IT, and this apply FAILED on exactly that:
+#   Error 400: Service account service-955736313934@gcp-sa-monitoring-notification.iam.gserviceaccount.com does not exist.
+# GCP provisions service agents lazily. One command creates it, and it is idempotent:
+#   gcloud alpha services identity create --service=monitoring.googleapis.com --project=cello-infra
+# Note the service is `monitoring.googleapis.com` — asking for `monitoring-notification.googleapis.com`
+# returns SERVICE_CONFIG_NOT_FOUND, and `alpha` because the `beta` component is not installed here.
+#
+# NOT MANAGED IN TERRAFORM, deliberately and with a cost: `google_project_service_identity` exists
+# only in the google-beta provider, which this configuration does not use, and pulling in a second
+# provider for one bootstrap identity is the larger change. So this sits in the same bootstrap layer
+# as the project object itself — recorded in infra/GCP-STATE.md, and it is the one step a
+# from-scratch project would need by hand before this resource applies.
 resource "google_pubsub_topic_iam_member" "monitoring_notification_publisher" {
   project = var.project_id
   topic   = google_pubsub_topic.seal_alerts.name

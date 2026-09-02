@@ -59,7 +59,7 @@ and nobody was told; it was found by a person looking.
 | What | Route | Why that route |
 |---|---|---|
 | A seal was refused / a redial did not recover | log sink → Pub/Sub → Cloud Run `cello-seal-notifier` → **Telegram** | Rare discrete events; the sink delivers the log entry itself so the message can name the session |
-| A directory node is unwell (CPU, memory) | `google_monitoring_alert_policy` → **email**, `alert_operator_email` (`andre@mygentic.ai`) | The seal notifier parses Cloud Logging's `LogEntry` shape (`jsonPayload.event`, `resource.labels.zone`); a Monitoring incident carries neither, so pointing a policy at that topic delivers *"unknown_event in unknown-zone"*. Reusing it means changing the notifier — a different unit |
+| A directory node is unwell (CPU, memory) | **BOTH**: Monitoring alert policy → Pub/Sub notification channel → the same topic → `cello-seal-notifier` → **Telegram**, and → **email** (`alert_operator_email`) | Telegram is where Andre actually looks. Email is kept because it does not traverse Cloud Run, so it survives a rotated bot token, a deleted chat, or a mid-deploy notifier — none of which announce themselves |
 
 **The two policies, both in `infra/terraform/alerting.tf`:**
 
@@ -174,21 +174,41 @@ alert reads as coverage:
 > **Accepted cost:** a node genuinely down for over 30 minutes now emails. During a capacity-stalled
 > roll that will happen, and it is the intended behaviour — a node down half an hour is news.
 
-> ### 🔔 WHAT IS **NOT** PROVEN: NO NOTIFICATION HAS EVER BEEN DELIVERED THROUGH THIS CHANNEL
-> Stated plainly because everything else here is green and this is the gap. What IS proven: both
-> policies exist and are enabled with the intended thresholds; the metrics behind them are arriving;
-> and real historical data crossed the CPU threshold for 3,090 consecutive minutes, so the condition
-> demonstrably can evaluate true. What is NOT proven is the last hop — **that an incident on this
-> channel actually lands in a mailbox.** A channel that accepts creation and silently drops mail
-> looks identical to a healthy one from every check above.
+> ### 🔔 DELIVERY IS PROVEN — Telegram, 2026-09-02
+> The gap recorded here on 2026-09-01 ("no notification has ever been delivered through this
+> channel") is **closed for Telegram**. A synthetic Monitoring incident was published to
+> `cello-seal-alerts` and the notifier logged `kind=send shape=incident` with **no**
+> `seal.notifier.send.failed` — and that absence is meaningful, because the notifier answers 503 and
+> logs on every refusal *including* Telegram's 200-with-`ok:false` for a bad chat or a blocked bot.
+> The message rendered with the node, the zone, the observed value against the threshold, and the
+> console link.
 >
-> It was not forced, deliberately: firing it means either a throwaway policy created by hand (this
-> file's rule is that nothing exists outside Terraform) or an hour of synthetic load on a production
-> node, and either way it emails at 1am for a drill.
+> What that proves: the notifier, the new incident formatter, and the Telegram hop. What it does not
+> prove on its own is the Monitoring→Pub/Sub hop, since the message was published directly to the
+> topic — though that hop's one real hazard (the publisher grant) did surface and was fixed, see the
+> bootstrap note below.
 >
-> **The cheap way to close it is a human one-click:** Cloud Console → Monitoring → Alerting →
-> Notification channels → the `CELLO operator — node health` row → **Send test notification**. Until
-> someone does that, treat node-health alerting as wired-and-plausible rather than proven.
+> **The email channel is still unproven.** It needs no verification click (measured: the channel
+> comes back with no `verificationStatus` field, which per the API means a type that does not
+> require it), but no mail has ever actually been sent through it. One click closes it: Console →
+> Alerting → Notification channels → the email row → **Send test notification**.
+
+> ### 🥾 A BOOTSTRAP STEP TERRAFORM DOES NOT OWN — the Monitoring notification service agent
+> The first apply of the Pub/Sub notification channel **failed**:
+> `Error 400: Service account service-955736313934@gcp-sa-monitoring-notification.iam.gserviceaccount.com does not exist.`
+> GCP provisions service agents lazily, so the grant cannot be made until something asks for the
+> identity. One idempotent command creates it:
+> ```bash
+> gcloud alpha services identity create --service=monitoring.googleapis.com --project=cello-infra
+> ```
+> **`monitoring.googleapis.com`**, not `monitoring-notification.googleapis.com` — the latter returns
+> `SERVICE_CONFIG_NOT_FOUND`, despite being the agent's own name. And **`alpha`**, because the `beta`
+> component is not installed on this machine.
+>
+> **Not in Terraform, deliberately:** `google_project_service_identity` exists only in the
+> google-beta provider, which this configuration does not use. So this joins the project object in
+> the bootstrap layer, and it is the one manual step a from-scratch project needs before
+> `google_pubsub_topic_iam_member.monitoring_notification_publisher` will apply.
 
 > ### 📏 THE MEMORY METRIC READS IN 50 MB STEPS, AND SLIGHTLY HIGH
 > Verified after the apply: the metric returns **3 series, one per `node_id`** (which is what proves
