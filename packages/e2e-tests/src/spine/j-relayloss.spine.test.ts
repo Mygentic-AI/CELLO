@@ -38,12 +38,23 @@ import {
   registerAgent,
   connectMcp,
   cello,
+  writeConsortiumManifest,
+  AUTH_DIRECTORY_NODE_ID,
+  AUTH_DIRECTORY_NODE_KEY_HEX,
+  AUTH_DIRECTORY_NODE_PUBKEY,
   type SpineCluster,
   type Proc,
   type McpConn,
+  type ManifestEnv,
 } from "./live-harness.js";
 
 let cluster: SpineCluster;
+/**
+ * Both daemons need a manifest that NAMES the directory, or `cello_initiate_session` refuses with
+ * `home_node_not_in_reachable_roster` before the experiment starts — the counterparty's home node
+ * is not in a roster the daemon was never given.
+ */
+let manifestEnv: ManifestEnv;
 const daemons: Proc[] = [];
 const agentDirs: string[] = [];
 const mcpConns: McpConn[] = [];
@@ -96,7 +107,17 @@ async function waitForEventAfter(
 }
 
 beforeAll(async () => {
-  cluster = await startSpineCluster({ relayIngressProxy: true });
+  cluster = await startSpineCluster({
+    relayIngressProxy: true,
+    directoryNodeKeyHex: AUTH_DIRECTORY_NODE_KEY_HEX,
+  });
+  manifestEnv = writeConsortiumManifest(cluster.tmpDir, "j-relayloss", [{
+    nodeId: AUTH_DIRECTORY_NODE_ID,
+    pubkey: AUTH_DIRECTORY_NODE_PUBKEY,
+    region: "local",
+    provider: "aws",
+    endpoint: cluster.directoryUrl,
+  }]);
 }, 300_000);
 
 afterAll(async () => {
@@ -118,8 +139,8 @@ describe("J-RELAYLOSS — kill a relay mid-conversation and watch (016-RELAYLOSS
     agentDirs.push(dirA, dirB);
     await provisionAgent(dirA, "agentA");
     const pubB = await provisionAgent(dirB, "agentB");
-    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "relayloss-A");
-    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "relayloss-B");
+    const daemonA = await startDaemon(dirA, cluster.directoryUrl, "relayloss-A", { manifestEnv });
+    const daemonB = await startDaemon(dirB, cluster.directoryUrl, "relayloss-B", { manifestEnv });
     daemons.push(daemonA, daemonB);
     expect(registerAgent("agentA", `DEV-relayloss-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
     expect(registerAgent("agentB", `DEV-relayloss-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
@@ -159,6 +180,29 @@ describe("J-RELAYLOSS — kill a relay mid-conversation and watch (016-RELAYLOSS
     // reading is worthless unless the healthy path is silent here first.
     expect(healthyUnwitnessed, "baseline: a witnessed send must not log own_leaf_unwitnessed").toBe(0);
 
+    /**
+     * ─── WHAT THIS HARNESS CAN AND CANNOT MEASURE, established BEFORE the outage ────────────────
+     *
+     * The reachability half of `016-RELAYLOSS` is about losing a CIRCUIT RESERVATION. On loopback
+     * the receiver never takes one — every node here is directly dialable, so there is no NAT for a
+     * circuit to traverse — and the reservation watchdog only watches receivers that HAD one
+     * (`#reservationWatchdogTick` returns early otherwise). A journey that waited for
+     * `reservation.lost` here would wait forever and report the absence as a finding.
+     *
+     * So the state is READ and RECORDED rather than assumed, and it decides which questions this
+     * run can answer. The reachability numbers come from 32 days of the production daemon log
+     * instead, which is the better evidence for them anyway: real NAT, real relays, real WAN.
+     */
+    const baselineStatus = JSON.parse(cello(["status"], { CELLO_DIR: dirA }).stdout) as
+      { agents?: Array<{ name?: string; standing_receiver_reachability?: string }> };
+    const baselineReach = baselineStatus.agents?.find((a) => a.name === "agentA")?.standing_receiver_reachability;
+    const holdsReservation = baselineReach === "reserved";
+    record("Q0 baseline standing_receiver_reachability (loopback)", baselineReach ?? "(absent)");
+    record("Q4/Q5 measurable on this harness", holdsReservation
+      ? "yes — the receiver holds a reservation to lose"
+      : "NO — on loopback the receiver never takes a circuit reservation, so there is none to lose. "
+        + "The reachability half is answered from the production daemon log, not from this run.");
+
     // ─── PHASE 2 — the relay stops answering ───────────────────────────────────────────────────
     const t0 = Date.now();
     cluster.relayIngress!.blackhole();
@@ -187,25 +231,30 @@ describe("J-RELAYLOSS — kill a relay mid-conversation and watch (016-RELAYLOSS
     record("Q2b does the send response name the missing witness",
       JSON.stringify(outageSend).includes("witness") ? "yes" : "NO — the word 'witness' is absent from the response");
 
-    // Q6/Q4 — what is the operator told, and when? `cello status` is the surface they have.
+    /**
+     * CONTROL, and the one the whole run rests on. The black hole reached the client if and only if
+     * a send that was witnessed before the outage is unwitnessed after it. This replaces
+     * `reservation.lost` as the control precisely because that event cannot fire on loopback — an
+     * absence there would have proved nothing about the proxy, which is the trap this avoids.
+     */
+    expect(outageUnwitnessed, "the outage must actually reach the client: the send must go unwitnessed")
+      .toBeGreaterThan(healthyUnwitnessed);
+
+    // Q6 — what is the operator told, and when? `cello status` is the surface they have.
     const statusDuring = cello(["status"], { CELLO_DIR: dirA }).stdout.trim();
     record("Q6 cello status ~immediately after the relay died", statusDuring.slice(0, 900));
 
-    // Q4a — the SILENT window: relay death → the daemon noticing. The watchdog ticks every 30s.
-    const lost = await waitForEventAfter(daemonA, /session\.standing_receiver\.reservation\.lost/, t0, 120_000);
-    record("Q4a ms from relay death to reservation.lost (the silent window)", lost?.waitedMs ?? "NEVER within 120s");
-    record("Q4a the lost event", lost?.raw ?? "(none)");
-    // CONTROL. If this never fires the black hole did not reach the client and every number above
-    // describes a healthy relay. The whole experiment rests on this one.
-    expect(lost, "the client must eventually notice a relay that stopped answering").not.toBeNull();
-
-    // Q5 — the rebuild fires. With the fleet's only relay in the hole, does it get a reservation?
-    const rebuilt = await waitForEventAfter(daemonA, /session\.standing_receiver\.reachability/, lost!.waitedMs + t0, 90_000);
-    record("Q5 rebuild attempt after the loss", rebuilt?.raw ?? "(no rebuild observed within 90s)");
-    const noneAfterLoss = await waitForEventAfter(daemonA, /session\.standing_receiver\.reservation\.none/, t0, 5_000);
-    record("Q5 did the rebuild end with NO reservation", noneAfterLoss ? "yes — reservation.none" : "no reservation.none seen");
-    const statusUnreachable = cello(["status"], { CELLO_DIR: dirA }).stdout.trim();
-    record("Q6 cello status once the loss was noticed", statusUnreachable.slice(0, 900));
+    // Q4a/Q5 — only askable of a receiver that holds a reservation; see the note above.
+    if (holdsReservation) {
+      const lost = await waitForEventAfter(daemonA, /session\.standing_receiver\.reservation\.lost/, t0, 120_000);
+      record("Q4a ms from relay death to reservation.lost (the silent window)", lost?.waitedMs ?? "NEVER within 120s");
+      record("Q4a the lost event", lost?.raw ?? "(none)");
+      const rebuilt = await waitForEventAfter(daemonA, /session\.standing_receiver\.reachability/, t0, 90_000);
+      record("Q5 rebuild attempt after the loss", rebuilt?.raw ?? "(no rebuild observed within 90s)");
+    } else {
+      record("Q4a ms from relay death to reservation.lost", "not measurable here — no reservation to lose (see Q4/Q5 note)");
+      record("Q5 rebuild against a different relay", "not measurable here — this harness runs ONE relay");
+    }
 
     // ─── PHASE 3 — THE SEVERITY QUESTION. Can the conversation still be closed and sealed? ──────
     // Both parties close while the relay is a black hole. This is the one that decides whether a
@@ -238,15 +287,36 @@ describe("J-RELAYLOSS — kill a relay mid-conversation and watch (016-RELAYLOSS
     cluster.relayIngress!.restore();
     record("T1 relay restored at", new Date(t1).toISOString());
 
-    // Q4b — the RECOVERY half of the reachability gap: relay answering again → a working circuit.
-    const reserved = await waitForEventAfter(
-      daemonA, /"event":"session\.standing_receiver\.reachability".*"circuitAddrs":[1-9]/, t1, 180_000);
-    record("Q4b ms from relay restored to a working circuit again", reserved?.waitedMs ?? "NEVER within 180s");
-    record("Q4b the recovered reachability event", reserved?.raw ?? "(none)");
+    /**
+     * Q4b — the RECOVERY half, measured on the WITNESS path rather than the circuit.
+     *
+     * The circuit is not available to measure here (see the Q4/Q5 note), and the witness path is
+     * the one this journey's other answers depend on: if a send is witnessed again, the client
+     * re-established its relay stream. It is also the question the operator actually has, which is
+     * "is it working again", not "which libp2p address do I hold".
+     */
+    const awaitP2 = connB.call("cello_await_session", { timeout_ms: 90_000 });
+    let init2 = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as typeof init;
+    for (let i = 0; i < 40 && !init2.ok; i++) {
+      await sleep(1_000);
+      init2 = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as typeof init;
+    }
+    record("Q4b a NEW session could be opened after the relay came back", init2.ok === true ? "yes" : JSON.stringify(init2));
+    expect(init2.ok, `no session after recovery: ${JSON.stringify(init2)}`).toBe(true);
+    const inbound2 = (await awaitP2) as { session_id?: string };
+    const beforeRecoverySend = daemonA.countLines(/session\.tree\.own_leaf_unwitnessed/);
+    const recoverySend = (await connA.call("cello_send",
+      { cello_session_id: init2.sessionId!, content: "after the outage", signal: "over" })) as Record<string, unknown>;
+    expect(((await connB.call("cello_receive", { cello_session_id: inbound2.session_id!, timeout_ms: 30_000 })) as
+      { content?: string | null }).content).toBe("after the outage [[OVER]]");
+    await sleep(2_000);
+    const recoveryUnwitnessed = daemonA.countLines(/session\.tree\.own_leaf_unwitnessed/) - beforeRecoverySend;
+    record("Q4b ms from relay restored to a WITNESSED send", Date.now() - t1);
+    record("Q4b the recovery send was witnessed", recoveryUnwitnessed === 0 ? "yes" : `NO — ${recoveryUnwitnessed} unwitnessed`);
+    record("Q4b recovery send response", recoverySend);
     // CONTROL. Without recovery the run cannot separate "the outage broke it" from "it was already
-    // broken", and the total gap in Q4 would have no upper end.
-    expect(reserved, "the standing receiver must recover once the relay answers again").not.toBeNull();
-    record("Q4 TOTAL reachability gap ms (death → working circuit)", (reserved!.waitedMs + (t1 - t0)));
+    // broken", and every duration measured above would have no upper end.
+    expect(recoveryUnwitnessed, "the witness path must work again once the relay answers").toBe(0);
 
     // Q3b — does the seal that could not complete during the outage complete AFTER recovery?
     let sealedAfter: unknown = "(never)";
