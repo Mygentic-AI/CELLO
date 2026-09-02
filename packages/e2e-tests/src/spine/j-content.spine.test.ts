@@ -2,18 +2,18 @@
  * J-CONTENT — live binary content delivery (M7-DEFINITION-OF-DONE.md §"verification
  * harness", journey 5; DOD-MSG-* / MSG-001-3b).
  *
- * INCREMENT 1 — the daemon↔relay content-park TRANSPORT in isolation. A message must
- * survive the recipient being OFFLINE: the sender DEPOSITS ciphertext keyed to the
- * recipient's pubkey into the relay's store-and-forward mailbox; when the recipient comes
- * online it PULLS its parked entries (proving identity via the relay's auth challenge).
- * The relay holds CIPHERTEXT only (INV-3 — it is a hash custodian, not a data custodian).
+ * A message must survive the recipient being OFFLINE. The sender's daemon parks the sealed content
+ * in the relay's store-and-forward mailbox keyed to the recipient's pubkey; when the recipient
+ * comes back online its daemon drains that mailbox and the content enters through the same inbound
+ * funnel a direct frame uses. The relay holds CIPHERTEXT only (INV-3 — it is a hash custodian, not
+ * a data custodian).
  *
- * The transport round-trip is proved through a REAL directory-brokered send, not through the
- * daemon's raw content-park IPC handlers. It used the handlers until 2026-09-02, minting its own
- * session id — a session the directory never brokered, so the relay had never vouched either key
- * and refused the pull `not_a_participant`. That refusal is RELAYAUTH-1 working; the test was
- * measuring the gate instead of the round trip. `content_park_deposit` / `_pull` have no callers
- * outside these tests: they are a diagnostic surface, not the path an operator's message takes.
+ * Every test here drives that through a REAL directory-brokered session. Never mint a session id
+ * in this file: the relay vouches a key only when a client presents a directory-signed assignment,
+ * so a fabricated session is one the relay has never seen and its pull is refused
+ * `not_a_participant` — correctly. The raw `content_park_deposit` / `_pull` IPC handlers have no
+ * caller outside these tests; they are a diagnostic surface, not the path an operator's message
+ * takes, and a test built on them measures the vouching gate rather than delivery.
  *
  * Anchored to the binary — see live-harness.ts. The deposit/pull cross the REAL relay binary.
  *
@@ -43,10 +43,11 @@ import {
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 // `sealToRecipient` is deliberately no longer imported. Every park in this file that feeds the
 // RECOVER path now deposits through the daemon's own `sealParkEnvelope` (via `content:`), because a
-// bare seal with no park envelope is the unsigned shape SEC-1 refuses. The transport round-trip
-// stopped raw-depositing on 2026-09-02 (it sends for real now), so the remaining raw deposits are
-// the ones that never reach recover — the deliberately-unsealable entry in DOD-MSG-7 and its
-// neighbours — and those use random bytes, which need no seal.
+// bare seal with no park envelope is the unsigned shape SEC-1 refuses. Exactly ONE raw
+// `ciphertext:` deposit remains — case (3) in DOD-MSG-7, a blob that is deliberately unsealable, so
+// it never gets past `openContentSeal` and needs no signature. It IS recovered-and-skipped rather
+// than never reaching recover, which is the whole point of that case. Its neighbours in DOD-MSG-7
+// pass `content:` and therefore go through `sealParkEnvelope` like everything else.
 import { contentHashHex } from "./content-seal-fixture.js";
 
 let cluster: SpineCluster;
@@ -126,17 +127,21 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
       expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
     }
 
+    // WHY THIS TEST AND "DOD-MSG-3/4 (recover)" BOTH EXIST — they are not duplicates. This one
+    // pins byte-for-byte encoding integrity across the round trip and INV-3 plaintext absence at
+    // the relay. The recover test below pins the inbound funnel and the mailbox drain (`pulled: 0`).
+    // Deleting either loses a property the other does not hold.
+    //
     // A REAL directory-brokered session, opened while B is online. The relay vouches a key only
     // when a client presents a directory-signed assignment (relay-node.ts), so a session id minted
-    // here in the test is a session the directory never brokered and the relay has never seen —
-    // and its pull is refused `not_a_participant`, correctly. This test used to fabricate exactly
-    // that, and measured the vouching gate rather than the round-trip it is named for.
+    // in the test is one the relay has never seen, and its pull is refused `not_a_participant`.
     const awaitP = connTB.call("cello_await_session", { timeout_ms: 25_000 });
     const init = (await connTA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
     expect(init.ok, `initiate failed:\n${daemonA.output.split("\n").slice(-30).join("\n")}`).toBe(true);
     const sessionId = init.sessionId!;
     expect(((await awaitP) as { type?: string }).type).toBe("new_session");
-    expect(((await connTA.call("cello_send", { cello_session_id: sessionId, content: "msg1-online", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
+    const liveSend = (await connTA.call("cello_send", { cello_session_id: sessionId, content: "msg1-online", signal: "over" })) as { ok?: boolean; reason?: string };
+    expect(liveSend.ok, `the send while B is ONLINE was refused: ${JSON.stringify(liveSend)}`).toBe(true);
 
     // ── B goes OFFLINE (abrupt kill), so A's next send has nowhere to deliver and must park. ──
     await connTB.close();
@@ -147,21 +152,30 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // UNCHANGED, so the payload is chosen to break on a truncation or an encoding mangle: it is
     // long, and it is multibyte in four different ways (accents, CJK, an emoji, curly quotes).
     //
-    // It is deliberately NOT random hex. A `randomBytes(64).toString("hex")` payload comes back as
-    // `[redacted: high-entropy data]` — screening classifies a long hex blob as a leaked secret and
-    // redacts it before it is ever delivered. That is screening working, and it silently made this
-    // assertion compare a redaction marker against the original bytes. Entropy is the wrong tool
-    // here; multibyte width is the right one, and it tests encoding integrity that hex cannot.
+    // It must NOT be random hex. Screening classifies a long hex blob as a leaked secret and
+    // replaces it with `[redacted: high-entropy data]` before delivery, so an entropy payload makes
+    // this assertion compare a redaction marker against the original bytes. Multibyte width is the
+    // property that catches a truncation or an encoding mangle; entropy is not.
     const PAYLOAD = "msg2-while-offline — the EXACT bytes B must recover: ünïcödé, 日本語, ✅, “curly”, 018-PARKCOLLECT.";
-    await connTA.call("cello_send", { cello_session_id: sessionId, content: PAYLOAD, signal: "over" });
+    // The response is asserted, not discarded. The fear this test exists for is "their side says
+    // parked — success" while collection fails, and that is a claim about THIS response. An
+    // unchecked `ok: false` here would surface 25 seconds later as a `waitForLine` timeout — an
+    // exit-point label standing in for a send refusal whose reason was in the object we dropped.
+    const parkSend = (await connTA.call("cello_send", { cello_session_id: sessionId, content: PAYLOAD, signal: "over" })) as { ok?: boolean; reason?: string };
+    expect(parkSend.ok, `the send that must park was refused: ${JSON.stringify(parkSend)}`).toBe(true);
     await daemonA.waitForLine(/"event":"content\.park\.deposited"/, 25_000);
 
     // INV-3: the relay received and stored the entry, and it only ever held CIPHERTEXT — the
     // payload itself never appears in the relay's output. The old test could only CORROBORATE this
     // (it deposited a random blob that was never plaintext anywhere); a real send lets it be
     // asserted, because the plaintext genuinely exists on both daemons and must not exist here.
-    expect(cluster.relay.output).toMatch(/"event":"content\.park\.received"|content\.park\.received/);
+    expect(cluster.relay.output).toMatch(/"event":"content\.park\.received"/);
+    // TWO absence checks, because one of them can pass vacuously. PAYLOAD is deliberately
+    // multibyte, so a leak logged through a serializer that escapes non-ASCII (`日本語`)
+    // would slip past `not.toContain(PAYLOAD)` while the plaintext sat in the relay's stdout. The
+    // ASCII slice survives any escaping, so it is the one that actually holds.
     expect(cluster.relay.output, "the relay is a hash custodian — it must never hold the plaintext").not.toContain(PAYLOAD);
+    expect(cluster.relay.output, "…and not an escaped form of it either").not.toContain("018-PARKCOLLECT");
 
     // ── B comes back and AUTO-recovers the parked entry through the inbound funnel. ──
     for (const f of ["daemon.sock", "daemon.lock"]) {
@@ -175,7 +189,36 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     mcpConns.push(connTB2);
     expect(((await connTB2.call("cello_start_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
     expect(((await connTB2.call("cello_use_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
-    await daemonB.waitForLine(/"event":"content\.recover\.auto\.completed"/, 25_000);
+    // `"recovered":[1-9]` is load-bearing, and the bare event name is NOT a substitute for it.
+    // `drainOnce` emits `content.recover.auto.completed` UNCONDITIONALLY — deliberately, so that a
+    // clean "nothing parked" run is observable — and it carries `recovered: 0, refused: 1,
+    // refusedReasons: {not_a_participant: 1}` just as readily as `recovered: 1`. Waiting on the
+    // event alone is therefore a barrier that cannot fail: a vouching-gate regression, which is the
+    // exact thing this test exists to catch, would satisfy it, and a zero-recovery sweep landing
+    // first would race the real pull and blame the park path for a harness timing artifact.
+    try {
+      await daemonB.waitForLine(/"event":"content\.recover\.auto\.completed"[^\n]*"recovered":[1-9]/, 25_000);
+    } catch (err: unknown) {
+      const sweeps = daemonB.output.split("\n").filter((l) => l.includes("content.recover.auto.completed"));
+      throw new Error(
+        `no auto-recover sweep ever recovered anything. Every sweep B ran:\n${
+          sweeps.join("\n") || "  (none — B ran no auto-recover sweep at all, which is a different failure)"
+        }\n  A refusedReasons of {not_a_participant: 1} means the relay declined to serve B's mailbox — the vouching gate, not the park path.`,
+        { cause: err },
+      );
+    }
+
+    // The bytes must have come through the PARK path, not some future direct-redelivery retry.
+    // Today `drainAwaitingToPark` re-parks and there is no direct path, so the read below can only
+    // be served by the mailbox — but that is an argument about another repo's code, not something
+    // this test says. These two pin it: the day someone adds a sender-side direct retry, this test
+    // fails loudly instead of silently ceasing to test park/collect while keeping its name.
+    expect(daemonB.output, "the entry came back through recover, not a direct redelivery").toMatch(
+      new RegExp(`"event":"content\\.recovered"[^\\n]*"sessionId":"${sessionId}"`),
+    );
+    expect(daemonB.output, "the parked entry self-orders on recover").toMatch(
+      /"event":"session\.content\.ordering\.recorded"[^\n]*"source":"park"/,
+    );
 
     // Round-trip integrity through the real relay: B receives the EXACT bytes A sent.
     // msg1 comes first — B received it live and never read it (DOD-COATTEND-1: delivery resumes
