@@ -77,9 +77,12 @@ over unchanged:
 
 - **The rules header**, updated to name M16: read M16-PROCEDURE in full first; do NOT read the DoD
   or the journal — the order carries everything needed from them; MICRO means small, one mission,
-  never grown; **500 lines, hard cap**; commit per fix, push after every commit; **closing a unit
-  means flipping the order's own `status:` frontmatter to `complete` in the SAME commit as the
-  reviewer's verdict.**
+  never grown; **500 lines, hard cap**; **standard procedure still applies in full — implement →
+  review (`cello-unit-reviewer`) → fix every finding → commit; commit per fix, push after every
+  commit; arm the watchdog cron (§4a) at session start**; **closing a unit means flipping the
+  order's own `status:` frontmatter to `complete` in the SAME commit as the reviewer's verdict.**
+  A micro order narrows the SCOPE, never the DISCIPLINE — nothing about being small exempts a unit
+  from the reviewer, the commit cadence, the gate, or the cron.
 - **The section shape:** *The problem, plainly* → *The work* → *⚠️ WHAT MUST NOT CHANGE* →
   *Definition of Done* (numbered clauses) → *Not in scope* → *Traps recorded before you start* →
   *Newly discovered* (foot of file).
@@ -124,6 +127,12 @@ over unchanged:
   context loses the early constraints.
 - **Run the falsification step yourself** (does the call site hold the right interface; does
   responsibility live where the change goes) — the coder cannot be relied on to.
+- **Apply the hollow-test questions to the test list you enumerate** — M15's most persistent
+  defect class (2 → 3 → 5 across review rounds), and in M16 the planner writes the tests, so the
+  blind spot is the planner's to close: (1) does the property live in something the test stubs
+  away? (2) is the fixture the shape that BREAKS, or a neighbouring shape that works? (3) would
+  the assertion pass if the code did nothing? — start recorders `undefined`, never pre-seeded;
+  (4) does it assert the OUTCOME by name, or only "it did not fail"? Name the value.
 - **Cross-repo orders carry the cascade explicitly:** which package bumps where, and that
   `/cello-publish` and any publish step are planner/Andre work — a coder's order ends at
   "committed, pushed, journal updated," never at "published."
@@ -160,6 +169,29 @@ over unchanged:
 9. **If Docker is needed and not running, start it.** Do not report the gate as blocked.
 10. **Journal after: tests red, gate green, enforcer run, review verdict.** Four entries per unit,
     each a few lines plus pasted output. The journal is append-only.
+11. **The 🟡 count is countable, and one is the limit:** `grep -c "❌\|🟡"` against the DoD tells
+    anyone the state; a second 🟡 line is a violation, not a judgement call. (With one session per
+    order this should be structurally impossible — the grep exists so a violation is caught, not
+    argued.)
+
+## §4a. WATCHDOG CRON — 30-minute heartbeat, armed at session start
+
+**Every coder session arms this before touching code, and re-arms it after any compaction or
+restart.** It is the defibrillator, not a metronome — if working, keep working. The three checks
+that matter most, learned in M15: **the not-stopping rules, committing often, and the unit
+reviewer on every unit.** The fired prompt runs this checklist:
+
+1. **Context check** — is THIS PROCEDURE and the current micro order still in context? If either
+   has dropped, re-read the order (it is short by design) and re-arm.
+2. **Stalled on a question?** Check §5: if it is not one of the three stop conditions, it is not a
+   stop — keep working. If it is, hand back with the quote §5 requires and end the session.
+3. **More than 15 minutes since the last commit?** Commit now, by explicit path, and push.
+4. **Is implementation done but the reviewer not yet dispatched?** Dispatch `cello-unit-reviewer`
+   now — review is part of the unit, not a follow-up.
+5. **One status line** to the transcript: which DoD-clause of the order you are on, nothing more.
+
+**Self-terminate the cron when the order's `status:` flips to `complete`** — the session's work is
+over at that moment (§4.1), and a heartbeat outliving its session is noise.
 
 ## §5. STOP CONDITIONS FOR THE CODER — the complete list
 
