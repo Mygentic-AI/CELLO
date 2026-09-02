@@ -9829,3 +9829,151 @@ and the attestation that goes with it — which is `013-ABSENCE`'s subject and i
 
 **The stop rule was not needed.** The fix is two commits, one per repo, and it does not touch relay
 authentication: the relay's check is unchanged and the issuing predicate is not loosened.
+
+### The unit itself — what changed, and what a person gets out of it
+
+**The trust anchor moves from *"the verifying directory node is honest"* to *"at least one of the two
+real participants is honest."*** Three changes carry it.
+
+#### 1. The counterparty's approval already existed on the wire. It was OPTIONAL.
+
+This is the finding that shaped the whole unit, and it is the opposite of what the order's framing
+suggested. Nothing had to be invented for a second party to approve a seal: **each party's SEAL ctrl
+leaf already carries a signed `final_root`** — its own statement of the transcript it is closing on,
+made when it closed, long before any notarizing signature exists. `verifySealFinalRoots` already
+checked that a carried root binds to what the client signed, that the two parties agree with each
+other, and that they agree with the leaves the relay supplied.
+
+What it did not do was **require two of them.** Two verdicts were accepted that are not agreement:
+
+| verdict | what it means | what happened |
+|---|---|---|
+| `not_carried` | nobody's signed root was checked at all | certified |
+| `coverage: "one"` | exactly one participant's was | certified |
+
+Both were correct during the payload rollout, and the code said so in a comment that also named the
+price: **`content_bytes` is supplied by the party ASSEMBLING the leaves**, so a relay that drops one
+field lands in the tolerated branch and is certified. *A check the guarded party can switch off by
+sending less is not a check.* There is no roll left to protect, so the tolerance is deleted rather
+than trimmed — the older shape is gone, not supported alongside the new one. That closes
+`DOD-M15-NOTCARRIED-REFUSE-1`, which was filed as the named follow-on for exactly this.
+
+`coverage: "one"` stays correct on the **unilateral** path, where the counterparty is gone by
+definition — and that path does not run this check at all, which is what keeps the absent party from
+gaining a veto (see 4 below).
+
+#### 2. The other directories now judge, instead of signing what they are handed
+
+A seal is FROST-signed with the initiator's group key, whose shares sit on the directory nodes. Every
+node except the one that ran the verification checked that it held a share and that no rival ceremony
+was running, and then signed whatever bytes it was given. Three signatures resting on one node's
+reading — cryptographic weight without judgement, on a threshold whose whole purpose is that no
+single node can produce a valid output alone.
+
+The signed leaves now travel with the signature request. Each co-signer rebuilds the certified root
+and the leaf count **from the bytes each sender's own signature covers**, and requires the message it
+is being asked to sign to be exactly the seal TBS over what it derived.
+
+**The message is reconstructed, not parsed**, and that is the load-bearing choice. Decoding the TBS
+and comparing the root inside would be easier and weaker: the TBS carries a trailing legibility hash,
+so a decoder has to be told where the CBOR ends, and a decoder that guesses is a decoder an attacker
+can steer. The expected framed message is built from values the node derived itself and required to
+be a byte PREFIX, with a remainder of exactly 0 or 32 bytes. The close timestamp — the one value a
+co-signer cannot derive, being the verifying node's clock — rides the request and is bound by that
+comparison rather than believed.
+
+**What it deliberately does not claim**, written into the module header because overstating it would
+be worse than not checking: with no session record for a session it did not broker (the normal
+federated case) a co-signer can say there are at most two signers but not WHICH two, and the
+legibility tail stays anchored to the verifying node alone.
+
+#### 3. `session_seal_rejected` had no consumer. None. Anywhere.
+
+The directory has sent this frame since M1. Searching the client repository for it found exactly one
+occurrence: the type declaration. **Every refusal — a stranger's leaf, a relay that dropped a message,
+and now a counterparty who approved nothing — was decoded, matched no handler, and dropped.** Both
+operators then sat out the full close window and were told *the counterparty has not closed*, about a
+seal the directory had already decided against.
+
+The listener joins the seal bundle, resolves the waiting close with the cause, logs it, and records
+it so the answer outlives the call. Both parties are waiting on their own close, so both are
+answered. The remedy travels WITH the refusal instead of being guessed at the close handler, which
+had one hardcoded sentence — right for this daemon's own root check and a confident falsehood for a
+directory refusal, because it names a signature that was never produced. `seal_approval_missing`
+sends the reader to have the counterparty close again; `seal_parties_disagree` is the one that means
+compare transcripts; `seal_leaves_invalid` names the relay.
+
+And `if (!frostSignature) return;` — the entire handling of a ceremony that produced no signature —
+is gone. Requiring co-signers to judge makes that line reachable for the strongest signal this system
+produces (a share-holder looked at the record and declined), and its whole trace was a bare return.
+
+#### 4. The trap, and why it did not eat the unit
+
+Requiring the second party's approval hands an ABSENT party a veto it never had. The order is explicit
+that the change must make a seal harder to FORGE without making it harder to OBTAIN.
+
+It cannot, and the reason is structural rather than a clock: **with no second SEAL ctrl leaf there is
+no bilateral ceremony to refuse.** The honest party's close escalates to the solo seal, which requires
+exactly one ctrl leaf by design and never calls the bilateral check. No second timeout was invented
+here; the solo trigger stays `013-ABSENCE`'s.
+
+The live evidence for this is in `j-unilateral`'s third journey, which passes: **B is alive but its
+agent never closes, B's NODE auto-acks, and the seal completes BILATERALLY.** The auto-ack is B's own
+daemon signing B's own transcript root — which is exactly what makes it B's approval, and it survives
+the new requirement across separate OS processes.
+
+### The counterbalance (Invariant 1), measured against the code
+
+Named before the code and it holds afterwards: **the enforcement point is not the constrained party's
+own daemon.**
+
+- The counterparty's approval is a signature over ITS OWN transcript root, checked by a directory. A
+  rewritten client can refuse to produce one — and then it gets no bilateral seal, which is the
+  intended outcome, not a bypass.
+- The co-signer check runs on `T−1` directory nodes the coordinating agent does not control, over
+  leaves signed by BOTH participants. An agent forwarding the evidence cannot forge its
+  counterparty's leaves, so the evidence is self-authenticating and a doctored set changes the root
+  the co-signers derive.
+- The Part 0 change moves only WHEN a directory issues the relay token, never WHO checks it: the relay
+  still verifies every token against the consortium directory pubkeys.
+
+**Where it is bounded, stated rather than papered over:** a co-signer without a session record cannot
+detect a SUBSTITUTION of one participant for another (`DOD-M15-SEALROSTER-FEDERATED-1`), and the
+legibility tail of the TBS is anchored to the verifying node alone.
+
+### Evidence
+
+| clause | evidence |
+|---|---|
+| 1, 2, 5, 6 (directory half) | `dod-m15-sealparties-1-approval.test.ts` — 6 tests against the REAL `processSeal` and the REAL unilateral handler |
+| 3, 4 | `dod-m15-sealparties-1-cosign.test.ts` — 11 tests, the last three over the REAL `/cello/frost/1.0.0` stream on a real libp2p dial with a real K_local auth signature |
+| 6 (client half) | `seal-listener-wiring.test.ts` — the waiter is answered, the remedy differs by cause, a stranger's session id is ignored |
+| 7 | eight mutations, each TYPECHECKED before being trusted (two earlier attempts did not compile and were rewritten rather than recorded as catches) |
+| 8, 9 | `j-spine` **7/7** against the real binaries as separate OS processes, up from 5/7 |
+| 10 | `pnpm run test` exit 0 in both repos — trustless-cello 1908 passed, cello-client 4734 passed; `lint` and `typecheck` clean in both |
+
+**On clause 7's one partial catch, said plainly:** removing the explicit absent-leaves branch in the
+co-sign verifier changes the reason LABEL from `SEAL_EVIDENCE_MISSING` to `SEAL_EVIDENCE_MALFORMED`
+and does not let the request through — the parse refuses it too. Absence is doubly covered there, so
+that mutation is a partial catch and is recorded as one rather than as a clean kill.
+
+**On the gate, and the difference between two ways of running it.** The documented gate
+(`pnpm run test`) is exit 0. Running the directory suite with `CELLO_ENV=local`, which additionally
+enables the Postgres-backed cases, is ORDER-UNSTABLE on this machine: three consecutive runs of the
+same code produced three different failing sets, every one of them a shared-database or live-timing
+condition (`spawnSync ENOBUFS` reading docker logs, `Test timed out in 20000ms` in a live libp2p
+test, an overdue detector finding 0 staged rows), and each passes in isolation. **A baseline run on
+`main` in the same environment fails too** — `dod-m15-chainroundtrip-1`, `conversation_seals (break
+at 1)` — so this is a pre-existing property of that mode, not something this unit introduced. One
+real failure DID hide in there and is fixed: `persist-017` drives the real `processSeal` and its
+fixture carried no approvals.
+
+### Two production defects found and fixed on the way, neither of them the mission
+
+- **A registered agent was never issued a relay credential** (Part 0, above).
+- **A client that gave up mid-registration could take a directory node down.** The register_success
+  send sits at the end of a long await chain and `#processRegisterRequest` is dispatched
+  fire-and-forget, so a stream closed inside that window made `stream.send` throw with nothing to
+  catch it — an unhandled rejection. Vitest caught one; in production it is an unhandled rejection in
+  a directory. Every other seal-path send in that file already guarded. Adding the token mint widened
+  the window enough to make it visible.
