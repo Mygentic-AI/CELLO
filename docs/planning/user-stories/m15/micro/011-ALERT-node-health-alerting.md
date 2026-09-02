@@ -2,7 +2,7 @@
 name: 011-ALERT — Something tells us when a directory node is unwell
 type: micro-work-order
 date: 2026-09-01
-status: open
+status: complete
 description: >
   There is not one `google_monitoring_alert_policy` in the whole Terraform tree. A directory node
   ran at 38-44% CPU against a healthy idle of 0.3-0.4% for days and nothing said a word. Add a
