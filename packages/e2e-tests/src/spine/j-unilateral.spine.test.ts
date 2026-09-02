@@ -298,29 +298,36 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
     // ── M8B FINDING-3 (cascade-2): a unilateral close must yield a DURABLE, LEGIBLE, RETRIEVABLE
     // receipt — the same one a bilateral close does — with the counterparty recorded ABSENT. ──
 
-    // (a) The close response carries the legibility certificate INLINE (bilateral parity) — not a
-    //     bare {sealed_root, seal_type}. Receipt-not-assent, per-party frontiers, attestation modes.
+    /**
+     * ⚠️ THE FIFTH STALE USE, AND THE SAME ONE AGAIN — `DOD-M15-UNILATERAL-1`.
+     *
+     * This asserted `close.legibility` was defined. It is not, and cannot be: the non-blocking close
+     * returns a COMMITMENT (`{ok, seal_status: "committed", guidance}`) and the notarization runs
+     * afterwards, so at the moment the close answers there is no certificate to inline. Identical in
+     * kind to the `sealed_root` and `seal_type` uses this file already converted, and it was hidden
+     * behind them: the seal never completed here, so the run died before reaching this line and the
+     * assertion was never the thing that failed.
+     *
+     * What the M8B FINDING-3 clause actually asks for is that a solo close yields a receipt that is
+     * DURABLE, LEGIBLE and RETRIEVABLE. Retrievable is the operative word, and it is asserted below
+     * against the value the operator would actually read.
+     */
     const legDiag =
-      `\nclose.legibility: ${JSON.stringify(close.legibility)}` +
       `\n--- daemonA receipt persist ---\n${daemonA.output.split("\n").filter((l) => /unilateral\.receipt|recordSeal|legibility|sealed_receipt/i.test(l)).slice(-10).join("\n")}`;
-    expect(close.legibility, `unilateral close must return the legibility inline:${legDiag}`).toBeDefined();
-    expect(close.legibility!.attests, `legibility attests receipt (never assent):${legDiag}`).toBe("receipt");
-    expect(close.legibility!.implies_assent).toBe(false);
-    const inlineParticipants = close.legibility!.participants ?? [];
-    // The present party (A) is 'live'; the absent counterparty (B) is 'absent'. Both must appear.
-    expect(inlineParticipants.some((p) => p.attestation_mode === "live"), `present party must be 'live':${legDiag}`).toBe(true);
-    const inlineAbsent = inlineParticipants.find((p) => p.attestation_mode === "absent");
-    expect(inlineAbsent, `absent counterparty must be recorded 'absent' in the legibility:${legDiag}`).toBeDefined();
-    expect(inlineAbsent!.pubkey, `the 'absent' participant must be B (${pubB.slice(0, 16)}…):${legDiag}`).toBe(pubB);
 
-    // (b) THE FINDING-3 CORE: the receipt is RETRIEVABLE afterward via cello_get_sealed_receipt —
-    //     the read that returned sealed_receipt_not_found before the fix. Same store the bilateral
-    //     seal writes; works because the daemon now persists the verified unilateral cert.
+    // THE FINDING-3 CORE: the receipt is RETRIEVABLE afterward via cello_get_sealed_receipt — the
+    // read that returned sealed_receipt_not_found before the fix. Same store the bilateral seal
+    // writes; works because the daemon persists the verified unilateral cert.
     const receipt = (await connA.call("cello_sealed_receipt", { cello_session_id: sessionIdA })) as {
       ok?: boolean;
       reason?: string;
       sealed_root?: string;
-      legibility?: { participants?: Array<{ pubkey?: string; attestation_mode?: string }> };
+      legibility?: {
+        attests?: string;
+        implies_assent?: boolean;
+        countersigned_through_seq?: number;
+        participants?: Array<{ pubkey?: string; attestation_mode?: string }>;
+      };
     };
     const rcptDiag = `\nreceipt: ${JSON.stringify(receipt)}${legDiag}`;
     expect(receipt.ok, `cello_get_sealed_receipt must return the receipt (was sealed_receipt_not_found):${rcptDiag}`).toBe(true);
@@ -333,9 +340,31 @@ describe("J-UNILATERAL — unilateral seal → real notarization, live (DOD-SEAL
      * Compared against the polled root instead, which is a value that had to actually exist.
      */
     expect(receipt.sealed_root, `retrieved receipt must carry the sealed_root:${rcptDiag}`).toBe(sealedRoot);
-    const persistedAbsent = (receipt.legibility?.participants ?? []).find((p) => p.attestation_mode === "absent");
+    // Receipt-not-assent, and both parties named: A 'live', B 'absent'. Asserted on the RETRIEVED
+    // receipt, which is the artifact a reader actually holds.
+    expect(receipt.legibility?.attests, `legibility attests receipt (never assent):${rcptDiag}`).toBe("receipt");
+    expect(receipt.legibility?.implies_assent).toBe(false);
+    const persistedParticipants = receipt.legibility?.participants ?? [];
+    expect(
+      persistedParticipants.some((p) => p.attestation_mode === "live"),
+      `the present party must be recorded 'live':${rcptDiag}`,
+    ).toBe(true);
+    const persistedAbsent = persistedParticipants.find((p) => p.attestation_mode === "absent");
     expect(persistedAbsent, `retrieved receipt must record the counterparty 'absent':${rcptDiag}`).toBeDefined();
     expect(persistedAbsent!.pubkey, `retrieved receipt's absent party must be B (${pubB.slice(0, 16)}…):${rcptDiag}`).toBe(pubB);
+
+    /**
+     * `DOD-M15-UNILATERAL-1` clause 5, live: THE RECEIPT SAYS WHICH PART OF ITSELF IS WEAKER.
+     *
+     * B was killed after receiving one message and never authored a leaf, so nothing in this
+     * transcript carries B's signature and the mutually-signed prefix is empty. A consumer reading
+     * this receipt must be able to see that rather than derive it — otherwise A's uncountersigned
+     * tail reads as something B signed for.
+     */
+    expect(
+      receipt.legibility?.countersigned_through_seq,
+      `the receipt must name where the mutually-signed prefix ends, and B signed nothing here:${rcptDiag}`,
+    ).toBe(0);
   }, 180_000);
 });
 
