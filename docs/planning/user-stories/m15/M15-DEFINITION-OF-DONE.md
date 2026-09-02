@@ -857,16 +857,11 @@ consumes.
 > 0.0.64, `client` 0.0.50, `connect` 0.0.158, each one ahead of the working tree). **Daemons on
 > `latest` are now running the encryption.**
 >
-> **ONE reason it is not ✅, and it is the only one left:** the clause `007` itself calls *"the clause
-> that makes the feature real"* — two daemons in separate OS processes, ciphertext asserted on the
-> wire — **was proven with two managers in ONE process.** Real libp2p, real identities, real
-> signatures, nothing seeded, but one process. This file's own rule is that Vitest green is necessary
-> and never sufficient.
->
-> **That proof is available now and costs nothing to obtain.** The spine harness spawns
-> `../cello-client/core/daemon/dist/bin/cello-daemon.js` — the LOCAL build, not the published
-> package — so the process-boundary version needs no publish and no new infrastructure, only a
-> journey that asserts the wire bytes. → Entry S15.
+> **THE HISTORY, kept because it is why this clause existed at all:** `007` called the
+> process-boundary version *"the clause that makes the feature real"*, and it had been proven with
+> two session managers in ONE process — real libp2p, real identities, real signatures, nothing
+> seeded, but one process, and this file's rule is that Vitest green is necessary and never
+> sufficient. That is what the measurement below replaced. → Entry S15.
 >
 > **2026-09-02 — THE WIRE BYTES ARE NOW MEASURED IN PRODUCTION, and this line is still 🟡. Read
 > which half moved.** Against the deployed fleet on `7befcc95`, a message was forced to park at the
