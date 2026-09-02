@@ -2,7 +2,7 @@
 name: 001-SPINE — Park the out-of-scope cross-machine journeys
 type: micro-work-order
 date: 2026-08-24
-status: open
+status: complete
 description: >
   Skip the four spine journey files whose failures Andre ruled out of the launch gate on
   2026-08-24 (shared documents, and the kill switch), so the remaining red in the lane is
@@ -87,10 +87,59 @@ into CI, touching any journey not named above.
 
 ## Review
 
-*(Reviewer verdict goes here. One quote. Not a transcript.)*
+**✅ CLOSED 2026-09-02.** One pass, `cello-unit-reviewer` on Opus. **SPEC: FAITHFUL, no blocking
+findings, two LOWs — one fixed, one was this file.**
+
+> *"Am I rubber-stamping? I don't think so — I attacked clause 3 with my own transform rather than
+> the coder's filter, ran the `j-multiplayer` guard's assertion by hand to establish it was green,
+> read `j-stale-session` end to end instead of trusting the commit message, and measured vitest's
+> hook behaviour rather than assuming it. This diff is 11 tokens wide and touches no runtime code;
+> a clean result is what that shape earns."* — `cello-unit-reviewer`
+
+**Clause 3 was proven, not accepted.** The reviewer refused my filter and built its own: it took the
+zero-context diff, mechanically transformed every REMOVED line `describe(` → `describe.skip(`, and
+diffed that against the 11 added non-comment lines. **Byte-identical, zero differences** — `.skip`
+was inserted and nothing else on any line was touched.
+
+**Two things it measured that I had assumed:**
+
+- **A skipped journey reports as `↓ skipped`, never folded into a pass count.** So the lane cannot
+  report these as green. Verified by running vitest rather than reading its docs.
+- **A file whose every describe is skipped does not run its `beforeAll`.** `j-stale-session` and
+  `j-suspend-tofn` start a 3-directory cluster there, so the parked files now cost no ports, no
+  Postgres and no minutes, and cannot go red on a cluster-start failure.
+
+**FINDING 1 — FIXED. I switched off a guard that was green and free.** `j-multiplayer`'s
+`the built artifact keeps its layer boundary` reads four built `.js` files and asserts the document
+layer speaks no relay vocabulary. The reviewer ran its assertion by hand: **green today**, so it
+contributed zero red — and 001's mission was to remove out-of-scope RED, not to switch off working
+guards. Reinstated, with the reasoning in the code.
+
+> ⚠️ **AND THE FIX COSTS MORE THAN THE REVIEW THOUGHT — measured after applying it.** The guard is
+> process-free; **the file's `beforeAll` is not**, and un-skipping one describe re-arms it. The file
+> now takes **56 seconds and starts a full cluster** for one assertion that reads four files off
+> disk. Kept anyway — a tripwire on vocabulary leaking into shipped code is worth 56s once per lane
+> run — but the reviewer's "cheapest correct outcome" was costed on the guard alone, not on the
+> hook it wakes. The genuinely cheapest outcome is a separate file with no cluster hook; that is
+> scope growth, so it is recorded below rather than taken.
+
+**FINDING 2 — this file.** `status:` was `open` and this section was empty. Fixed in the same commit
+as the verdict, which is now rule 5.
+
+**Verdicts:** SPEC: FAITHFUL · NO SILENT FALLBACKS · ERRORS NAME THEIR CAUSE (lens does not fire —
+no error handling in the diff) · TESTS HAVE TEETH (no new tests; no assertion weakened; reverting
+restores exactly the 11 describes and nothing more) · REMOVALS PROVEN · NO COMPATIBILITY DEBT.
 
 ---
 
 ## Newly discovered
 
-*(Anything you find that is not this mission. One or two lines each. Do not act on them.)*
+*(One or two lines each. Do not act on them.)*
+
+- **The layer-boundary guard is in the wrong file.** It reads four built `.js` files and needs
+  no cluster, but it lives in a journey file whose `beforeAll` starts three directories — so
+  running it costs 56s and a full cluster for a disk read. Its own file, with no hook, makes it
+  a second-long check. Not taken here: moving a test out of a journey file is scope growth.
+- **`packages/e2e-tests/src/transport-path.test.ts:159` carries a bare `it.skip`** (circuit-relay
+  reservation) that predates this unit and carries no reason comment — the silent-skip shape
+  this order exists to prevent, sitting outside the four files it was scoped to.

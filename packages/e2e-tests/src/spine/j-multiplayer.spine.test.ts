@@ -291,11 +291,17 @@ async function awaitContent(
   expect(last, `${party.name} never converged on ${documentId}`).toBe(expected);
 }
 
-// SKIPPED 2026-09-01 (001-SPINE): shared documents are out of the launch gate (Andre, Decision
-// #16). This describe is a build-artifact guard on the DOCUMENT layer's boundary, so it follows
-// documents out. Noted rather than kept: it is cheap (no processes) and it is the only assertion
-// here that is not a live journey — worth reinstating first if documents come back into scope.
-describe.skip("J-MULTIPLAYER — the built artifact keeps its layer boundary", () => {
+// KEPT RUNNING 2026-09-01 (001-SPINE review, finding 1) — deliberately NOT skipped with the rest
+// of this file. Its subject is the document layer, so the documents ruling would carry it out; but
+// skipping it serves nothing and costs a tripwire. Measured, not assumed: it is GREEN today and it
+// spawns no processes — it reads four built .js files and asserts the document layer speaks no
+// relay vocabulary. So it contributed zero red to the lane, and 001's mission was to remove red
+// that is out of scope, not to switch off working guards.
+//
+// What it protects is IN the gate even though its subject is not: the way this goes red is someone
+// refactoring the relay or session layer and leaking `parked`/`witnessed` vocabulary into code that
+// still ships. `cello_doc_*` is still on the MCP surface.
+describe("J-MULTIPLAYER — the built artifact keeps its layer boundary", () => {
   /**
    * ─── Why this scan strips comments, and why that is the FIX rather than a loosening ────────────
    *
