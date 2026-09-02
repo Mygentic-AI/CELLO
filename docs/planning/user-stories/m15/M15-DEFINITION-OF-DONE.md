@@ -726,13 +726,18 @@ status marker there.** Items are cross-referenced by their triage designation.
 ### `DOD-M15-SIGNUP-1` — ✅ Signup throttles a person, not their employer
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-SIGNUP-1`.
 
-### `DOD-M15-ALERTING-1` — ❌ Something tells us when a node is unwell
-`DOD-NODE-ALERTING-1`. **Zero alerting policies exist in `cello-infra`** while a node ran at 38–44%
-CPU against a healthy idle of 0.3–0.4% for days.
-- A policy on sustained CPU, and one on the `cello.node.memory` metric the host sampler now emits.
-- **Note for anyone adding another sampler:** COS forwards journald to Cloud Logging at **WARNING
-  AND ABOVE ONLY** — the first version logged at info, produced perfect lines that never left the
-  instance, and cost a second roll of all three nodes.
+### `DOD-M15-ALERTING-1` — ✅ Something tells us when a node is unwell
+> **Closed 2026-09-02** (`011-ALERT`). Both policies are in Terraform and applied — sustained CPU
+> and memory — routed to the Telegram channel that already carries infra alerts. **Every metric was
+> confirmed ARRIVING before its policy was written**, which was the order's loudest instruction: CPU
+> returned 58 live directory series; `cello.node.memory` turned out to be **a log line, not a
+> metric**, so it is a log-based metric over the stream that already exists, and its filter was run
+> verbatim against Cloud Logging first.
+>
+> **The review's best finding is why this line is worth its tag:** a dead directory process silenced
+> BOTH alerts — the failure the line exists to catch was the one case it could not report. Fixed
+> with `evaluation_missing_data = ACTIVE` on the memory condition, applied and verified live.
+> → journal.
 
 ### `DOD-M15-STALEROSTER-1` — ✅ A stale reading refuses to present itself as current
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-STALEROSTER-1`.
