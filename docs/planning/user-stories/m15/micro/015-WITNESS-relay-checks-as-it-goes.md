@@ -122,6 +122,36 @@ the relay to read message content.
 
 ---
 
+## The decision this order asked for: a flagged session KEEPS BEING RELAYED
+
+**Written here as well as at `#flagUnwitnessedLeaf`, because the order asked for the choice and the
+reason, not for the code to imply it.**
+
+The relay refuses the submission and goes on carrying the session. Three reasons, in order of weight:
+
+1. **There is nothing left to protect.** The leaf was refused before a sequence was allocated, so it
+   never entered the tree and the conversation record is exactly what it was a moment earlier.
+2. **A teardown is a weapon in a way a refusal is not.** Anyone who can authenticate to the relay and
+   name a session id could then end any conversation with one frame. The order's own trap says a
+   false accusation is worse than a missed detection; a false teardown is worse still, because it
+   costs the honest pair the thing they came for and needs no accusation at all.
+3. **One relay is not the arbiter.** Freezing is safe for a *client* — it limits only what that
+   client trusts. A relay that stops carrying traffic imposes its verdict on both parties, including
+   the one it has no observation about. So the relay reports and the two clients decide.
+
+**What one witness establishes, stated once so nothing downstream overclaims it:** that THIS relay
+received a submission on that session and refused it because the signature verified against neither
+participant key. Not who sent it. Not that anyone acted in bad faith. There is no second witness to
+check it against — fanning the hash sequence out to several relays is a separate line — and the
+operator-facing guidance says exactly that rather than implying a finding.
+
+**And the bound on the holding half:** an alert for an offline participant is held in the relay's
+memory and re-delivered on their next authenticated connection. A relay restart loses it. That is
+the same durability the delivery queue has, and it is worth naming rather than leaving as an implied
+guarantee.
+
+---
+
 ## Review
 
 *(Reviewer verdict goes here. One quote. Not a transcript.)*
