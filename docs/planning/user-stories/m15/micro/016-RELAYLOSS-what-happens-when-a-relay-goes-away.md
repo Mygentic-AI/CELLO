@@ -2,7 +2,7 @@
 name: 016-RELAYLOSS — What actually happens when a relay goes away, and then fix it
 type: micro-work-order
 date: 2026-09-02
-status: open
+status: complete
 description: >
   Two open lines ask the same question from different ends: can an agent still be REACHED when a
   relay dies, and does a live CONVERSATION survive it. Both are written "measure first", and it is
@@ -260,15 +260,19 @@ the moment of each:
 
 | The relay… | Time until the daemon notices |
 |---|---|
-| is **killed** — process gone, sockets close | **14 to 26 seconds** (four runs, one sample each) |
-| goes **mute** — alive, sockets held open, answers nothing | **44 seconds in one run; not within 180 seconds in another** |
+| is **killed** — process gone, sockets close | **14 to 26 seconds** (five runs) |
+| goes **mute** — alive, sockets held open, answers nothing | **≈44 seconds** twice, and **still nothing after 180 seconds** once |
 
-**The mute number is unstable, and that instability is itself the finding.** Two runs of the same
-code against the same harness: once the daemon noticed in 44 seconds, once it had not noticed after
-three minutes. A killed relay is consistently a handful of seconds. I first wrote the mute row as a
-flat "not within 180 seconds" on the strength of one run; the next run refuted it, which is the
-second time in this unit that one sample became a claim. What holds across both is the comparison —
-a mute relay costs multiples of a killed one, and sometimes far more.
+**The mute case is both slower and less predictable, and the unpredictability is part of the
+finding.** Same code, same harness, three runs: 43.6s, 43.8s, and once nothing at all inside three
+minutes. A killed relay is consistently a handful of seconds because it closes its sockets and the
+watchdog is watching for exactly that; a mute relay closes nothing, so detection falls to whichever
+timeout happens to fire first.
+
+I first wrote this row as a flat "not within 180 seconds" on the strength of a single run, and the
+next run refuted it — the second time in this unit that one sample became a claim. What survives
+across all of them is the comparison, not any single figure: a relay that stops answering costs
+multiples of one that dies, and sometimes very much more.
 
 The order's own trap note said to kill the relay convincingly, because "the incident shape is a relay
 that stops answering". It was right, and the gap between the two is the reason: a killed relay
