@@ -83,6 +83,7 @@ import { Encoder } from "cbor-x";
 import pg from "pg";
 import { generateKeypair, buildMerkleTree, merkleRoot } from "@cello-protocol/crypto";
 import { buildStructure2, encodeStructure2 } from "@cello-protocol/protocol-types";
+import { rootOverContentHashes, sealApproval } from "./helpers/seal-fixture.js";
 import { MmrStore } from "../mmr-store.js";
 import { MmrCheckpointService } from "../mmr-checkpoint-service.js";
 import { verifyInclusionProof, PROOF_NOT_YET_AVAILABLE } from "../mmr.js";
@@ -111,9 +112,18 @@ async function buildMinimalSealData(
   const timestamp1 = (tsMs + 1) > 0xffffffff ? BigInt(tsMs + 1) : tsMs + 1;
   const timestamp2 = (tsMs + 2) > 0xffffffff ? BigInt(tsMs + 2) : tsMs + 2;
 
+  /**
+   * DOD-M15-SEALPARTIES-1: both SEAL ctrl leaves carry their party's signed approval — the root over
+   * the NON-ctrl content hashes, which here is leaf 1 alone. A bilateral seal with fewer than two
+   * approvals is refused, so a fixture without them no longer reaches `appendSeal` at all.
+   */
+  const approvalRoot = rootOverContentHashes([contentHash]);
+  const approvalB = sealApproval(sessionId, approvalRoot, tsMs + 1);
+  const approvalA = sealApproval(sessionId, approvalRoot, tsMs + 2);
+
   const s1Tbs = CBOR_ENC_TEST.encode([1, contentHash, pubkeyA, sessionId, 0, timestamp]);
   const s1Sig = new Uint8Array(await keyA.sign(s1Tbs));
-  const s1TbsB = CBOR_ENC_TEST.encode([1, contentHash, pubkeyB, sessionId, 1, timestamp1]);
+  const s1TbsB = CBOR_ENC_TEST.encode([1, approvalB.contentHash, pubkeyB, sessionId, 1, timestamp1]);
   const s1SigB = new Uint8Array(await keyB.sign(s1TbsB));
 
   const genesisPrevRoot = new Uint8Array(32);
@@ -122,17 +132,17 @@ async function buildMinimalSealData(
   const s2CborA = encodeStructure2(s2ResultA.structure2);
 
   const prevRoot2 = merkleRoot(buildMerkleTree([{ kind: "msg", data: s2CborA }]));
-  const s2ResultB = buildStructure2(2, pubkeyB, contentHash, s1SigB, prevRoot2);
+  const s2ResultB = buildStructure2(2, pubkeyB, approvalB.contentHash, s1SigB, prevRoot2);
   if (!s2ResultB.ok) throw new Error("buildStructure2 failed B");
   const s2CborB = encodeStructure2(s2ResultB.structure2);
 
-  const s1TbsA2 = CBOR_ENC_TEST.encode([1, contentHash, pubkeyA, sessionId, 2, timestamp2]);
+  const s1TbsA2 = CBOR_ENC_TEST.encode([1, approvalA.contentHash, pubkeyA, sessionId, 2, timestamp2]);
   const s1SigA2 = new Uint8Array(await keyA.sign(s1TbsA2));
   const prevRoot3 = merkleRoot(buildMerkleTree([
     { kind: "msg", data: s2CborA },
     { kind: "ctrl", data: s2CborB },
   ]));
-  const s2ResultA2 = buildStructure2(3, pubkeyA, contentHash, s1SigA2, prevRoot3);
+  const s2ResultA2 = buildStructure2(3, pubkeyA, approvalA.contentHash, s1SigA2, prevRoot3);
   if (!s2ResultA2.ok) throw new Error("buildStructure2 failed A2");
   const s2CborA2 = encodeStructure2(s2ResultA2.structure2);
 
@@ -163,8 +173,8 @@ async function buildMinimalSealData(
     sealData: {
       leaves: [
         { kind: "msg", s2: s2ResultA.structure2, structure1_cbor: s1Tbs },
-        { kind: "ctrl", s2: s2ResultB.structure2, structure1_cbor: s1TbsB },
-        { kind: "ctrl", s2: s2ResultA2.structure2, structure1_cbor: s1TbsA2 },
+        { kind: "ctrl", s2: s2ResultB.structure2, structure1_cbor: s1TbsB, content_bytes: approvalB.contentBytes },
+        { kind: "ctrl", s2: s2ResultA2.structure2, structure1_cbor: s1TbsA2, content_bytes: approvalA.contentBytes },
       ],
       seq_count: 3,
       merkle_root: finalRoot,
