@@ -162,6 +162,36 @@ function trailingSealCtrlAuthors(leaves: RelaySealLeaf[]): Set<string> {
 }
 
 /**
+ * WHERE THE MUTUALLY-SIGNED PREFIX ENDS — `DOD-M15-UNILATERAL-1`, the artifact split.
+ *
+ * A leaf is countersigned by a party when that party's own signature reaches it: either they
+ * AUTHORED it (`last_authored_seq`) or they acknowledged it in something they signed
+ * (`content_frontier_seq`, the highest counterparty sequence their own signed leaves attest to
+ * receiving). So one party's commitment reaches `max` of the two, and the transcript is mutually
+ * signed only as far as the LEAST-committed party reaches — hence the min across participants.
+ *
+ * A solo seal's absent party is carried as a participant with both values at 0 when they authored
+ * nothing, which yields 0: no mutually-signed prefix, the whole record is the uncountersigned tail.
+ * That is the honest floor, and it is why this must be computed AFTER that participant is added —
+ * over authors alone, a one-sided transcript would report itself fully countersigned.
+ *
+ * Derived, never asserted: every input is a value already bound into the seal TBS through
+ * `canonicalLegibilityHash`, so a consumer can recompute this and does not have to trust the
+ * published number. The client does exactly that rather than reading the field off the wire.
+ */
+export function countersignedThroughSeq(
+  participants: ReadonlyArray<{ content_frontier_seq: number; last_authored_seq: number }>,
+): number {
+  if (participants.length === 0) return 0;
+  let lowest = Number.POSITIVE_INFINITY;
+  for (const p of participants) {
+    const reach = Math.max(p.content_frontier_seq, p.last_authored_seq);
+    if (reach < lowest) lowest = reach;
+  }
+  return Number.isFinite(lowest) ? lowest : 0;
+}
+
+/**
  * Build the legibility object for a verified seal leaf set.
  *
  * Derivation (story behavior triggers):
@@ -296,6 +326,10 @@ export function buildSealLegibility(
     disclaimer: SEAL_RECEIPT_DISCLAIMER,
     participants,
     final_message: finalMessage,
+    // DOD-M15-UNILATERAL-1. On the SOLO path the absent counterparty may author no leaf at all and
+    // is appended afterwards, so #processSealUnilateral recomputes this over the completed
+    // participant list — see the note on countersignedThroughSeq.
+    countersigned_through_seq: countersignedThroughSeq(participants),
   };
 }
 
