@@ -146,3 +146,20 @@ build; if it has changed, say so in the journal rather than inheriting my readin
 ## Newly discovered
 
 *(One or two lines each. Do not act on them.)*
+
+- **A park refusal no longer quotes the relay's own retry window.** `016-RELAYLOSS` commit `032f5a5`
+  made the send guidance conditional on `wasWitnessed(placed)` (`session-content-handlers.ts:645`),
+  and a rate-limited park is unwitnessed by construction — so the upstream relay's "about 45 seconds"
+  is discarded and replaced by the unwitnessed-ordering text. Invariant 3 pointing the other way: a
+  downstream handler overwriting an upstream descriptive value. It reddens
+  `dod-m15-park-envelope-coded-error.test.ts`. **That lane's file and that lane's in-flight review —
+  not touched here.**
+- **The empty-agent guard has a hole its own comment does not cover.** `m8c-agent-param-1-tools`
+  forbids dropping an empty `agent`, but matches only `\(agent \? \{ agent \}` — an object of exactly
+  `{ agent }`. The shape `agent ? { target_pubkey, agent } : { target_pubkey }` drops an empty name
+  identically and sails through. `cello_initiate_session` carried that shape until this unit
+  rewrote it; whether other tools still do was not surveyed.
+- **Two lanes are committing into one checkout and the commits interleave.** `016-RELAYLOSS`'s
+  commits sit on `m15/013-absence` in both repos (trustless-cello `901bd9c7`, `72901b99`, `5f87081e`;
+  cello-client `194296a`, `032f5a5`). Nothing lost, nothing rewritten, but a reviewer reading either
+  branch cannot tell the units apart without being told. Journal entry 013b lists which are whose.
