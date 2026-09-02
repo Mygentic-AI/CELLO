@@ -8,10 +8,12 @@
  * online it PULLS its parked entries (proving identity via the relay's auth challenge).
  * The relay holds CIPHERTEXT only (INV-3 — it is a hash custodian, not a data custodian).
  *
- * This increment proves the transport round-trip directly (via the daemon's content-park
- * IPC handlers, the same approach DOD-RETRY-1 used) BEFORE the send/receive-path
- * integration (increment 2: cello_send parks when B is offline; increment 3: B pulls +
- * verifies + accepts on online) and recovery/dedup (DOD-MSG-4/5).
+ * The transport round-trip is proved through a REAL directory-brokered send, not through the
+ * daemon's raw content-park IPC handlers. It used the handlers until 2026-09-02, minting its own
+ * session id — a session the directory never brokered, so the relay had never vouched either key
+ * and refused the pull `not_a_participant`. That refusal is RELAYAUTH-1 working; the test was
+ * measuring the gate instead of the round trip. `content_park_deposit` / `_pull` have no callers
+ * outside these tests: they are a diagnostic surface, not the path an operator's message takes.
  *
  * Anchored to the binary — see live-harness.ts. The deposit/pull cross the REAL relay binary.
  *
@@ -41,9 +43,10 @@ import {
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 // `sealToRecipient` is deliberately no longer imported. Every park in this file that feeds the
 // RECOVER path now deposits through the daemon's own `sealParkEnvelope` (via `content:`), because a
-// bare seal with no park envelope is the unsigned shape SEC-1 refuses. The only remaining raw
-// deposits are the two that never reach recover — the transport round-trip, and the
-// deliberately-unsealable entry in DOD-MSG-7 — and both use random bytes, which need no seal.
+// bare seal with no park envelope is the unsigned shape SEC-1 refuses. The transport round-trip
+// stopped raw-depositing on 2026-09-02 (it sends for real now), so the remaining raw deposits are
+// the ones that never reach recover — the deliberately-unsealable entry in DOD-MSG-7 and its
+// neighbours — and those use random bytes, which need no seal.
 import { contentHashHex } from "./content-seal-fixture.js";
 
 let cluster: SpineCluster;
@@ -99,23 +102,18 @@ afterAll(async () => {
   }
 });
 
-interface PullResult {
-  ok?: boolean;
-  entries?: Array<{ contentHash: string; sessionId: string; ciphertext: string }>;
-}
-
 describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)", () => {
-  it("DOD-MSG-3 (transport) — deposit ciphertext for an offline recipient → recipient pulls the SAME bytes", async () => {
+  it("DOD-MSG-3 (transport) — A sends to an offline recipient → recipient recovers the SAME bytes", async () => {
     const dirA = mkdtempSync(join(tmpdir(), "cello-msgA-"));
     const dirB = mkdtempSync(join(tmpdir(), "cello-msgB-"));
     dirs.push(dirA, dirB);
     await provisionAgent(dirA, "agentA");
     const pubB = await provisionAgent(dirB, "agentB"); // recipient K_local (the mailbox key)
     const daemonA = await startLocalDaemon(dirA, "msgA");
-    const daemonB = await startLocalDaemon(dirB, "msgB");
+    let daemonB = await startLocalDaemon(dirB, "msgB");
     daemons.push(daemonA, daemonB);
     // DOD-LOOP-1: the standing receiver is now PER-AGENT (created by cello_start_agent) — there is
-    // no per-daemon standing receiver at initialize() anymore. The outbound deposit (A) and pull (B)
+    // no per-daemon standing receiver at initialize() anymore. A's park deposit and B's recover
     // each dial the relay from their own agent's standing-receiver node, so both agents must be
     // started first. (Pre-re-key this test relied on the per-daemon receiver and started no agent.)
     expect(registerAgent("agentA", `DEV-tr-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
@@ -128,38 +126,65 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
       expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
     }
 
-    const sessionId = randomBytes(16).toString("hex");
-    const contentHash = randomBytes(32).toString("hex");
-    const ciphertext = randomBytes(160).toString("hex"); // opaque to the relay (sealed in increment 2)
+    // A REAL directory-brokered session, opened while B is online. The relay vouches a key only
+    // when a client presents a directory-signed assignment (relay-node.ts), so a session id minted
+    // here in the test is a session the directory never brokered and the relay has never seen —
+    // and its pull is refused `not_a_participant`, correctly. This test used to fabricate exactly
+    // that, and measured the vouching gate rather than the round-trip it is named for.
+    const awaitP = connTB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connTA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+    expect(init.ok, `initiate failed:\n${daemonA.output.split("\n").slice(-30).join("\n")}`).toBe(true);
+    const sessionId = init.sessionId!;
+    expect(((await awaitP) as { type?: string }).type).toBe("new_session");
+    expect(((await connTA.call("cello_send", { cello_session_id: sessionId, content: "msg1-online", signal: "over" })) as { ok?: boolean }).ok).toBe(true);
 
-    // A deposits FOR B while B has never connected for content — pure store-and-forward.
-    const dep = (await ipcCall(dirA, "content_park_deposit", {
-      relayMultiaddr: cluster.relayMultiaddr,
-      recipientPubkey: pubB,
-      contentHash,
-      sessionId,
-      ciphertext,
-    })) as { ok?: boolean; reason?: string };
-    expect(dep.ok, `deposit failed: ${JSON.stringify(dep)}`).toBe(true);
+    // ── B goes OFFLINE (abrupt kill), so A's next send has nowhere to deliver and must park. ──
+    await connTB.close();
+    mcpConns.splice(mcpConns.indexOf(connTB), 1);
+    await daemonB.kill();
 
-    // B pulls — proving ownership of pubB via the relay's Ed25519 auth challenge.
-    const pull = (await ipcCall(dirB, "content_park_pull", {
-      relayMultiaddr: cluster.relayMultiaddr,
-      recipientPubkey: pubB,
-    })) as PullResult;
-    expect(pull.ok, `pull failed: ${JSON.stringify(pull)}`).toBe(true);
+    // The property under test is that the bytes survive the round trip through the real relay
+    // UNCHANGED, so the payload is chosen to break on a truncation or an encoding mangle: it is
+    // long, and it is multibyte in four different ways (accents, CJK, an emoji, curly quotes).
+    //
+    // It is deliberately NOT random hex. A `randomBytes(64).toString("hex")` payload comes back as
+    // `[redacted: high-entropy data]` — screening classifies a long hex blob as a leaked secret and
+    // redacts it before it is ever delivered. That is screening working, and it silently made this
+    // assertion compare a redaction marker against the original bytes. Entropy is the wrong tool
+    // here; multibyte width is the right one, and it tests encoding integrity that hex cannot.
+    const PAYLOAD = "msg2-while-offline — the EXACT bytes B must recover: ünïcödé, 日本語, ✅, “curly”, 018-PARKCOLLECT.";
+    await connTA.call("cello_send", { cello_session_id: sessionId, content: PAYLOAD, signal: "over" });
+    await daemonA.waitForLine(/"event":"content\.park\.deposited"/, 25_000);
 
-    const got = (pull.entries ?? []).find((e) => e.contentHash === contentHash);
-    expect(got, `B must receive the parked entry:\n${JSON.stringify(pull)}`).toBeTruthy();
-    // Round-trip integrity through the real relay: B gets the EXACT bytes A deposited.
-    expect(got!.ciphertext, "the recipient pulls the same ciphertext the sender deposited").toBe(ciphertext);
-    expect(got!.sessionId, "the parked entry carries the session id").toBe(sessionId);
-
-    // INV-3: the relay witnessed a deposit it could store + serve, but it only ever held
-    // CIPHERTEXT — the random blob is opaque, and the relay logs byte counts, not content.
-    // (The round-trip itself proves the relay received+stored+served; this is corroboration.)
+    // INV-3: the relay received and stored the entry, and it only ever held CIPHERTEXT — the
+    // payload itself never appears in the relay's output. The old test could only CORROBORATE this
+    // (it deposited a random blob that was never plaintext anywhere); a real send lets it be
+    // asserted, because the plaintext genuinely exists on both daemons and must not exist here.
     expect(cluster.relay.output).toMatch(/"event":"content\.park\.received"|content\.park\.received/);
-  }, 60_000);
+    expect(cluster.relay.output, "the relay is a hash custodian — it must never hold the plaintext").not.toContain(PAYLOAD);
+
+    // ── B comes back and AUTO-recovers the parked entry through the inbound funnel. ──
+    for (const f of ["daemon.sock", "daemon.lock"]) {
+      try { rmSync(join(dirB, f), { force: true }); } catch { /* best-effort */ }
+    }
+    daemonB = await startLocalDaemon(dirB, "msgB-restart");
+    daemons.push(daemonB);
+    await daemonB.waitForLine(/"event":"session\.interrupted\.detected"/, 15_000);
+    expect(cello(["login"], { CELLO_DIR: dirB }).status).toBe(0);
+    const connTB2 = await connectMcp(dirB, "tr-B2");
+    mcpConns.push(connTB2);
+    expect(((await connTB2.call("cello_start_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connTB2.call("cello_use_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+    await daemonB.waitForLine(/"event":"content\.recover\.auto\.completed"/, 25_000);
+
+    // Round-trip integrity through the real relay: B receives the EXACT bytes A sent.
+    // msg1 comes first — B received it live and never read it (DOD-COATTEND-1: delivery resumes
+    // from what this connection has read, so nothing is skipped and nothing is lost). The
+    // `[[OVER]]` suffix is in-band; the shim appends the turn signal to the content itself.
+    const read = async () => ((await connTB2.call("cello_receive", { cello_session_id: sessionId })) as { ok?: boolean; content?: string | null }).content;
+    expect(await read(), "the live message B never read is delivered first — not lost").toBe("msg1-online [[OVER]]");
+    expect(await read(), `B must receive the parked entry, byte for byte:\n${daemonB.output.split("\n").slice(-30).join("\n")}`).toBe(`${PAYLOAD} [[OVER]]`);
+  }, 90_000);
 
   it("DOD-MSG-3 (send park) — A sends to an offline recipient → hash witnessed + content auto-parked (R1)", async () => {
     const dirA = mkdtempSync(join(tmpdir(), "cello-sendparkA-"));
