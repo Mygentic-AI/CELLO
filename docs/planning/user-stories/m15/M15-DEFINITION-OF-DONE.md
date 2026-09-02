@@ -831,8 +831,10 @@ consumes.
 > destroyed at teardown and shutdown — one Opus pass, six findings, three blocking, all fixed, 17
 > mutants) and `007-CRYPTO` (wire: exchange, sign, verify, encrypt the body — one Opus pass, fourteen
 > findings, five blocking a publish, all addressed, 13 mutants). **Merged and published 2026-09-01,
-> so operators are running it.** The tag stays 🟡 for ONE thing only: the multi-process proof — see
-> `DOD-M15-EPHEMERAL-AUTH-1`. → Entry S15.
+> so operators are running it.**
+>
+> ✅ **CLOSED 2026-09-02.** The one thing it was waiting on — the multi-process proof — is measured
+> against the production relay: see `DOD-M15-EPHEMERAL-AUTH-1`. → Entry S15, Entry C11.
 >
 > **2026-09-02 — the LOCAL half (this line's own scope) is now proven against the running system, by
 > conservation rather than by a single event firing.** On the deployed build: `ephemeral.minted` 5,
