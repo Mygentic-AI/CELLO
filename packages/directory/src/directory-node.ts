@@ -3590,12 +3590,38 @@ export class CelloDirectoryNode {
      * moment the answer changes. See `#mintOnlineTokenForRegistered`.
      */
     const onlineToken = await this.#mintOnlineTokenForRegistered(frame.k_local_pubkey, accountCorrelationId);
-    this.#sendFrame(stream, encodeRegisterSuccess({
-      type: "register_success",
-      agent_id: agentId,
-      primary_pubkey: primaryPubkeyFromDkg,
-      ...(onlineToken ? { online_token: onlineToken } : {}),
-    }));
+    /**
+     * ⚠️ A DEAD STREAM HERE IS A LOG LINE, NOT AN UNHANDLED REJECTION.
+     *
+     * `#processRegisterRequest` is dispatched fire-and-forget (`void`), so a throw out of this send
+     * escapes as an unhandled rejection and can take the process down — and the send is at the end
+     * of a long `await` chain (the DKG, the account resolve, and now the token mint), which is
+     * exactly the window in which a client that gave up closes its stream. Every other seal-path
+     * send in this file already guards; this one did not, and the token mint widened the gap that
+     * made it observable.
+     *
+     * The profile is already written, so what is lost is the agent's own copy of its `agent_id` —
+     * recoverable by registering again, which answers `already_registered` and returns it.
+     */
+    try {
+      this.#sendFrame(stream, encodeRegisterSuccess({
+        type: "register_success",
+        agent_id: agentId,
+        primary_pubkey: primaryPubkeyFromDkg,
+        ...(onlineToken ? { online_token: onlineToken } : {}),
+      }));
+    } catch (error) {
+      this.#logger?.warn("directory.register.success.send_failed", {
+        agentPubkeyHex: frame.k_local_pubkey.slice(0, 16),
+        correlationId: accountCorrelationId,
+        error: error instanceof Error ? error.message : String(error),
+        impact: "the agent IS registered here — the profile is written — but its stream closed before " +
+          "the confirmation could be delivered, so it does not hold its agent_id or its relay online " +
+          "token and will report itself unregistered.",
+        guidance: "The operator registers again: this node answers `already_registered` with the same " +
+          "agent_id and primary_pubkey, so nothing is duplicated and no second DKG runs.",
+      });
+    }
   }
 
   // ─── CONNREQ-002: Connection request processing ──────────────────────────────
