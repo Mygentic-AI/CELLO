@@ -146,7 +146,12 @@ describe("directory migration numbering", () => {
     // cleared their count by waiting for a release. The tripwire fired on this one too, within
     // minutes of the file landing, which is the third time it has earned itself.
     //
-    // Whoever takes 64 updates this line.
-    expect(nextFree, "coordination agreement says V64 is the next free number").toBe(64);
+    // V64 was consumed on 2026-09-02 — `sessions.high_stakes` (DOD-M15-UNILATERAL-1), the solo-seal
+    // tier a conversation opted in to. It is persisted rather than held in memory because a
+    // directory restart that forgot it would judge that conversation at the weaker bar and tell
+    // nobody. The tripwire fired on this one too, in the same gate run as the migration.
+    //
+    // Whoever takes 65 updates this line.
+    expect(nextFree, "coordination agreement says V65 is the next free number").toBe(65);
   });
 });

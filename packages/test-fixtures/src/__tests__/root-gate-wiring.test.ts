@@ -325,14 +325,20 @@ describe("DOD-M15-CI-SKIPS-SILENT-1: files a project config hides never collect 
      * +1 on 2026-09-02: `j-witness.spine.test.ts` (`DOD-M15-CORROBORATE-1`), hidden from the root
      * gate like every other spine file. It IS run, deliberately, by
      * `pnpm --filter @cello-protocol/e2e-tests test:spine` — the lane is hidden, not unrun.
+     *
+     * +1 again on 2026-09-02: `j-relayloss.spine.test.ts` (`016-RELAYLOSS`). Counted here by the
+     * `013-ABSENCE` lane rather than by the one that wrote it — the two lanes share a checkout and
+     * that file arrived mid-run, so this guard was already red before 013's own gate started. It is
+     * ADDED and therefore hidden: nobody has run it in the root gate, which is what this number is
+     * for saying out loud.
      */
     expect(
       spine.length,
-      `The hidden lane is ${String(spine.length)} files, not 38. If files were ADDED, they are ` +
+      `The hidden lane is ${String(spine.length)} files, not 39. If files were ADDED, they are ` +
         `hidden too and nobody has run them — say so here. If files were REMOVED or wired into the ` +
         `gate, that is the outcome DOD-M15-SPINE-LANE-1 wanted; update the number and the DoD line ` +
         `together so the record moves with the code.`,
-    ).toBe(38);
+    ).toBe(39);
   });
 });
 
