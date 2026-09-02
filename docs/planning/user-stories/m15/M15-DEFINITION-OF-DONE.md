@@ -788,7 +788,12 @@ value criterion** — "mint a trust signal and have it received" is advertised v
 
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
-### `DOD-M15-PARKCOLLECT-1` — ❌ A parked message can actually be collected
+### `DOD-M15-PARKCOLLECT-1` — ✅ A parked message can actually be collected
+
+> **Live check 2026-09-02: parked and collected.** Harness artifact — the test fabricated a session
+> the directory never brokered, which the vouching gate correctly refuses. Test rewritten to a real
+> send; `packages/relay/` untouched. → `micro/018-PARKCOLLECT-a-parked-message-can-be-collected.md`
+> (Review section carries the run, the three-layer mutation chain, and the reviewer's verdict).
 **Found by the full-lane run 2026-09-02 (`j-content` DOD-MSG-3). NEW — this test PASSED in the
 2026-08-23 baseline**, so something between then and now broke it. **BLOCKS LAUNCH**: this is the
 offline path, and the offline path is most of what "two agents connect and communicate" means when

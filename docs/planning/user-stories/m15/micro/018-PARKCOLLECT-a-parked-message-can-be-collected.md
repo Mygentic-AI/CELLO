@@ -2,7 +2,7 @@
 name: 018-PARKCOLLECT — A parked message can actually be collected
 type: micro-work-order
 date: 2026-09-02
-status: open
+status: complete
 description: >
   The spine lane says a recipient cannot collect a parked message — the relay refuses with
   not_a_participant. The SAME run shows the real send-to-offline path collecting fine, twice. This
@@ -284,9 +284,147 @@ written up under *Newly discovered* 1–3.
 two real daemons as separate OS processes, its own relay, independent of the live fleet's health.
 Its result is below.
 
-### The rest
-*(the fallback-run verdict, the test run output, the mutation proof from DoD 4, the reviewer's
-verdict)*
+### Part 1 — THE DECIDING RUN (the fallback): **LIVE: parked and collected**
+
+Two real daemons as separate OS processes, their own relay, their own Postgres — independent of the
+live fleet's health, which is what makes it the verdict:
+
+```
+✓ src/spine/j-content.spine.test.ts (10 tests | 9 skipped) 66959ms
+  ✓ DOD-MSG-3/4 (recover) — offline recipient comes back, RECOVERS the parked message
+    through the inbound funnel  5471ms
+Test Files  1 passed (1) · Tests  1 passed | 9 skipped (10) · exit=0
+```
+
+The park path demonstrably ran rather than being skipped: that test hard-asserts
+`daemonA.waitForLine(/"event":"content\.park\.deposited"/)` and
+`daemonB.waitForLine(/"event":"content\.recover\.auto\.completed"/)`, and reads the exact parked
+plaintext back. **A recipient CAN collect a parked message.** The operator's fear in the header of
+this order — told "parked, success", message never collectable — does not happen.
+
+**So this is 2A: the defect was in the TEST.** Confirmed from the daemon log of the rewritten
+test's own run, where a real send parks and is served back:
+
+```json
+{"event":"content.park.pull.result","relayPeerId":"12D3KooWFZ4Gex…","count":1}
+{"event":"content.recover.verified","agentName":"agentB","sessionId":"7cbbf8eb…"}
+{"event":"content.recovered","sessionId":"7cbbf8eb…","sequenceNumber":1}
+{"event":"content.recover.auto.completed","agentName":"agentB","recovered":1,"refused":0}
+```
+
+### DoD 3 — the vouching gate is UNTOUCHED
+
+**Stated explicitly, as the order requires.** `packages/relay/src/content-park.ts` was not edited,
+and **no file under `packages/relay/` was edited at all**. `git diff` across this order's commits
+names exactly two files: the test and this document. The reviewer verified this independently.
+
+The refusal the spine lane reported was the gate working. The test minted `randomBytes(16)` as a
+session id and raw-IPC-deposited against it — a session no directory ever brokered, so the relay
+had never vouched B's key, so the pull was refused `not_a_participant`. Correct behaviour, measured
+by a test that then reported it as a broken park path.
+
+### DoD 2 — the rewritten test, run alone
+
+```
+✓ DOD-MSG-3 (transport) — A sends to an offline recipient → recipient recovers the SAME bytes  5150ms
+Test Files  1 passed (1) · Tests  1 passed | 9 skipped (10) · exit=0
+```
+
+Three consecutive green runs after the review fixes. Whole file: 7 passed / 3 failed — the three
+reds are `DOD-MSG-5` and `DOD-MSG-7` (both on `content_park_deposit` returning
+`{"code":"internal_error","message":"[object Object]"}` — that is `019`'s line) and `DOD-MSG-8`
+(`MCP tool "cello_get_transcript" not found`). Left red on purpose. The reviewer confirmed
+independently that this order did not cause any of the three: they use fresh temp dirs and fresh
+keypairs and the diff's hunks do not reach them.
+
+**Build provenance for that run**, so it is reproducible rather than a claim: `cello-client` at
+`59b091f`, `core/daemon/dist/bin/cello-daemon.js` mtime `2026-09-02T06:45:02Z`. This order did not
+build or edit `cello-client` — Lane B held it — so the run is green *against that binary*.
+
+### DoD 4 — the mutation proof: a three-layer chain, each layer red for a named reason
+
+Run against the final post-review code, each mutation re-run alone, each typechecked first
+(`exit=0` — a mutant that fails to compile proves nothing), each restored with `git checkout --`
+and the tree verified clean after.
+
+| Mutation | Red at | The reason |
+|---|---|---|
+| **A** — parked `cello_send` + its deposit wait removed | `expect(cluster.relay.output).toMatch(/content\.park\.received/)` | the relay never received a deposit |
+| **B** — A, plus the three relay assertions removed to reach the next guard | the recovery barrier | `no auto-recover sweep ever recovered anything. Every sweep B ran: …` |
+| **C** — B, plus the barrier reverted to its hollow form and the provenance assertions removed | **"B must receive the parked entry, byte for byte"** | `expected null to be 'msg2-while-offline — the EXACT bytes…'`, with `session.receive.empty` in B's log |
+
+**C is the proof the DoD asks for.** A and B exist because, after the review fixes, three guards now
+catch the failure *before* it reaches that line — which is the improvement, not a dodge. Removing an
+intervening assertion to reach a target one does not weaken the target; the reviewer ruled the same.
+
+**B is also the proof that the HIGH-1 fix has teeth.** Under the old barrier — matching the event
+name only — this exact state sailed through to the read, because `drainOnce` emits
+`content.recover.auto.completed` unconditionally, `recovered: 0` included. Under the fixed
+`"recovered":[1-9]` form it stops three layers earlier and names the cause.
+
+**One mutation SURVIVED, and it is reported rather than buried.** Removing B's `cello_start_agent`
+(the reviewer's suggested isolation of the collect half) left the test **green**. The reason is
+diagnostic, not a hole: `cello_use_agent` on the next line auto-starts an offline agent, so the
+`cello_start_agent` call removes nothing. It is a redundant line in the test, not a missing
+assertion. The collect half is guarded instead by the `"recovered":[1-9]` barrier, whose teeth
+mutation B demonstrates.
+
+### DoD 5 — gate
+
+`pnpm run typecheck` → `exit=0`. `pnpm run lint` → `exit=0` (5 warnings, all pre-existing in
+`j-stale-session.spine.test.ts`, untouched here). Run with `set -o pipefail`, exit codes read rather
+than output tails. Only `trustless-cello` was touched, so only its gate applies.
+
+### DoD 6 — reviewer's verdict, in its own words
+
+`cello-unit-reviewer`, one pass. Verdicts: **SPEC: DEVIATIONS FOUND**, **HOLLOW TESTS FOUND
+[blocking]**, **ERROR SUBSTITUTION FOUND [blocking]**, **NO SILENT FALLBACKS**, **REMOVALS PROVEN**,
+**COMPATIBILITY DEBT FOUND**. On whether it was a rubber stamp: *"I do not think this is one. Two
+HIGHs and a MEDIUM sit exactly where this milestone's expensive misses have lived — a barrier that
+cannot fail, a provenance claim nobody asserts, and a discarded response object on the offline
+path."*
+
+**Every finding fixed.** The one that matters most was mine and it was this milestone's own
+signature defect:
+
+- **HIGH-1 — a barrier that could not fail.** I waited on `content.recover.auto.completed` by event
+  name. `drainOnce` emits it unconditionally and says so in its own comment, carrying
+  `"recovered":0,"refused":1,"refusedReasons":{"not_a_participant":1}` just as readily as a success.
+  **A vouching-gate regression — the exact thing this test exists to catch — would have satisfied
+  it.** Now matched on `"recovered":[1-9]`, with a catch that prints every sweep and names
+  `not_a_participant` as a relay refusal rather than an empty mailbox. The non-hollow form already
+  existed 646 lines below in the same file.
+- **HIGH-2 — nothing pinned the bytes to the park path.** True only via an argument about another
+  repo's code. Added a session-scoped `content.recovered` and the `"source":"park"` ordering
+  assertion.
+- **MED-1 — the parked send's response was discarded**, on the offline path, which is precisely the
+  half the operator's fear is about. An `ok:false` surfaced 25s later as a `waitForLine` timeout.
+  Now asserted, with the response in the message.
+- **MED-2 — `not.toContain(PAYLOAD)` could pass vacuously** against an escaping serializer, because
+  the payload is deliberately multibyte. Added an ASCII slice.
+- **MED-3 — the comment I had rewritten was itself wrong** about DOD-MSG-7's neighbours. Corrected.
+- **MED-5 / LOW-1 / LOW-2 / LOW-3** — duplicate-vs-sibling comment added, docblock present-tensed,
+  archaeology tails trimmed, decorative regex alternation dropped.
+
+**Ruled deviation, recorded because an un-journaled one is blocking on its own.** The order says
+keep the test's name. I kept the tag `DOD-MSG-3 (transport)` (so the `-t` filter and the DoD tag
+still match) and rewrote only the prose after the em-dash, which described the deposit/pull
+mechanism the test no longer uses. The reviewer ruled the deviation **correct**: *"Leaving 'deposit
+ciphertext … recipient pulls' on a test that no longer deposits or pulls would be a false claim in
+the one place a reader looks first."*
+
+**Scope question, ruled: keep.** `not.toContain(PAYLOAD)` is not scope growth — the old test
+deposited a random blob that was never plaintext anywhere, so "the relay holds ciphertext only"
+could not fail. A real send makes genuine plaintext exist on both daemons, so the absence becomes
+assertable for the first time.
+
+### One thing that is NOT explained, and is not being called flaky
+
+One run failed at the **live** send (`msg1-online`, sent while B was still online) with
+`expected false to be true` and no reason attached — the assertion had no message. Three consecutive
+runs before and after were green. I did not attribute it to flakiness and I could not reproduce it.
+What I did instead: that assertion now captures the response and prints it, so if it recurs the
+reason is on the failure rather than lost. Recorded here so the next reader knows it happened.
 
 ## Newly discovered
 
@@ -352,7 +490,29 @@ to be returned and never consumed. **Not investigated, per rule 3.** Recorded be
 park path this order is about, and because a pull that returns an entry forever is either a stuck
 entry or a watermark that never advances.
 
-### 4. `DOD-MSG-8` fails on a stale tool name
+### 4. The `content_park_pull` IPC handler now has NO caller in either repo
+
+Surfaced by the reviewer on this diff. Removing this order's two raw-IPC calls took away the last
+caller of the daemon's `content_park_pull` IPC method:
+
+```
+$ grep -rn '"content_park_pull"' cello-client/core trustless-cello/packages   # excluding dist/
+cello-client/core/daemon/src/content-park.ts:680:    handlers.set("content_park_pull", …)
+```
+
+That is the registration itself and nothing else. **Positive control** (because an empty grep is
+only evidence if the search could see): the same grep for `"content_park_recover"` returns **6**
+hits. The search had reach.
+
+Its own docblock already warns *"⚠️ THIS HANDLER HAS NO PRODUCTION CALLER, AND THAT IS WHY IT
+DRIFTED"* — this order removed its last test caller too. Note this is the IPC **method name**, not
+the `content_park_pull_request` wire frame, which is alive and load-bearing on the recover path.
+Its siblings are still called: `content_park_deposit` (5) and `content_park_recover` (5).
+
+**Deliberately NOT deleted here.** It lives in `cello-client`, which this order makes read-only and
+which Lane B holds. Rule 3 applies.
+
+### 5. `DOD-MSG-8` fails on a stale tool name
 
 The test calls `cello_get_transcript`. The tool is named `cello_transcript` today. The test is
 stale, not the product. Not this line, not touched — carried from this order's own *Not in scope*
