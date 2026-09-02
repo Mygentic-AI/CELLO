@@ -222,10 +222,14 @@ counterparty receives the message normally, because content travels the direct p
 **2 — Is the message witnessed? Was anything said?** **No, and nothing the operator could read.**
 The response was byte-identical to the healthy send that preceded it, down to a `sequence_number`
 that looks like a receipt and is a local index. The daemon knew: it logged the loss at ERROR with an
-accurate consequence and an accurate remedy, into a file the agent cannot open. **This is the unit's
-fix, and it is done** — the response now carries `witnessed` on every send, plus guidance on the
-false case saying what happened and not to resend. Both values are pinned by tests against a real
-relay.
+accurate consequence and an accurate remedy, into a file the agent cannot open.
+
+**This is the unit's fix, and it is done and verified live.** The response now carries `witnessed`
+on every send, with guidance on the false case saying what happened, that ordering will not repair
+itself, and not to resend. Re-running the experiment against the rebuilt binary, the same question
+that answered *"NO — the word 'witness' is absent from the response"* now answers **yes**, with
+`witnessed: true` on the healthy send and `witnessed: false` on the outage send, minutes apart,
+against the same relay.
 
 **3 — Can the session still be closed and sealed? THE SEVERITY ANSWER.** **No — and the two sides are
 told different things, which is what makes it bad.** Closing during the outage took ten seconds and
@@ -240,9 +244,11 @@ Neither seal leaf reached the witness. One party was told so; the other was told
 
 The receipt did not appear during the outage and **did not appear on its own after the relay came
 back** — nothing retries a refused close. The refused side was then made to perform exactly the
-remedy its own message named, and **that did not recover it either**: its leaf is recorded now, and
-the answer becomes *the counterparty has not closed* — pointing at the party who did close, was told
-it succeeded, and has no reason to look.
+remedy its own message named, and **that did not recover it either.** Its leaf is recorded now, and
+the close is refused again for a reason that shifts with the state — across runs, either *the
+counterparty has not closed* or *the counterparty is online right now, so a solo seal is not
+allowed*. Both point away from the party who needs to act: the one who did close, was told it
+succeeded, and has no reason to look.
 
 **So the receipt is not destroyed, but nothing gets it back on its own.** It needs the side that saw
 a success to close again, or the directory's grace window to expire into a unilateral seal. An
