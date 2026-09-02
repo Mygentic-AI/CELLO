@@ -1178,6 +1178,37 @@ Split from `DOD-M15-RELAYADMIN-1` once its deletion premise was disproved and th
 >
 > Full entry in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYSLOTS-1`. → Entry S15.
 
+### `DOD-M15-SESSION-RELAY-PINNED-1` — ❌ A live conversation survives its relay going away
+**Found 2026-09-02 by tracing, in answer to Andre's question "does multi-relay solve a relay going
+down mid-conversation?" It does not, and neither does `RELAYFANOUT-1`.** Two relays are involved in
+a session and only one of them recovers:
+
+- **Being reachable recovers.** When a standing receiver's reservation is lost, the watchdog notices
+  (`session.standing_receiver.reservation.lost`), quarantines that relay and rebuilds the receiver
+  against another. `DOD-M15-MULTIRELAY-1` narrows the window; it does not create the mechanism.
+- **The conversation does NOT.** A session is bound to ONE witness relay, named by the directory when
+  the session is brokered. `SessionRelayClient` is per `(agent, relayPeerId)`, and on a dead reader
+  it clears the stream and re-dials — **the same relay** (`#reconnectFromAnySession` →
+  `#ensureConnected`, both scoped to `this.#relayPeerId`). A blip recovers. A relay that is genuinely
+  gone gets re-dialled indefinitely. **There is no path that moves a live session to another relay.**
+
+**Why it is in the gate rather than the backlog:** the consequence is not yet established, and §0z.1
+says unclear blocks. The reader-ended path settles in-flight submits `relay_stream_closed` and its
+own comment says *"in-flight submits just failed"* — so the plausible outcomes range from messages
+parking harmlessly to a conversation that can no longer be witnessed and therefore cannot seal. The
+receipt is the product; a path that can silently cost one is not something to classify on a guess.
+
+- **FIRST CLAUSE IS MEASUREMENT, not a fix.** Kill the witness relay mid-conversation with two real
+  daemons and record what the operator actually experiences: does the send park, stall, or go
+  through unwitnessed? Does the session still seal? **Reclassify on the answer** — if it parks
+  cleanly and seals, this is post-launch and should be moved.
+- Only then decide the fix. Re-assignment to a new witness relay is a directory-brokered change, so
+  it is not a client-side retry loop; do not assume the shape before the measurement.
+- **Do not fix it by widening the re-dial to other relays.** The witness relay is named in a
+  directory-signed assignment; a client that picks its own witness is a client grading its own
+  homework, which is the property `LEAFPARTIES-1` and `CORROBORATE-1` just spent themselves closing.
+- **Enforcer:** journey — two daemons, a real relay, killed mid-conversation.
+
 ### `DOD-M15-MULTIRELAY-1` — ❌ An agent's reachability does not rest on one relay
 **Scoped by `DOD-M15-SPIKE-1(c)` → Entry 1. This line is AVAILABILITY ONLY.** The client already
 requests reservations with every known relay (`reservationsRequested: 2`) — the audit's "reserves
