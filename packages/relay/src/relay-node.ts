@@ -1496,19 +1496,41 @@ export class CelloRelayNode {
            */
           const heldAlerts = this.#store.drainWitnessAlerts(authedPubkeyHex);
           let alertsSent = 0;
+          let drainError = "";
           for (const alert of heldAlerts) {
             try {
               await this.#sendFrame(stream, encodeSessionWitnessAlert(alert));
               alertsSent++;
-            } catch { break; }
+            } catch (err: unknown) {
+              // The CAUSE, not just the stop — a `catch { break; }` here discarded the one thing
+              // that explains a recipient this relay can never deliver to.
+              drainError = err instanceof Error ? err.message : String(err);
+              break;
+            }
           }
           for (const alert of heldAlerts.slice(alertsSent)) {
             this.#store.enqueueWitnessAlert(authedPubkeyHex, alert);
           }
           if (heldAlerts.length > 0) {
-            this.#logger.info("relay.witness.alert.drained", {
-              recipientPubkey: authedPubkeyHex, held: heldAlerts.length, delivered: alertsSent,
-            });
+            /**
+             * WARN when anything was left behind, INFO only on a clean drain. `delivered: 0` against
+             * `held: 5` used to be logged at info with no cause and no impact, so a relay stuck in a
+             * re-enqueue loop against one recipient read as routine.
+             */
+            const undelivered = heldAlerts.length - alertsSent;
+            if (undelivered > 0) {
+              this.#logger.warn("relay.witness.alert.drain_incomplete", {
+                recipientPubkey: truncHex(authedPubkeyHex),
+                held: heldAlerts.length, delivered: alertsSent, undelivered,
+                ...(drainError ? { error: drainError } : {}),
+                impact: "the undelivered alerts are held again for this recipient's next connection. " +
+                  "Repeating for the same recipient means they never receive one at all.",
+              });
+            } else {
+              this.#logger.info("relay.witness.alert.drained", {
+                recipientPubkey: truncHex(authedPubkeyHex), held: heldAlerts.length, delivered: alertsSent,
+              });
+            }
           }
 
           // M7-MSG-001: notify a (re)connecting recipient that has parked content.

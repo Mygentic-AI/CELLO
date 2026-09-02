@@ -38,6 +38,12 @@ export interface RelayStore {
    * deliberately. Whoever submits forged leaves also chooses WHEN, so an attacker who could push
    * earlier alerts out of a bounded queue would have a mute button: submit while the victim is
    * offline, then flood. The first alert is the one that matters and it is the one that survives.
+   *
+   * ⚠️ **AND IT DOES NOT SURVIVE A RELAY RESTART.** This is the in-memory store and it is the one
+   * production runs; GCP rolls relay nodes node-by-node on every deploy, so anything still waiting
+   * for an offline participant dies with the process. Said here because "held for their next
+   * authenticated connection" reads like a durability promise and is not one — the durable copy of
+   * the observation is the relay operator's log, and the recipient's own copy once it is delivered.
    */
   enqueueWitnessAlert(pubkeyHex: string, alert: SessionWitnessAlert): void;
 
