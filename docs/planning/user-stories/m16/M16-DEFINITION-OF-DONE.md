@@ -102,8 +102,12 @@ surface, and one live CELLO-operated channel used for real.
   loaded fresh per publish. Never `workspace:*` for cello-client packages in trustless-cello.
 - **Crypto cites its RFC in pseudocode** (Merkle trees → RFC 6962 as reference shape; Ed25519 →
   RFC 8032). No mocks for crypto operations.
-- **Compatibility is bilateral.** A pre-M16 client receiving an unknown broadcast frame must fail
-  loud-and-harmless, not corrupt state. Each format story states what an old client does.
+- **No backward compatibility — it is forbidden, not optional (M16-PROCEDURE §0).** Alpha, one
+  user, nothing to migrate: no legacy-format readers, no migrations for pre-M16 data, no dual code
+  paths, no version negotiation. Change the format, upgrade every daemon, delete the old path in
+  the same diff. Any compat path is a blocking review finding. The one adjacent thing that IS
+  required — and is fail-loud robustness, not compat — is that unknown frame and artifact types
+  are rejected loudly without corrupting state.
 
 ---
 
@@ -117,9 +121,10 @@ One signed artifact: channel pubkey, monotonic sequence number, epoch id, title,
 `supersedes` (nullable, present from v1 — decision 24), previous epoch's sealed root when first in
 an epoch, signature, and a reserved extension area (future conclave co-signature, decision 26).
 Size limits and encoding stated. **Load-bearing clauses:** `supersedes` exists on day one even
-though semantics are minimal; the extension area is reserved now; the format doc states what a
-pre-M16 client does on receipt. **Enforcer:** publish from one daemon process, verify signature +
-decode on a second daemon process built from the published packages.
+though semantics are minimal; the extension area is reserved now; an unknown artifact or frame
+type is rejected loudly without corrupting state (fail-loud robustness — NOT a compat path; no
+version negotiation, no legacy readers). **Enforcer:** publish from one daemon process, verify
+signature + decode on a second daemon process built from the published packages.
 
 ### `DOD-M16-IDENTITY-1` ❌ — a channel is a registered CELLO identity
 Full registration ceremony (identity cost preserved — decision 31), directory profile carries

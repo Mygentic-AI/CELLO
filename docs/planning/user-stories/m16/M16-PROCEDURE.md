@@ -22,6 +22,17 @@ One user: Andre, also the only developer. CELLO is **alpha — no production use
 migrate.** Wire-format and schema decisions in Tier 0 are free today and never get cheaper; that is
 why Tier 0 is first and why its work orders get the most planning attention.
 
+**BACKWARD COMPATIBILITY IS FORBIDDEN, not optional.** There is no one using the old code, no data
+to preserve, no sessions in danger. A compat shim, a legacy-format reader, a migration for pre-M16
+rows, a deprecated-but-kept code path, a version-negotiation branch — every one of these is **dead
+code on the day it is written**, and dead code is where defects hide from review. The right move is
+always: change the format, change the schema, upgrade every daemon, delete the old path in the same
+diff. If a change breaks something existing, the fix is to update the existing thing, never to
+support both. (This is the standing "would I build this on an empty database?" rule — the answer is
+always build it as if yes, because the database IS empty.) Weak coders add legacy support
+reflexively because it looks diligent; planners name it in every work order's FORBIDDEN section
+where the temptation exists, and reviewers treat any compat path as a blocking finding.
+
 M16 sits **outside the M15 launch gate** — launch does not wait for it. Work lands in **both
 repos**: `cello-client` (crypto, protocol-types, transport, client, connect) and `trustless-cello`
 (relay, directory, daemon-side infra). The npm boundary (`/cello-publish`) and any GCP roll are the
@@ -139,7 +150,10 @@ written, commit pushed. ✅ is the reviewer's to earn, never yours.
 7. **Never:** `node:sqlite` (SQLCipher only); `console.log` in implementation (injected logger
    only); mocks for crypto operations; `workspace:*` for cello-client packages in trustless-cello;
    pinned versions; joining or keying on `agent_name`; a new relay path without its per-peer rate
-   limiter in the same diff; touching npm publish, git tags, or dist-tags.
+   limiter in the same diff; touching npm publish, git tags, or dist-tags; **any backward
+   compatibility** — no legacy-format readers, no migrations for pre-M16 data, no dual code paths,
+   no deprecated-but-kept functions, no version-negotiation branches (§0: alpha, one user, nothing
+   to preserve — change the thing and delete the old path in the same diff).
 8. **A failing test is fixed, never attributed.** "Flaky" is not a finding; map producer → consumer
    to the failing line, per the debugging discipline in the repo CLAUDE.md.
 9. **If Docker is needed and not running, start it.** Do not report the gate as blocked.
