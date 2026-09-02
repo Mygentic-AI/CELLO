@@ -54,3 +54,30 @@ registration/profile path; receiver gate + protocol-types layout). Notes that bi
 - **Sequencing:** 001, 002 independent (two lanes possible); 003 after 002; 004 anytime; 005
   after 004-published (and its deploy — terraform apply + node roll + GCP-STATE.md — stays
   with the planner); 006 after 004-merged.
+
+## 2026-09-02 — Tier 1 micro orders 007–011 issued (planner)
+
+Issued one tier ahead per M16-PROCEDURE §7 (Tier 0 not yet started). Anchors from a targeted
+recon: the directory's unilateral-seal path (`directory-node.ts` dispatch ~2666 →
+`#processSealUnilateral` ~4569; `FrostDirectoryHandler.signRawMessage` at `frost-handler.ts:561`)
+is the copy-anchor for notarization; `session-seal-leaf-store.ts` (CREATE TABLE IF NOT EXISTS +
+INSERT OR IGNORE immutability) is the store pattern.
+
+- **007-PUBLOG** publisher log store (`channel_log` + `channel_epoch_state`, keyed on channel
+  pubkey, atomic append, positions never overwritten). **008-EPOCH** sealer + seal store +
+  60s scheduler; 24h/1000 enforced as protocol maxima (`validatePolicy` throws above, never
+  clamps); empty epochs never seal; seal-record + epoch-close atomic. **009-NOTARIZE-CLIENT**
+  frames in protocol-types + submit flow copying `seal-escalation.ts`; notarization verified
+  before storage; timeout never fails the seal. **010-NOTARIZE-DIRECTORY** V65
+  `channel_epochs`, stream-identity-must-equal-seal-pubkey (the `#processSealUnilateral`
+  stranger defence), continuity against the STORE, T=majority, hwm lookup. **011-SEALREQ**
+  the local half only — `requestSeal` gate, one honored per channel per hour, window consumed
+  only by an honored request, `cello_channel_seal` IPC; the relay-borne request is Tier 3.
+- **Planner rulings embedded:** SEALREQ-1's transport does not exist until Tier 3, so its
+  Tier-1 order ships the entry point + limiter and Tier 3's relay order calls it (DoD line
+  unchanged). The notarization FROST message is the epoch-seal TBS bytes. `channel_hwm_lookup`
+  frames are declared directory-locally in 010 and must be reconciled into protocol-types by
+  the Tier 4 client order (pre-filled in 010's Newly discovered).
+- **Gates:** 009 changes protocol-types → registry release + promotion (planner/Andre) before
+  010; 010 → terraform apply + node roll + GCP-STATE.md (planner). 009's live enforcer is
+  written in 009 but runs only once 010 exists — 009 may sit 🟡 on that line alone.
