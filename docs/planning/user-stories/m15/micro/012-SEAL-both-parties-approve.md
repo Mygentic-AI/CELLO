@@ -8,7 +8,9 @@ description: >
   `session_sealed`, when the artifact is already durable and there is nothing to invalidate it. And
   the co-signing directories sign whatever bytes they are handed. Move the trust anchor from "the
   verifying directory is honest" to "at least one of the two real participants is honest".
-  Source: DOD-M15-SEALPARTIES-1. **Ships with 013-ABSENCE — read the pairing note.**
+  Source: DOD-M15-SEALPARTIES-1. **Ships with 013-ABSENCE — read the pairing note.** Carries a
+  PART 0: the seal journeys currently die at relay auth and never reach a seal, so this unit's
+  own enforcer clause is unsatisfiable until that is fixed.
 ---
 
 # **<ins>MICRO</ins>** WORK ORDER 012-SEAL — Both parties approve before anything is signed
@@ -38,6 +40,45 @@ description: >
 > engineers the appearance of unreachability, and takes the solo path instead. Sequence them
 > together; if only one can land, say so loudly in the journal rather than letting the gap sit
 > unremarked.
+
+---
+
+## 🔴 PART 0 — FIRST: the seal journeys must reach the seal. They do not.
+
+**Do this before the seal work, because without it this unit cannot honestly close.** DoD clause 8
+requires the enforcer to run as separate OS processes. Today it cannot: **the seal journeys never get
+as far as a seal.**
+
+Measured by `014-LEAVES` against the real binaries, not inferred. `j-spine` and `j-unilateral` both
+die at relay authentication, long before any leaf is submitted:
+
+```
+relay.auth.online_token.missing   ×14–18
+session.relay.auth.failed         ×8
+relay.reservation.denied          ×6
+→ then a standing receiver holding no reservation
+```
+
+**The suspect is the online-token path** — the directory issues a short-lived token when it marks an
+agent online, and the relay refuses a reservation without it (`DOD-M15-RELAYSLOTS-1` /
+`DOD-M15-RELAYAUTH-1`, shipped 2026-09-01, both repos). Something in the spine harness does not carry
+it. **Verify that rather than assuming it** — the error string is where the failure surfaced, not
+proof of the cause.
+
+**What "fixed" means here:** the seal journeys reach the seal and exercise it. Whether they then pass
+is a separate question; getting them to the seal is the deliverable.
+
+> ### ⛔ THE STOP RULE — this is a precondition, not a second mission
+>
+> **If this is not fixable in a bounded effort, STOP AND REPORT.** Do not rebuild relay
+> authentication inside a seal unit. Do not "fix" it by weakening a check that 002 or 008 added, and
+> do not fix it by skipping the journeys.
+>
+> If you stop, say so plainly, write what you established under *Newly discovered*, and **do the seal
+> work anyway** — closing this unit with clause 8 explicitly unmet and named is a far better outcome
+> than a green tag over an unrun enforcer, or a seal unit that spent itself on transport.
+>
+> Two of this milestone's units have already lost their evening to exactly this shape.
 
 ---
 
@@ -116,10 +157,13 @@ That is exactly what `013-ABSENCE` exists to handle — the solo path. So:
 6. A refusal reaches BOTH operators with a cause, in the response and the session record.
 7. Each of 1–6 has a test, and **each has been made to fail on purpose** — revert the fix, confirm
    it reddens, confirm it reddens for the reason you expect.
-8. **The enforcer runs as separate OS processes**, per the procedure — a passing unit test is
-   necessary and never sufficient for a line like this.
-9. Gate passes (test / lint / typecheck) in every repo touched.
-10. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below.
+8. **Part 0 is done: the seal journeys reach the seal** — or the stop rule was taken, and clause 8
+   is recorded as UNMET by name rather than glossed.
+9. **The enforcer runs as separate OS processes**, per the procedure — a passing unit test is
+   necessary and never sufficient for a line like this. This is the clause Part 0 exists to make
+   possible.
+10. Gate passes (test / lint / typecheck) in every repo touched.
+11. Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted below.
 
 **Not in scope:** the solo/unilateral trigger (that is `013-ABSENCE`); which leaves are constrained
 to which participants (`014-LEAVES`); the relay's live checking (`015-WITNESS`); changing FROST or
