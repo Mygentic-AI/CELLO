@@ -1892,10 +1892,40 @@ export class CelloRelayNode {
      * optional for a stranger — the exact party it exists to catch.
      */
     const s1 = decodeStructure1(frame.structure1_cbor);
-    if (!s1) { await reply("signature_invalid"); return; }
+    /**
+     * `submit_malformed`, not `signature_invalid` — review F8. Nothing here has looked at a
+     * signature yet; the frame did not DECODE. This line used to sit below the signature check where
+     * the wrong word was merely imprecise, and hoisting it made that word the only one a client with
+     * a CBOR bug ever sees — sending them to audit a signing key that is fine. `submit_malformed`
+     * exists for exactly this (`relay-types.ts`) and was being answered around.
+     */
+    if (!s1) { await reply("submit_malformed"); return; }
+
+    /**
+     * THE LEAF MUST BE SIGNED FOR *THIS* SESSION — review F6.
+     *
+     * `structure1_cbor` carries its own `session_id` and nothing compared it to the frame's. A
+     * participant in two conversations could lift one of their OWN validly-signed leaves out of the
+     * other session and submit it here: it verifies under a real assignment key, both identity
+     * bindings below hold, and it is sequenced into a transcript it was never written for. The
+     * witness check cannot see it, because everything it checks is true.
+     */
+    if (!Buffer.from(s1.session_id).equals(Buffer.from(frame.session_id))) {
+      this.#logger.warn("relay.submit.session_mismatch", {
+        sessionId: sessionKey,
+        senderPubkey: truncHex(senderPubkeyHex),
+        signedFor: truncHex(Buffer.from(s1.session_id).toString("hex")),
+        impact: "refused — the signature is real but it was made over a different conversation's leaf",
+      });
+      await reply("leaf_session_mismatch"); return;
+    }
+
+    // Ordered so the authenticated connection's own key is tried first — one verify, not two, for
+    // every honest submit. See `witnessLeafSignature`: the order cannot change what is accepted.
     const witness = witnessLeafSignature(
-      state.assignment.participant_a,
-      state.assignment.participant_b,
+      senderPubkeyHex === bHex
+        ? [state.assignment.participant_b, state.assignment.participant_a]
+        : [state.assignment.participant_a, state.assignment.participant_b],
       frame.structure1_cbor,
       frame.sender_signature,
     );
@@ -2002,7 +2032,7 @@ export class CelloRelayNode {
      * against a key supplied by the frame it was checking. It is strictly stronger, not a
      * relaxation: everything that check refused is still refused here.
      */
-    const signerHex = witness.signerIsA ? aHex : bHex;
+    const signerHex = Buffer.from(witness.signer).toString("hex");
     const s1PubkeyHex = Buffer.from(s1.sender_pubkey).toString("hex");
     if (s1PubkeyHex !== signerHex || senderPubkeyHex !== signerHex) {
       await reply("sender_mismatch"); return;
@@ -2792,7 +2822,7 @@ export class CelloRelayNode {
     const submitterIsParticipant = submitterHex === aHex || submitterHex === bHex;
     this.#logger.error("relay.witness.leaf_unwitnessed", {
       sessionId: sessionKey,
-      submitterPubkey: submitterHex,
+      submitterPubkey: truncHex(submitterHex),
       submitterIsParticipant,
       ...(this.#relayId !== null ? { relayId: this.#relayId } : {}),
       observation: "a submitted leaf verified against neither participant key in this session's directory-signed assignment; it was refused and nothing was sequenced",

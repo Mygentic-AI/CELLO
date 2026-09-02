@@ -20,24 +20,26 @@
 import { verify } from "@cello-protocol/crypto";
 
 export type LeafWitnessVerdict =
-  /** The leaf verifies under one of the two expected keys. `signerIsA` says which. */
-  | { ok: true; signerIsA: boolean }
+  /** The leaf verifies under one of the expected keys. `signer` is WHICH — never the frame's claim. */
+  | { ok: true; signer: Uint8Array }
   /** The leaf verifies under NEITHER expected key — nobody in this session signed it. */
   | { ok: false; reason: "leaf_signed_by_neither_participant" };
 
 /**
- * @param participantA 32-byte pubkey from the recorded session assignment
- * @param participantB 32-byte pubkey from the recorded session assignment
+ * @param expectedKeys the session's participant pubkeys, from the recorded assignment. **Order is a
+ *   performance hint only** — put the likeliest signer first (the authenticated connection's key)
+ *   and the common case costs ONE Ed25519 verify on the relay's hot path instead of two. The accept
+ *   set is identical whichever order they arrive in, so no caller can widen it by reordering.
  * @param structure1Cbor the exact bytes the sender signed
  * @param senderSignature the 64-byte Ed25519 signature carried on the submit (RFC 8032)
  */
 export function witnessLeafSignature(
-  participantA: Uint8Array,
-  participantB: Uint8Array,
+  expectedKeys: readonly Uint8Array[],
   structure1Cbor: Uint8Array,
   senderSignature: Uint8Array,
 ): LeafWitnessVerdict {
-  if (verify(participantA, structure1Cbor, senderSignature)) return { ok: true, signerIsA: true };
-  if (verify(participantB, structure1Cbor, senderSignature)) return { ok: true, signerIsA: false };
+  for (const key of expectedKeys) {
+    if (verify(key, structure1Cbor, senderSignature)) return { ok: true, signer: key };
+  }
   return { ok: false, reason: "leaf_signed_by_neither_participant" };
 }

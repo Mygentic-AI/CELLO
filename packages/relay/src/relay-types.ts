@@ -290,7 +290,13 @@ export type HashSubmitErrorReason =
    * is that nobody in this conversation signed those bytes. The participants other than the
    * submitter are told separately (`session_witness_alert`).
    */
-  | "leaf_signed_by_neither_participant";
+  | "leaf_signed_by_neither_participant"
+  /**
+   * DOD-M15-CORROBORATE-1 review F6: the leaf's own `structure1.session_id` names a DIFFERENT
+   * session from the frame's. The signature is real; it was made over another conversation's leaf,
+   * and sequencing it here would place a message in a transcript it was never written for.
+   */
+  | "leaf_session_mismatch";
 
 export interface HashSubmitError {
   type: "hash_submit_error";

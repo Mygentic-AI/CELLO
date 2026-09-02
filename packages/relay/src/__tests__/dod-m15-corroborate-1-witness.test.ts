@@ -286,6 +286,73 @@ describe("DOD-M15-CORROBORATE-1: the relay verifies each hash at arrival and ale
     ).toEqual(["impact", "observation", "relayId", "sessionId", "submitterIsParticipant", "submitterPubkey"]);
   }, 60_000);
 
+  it("★★ a leaf a participant really signed FOR ANOTHER SESSION is refused — review F6", async () => {
+    /**
+     * The witness check cannot see this one, because everything it checks is true: a real
+     * participant key signed these exact bytes. What is wrong is the scope. Structure 1 carries its
+     * own session_id and nothing compared it to the frame's, so a participant in two conversations
+     * could lift one of their own leaves out of the other and have it sequenced into this
+     * transcript.
+     */
+    const fx = await fixture();
+    const otherSession = new Uint8Array(randomBytes(16));
+    const lifted = await makeLeaf(otherSession, fx.kpA, fx.kpA);
+    send(fx.a.stream, CBOR.encode({ type: "hash_submit", session_id: fx.sessionId, leaf_kind: 0x00, ...lifted }));
+    const err = await fx.a.reader.next();
+    expect(err["type"]).toBe("hash_submit_error");
+    expect(err["reason"], "the signature is real; the conversation it was made for is not this one").toBe("leaf_session_mismatch");
+    expect(
+      fx.events.filter((e) => e.event === "relay.witness.leaf_unwitnessed"),
+      "and it is NOT a witness event — a participant's own signature is not a forgery",
+    ).toEqual([]);
+
+    // Nothing was sequenced: the next honest leaf is position 1.
+    const honest = await makeLeaf(fx.sessionId, fx.kpA, fx.kpA);
+    send(fx.a.stream, CBOR.encode({ type: "hash_submit", session_id: fx.sessionId, leaf_kind: 0x00, ...honest }));
+    const ack = await fx.a.reader.next();
+    expect(ack["sequence_number"]).toBe(1);
+  }, 60_000);
+
+  it("★★ a STRANGER REPLAYING a leaf a participant really signed is refused as not_a_participant — review F5", async () => {
+    /**
+     * The case the witness check deliberately lets through to the participant gate, and the one the
+     * re-pointed AC-004 stopped covering. The leaf IS signed by A, so `leaf_signed_by_neither_participant`
+     * would be a false statement; what is wrong is who is submitting it. Both refusals have to exist
+     * and this is the input that separates them.
+     */
+    const fx = await fixture();
+    const replayed = await makeLeaf(fx.sessionId, fx.kpA, fx.kpA); // genuinely A's
+    const strangerKp = generateKeypair();
+    const stranger = await fx.connect(strangerKp);
+    send(stranger.stream, CBOR.encode({ type: "hash_submit", session_id: fx.sessionId, leaf_kind: 0x00, ...replayed }));
+    const err = await stranger.reader.next();
+    expect(err["reason"], "a real participant signed it — the fault is the connection it arrived on").toBe("not_a_participant");
+    expect(
+      fx.events.filter((e) => e.event === "relay.witness.leaf_unwitnessed"),
+      "and no witness alert: nothing here was forged",
+    ).toEqual([]);
+    expect(
+      await fx.b!.reader.nextOrSilence(1_000),
+      "so the participants are not told a forgery happened when none did",
+    ).toBeUndefined();
+  }, 60_000);
+
+  it("★★ a submit whose Structure 1 does not DECODE is answered submit_malformed, not signature_invalid — review F8", async () => {
+    /**
+     * Nothing has looked at a signature at this point. `signature_invalid` sent a client author with
+     * a CBOR bug to audit a signing key that was fine — and hoisting the decode made that wrong word
+     * the only one they would ever see.
+     */
+    const fx = await fixture();
+    const undecodable = CBOR.encode([1, 2, 3]) as Uint8Array; // a 3-element array: not Structure 1
+    send(fx.a.stream, CBOR.encode({
+      type: "hash_submit", session_id: fx.sessionId, leaf_kind: 0x00,
+      structure1_cbor: undecodable, sender_signature: await fx.kpA.sign(undecodable),
+    }));
+    const err = await fx.a.reader.next();
+    expect(err["reason"]).toBe("submit_malformed");
+  }, 60_000);
+
   it("★★ a leaf whose CLAIMED sender is not the party who signed it is refused, on that party's own connection", async () => {
     /**
      * ⚠️ THE EXEMPLAR HERE IS CHOSEN FROM THE PREDICATE, NOT FROM INTENT, AND THE FIRST ONE WAS NOT.
