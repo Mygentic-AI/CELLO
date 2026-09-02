@@ -989,9 +989,14 @@ self-consistent — was never confirmed.
   that scenario the two participants the record shows are simply A and M throughout. It is still a
   distinct unresolved question.
 
-### `DOD-M15-INCLUSION-1` — ❌ An operator can prove a message sits under a sealed root
-`cello_get_inclusion_proof` is a `not_implemented` stub. **Depends on `DOD-M15-SEALWIRE-1`** for a
-root domain the client can reproduce.
+### `DOD-M15-INCLUSION-1` — ✅ An operator can prove a message sits under a sealed root
+> **Closed.** `cello_get_inclusion_proof` takes the MESSAGE and returns a proof against the root the
+> directory FROST-signed; `cello_verify_inclusion_proof` checks one from proof + message +
+> certificate with no database. **The certified root is NOT the local tree's root** — it covers the
+> seal's ctrl leaves and `SessionTree` does not — so the leaf set the seal frame carries is now kept,
+> and only if its Merkle root reproduces the signed one. 24 mutants, 24 caught. Reviewed by
+> `cello-unit-reviewer` (10 findings) + `cello-fallback-finder` (6), all fixed → work order
+> [[009-PROOF-inclusion-proof]].
 
 ---
 

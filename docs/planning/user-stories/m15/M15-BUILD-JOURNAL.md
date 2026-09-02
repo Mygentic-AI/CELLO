@@ -9490,3 +9490,93 @@ bullets — Decision 5(b), the harvest-now argument, per-session-ephemeral vs st
 hook, the "two independent values" correction — sitting **below** `EPHEMERAL-REVIVAL-1`, which is
 ⬇️ OUT OF GATE. A reader scanning tier 4 attributes those clauses to an out-of-gate line. Recorded
 rather than fixed: it is a restructure, not a transcription, and this entry's mandate is the latter.
+
+---
+
+## Entry C9 (CELLO_Coder_1) — 2026-09-01/02: 009-PROOF — the certified root is not the root the client holds
+
+**`DOD-M15-INCLUSION-1` → ✅.** Branch `m15/009-proof` in cello-client, worktree
+`/Users/andrep/cello-client-wt/009-proof`.
+
+### The discovery the unit turned on
+
+The work order assumed `SessionTree.rootHex()` should equal `cert.sealed_root`, and that a mismatch
+*is* the divergence case (DoD clause 5). It is not. Two facts, both verified in source and both
+re-verified independently by the reviewer:
+
+- the **certified root** is `merkleRoot` over **every** leaf's content hash in the relay's canonical
+  order, **ctrl leaves included** — `directory-node.ts:5233` ("THE CERTIFIED ROOT — client-
+  reproducible, and the one every signature below binds"), and the same at the unilateral path;
+- **`SessionTree` holds content leaves only.** `submitSealLeaf` computes its root without mutating
+  the durable tree, and an inbound counterparty ctrl leaf routes to the auto-acknowledge path, never
+  to an append. Every `appendSessionLeaf` call site passes `msg`, `doc` or `reject`.
+
+So `rootHex()` equals the SEAL payload's **`final_root`** (`seal-final-root.ts` says so explicitly)
+and does **not** equal `sealed_root`. An audit path built from the local tree lands on a root no
+certificate names — the work order's own first trap, *"a proof against your own root proves
+nothing"*, reached by accident rather than by design. Read literally, clause 5 would have refused
+every session, because the certified root always carries at least one leaf the local tree lacks.
+
+**What the unit does instead:** the signed leaves the seal frame already carries are kept
+(`session_certified_leaves`), and only if the Merkle root over them reproduces the FROST-signed
+`sealed_root`. A directory that reorders, adds, drops or alters one leaf produces a different root
+and the set is refused — so what lands on disk is the consortium's leaf set, not the directory's word
+for it. Clause 5 becomes a **prefix check**: this side's tree must be a prefix of the certified set.
+
+### Evidence
+
+- Gate: **3516 tests green** across `core/daemon`, `core/cli`, `core/adapter-claude-code`; lint and
+  `pnpm run typecheck` (which is the build) clean.
+- **Mutation: 24 mutants, 24 caught, 0 survived.** The first pass was worth running twice and both
+  halves of §0z.3 earned their keep:
+  - **six mutants did not compile.** `if (false && X)` makes TS treat the body as unreachable, which
+    resets every narrowing inside it. Per rule 4 those are NOT catches. `X && Date.now() < 0` is
+    opaque to control-flow analysis and is the operator that works here.
+  - **three reddened through the handler's SELF-CHECK rather than the assertion they were aimed at** —
+    the "name the writer" hazard exactly. DoD 2 was re-run with a *fully self-consistent* local-root
+    proof (root, leaf_count, audit path and the self-check anchor all moved together) so its own
+    inequality assertion had to do the catching. It did.
+
+### The review findings worth carrying forward
+
+`cello-fallback-finder` (6) then `cello-unit-reviewer` (10). Two shapes recurred:
+
+1. **A refusal that asserts the most benign of several causes.** `getCertifiedLeafSet` returned null
+   for four different things and the guidance named one: *"the normal state for the party that was
+   ABSENT at seal time — ask your counterparty."* So an operator who was present throughout, whose
+   directory had just shipped a leaf set contradicting its own FROST signature, was told they had been
+   absent and sent to a counterparty with nothing to give. Same shape in the salt: `#getSessionSalt`
+   answers null for "never agreed", "wrong-width row" and "read threw", and all three were reported as
+   *"this session's content hashes are UNSALTED"* — an affirmatively false statement about a security
+   property the session HAS, pointing the operator at their counterparty over damage to their own disk.
+2. **A guard that reads less than it appears to.** Three instances in one unit. The Cowork bridge
+   guard anchored on an exact `server.tool("name"` string and a two-space indent, so a multi-line
+   registration was invisible to both its matcher and its whole-surface sweep. `toolDescriptions`
+   captured a `+`-joined description up to its first closing quote — **97 chars of 362 and 97 of 286**
+   on the two new tools, losing every claim word — while its sibling assertion stayed green because it
+   counts NAMES. And `capability-registration-inversion` never saw `cello_get_inclusion_proof` at all,
+   because the old handler was registered inside a `for (const tool of [...])` loop rather than a
+   literal `handlers.set` — a capability shipped MCP-only for a whole milestone without reaching the
+   list that exists to catch exactly that.
+
+**And the one that would have shipped:** the chain that fills the table in production — a seal frame's
+`frontier_leaves` → `parseFrontierLeaves` → `certifiedLeafSetFrom` → the table — had **zero coverage**.
+Every test called the store methods directly, so all three call sites in `seal-coordinator.ts` could be
+deleted with the entire suite green. A feature that works perfectly in vitest and returns
+`certified_leaves_not_carried` on every real session. There is now a test driving the real listener,
+and deleting the hooks (or misspelling the wire field) reddens it.
+
+### Claims
+
+README's "Not yet implemented" block deleted (its only entry was implemented, and it was never a CLI
+command). Both shipped `SKILL.md` files rewritten, including the disclosure that **issuing a proof
+hands over the session salt** — per-session, so the recipient can test guessed wording against every
+leaf in it, which is the capability the unsalted refusal spends four lines denying. `vocabulary.ts`,
+`dispatch-parity`, `registry.test` and `.claude/commands/cello-chat.md` all still called the tool a
+stub or passed it a `content_hash` parameter that no longer exists. Twelve new ledger rows, no
+baseline raised.
+
+### Newly discovered — recorded, not acted on
+
+Four on the work order, plus: **`cello_get_inclusion_proof` is already spoken for.** PERSIST-017
+specifies that name for the **MMR checkpoint** proof in this repo. Two different proofs, one name.
