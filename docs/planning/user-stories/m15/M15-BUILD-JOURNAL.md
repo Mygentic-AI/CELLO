@@ -9731,3 +9731,85 @@ route is known:** observe the relay's content store (NOT a packet capture — li
 wire recorder pass even with the feature deleted, because the relay terminates Noise), make the WAL
 directory opt-in per cluster so no other journey changes, and use the content-hash linkage rather
 than recovery.
+
+---
+
+## Entry C12 (CELLO_Coder_1) — 2026-09-02: 012-SEAL Part 0 — a freshly registered agent is issued no relay credential, ever
+
+**Unit:** micro work order `012-SEAL-both-parties-approve`, `DOD-M15-SEALPARTIES-1`.
+Branch `m15/012-seal-both-parties-approve` in BOTH repos, worktrees colocated at
+`~/wt-012-seal/{trustless-cello,cello-client}` so the spine harness's `../cello-client` sibling
+resolution finds the branch's own binaries rather than `main`'s.
+
+### The clause checklist (what the reviewer receives)
+
+`DOD-M15-SEALPARTIES-1`, expanded:
+
+1. Affirmative pre-signature approval from **both** participants — the non-closing party re-derives
+   the root from its own transcript and approves BEFORE any signature exists.
+2. A participant whose transcript disagrees **refuses, and no signature is produced** — asserted
+   from the NON-closing side.
+3. Co-signing directories receive the **raw signed leaf data**, not a claimed root.
+4. A co-signer handed leaves that do not support the claimed root **refuses**.
+5. **An honest party does not lose a receipt** because the other side is absent — no-approval takes
+   the solo path, not a hang and not a silent failure. **No second timeout invented here** (013's).
+6. A refusal reaches **BOTH** operators with a cause — in the response AND the session record.
+7. Each of 1–6 has a test, and each has been **made to fail on purpose**, for the expected reason.
+8. **Part 0** — the seal journeys reach the seal.
+9. The enforcer runs as **separate OS processes**.
+10. Gate passes in every repo touched. 11. Reviewed by `cello-unit-reviewer`, findings fixed.
+
+### Part 0 — MEASURED, not inferred. One cause, and it is a production defect.
+
+The order says the seal journeys die at relay auth and names the online-token path as the suspect,
+to be verified rather than assumed. Verified, and the suspicion was right about the subsystem and
+wrong about the shape: nothing "does not carry" the token. **The token is never issued in the first
+place, and there is no second chance to issue it.**
+
+Run of `j-spine` on this branch, real binaries, three directory nodes + relay:
+`2 failed | 5 passed`, and the two failures are DOD-SPINE-6 and DOD-SPINE-7 — the send and the seal.
+
+The producer/consumer chain, from the full process logs (the harness keeps only a 20-line tail per
+process in its failure diagnostic, so the run was repeated with every child's stdout dumped to disk;
+the earlier "no `directory.online_token.*` events" reading was a search that could not see — the
+positive control `directory.auth.challenge.signed` returned 0 from the same file and 11 from the
+full log):
+
+1. `agent.signaling.created` for `agentA` at **04:54:33.546** — the per-agent signaling stream is
+   opened by `cello register-agent`, because registration needs that stream to run the DKG.
+2. The directory answers `signaling_auth_ok` at **04:54:33.587** and mints **no** online token:
+   `directory.online_token.not_issued  reason=not_registered`. Correct at that instant — the agent
+   has no `agent_profiles` row yet, because it is in the middle of getting one.
+3. Registration completes. The row lands at **04:54:34.417** — **830 ms after the auth**. The agent
+   is now registered, `register-agent` exits 0, and the test proceeds.
+4. **There is no second authentication.** `agentA`'s daemon logs exactly one
+   `agent.signaling.created` and one `directory.online_token.absent` for its whole life. The token
+   is issued at signaling-auth time and at no other moment, so `#directoryOnlineTokens` stays empty.
+5. Every later relay authentication reads that empty map: `session.relay.auth.no_online_token` →
+   the relay refuses `online_token_required` → no reservation, and
+   `session.relay.hash.submit.failed` / `session.seal.leaf.submit.failed  reason=relay_unavailable`.
+6. The seal then fails for a reason that looks unrelated —
+   `seal_persist_failed: session row was not in an active/interrupted state at commit time` — because
+   the unwitnessed leaves push the session down the interrupted-responder path while the close is
+   still committing. That is the string in `closeA`, and it is downstream, not a second bug.
+
+**What it costs a user, in the order they live it:** you install CELLO, you register your agent, it
+reports success — and from that moment until something makes your daemon reconnect to a directory,
+your agent holds no relay reservation. It is reachable only over a direct connection, so behind NAT
+it is not reachable at all, nothing it sends can be witnessed, and closing the conversation returns
+`seal_persist_failed`. Nothing in the success path says any of this; the only evidence is a warning
+in a log file.
+
+**The fix, and where responsibility lives.** The directory is the party that knows the exact moment
+the agent becomes registered — it writes the profile and sends `register_success` on that same
+authenticated stream. So the token rides `register_success`. Not a client-side re-authentication:
+that would race the fire-and-forget profile insert and re-derive a credential the directory could
+simply have handed over.
+
+**Counterbalance (Invariant 1), named before the code.** Unchanged and deliberately so: the online
+token is minted by a **directory** key and verified by the **relay** against the consortium
+directory pubkey set. An operator who rewrites their own daemon still cannot mint one, and this
+change moves only *when* a directory issues it — never *who* checks it. The relay-side check that
+`002`/`008` installed is untouched, and the issuing predicate is not loosened: at `register_success`
+the directory has just completed a real DKG registration for that key, which is a strictly stronger
+proof than the profile read the auth path uses.
