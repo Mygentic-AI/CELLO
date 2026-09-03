@@ -965,7 +965,12 @@ an attacker walks around.
 - **`DOD-DOC-SCREEN-STARTING-CONTENT-1`:** a document's initial seeded content — the largest single
   block of peer-authored text an operator ever receives — gets only the character denylist.
 
-### `DOD-M15-HEARTBEAT-1` — ❌ Directory nodes can see each other's heartbeats
+### `DOD-M15-HEARTBEAT-1` — ✅ Directory nodes can see each other's heartbeats
+> **✅ 2026-09-03 (Order 021).** `directory_nodes` joins Tier B carrying `node_id` +
+> `last_heartbeat_at`; a node at epoch 0 learns a peer's heartbeat through a real
+> `runAntiEntropyRound` against live Postgres and the next round pulls zero. No migration — the
+> encoding is coalesced at the AE SELECT, as `origin_node` is. **The `availableNodes` clause below is
+> struck as false**; the federated countersignature is parked (M12-P5), not closed here.
 > **BUILD IT — ruled by Andre 2026-09-03, on the migration argument.** *"Anything that's going to
 > change the tables in the directories I'd rather build now, because we don't want to invalidate or
 > do a whole lot of backward-compatibility work once we have users."* Same reasoning Tier 4 was
@@ -986,9 +991,7 @@ an attacker walks around.
 > 2-of-3 countersignature has never once succeeded. This is what makes "you do not have to trust a
 > single directory" true rather than aspirational.
 
-`DOD-HEARTBEAT-REPLICATION-1`. Every node reads the other two as never-heartbeated and counts
-`availableNodes: 1` against `requiredThreshold: 2`; federation checkpoints have **never once
-succeeded**.
+`DOD-HEARTBEAT-REPLICATION-1`. Every node read the other two as never-heartbeated.
 - **Established by measurement, do not re-derive:** this did NOT cause the sealing outage — the
   degraded count was already true *during* seals that worked.
 - **Cost, stated before anyone starts:** `last_heartbeat_at` is mutable, so it cannot join the Tier-A
@@ -996,6 +999,29 @@ succeeded**.
   one-line spec edit.
 - **A code comment blaming a "BIGSERIAL `id` collision" is wrong** and would send the repairer at the
   wrong fix; rewrite it (Invariant / `DOD-M15-CLAIM-COMMENTS-1`).
+
+> ### ⚠️ THIS LINE CARRIED A SECOND, FALSE CLAUSE. Struck 2026-09-03, on measurement (→ Order 021).
+>
+> It read: *"…and counts `availableNodes: 1` against `requiredThreshold: 2`; federation checkpoints
+> have never once succeeded."* The second half is TRUE. **The causal link is FALSE** — and it is the
+> same defect class this very line exists to correct: a plausible wrong explanation that sends the
+> next repairer at the wrong subsystem, exactly like the BIGSERIAL comment above it.
+>
+> `last_heartbeat_at` is read nowhere in `checkpoint-coordinator.ts`. `availableNodes` is
+> `signaturesCollected.length`; peers come from `getPeerNodeIds()` → `Libp2pCheckpointTransport`'s
+> `#peers` → `process.env.CHECKPOINT_PEER_ADDRS`, which is **set nowhere in IaC** (verified against
+> `infra/terraform/templates/directory-cloud-init.yaml` with a positive control). Replicating
+> heartbeats cannot move that number, and does not.
+>
+> **Cross-signing is already PARKED in writing, twice — and wiring it would have been the WRONG fix.**
+> `M12-P5` and `M12-ANTI-ENTROPY-DESIGN §5` retire `/cello/checkpoint/1.0.0` as *"unauthenticated in
+> both directions and trusting responder-supplied pubkeys"*, and record a THIRD independent blocker:
+> the MMR tables do not replicate, so every node's peaks differ and `verifyAndSign` refuses by
+> construction. Setting `CHECKPOINT_PEER_ADDRS` would re-enable a deliberately retired channel and
+> still collect no signatures.
+>
+> So this line closes on heartbeat replication — a real defect, really fixed. The federated
+> countersignature is **not** this line's to claim; it sits in the POST-LAUNCH BACKLOG under §0z.4.
 
 ### `DOD-M15-NO-SILENT-REFUSAL-1` — ❌ Nothing is refused silently. If we refuse it, the operator is told
 > **RENAMED from `DOD-M15-SCREENBLOCK-SILENT-1` on the day it was written.** It was scoped to the
@@ -2332,6 +2358,61 @@ and, for the made-true rows, the units that make them true.
 ---
 
 # POST-LAUNCH BACKLOG
+
+### `DOD-M15-CHECKPOINT-COUNTERSIGN-1` — 🅿️ POST-LAUNCH. A sealed receipt is countersigned by one node, not several
+**Found 2026-09-03 (Order 021), while closing `DOD-M15-HEARTBEAT-1`. POST-LAUNCH under §0z.4 — a
+lane may not add to the gate. Andre decides if it blocks.**
+
+**What it costs the operator:** the pitch is that a receipt does not rest on any single directory's
+word. Today it does. A separate LOCAL single-node checkpoint path writes the row unilaterally on a
+scheduler, which is why receipts still finish and inclusion proofs still resolve — so this is not
+"receipts are broken". What is missing is the property the product is sold on.
+
+**Why it is post-launch rather than urgent:** a customer gets a working, verifiable receipt. What
+they do not get is the multi-node countersignature, and nothing in the product currently claims to
+them that they have it. **The claims-ledger row for "countersigned by several independent nodes" is
+the thing to check before launch** — if any outward-facing copy asserts it, the copy is the
+launch-blocking half, not the code.
+
+**Three independent blockers, all measured — do not re-derive:**
+1. `CHECKPOINT_PEER_ADDRS` is set **nowhere in IaC**, so `getPeerNodeIds()` returns `[]` and
+   `availableNodes` is always 1 against a threshold of 2.
+2. The MMR tables do not replicate, so every node's peaks differ and `verifyAndSign` **refuses by
+   construction** — wiring (1) alone would still collect zero signatures.
+3. `/cello/checkpoint/1.0.0` was **retired** by `M12-ANTI-ENTROPY-DESIGN §5` as *"unauthenticated in
+   both directions and trusting responder-supplied pubkeys."* Re-enabling it to satisfy a checklist
+   line would be a security regression.
+
+**The shape of the fix is already written down:** `M12-P5` — rebuild cross-signing on the
+authenticated AE channel with a deterministic shared leaf order. Not a wiring change.
+
+**⚠️ Do NOT lower `requiredThreshold`.** `T = majority(N)` is settled. A threshold of 1 lets one node
+complete a ceremony alone, which is the security violation the whole design exists to prevent.
+
+**Related, and separable:** the retired proposal loop is still wired
+(`bin/directory.ts` calls `checkpointCoordinator.start()`), so every node logs
+`federation.checkpoint.skipped` at WARN every 10 minutes, forever, in every environment — a
+permanent unactionable warning. M12 §5 said the mesh-retirement unit would remove the wiring; it did
+not. Cheap to fix independently of the rebuild.
+
+### `DOD-M15-CLOCK-CLAMP-1` — 🅿️ POST-LAUNCH. A peer can pin a wall-clock LWW field to the far future
+**Found 2026-09-03 (Order 021), by review. POST-LAUNCH under §0z.4.**
+
+**The shape:** both wall-clock last-writer-wins merges — `presence-merge` (pre-existing) and the new
+`directory-node-heartbeat-merge` — take `max()` over a peer-supplied timestamp with no upper bound.
+An authenticated peer advertising `last_heartbeat_at: "99999999999999"` wins permanently, because
+**every honest writer writes `now()`, which is smaller**. There is no correction path: a dead node
+reads as fresh forever on every node that pulled it, and if the poisoned key is our own `node_id`
+the row churns every round without ever converging.
+
+**Why not urgent today:** both freshness consumers deliberately ignore the heartbeat
+(`resolveDiscoveryState` records `staleHeartbeat` for observability only; `listAccountAgentsWithPresence`
+dropped the conjunct), so nothing currently acts on the poisoned value. **The trigger is anyone
+re-gating on freshness** — the comments now say the signal is available, which is exactly the
+invitation. Re-gate and this becomes a liveness lie an attacker pins.
+
+**The fix:** clamp on ingest — reject or floor an incoming timestamp more than a small skew allowance
+beyond `now()`, and log the rejection. State it as a shared rule for both merges, not a one-off.
 
 ### `DOD-M15-RESERVE-PURPOSE-1` — 🅿️ POST-LAUNCH. A relay grants forwarding rows without asking what they are for
 **Found 2026-09-03, [[2026-09-03_1158_relay-overload-and-the-four-things-underneath-it]]. Ruled POST-LAUNCH by Andre 2026-09-03:** it needs 128 registered agents,
