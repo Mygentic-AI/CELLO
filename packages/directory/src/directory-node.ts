@@ -6978,25 +6978,65 @@ interface Structure1Fields {
   session_id: Uint8Array;
   last_seen_seq: number;
   timestamp: number | bigint;
+  /** 020-ACKHASH: the acknowledged content, on a v2 claim only. Read, not yet checked. */
+  last_seen_hash?: Uint8Array;
 }
 
-function decodeStructure1Fields(cbor: Uint8Array): Structure1Fields | null {
-  // Structure 1 TBS: [protocol_version, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]
+/**
+ * Structure 1 TBS:
+ *   v1: [1, content_hash(32), sender_pubkey(32), session_id(16), last_seen_seq, timestamp]
+ *   v2: [2, …the same five…, last_seen_hash(32)]        ← 020-ACKHASH
+ *
+ * ⚠️ THIS REFUSED EVERY SEVEN-FIELD ARRAY UNTIL 020-ACKHASH, and that is the load-bearing change.
+ * `DOD-M15-SUBMIT-ID-1` widened the RELAY to accept a seven-field claim carrying a submission id
+ * but never widened the directory, so a leaf the relay accepts and orders could not be verified at
+ * seal time here. Two shapes now land at index 6 and the VERSION is what tells them apart — a
+ * length check cannot, because a submission id and an ack hash are both just bytes.
+ *
+ * Every index this function already read is unchanged, which is why the field was appended rather
+ * than inserted: `content_hash` is still 1, `last_seen_seq` still 4, `timestamp` still 5.
+ */
+// Exported for 020-ACKHASH unit coverage: this refused EVERY seven-field claim before that unit, so
+// the tolerance it gained is the thing most worth pinning. Pure function; no state.
+export function decodeStructure1Fields(cbor: Uint8Array): Structure1Fields | null {
   let arr: unknown;
   try {
     arr = cborDecode(cbor);
   } catch {
     return null;
   }
-  if (!Array.isArray(arr) || arr.length !== 6) return null;
-  const [, _ch, , _sid, _lss, _ts] = arr;
+  if (!Array.isArray(arr)) return null;
+  const [_pv, _ch, , _sid, _lss, _ts, _tail] = arr;
+  const isV1 = _pv === 1 && (arr.length === 6 || arr.length === 7);
+  const isV2 = _pv === 2 && arr.length === 7;
+  // An unnamed (version, length) pair is REFUSED, never coerced into the nearest known layout —
+  // this would otherwise be a signature verified over bytes whose meaning is not agreed.
+  if (!isV1 && !isV2) return null;
   const chBytes = _ch instanceof Uint8Array ? _ch : Buffer.isBuffer(_ch) ? new Uint8Array(_ch as Buffer) : null;
   if (!chBytes || chBytes.length !== 32) return null;
   const sidBytes = _sid instanceof Uint8Array ? _sid : Buffer.isBuffer(_sid) ? new Uint8Array(_sid as Buffer) : null;
   if (!sidBytes || sidBytes.length !== 16) return null;
   if (typeof _lss !== "number") return null;
   if (typeof _ts !== "number" && typeof _ts !== "bigint") return null;
-  return { content_hash: chBytes, session_id: sidBytes, last_seen_seq: _lss, timestamp: _ts };
+  let lastSeenHash: Uint8Array | undefined;
+  if (isV2) {
+    const b = _tail instanceof Uint8Array ? _tail : Buffer.isBuffer(_tail) ? new Uint8Array(_tail as Buffer) : null;
+    // Exactly 32 — a SHA-256 root. Present-but-malformed is refused rather than dropped: a v2 whose
+    // hash is unreadable is an acknowledgement nobody can check, and admitting it without the field
+    // would make a corrupt ack indistinguishable from an honest v1 that never claimed one.
+    if (!b || b.length !== 32) return null;
+    lastSeenHash = b;
+  }
+  // A v1 seven-array's index 6 is a SUBMISSION ID (`DOD-M15-SUBMIT-ID-1`) and is deliberately not
+  // read here — the directory has no use for it, and reading it as an ack hash is the confusion the
+  // version tag exists to prevent.
+  return {
+    content_hash: chBytes,
+    session_id: sidBytes,
+    last_seen_seq: _lss,
+    timestamp: _ts,
+    ...(lastSeenHash ? { last_seen_hash: lastSeenHash } : {}),
+  };
 }
 
 /**

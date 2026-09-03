@@ -87,6 +87,24 @@ export interface LeafSpec {
   signsSession?: Uint8Array;
   carries?: boolean;
   finalRoot?: Uint8Array;
+  /** The signed `last_seen_seq`. Defaults to 0, which is always within the causal bound. */
+  lastSeenSeq?: number;
+  /**
+   * 020-ACKHASH: emit a **v2** Structure 1 — `[2, …, last_seen_hash]`, seven fields.
+   * Absent ⇒ the v1 six-field layout, unchanged, which is what every existing caller gets.
+   */
+  lastSeenHash?: Uint8Array;
+  /**
+   * `DOD-M15-SUBMIT-ID-1`: emit a **v1 SEVEN-field** Structure 1, index 6 being a submission id.
+   * This is the shape the deployed relay already tolerates, and the one a length-only reader
+   * mistakes for an ack hash — so it is the regression case, not a curiosity.
+   *
+   * Mutually exclusive with `lastSeenHash`: index 6 has one meaning per version, and a spec asking
+   * for both is asking for a shape no version defines.
+   */
+  submissionId?: Uint8Array;
+  /** Emit an arbitrary version tag, to prove an unnamed layout is refused rather than coerced. */
+  protocolVersion?: number;
 }
 
 /** SHA-256(0x02 ‖ payload) — the client's own SEAL content-hash derivation, reproduced exactly. */
@@ -153,7 +171,22 @@ export async function buildSeal(specs: LeafSpec[], sessionId: Uint8Array): Promi
       contentHash = new Uint8Array(randomBytes(32));
     }
 
-    const s1 = ENC.encode([1, contentHash, pub, spec.signsSession ?? sessionId, 0, 1_700_000_000_000 + i]) as Uint8Array;
+    if (spec.lastSeenHash && spec.submissionId) {
+      throw new Error(`leaf ${i}: lastSeenHash and submissionId both set — index 6 has one meaning per version`);
+    }
+    // 020-ACKHASH: v1 is six fields; a v2 appends last_seen_hash at index 6, and a v1 seven-array
+    // carries a submission id there instead. The VERSION is what says which — never the length.
+    const s1Fields: unknown[] = [
+      spec.protocolVersion ?? (spec.lastSeenHash ? 2 : 1),
+      contentHash,
+      pub,
+      spec.signsSession ?? sessionId,
+      spec.lastSeenSeq ?? 0,
+      1_700_000_000_000 + i,
+    ];
+    if (spec.lastSeenHash) s1Fields.push(spec.lastSeenHash);
+    else if (spec.submissionId) s1Fields.push(spec.submissionId);
+    const s1 = ENC.encode(s1Fields) as Uint8Array;
     const sig = new Uint8Array(await spec.key.sign(s1));
     const s2 = buildStructure2(i + 1, pub, contentHash, sig, prevRoot);
     if (!s2.ok) throw new Error(`buildStructure2 failed at leaf ${i}`);

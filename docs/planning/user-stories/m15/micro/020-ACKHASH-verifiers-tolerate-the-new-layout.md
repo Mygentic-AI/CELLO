@@ -3,6 +3,12 @@ name: 020-ACKHASH — Every verifier accepts the v2 layout, before anything emit
 type: micro-work-order
 date: 2026-09-03
 status: open
+blocked_on: >
+  DoD 9 ONLY — the npm publish of protocol-types and the GCP fleet roll. Both are Andre's to run.
+  Code, tests, gate and review are all done; nothing else in this order is outstanding. Deliberately
+  NOT flipped to `complete`: a `complete` here reads as "published and deployed", and unit 021 is
+  gated on this being LIVE ON THE FLEET, not merged — see the deployment section before the
+  Newly discovered list for why starting 021 early costs silent message loss.
 description: >
   Structure 1 gains `last_seen_hash` so an acknowledgement binds to CONTENT, not to a position.
   This unit ships the READING half only — relay, directory and daemon all accept a v2 Structure 1
@@ -240,11 +246,119 @@ close-out.
 
 ## Review
 
-_(the reviewer's verdict, quoted, goes here — in the same commit as the `status:` flip)_
+`cello-unit-reviewer`, one pass, read-only, no model override. Verdict quoted:
+
+> **SPEC: DEVIATIONS FOUND** — Part 1's *"the two encoders must produce byte-identical v1 output"* is
+> deviated. Journaled in commit `d0f3b72` with correct reasoning I independently verified, so it is
+> **legal, not blocking** — but rule 3 puts findings in the order's *Newly discovered* section, and it
+> is not there. Write it in before the `status:` flip.
+>
+> **NO SILENT FALLBACKS** — none at HIGH. Two at LOW.
+>
+> **ERROR SUBSTITUTION FOUND** — F2 and F3, three sites. [blocking] per the rubric: they send the
+> operator to the wrong subsystem, and two of them are `catch` blocks naming a cause that can no
+> longer occur inside them. All three are one-line renames.
+>
+> **HOLLOW TESTS FOUND** — F4, one test, [blocking] as a test-quality gap. Every other new test
+> survives THE REVERT TEST; the refusal tests and the two v1-seven-array regressions are genuinely
+> load-bearing and go red under exactly the mutation that would break the deployed fleet. F5 is a
+> separate coverage gap: the encoding production now emits appears in no server-side test.
+>
+> **REMOVALS PROVEN** — both repos grepped, the `exports` map checked (no subpath export existed),
+> the built artifact confirms no orphan, and no test was deleted — the eight were re-pointed.
+>
+> **NO COMPATIBILITY DEBT** — the v2 branch names the deployment fact that retires it; the float64
+> tolerance is live data, not an old version.
+>
+> **Scope:** you did not grow the mission.
+
+Both judgement calls were independently re-derived and upheld — the reviewer ran the encoder bytes
+rather than trusting the commit message, and enumerated all five signature-verification sites to
+confirm nothing re-encodes.
+
+**All nine findings dispositioned.** Fixed: F1 (a tenth reader, missed by this order's own list),
+F2/F3 (three errors naming their exit point), F5 (the uint64 encoding had no server-side test; the
+one test meant to mirror the relay's decoder used `Number()`, which erased the type and is why the
+drift survived), F6 (a reason code in a field named `error`), F7 (two undocumented narrowings), F8
+(a comment calling the dangerous direction "conservative"), plus the Decision-2 comment that claimed
+every consumer compares `session_id` — false for `#captureReceipt`. Deleted: F4, a test that passed
+with this unit reverted AND with 021 landed. Recorded not fixed: F9 (below).
+
+## ⚠️ DEPLOYMENT: MERGING 021 EARLY IS SILENT MESSAGE LOSS, NOT A LOUD REFUSAL
+
+The reviewer sharpened this order's own rationale, and the correction matters more than the original.
+This order says a client-first rollout means *"every message refused as `signature_invalid`."* **For
+this field that is wrong, and the truth is worse.**
+
+The relay as deployed today accepts ANY `protocol_version` and validates index 6 as `1..32 bytes` —
+**a 32-byte ack hash passes that.** So a v2 emitter is not refused by the current fleet. It is
+accepted, ordered, and its `last_seen_hash` is filed as a **submission id**, which is the
+retransmission dedup key (`relay-node.ts` ~2120-2144). Two consecutive messages acknowledging the
+same last message from the counterparty — the commonest shape in any conversation — carry the same
+`last_seen_hash`, therefore the same dedup key. The second is answered from the first's ack, takes
+the first's sequence, and **is never appended to the relay's tree.** The sender sees a valid ack; the
+message is gone from the transcript.
+
+So **021 cannot start until this is DEPLOYED on every node**, not merely merged, and the reason is
+silent message loss rather than a visible outage.
+
+## Newly discovered
 
 ## Newly discovered
 
 _(write findings here and keep going — do not fix them)_
+
+- **⚠️ SPEC DEVIATION — RULED BY ANDRE 2026-09-03, SETTLED, DO NOT RE-OPEN. The canonical uint64
+  encoder wins; the wire timestamp moves float64 → uint64.** Presented as three options (keep the
+  published encoder / make it match what production actually emitted, editing the canonical vector to
+  bless the drift / restore the duplicate builder). He chose the first. The reasoning that decided it:
+  nothing anywhere reads `.timestamp`, every decoder in both repos already accepts either form, and
+  signatures cover the bytes as sent so no stored message is affected — making the alternative a
+  permanent documentation cost paid to avoid a change with no reachable consequence.
+
+  **The two encoders were NEVER byte-identical, so Part 1's "behaviour must not change" could not be
+  satisfied as written.**
+  The daemon's local copy passed `Date.now()` straight to CBOR, which encodes an integer above
+  2^32-1 as a **float64** (`fb4278bcfe56800000`); the published encoder promotes to a **uint64**
+  (`1b0000018bcfe56800`), the same idiom `buildSessionEstablishmentTbs` uses. Measured, not inferred.
+  **`structure1-canonical.json` has always pinned the uint64 form — so the only vector in either repo
+  was pinning bytes production never emitted.** Importing the published encoder therefore moves the
+  wire timestamp float64 → uint64. Kept, because the alternative is editing the canonical vector to
+  ratify the drift. Verified inert: all five signature-verification sites across both repos verify
+  over the bytes as received or stored and never re-encode; every decoder guards `number | bigint`;
+  and **nothing anywhere reads `.timestamp`** — the relay reads `session_id`, `content_hash`,
+  `sender_pubkey`, `last_seen_seq`, `submission_id`; the directory reads `content_hash` and
+  `last_seen_seq`; the daemon reads none. Old float64 leaves in local SQLCipher DBs and relay state
+  still verify and still decode.
+
+- **Daemon test fixtures build session ids no relay would accept.** ~20 files under
+  `core/daemon/src/__tests__` use a 32-byte session id (`"cc".repeat(32)`); others use the canonical
+  16. The wire contract is 16 bytes and both the relay and the directory refuse anything else, so
+  those leaves could not survive production. Found because a first cut of `decodeStructure1`
+  validated the width and reddened two SEALWIRE authorship tests. Not fixed: enforcing the width
+  client-side is a new refusal unrelated to v2, and correcting the fixtures is a separate unit.
+
+- **`seal_payload_malformed` names the wrong subsystem.** In `seal-final-root.ts`, an undecodable
+  `structure1_cbor` returns `SEAL_FINAL_ROOT_REASONS.PAYLOAD_MALFORMED` — documented as *"the payload
+  bytes are not a decodable SEAL payload"* — when nothing has looked at a SEAL payload. The `detail`
+  string is accurate; the reason code is not. Pre-existing; 020-ACKHASH only widens what reaches it
+  (an unnamed version now lands there too). Not fixed here: a new reason code ripples into
+  `SEAL_FINAL_ROOT_GUIDANCE` and its consumers. The test asserts the detail string so the mislabel
+  cannot quietly become about something else.
+
+- **Reviewer F9, for a follow-up unit's AC, not a defect in this one:** trustless-cello now has FOUR
+  hand-rolled version branches (`relay-node.ts`, `directory-node.ts`, `seal-final-root.ts`,
+  `seal-legibility.ts`) and they already disagree — session-id width enforced in two of four, index-6
+  tail validated only by the relay, a `bigint` `last_seen_seq` accepted only by `seal-legibility`.
+  Correctly sequenced (the shared decoder cannot be imported until the publish lands), but the stated
+  reason for exporting `decodeStructure1` — *"the next layout change should not have to find them
+  again"* — is unrealised on exactly the side that had three hand-rolled readers. It should become an
+  explicit AC on a follow-up rather than an implication.
+
+- **For the planner, before 021 starts — index 6 becomes EXCLUSIVE.** From 021 onward a v2 claim
+  cannot also carry a submission id: the ack hash and the `SUBMIT-ID` dedup key are mutually exclusive
+  on the wire. The fixture encodes this (`buildSeal` throws if a spec sets both). 021 is the unit that
+  makes it real.
 
 - **Filed by the planner before the unit started, do not investigate:** `DOD-M15-SUBMIT-ID-1`
   widened the relay to accept a seven-field Structure 1 for a submission id, but the production
