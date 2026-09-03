@@ -997,6 +997,41 @@ succeeded**.
 - **A code comment blaming a "BIGSERIAL `id` collision" is wrong** and would send the repairer at the
   wrong fix; rewrite it (Invariant / `DOD-M15-CLAIM-COMMENTS-1`).
 
+### `DOD-M15-BLOCKEDEVIDENCE-1` — ❌ A blocked message is still evidence, so it is still kept
+
+**THE RULE, Andre 2026-09-03:**
+> *"The point of maintaining signed messages and a seal is that you can use it to prove malicious
+> behavior. So the transcript in its entirety, in its whole chain, needs to be available and the
+> signed hashes need to be maintained. If we don't store this, then we can never use it."*
+
+**Measured 2026-09-03, in `ingestReceivedContent`.** A screener-blocked message takes
+`appendSessionLeaf` (the content hash into the tree) instead of `#appendVerifiedContent` (which is
+the branch that calls `recordTranscriptMessage`). So the daemon keeps the HASH and nothing else — no
+plaintext, no `sender_pubkey`, no `sender_sig`. `GatewayRecordStore` records a hash and a
+disposition too, never content.
+
+**A hash with no original proves nothing to anybody.** You cannot show what they sent, and you cannot
+show they signed it. The one category of message an operator would most want to prove is the one
+CELLO keeps the least evidence for.
+
+**The fix is a branch, not an architecture:** a blocked message follows the ordinary path — full
+transcript row, under the seal, at the same leaf index — and only the LAST step changes, the agent
+being told it was blocked rather than handed the content.
+
+**⚠️ THE ACCESS DESIGN IS RULED AND ITS OPPOSITE IS THE OBVIOUS ANSWER — see the order.** Framing,
+not friction: hiding the payload does not remove the LLM from the path, it removes the WARNING from
+the path, because a human who cannot find the file tells their agent to go find it. Base64 encoding,
+CLI-only access and a separate quarantine store were each proposed and rejected in writing. And the
+framing carries **no closing delimiter** — a payload can forge its own "end of message" marker and
+make everything after it read as trusted.
+
+- **Order:** `micro/023-BLOCKEDEVIDENCE-a-blocked-message-is-still-evidence.md`
+- **Found by:** Andre, reviewing 022-REFUSALVISIBLE's operator-facing wording — the question was
+  "where would a human read the blocked text?", and the answer was that there is nowhere.
+- **Enforcer:** journey — a blocked message is in the receiver's transcript with a signature that
+  VERIFIES against the sender's key, `cello_receive` still never returns it, and the session still
+  seals with matching roots.
+
 ### `DOD-M15-NO-SILENT-REFUSAL-1` — ✅ Nothing is refused silently. If we refuse it, the operator is told
 
 > **✅ 2026-09-03 (022-REFUSALVISIBLE).** Twelve reasons now file a durable notice keyed on
