@@ -107,6 +107,24 @@ acknowledgement bind to what was actually received — and hold with no relay in
 a v2 of `Structure1` (field order is signed over). The first message of a session has seen nothing,
 and that must be a **defined value, never an absent field**. Full clauses on the line itself.
 
+**⚠️ IT IS TWO UNITS, AND THE ORDER IS NOT NEGOTIABLE — measured, not cautious.**
+`020-ACKHASH` ships the READING half everywhere (relay, directory, daemon accept a v2 layout and
+nothing emits one). **`021` emits it, and cannot start until `020` is DEPLOYED, not merely merged.**
+`DOD-M15-SUBMIT-ID-1` already paid for the other order: its decoder was `!== 6`, so *"a client that
+appended a submission id had every frame refused as `signature_invalid` by any relay not yet
+updated — including the one deployed."* Same structure, one field over.
+
+**Two things `020` turned up before it started, both now written into it:**
+- **There are TWO `encodeStructure1` functions.** The published one in `protocol-types` says in its
+  own header that it has no production caller; the copy in `core/daemon/src/session-relay-client.ts`
+  is what production actually signs. The canonical definition and the shipped bytes are separately
+  maintained — **the same defect `017-TBS` just removed for the assignment TBS.** `020` Part 1
+  deletes the copy before touching the layout.
+- **Index 6 is already spoken for.** The relay accepts a SIX-or-SEVEN field Structure 1 today,
+  because `SUBMIT-ID-1` widened it for a submission id that no client has ever emitted. So a length
+  check cannot tell that shape from this one: **both decoders must branch on the version tag**,
+  which is precisely why it is field 0.
+
 ---
 
 ### The ranking, with sizes — smalls first, because a quick win is a real win
