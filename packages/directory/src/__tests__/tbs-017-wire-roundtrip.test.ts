@@ -155,6 +155,10 @@ describe("017-TBS: the signed bytes survive the wire", () => {
       const wire = wireFieldsOf({ ...assignmentWith(true, "a".repeat(64)), ...override });
       expect(wire["high_stakes"], "unsigned on the short layout — must not ship").toBeUndefined();
       expect(wire["prior_relay_id"], "unsigned on the short layout — must not ship").toBeUndefined();
+      // transport_mode is covered by the same layout and therefore the same gate. Its own gate
+      // used to be wider (peer ids only), which would have shipped it unsigned on two of these
+      // four shapes — letting a MITM flip direct<->relay with nothing detecting it.
+      expect(wire["transport_mode"], "unsigned on the short layout — must not ship").toBeUndefined();
     },
   );
 

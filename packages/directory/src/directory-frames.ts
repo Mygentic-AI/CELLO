@@ -170,10 +170,25 @@ export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Arr
   if (a.counterparty_session_addrs && a.counterparty_session_addrs.length > 0) {
     encodedAssignment["counterparty_session_addrs"] = a.counterparty_session_addrs;
   }
-  // Only encode transport_mode when both peer IDs are present (10-field TBS covers it).
-  // When counterparty is absent (5-field TBS), transport_mode is not signed and must
-  // not appear on the wire — otherwise a MITM could modify it without breaking verification.
-  if (a.transport_mode && a.initiator_session_peer_id && a.counterparty_session_peer_id) {
+  /**
+   * A field that is not SIGNED must not appear on the wire — otherwise a MITM can modify it and
+   * nothing breaks verification. `transport_mode`, `high_stakes` and `prior_relay_id` are all
+   * covered only by the long layout, so all three share one gate.
+   *
+   * They did not used to. `transport_mode`'s own gate tested the two peer ids and ignored the
+   * address arrays, which is WIDER than the layout rule — "peer id present, addrs empty" would
+   * have shipped it unsigned. Unreachable today only because `directory-node.ts` refuses a
+   * session_request without initiator addrs and records an offer_accept only when the
+   * counterparty has both. That is a guard in a different method with nothing pointing back here,
+   * and relaxing it (a peer id alone is DHT-dialable, so this is a plausible future change) would
+   * have re-opened it silently. One expression removes the coupling.
+   */
+  const onLongLayout =
+    !!a.initiator_session_peer_id &&
+    !!a.counterparty_session_peer_id &&
+    !!a.initiator_session_addrs?.length &&
+    !!a.counterparty_session_addrs?.length;
+  if (onLongLayout && a.transport_mode) {
     encodedAssignment["transport_mode"] = a.transport_mode;
   }
   /**
@@ -195,17 +210,8 @@ export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Arr
    * thing that catches it is `__tests__/tbs-017-wire-roundtrip.test.ts`, which crosses the encode
    * boundary rather than comparing two builders.
    */
-  // ...but only on the layout that SIGNS them. Same reasoning as `transport_mode` directly above:
-  // the long layout is reached only when both peer ids and both address arrays are present, and on
-  // the short layout these two are outside the TBS entirely. Emitting them there would put fields
-  // on the wire that no signature covers — a MITM could flip `high_stakes` and nothing would
-  // detect it. The client ignores them on that path anyway (its arity check needs the five M7
-  // values first), so sending them buys nothing and costs the integrity claim.
-  const onLongLayout =
-    !!a.initiator_session_peer_id &&
-    !!a.counterparty_session_peer_id &&
-    !!a.initiator_session_addrs?.length &&
-    !!a.counterparty_session_addrs?.length;
+  // Same gate, same reason — see above. The client ignores these on the short layout anyway (its
+  // arity check needs the five M7 values first), so sending them there buys nothing.
   if (onLongLayout && a.high_stakes !== undefined) {
     encodedAssignment["high_stakes"] = a.high_stakes;
   }
