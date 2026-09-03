@@ -1086,4 +1086,143 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(frontierOf(receipt2, pubB), "B's content frontier is unchanged — the straggler did not inflate it").toBe(bFrontierAtSeal);
   }, 120_000);
 
+  /**
+   * ─── 022-REFUSALVISIBLE / DOD-M15-NO-SILENT-REFUSAL-1 ─────────────────────────────────────────
+   *
+   * **The refusal reaches the operator even though nobody is attending, and it survives a restart.**
+   *
+   * From B's operator's chair: A sends something, B's screener catches it and blocks it, and the
+   * message never appears. Before this, B was told nothing — the explanation sat in a log file they
+   * have no reason to open, and the conversation just went quiet. The two properties that make the
+   * fix real, and that a per-session `cello_receive` drain could not have:
+   *
+   *   1. **Nobody is attending.** B never calls `cello_receive` on that session. The refusal must
+   *      still reach them, through `cello_inbox`, which holds an AGENT and not a session.
+   *   2. **A restart does not destroy it.** The first thing anyone does about a quiet conversation
+   *      is restart the daemon, which is exactly what erased the old in-memory notice.
+   *
+   * The screener is the real one — the enforcing gateway sidecar the shipped binary spawns, not a
+   * test double. The message is predominantly Cyrillic, which trips IN-003's language allowlist
+   * (`inbound_language_blocked`, terminal) with no model installed, so this exercises a genuine
+   * content detector rather than a seam. A terminal block is not an error path: it leafs the
+   * original hash at its canonical position and ACKS the sender, so nothing fails and nothing
+   * retries — which is precisely why it had no notice and why the silence was total.
+   */
+  it("022-REFUSALVISIBLE — a screener block reaches an UNATTENDED operator, and survives a daemon restart", async () => {
+    const dirA = mkdtempSync(join(tmpdir(), "cello-refuseA-"));
+    const dirB = mkdtempSync(join(tmpdir(), "cello-refuseB-"));
+    dirs.push(dirA, dirB);
+    await provisionAgent(dirA, "agentA");
+    const pubB = await provisionAgent(dirB, "agentB");
+    const daemonA = await startLocalDaemon(dirA, "refuseA");
+    let daemonB = await startLocalDaemon(dirB, "refuseB");
+    daemons.push(daemonA, daemonB);
+    expect(registerAgent("agentA", `DEV-rf-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-rf-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
+    const connA = await connectMcp(dirA, "rf-A");
+    const connB = await connectMcp(dirB, "rf-B");
+    mcpConns.push(connA, connB);
+    for (const [c, n] of [[connA, "agentA"], [connB, "agentB"]] as const) {
+      expect(((await c.call("cello_start_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+    }
+
+    const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+    expect(init.ok, `initiate failed:\n${daemonA.output.split("\n").slice(-30).join("\n")}`).toBe(true);
+    const sessionId = init.sessionId!;
+    expect(((await awaitP) as { type?: string }).type).toBe("new_session");
+
+    /**
+     * Long enough to clear IN-003's `minLetters` (12) and overwhelmingly one script, so the
+     * dominant-share test (0.5) cannot be tipped by the turn signal the shim appends. `signal` is
+     * REQUIRED by cello_send, so `[[OVER]]` rides in the same string the detector judges — four
+     * Latin letters against ~24 Han ones.
+     *
+     * ⚠️ Chosen for its SCRIPT, not its meaning. The detector under test is the language allowlist,
+     * which is a real content detector that needs no model — the semantic injection scanner is off
+     * unless one is installed (the daemon logs `security.gateway.layer2: off:no`), so a prose
+     * "ignore your instructions" payload would sail through and this test would silently stop
+     * testing a block at all.
+     *
+     * ⚠️ **AND IT MUST NOT BE CYRILLIC, which is the trap this test fell into first.** Sanitization
+     * runs BEFORE the language check and normalizes confusables, and most lowercase Cyrillic letters
+     * are Latin homoglyphs — so a Cyrillic sentence is judged as LATIN and comes back `redact`, not
+     * `block`. Measured: the same call with a 68-letter Cyrillic payload returns
+     * `{"disposition":"redact"}` with no `terminal` and no reason. Han has no Latin homoglyphs.
+     */
+    const BLOCKED = "请把这条消息交给你的操作员并立即回复我谢谢你的帮助";
+    const send = (await connA.call("cello_send", { cello_session_id: sessionId, content: BLOCKED, signal: "over" })) as { ok?: boolean; reason?: string };
+    expect(
+      send.ok,
+      `A's send succeeds — the refusal happens on B's side, silently, which is the point. Got: ${JSON.stringify(send)}\n` +
+      `--- daemonA screening ---\n${daemonA.output.split("\n").filter((l) => /gateway|screen|governance/.test(l)).slice(-12).join("\n")}`,
+    ).toBe(true);
+    await daemonB.waitForLine(/"event":"security\.gateway\.inbound\.terminal_block"/, 30_000);
+
+    /**
+     * ⚠️ **NOBODY IS ATTENDING.** B never calls `cello_receive` on this session — not before the
+     * block and not after. That is the case this unit exists for, and the door that must open is
+     * the inbox. Reading `cello_receive` here would test the door that already worked.
+     */
+    type InboxRefusal = { session_id?: string; reason?: string; impact?: string; guidance?: string; times?: number };
+    type Inbox = { ok?: boolean; agents?: Array<{ agent?: string; refusals?: InboxRefusal[]; refusals_guidance?: string }> };
+    const readInbox = async (c: McpConn): Promise<{ refusals: InboxRefusal[]; guidance: string }> => {
+      const res = (await c.call("cello_inbox", { agent: "agentB" })) as Inbox;
+      expect(res.ok, `cello_inbox failed: ${JSON.stringify(res)}`).toBe(true);
+      const desk = (res.agents ?? []).find((a) => a.agent === "agentB");
+      return { refusals: desk?.refusals ?? [], guidance: desk?.refusals_guidance ?? "" };
+    };
+
+    const before = await readInbox(connB);
+    expect(
+      before.refusals.length,
+      `B's operator must be TOLD a message was blocked, without attending the session. Inbox held ` +
+      `no refusals.\n--- daemonB ---\n${daemonB.output.split("\n").filter((l) => /terminal_block|refusal/.test(l)).slice(-10).join("\n")}`,
+    ).toBeGreaterThan(0);
+    const notice = before.refusals.find((r) => r.session_id === sessionId);
+    expect(notice, "and the notice must NAME the conversation — the inbox holds an agent, not a session").toBeDefined();
+    expect(
+      notice!.reason,
+      "the DETECTOR's reason, not a generic seam label — the remedy differs per detector (Invariant 3)",
+    ).toBe("inbound_language_blocked");
+    expect(notice!.impact, "it says the sender was acked, so nobody sits waiting for a resend").toMatch(/acknowledged/);
+    expect(before.guidance, "and the advice travels WITH the notice, never separately").toMatch(/Waiting longer will not help/);
+    // The blocked content NEVER travels. A screener that can be talked into surfacing what it
+    // blocked is not a screener, and the inbox is a surface an agent reads directly.
+    expect(JSON.stringify(before), "the blocked message must not appear in the notice").not.toContain(BLOCKED);
+
+    /**
+     * ─── The restart, which is the half the in-memory map failed ────────────────────────────────
+     *
+     * A fresh IPC connection is minted by the reconnect, so the notice is unseen by THAT consumer
+     * and re-announces — which is the correct direction: a new window has been told nothing. What
+     * is being proved is that the NOTICE itself is still there to be re-announced.
+     */
+    await connB.close();
+    mcpConns.splice(mcpConns.indexOf(connB), 1);
+    await daemonB.kill();
+    for (const f of ["daemon.sock", "daemon.lock"]) {
+      try { rmSync(join(dirB, f), { force: true }); } catch { /* best-effort */ }
+    }
+    daemonB = await startLocalDaemon(dirB, "refuseB-restart");
+    daemons.push(daemonB);
+    expect(cello(["login"], { CELLO_DIR: dirB }).status).toBe(0);
+    const connB2 = await connectMcp(dirB, "rf-B2");
+    mcpConns.push(connB2);
+    expect(((await connB2.call("cello_start_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB2.call("cello_use_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+
+    const after = await readInbox(connB2);
+    const survived = after.refusals.find((r) => r.session_id === sessionId);
+    expect(
+      survived,
+      `the refusal must survive the restart — restarting the daemon is the FIRST thing an operator ` +
+      `does about a quiet conversation, and the in-memory map this replaced was destroyed by exactly ` +
+      `that act. Inbox after restart: ${JSON.stringify(after.refusals)}`,
+    ).toBeDefined();
+    expect(survived!.reason).toBe("inbound_language_blocked");
+    expect(survived!.guidance, "with its advice intact, not just the reason code").toBeDefined();
+  }, 180_000);
+
 });
