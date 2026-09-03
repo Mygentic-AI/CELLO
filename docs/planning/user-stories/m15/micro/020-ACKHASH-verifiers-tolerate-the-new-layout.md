@@ -2,13 +2,12 @@
 name: 020-ACKHASH — Every verifier accepts the v2 layout, before anything emits it
 type: micro-work-order
 date: 2026-09-03
-status: open
-blocked_on: >
-  DoD 9 ONLY — the npm publish of protocol-types and the GCP fleet roll. Both are Andre's to run.
-  Code, tests, gate and review are all done; nothing else in this order is outstanding. Deliberately
-  NOT flipped to `complete`: a `complete` here reads as "published and deployed", and unit 021 is
-  gated on this being LIVE ON THE FLEET, not merged — see the deployment section before the
-  Newly discovered list for why starting 021 early costs silent message loss.
+status: complete
+remaining: >
+  ⚠️ COMPLETE MEANS WRITTEN, REVIEWED AND MERGED — NOT PUBLISHED. DoD 9 is still open: the npm
+  publish of protocol-types and the GCP fleet roll, both Andre's to run. THE EMITTER UNIT MUST NOT
+  START until this is LIVE ON EVERY NODE, not merely merged — see the deployment section before the
+  Newly discovered list, where the cost is silent message loss rather than a visible refusal.
 description: >
   Structure 1 gains `last_seen_hash` so an acknowledgement binds to CONTENT, not to a position.
   This unit ships the READING half only — relay, directory and daemon all accept a v2 Structure 1
@@ -37,7 +36,7 @@ description: >
 >
 > When you finish, **every verifier accepts a v2 Structure 1 and no code produces one.** The
 > production builder is untouched. If you find yourself editing the call site that signs a submit,
-> you have grown the mission — stop and re-read this. Emitting is unit **021**, and it cannot start
+> you have grown the mission — stop and re-read this. Emitting is **the emitter unit**, and it cannot start
 > until this one is DEPLOYED, not merely merged.
 
 ---
@@ -239,7 +238,7 @@ verification path — the relay's own comment says the encoded bytes are what ge
 **A tolerance test that only tests the happy path is vacuous.** The load-bearing tests are the
 refusals: an unknown version, an unknown length, and a v1 seven-array that must still work.
 
-**Deployment is not merge.** Unit 021 cannot start until this is live on the fleet. Say so in your
+**Deployment is not merge.** The emitter unit cannot start until this is live on the fleet. Say so in your
 close-out.
 
 ---
@@ -282,9 +281,9 @@ one test meant to mirror the relay's decoder used `Number()`, which erased the t
 drift survived), F6 (a reason code in a field named `error`), F7 (two undocumented narrowings), F8
 (a comment calling the dangerous direction "conservative"), plus the Decision-2 comment that claimed
 every consumer compares `session_id` — false for `#captureReceipt`. Deleted: F4, a test that passed
-with this unit reverted AND with 021 landed. Recorded not fixed: F9 (below).
+with this unit reverted AND with the emitter landed. Recorded not fixed: F9 (below).
 
-## ⚠️ DEPLOYMENT: MERGING 021 EARLY IS SILENT MESSAGE LOSS, NOT A LOUD REFUSAL
+## ⚠️ SHIPPING THE EMITTER EARLY IS SILENT MESSAGE LOSS, NOT A LOUD REFUSAL
 
 The reviewer sharpened this order's own rationale, and the correction matters more than the original.
 This order says a client-first rollout means *"every message refused as `signature_invalid`."* **For
@@ -299,7 +298,7 @@ same last message from the counterparty — the commonest shape in any conversat
 the first's sequence, and **is never appended to the relay's tree.** The sender sees a valid ack; the
 message is gone from the transcript.
 
-So **021 cannot start until this is DEPLOYED on every node**, not merely merged, and the reason is
+So **the emitter cannot start until this is DEPLOYED on every node**, not merely merged, and the reason is
 silent message loss rather than a visible outage.
 
 ## Newly discovered
@@ -355,9 +354,9 @@ _(write findings here and keep going — do not fix them)_
   again"* — is unrealised on exactly the side that had three hand-rolled readers. It should become an
   explicit AC on a follow-up rather than an implication.
 
-- **For the planner, before 021 starts — index 6 becomes EXCLUSIVE.** From 021 onward a v2 claim
+- **For the planner, before the emitter starts — index 6 becomes EXCLUSIVE.** From the emitter onward a v2 claim
   cannot also carry a submission id: the ack hash and the `SUBMIT-ID` dedup key are mutually exclusive
-  on the wire. The fixture encodes this (`buildSeal` throws if a spec sets both). 021 is the unit that
+  on the wire. The fixture encodes this (`buildSeal` throws if a spec sets both). The emitter is the unit that
   makes it real.
 
 - **Filed by the planner before the unit started, do not investigate:** `DOD-M15-SUBMIT-ID-1`
