@@ -20,12 +20,13 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
 import pg from "pg";
 import { PgAeStore } from "../pg-ae-store.js";
 import { encodeTierARecord, AGENT_REVOCATIONS_SPEC, AGENT_PROFILES_SPEC, SIGNAL_RECORDS_SPEC } from "../ae-table-encoders.js";
-import { encodeTierBVersion, SUSPENSION_VERSION_SPEC } from "../ae-mutable-version.js";
+import { encodeTierBVersion, SUSPENSION_VERSION_SPEC, DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC } from "../ae-mutable-version.js";
 import { runAntiEntropyRound, type AeStoreView } from "../anti-entropy-engine.js";
 import { computeTableDigest } from "../set-reconciliation.js";
 import { tierBTableDigest } from "../ae-round.js";
 import type { SuspensionRecord } from "../suspension-merge.js";
 import type { PresenceRecord } from "../presence-merge.js";
+import type { DirectoryNodeHeartbeatRecord } from "../directory-node-heartbeat-merge.js";
 import { configurePgTypes } from "../pg-type-config.js";
 
 configurePgTypes();
@@ -64,6 +65,140 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
     await pool.query(`DELETE FROM agent_revocations WHERE agent_id LIKE $1`, [`${P}%`]);
     await pool.query(`DELETE FROM agent_profiles WHERE k_local_pubkey LIKE $1`, [`${P}%`]);
     await pool.query(`DELETE FROM signal_records WHERE signal_hash LIKE $1`, [`${P}%`]);
+    await pool.query(`DELETE FROM directory_nodes WHERE node_id LIKE $1`, [`${P}%`]);
+  });
+
+  // ── DOD-M15-HEARTBEAT-1: directory_nodes.last_heartbeat_at replicates as Tier B ──────────────
+  //
+  // Before this, every node read every OTHER node as never-heartbeated: `last_heartbeat_at` is
+  // mutable and `directory_nodes` was Tier-A only, which hashes immutable columns. The column was
+  // excluded by construction, so no query could show it missing — it simply never travelled.
+
+  /** Seed a directory_nodes row at a given heartbeat instant (epoch millis; 0 = never). */
+  const seedNode = async (nodeId: string, heartbeatMs: number): Promise<void> => {
+    await pool.query(
+      `INSERT INTO directory_nodes (node_id, region, status, last_heartbeat_at)
+       VALUES ($1, $2, 'active', to_timestamp($3/1000.0))`,
+      [nodeId, `${nodeId}-region`, heartbeatMs],
+    );
+  };
+
+  /** A peer advertising ONLY directory_nodes' Tier-B half, holding one node at one heartbeat. */
+  const heartbeatPeer = (nodeId: string, heartbeatMs: number): AeStoreView => {
+    const body: DirectoryNodeHeartbeatRecord = { node_id: nodeId, last_heartbeat_at: String(heartbeatMs) };
+    const versions = new Map([[
+      nodeId,
+      encodeTierBVersion(DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC, body as unknown as Record<string, string>).versionHash,
+    ]]);
+    return {
+      tierATables: () => [],
+      tierBTables: () => ["directory_nodes"],
+      tierARecordHashes: () => [],
+      tierATableDigest: () => computeTableDigest([]),
+      tierBTableDigest: () => tierBTableDigest(versions),
+      tierBVersions: () => versions,
+      serveTierA: () => [],
+      serveTierB: (_t, keys) => keys.filter((k) => k === nodeId).map((k) => ({ key: k, body })),
+      applyTierA: () => 0,
+      applyTierB: () => 0,
+    };
+  };
+
+  it("a node that was DOWN learns a peer's heartbeat through a real AE round, then terminates", async () => {
+    // The DoD's user-visible claim: a node comes back and learns the others' heartbeats without a
+    // restart. Locally this node is at epoch 0 — "registered, never heartbeated", which is exactly
+    // what every node read for every peer before this line.
+    const nodeId = `${P}europe-west1`;
+    const fresh = 1785200060000;
+    await seedNode(nodeId, 0);
+
+    const first = await runAntiEntropyRound(store, heartbeatPeer(nodeId, fresh));
+    expect(first.tierBApplied, "the peer's heartbeat should have landed").toBe(1);
+
+    const row = (await pool.query(
+      `SELECT (EXTRACT(EPOCH FROM last_heartbeat_at)*1000)::bigint AS ms, region
+         FROM directory_nodes WHERE node_id=$1`, [nodeId],
+    )).rows[0];
+    // Assert the VALUE, not merely "it changed" — a merge that wrote now() would also move it.
+    expect(String(row.ms)).toBe(String(fresh));
+    // And the identity column Tier A owns is untouched by the Tier-B merge.
+    expect(row.region).toBe(`${nodeId}-region`);
+
+    const second = await runAntiEntropyRound(store, heartbeatPeer(nodeId, fresh));
+    // TRUE termination: nothing is even PULLED. tierBApplied 0 alone would also pass under a
+    // perpetual pull-merge-to-the-same-row loop, which is the cross-encoding bug class V65 exists
+    // to prevent — pulled:0 is what pins it out.
+    expect(second.tierBPulled).toBe(0);
+    expect(second.tierBApplied).toBe(0);
+  });
+
+  it("a STALER heartbeat from a peer never moves the local one backwards", async () => {
+    const nodeId = `${P}asia-northeast1`;
+    const local = 1785200060000;
+    await seedNode(nodeId, local);
+
+    await runAntiEntropyRound(store, heartbeatPeer(nodeId, local - 30000));
+
+    const ms = (await pool.query(
+      `SELECT (EXTRACT(EPOCH FROM last_heartbeat_at)*1000)::bigint AS ms FROM directory_nodes WHERE node_id=$1`,
+      [nodeId],
+    )).rows[0].ms;
+    expect(String(ms)).toBe(String(local));
+  });
+
+  it("the ADVERTISE version equals the SERVED-body version (no null↔\"null\" split)", async () => {
+    // The failure V65's NOT NULL removes: advertise hashes the RAW pg row, a peer hashes the SERVED
+    // body. With a nullable column those routes disagree (`null` vs the string "null"), so two nodes
+    // holding IDENTICAL state advertise different versions forever and re-pull every round without
+    // converging. agent_suspensions.origin_node hit exactly this.
+    const nodeId = `${P}us-central1`;
+    await seedNode(nodeId, 0); // the shape that used to be NULL — the one that broke
+    const advertised = (await store.tierBVersions("directory_nodes")).get(nodeId);
+    const served = (await store.serveTierB("directory_nodes", [nodeId]))[0].body as DirectoryNodeHeartbeatRecord;
+    const peerComputed = encodeTierBVersion(
+      DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC,
+      served as unknown as Record<string, string>,
+    ).versionHash;
+    expect(advertised).toBe(peerComputed);
+  });
+
+  it("REFUSES a heartbeat for a node whose identity row has not replicated — it does not invent one", async () => {
+    // This entry owns ONE column of a row whose `region` is NOT NULL and belongs to the Tier-A spec.
+    // There is no honest INSERT, and a fabricated identity row is what the tier split exists to
+    // prevent. Must fail LOUD and name the cause, not silently no-op.
+    const nodeId = `${P}never-registered`;
+    const body: DirectoryNodeHeartbeatRecord = { node_id: nodeId, last_heartbeat_at: "1785200060000" };
+    await expect(
+      store.applyTierB("directory_nodes", [{ key: nodeId, body }]),
+    ).rejects.toThrow(/heartbeat for unknown node/);
+    const rows = (await pool.query(`SELECT 1 FROM directory_nodes WHERE node_id=$1`, [nodeId])).rows;
+    expect(rows, "no row may be fabricated").toHaveLength(0);
+  });
+
+  it("heartbeat epoch coercion is node-TZ-INDEPENDENT (two regions must hash the same instant)", async () => {
+    // Two nodes in different regions hashing local time is a divergence that reads as corruption.
+    // A write using AT TIME ZONE would shift the stored instant under a non-UTC session.
+    const nodeId = `${P}tz-node`;
+    const ms = 1785200000123;
+    await seedNode(nodeId, 0);
+    await tzStore.applyTierB("directory_nodes", [{ key: nodeId, body: { node_id: nodeId, last_heartbeat_at: String(ms) } }]);
+    const tzServed = (await tzStore.serveTierB("directory_nodes", [nodeId]))[0].body as DirectoryNodeHeartbeatRecord;
+    const utcServed = (await store.serveTierB("directory_nodes", [nodeId]))[0].body as DirectoryNodeHeartbeatRecord;
+    expect(tzServed.last_heartbeat_at).toBe(String(ms));
+    expect(utcServed.last_heartbeat_at).toBe(String(ms));
+  });
+
+  it("directory_nodes is in BOTH tiers and the store resolves each to its own entry", async () => {
+    // The one table in two tiers. If either lookup resolved to the wrong entry, Tier-A applies would
+    // run through an LWW merge (or Tier-B pulls would hash immutable columns) and the divergence
+    // would be silent.
+    expect(store.tierATables()).toContain("directory_nodes");
+    expect(store.tierBTables()).toContain("directory_nodes");
+    const nodeId = `${P}bothtiers`;
+    await seedNode(nodeId, 1785200000000);
+    // The Tier-B body carries the heartbeat and NOT the identity columns.
+    const served = (await store.serveTierB("directory_nodes", [nodeId]))[0].body as Record<string, unknown>;
+    expect(Object.keys(served).sort()).toEqual(["last_heartbeat_at", "node_id"]);
   });
 
   // ── DOD-SIGNAL-REPLICATION-1: signal_records must actually apply ────────────────────────────
