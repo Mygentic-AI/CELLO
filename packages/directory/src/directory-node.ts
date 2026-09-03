@@ -349,11 +349,16 @@ export function buildAssignmentTbs(
   highStakes: boolean,
   priorRelayId: string,
 ): Uint8Array {
+  // `!!` and not `!== ""`. The caller's peer-id parameters are typed optional and the call site
+  // silences that with `!`, so `undefined` can reach here: `undefined !== ""` is TRUE, and the
+  // chain would walk on to `.length` on an undefined array and throw, taking down the whole
+  // session-request handler instead of falling back to the short layout. The pre-refactor code was
+  // a plain truthiness chain and short-circuited correctly; this keeps that behaviour exactly.
   const endpointsKnown =
-    initiatorSessionPeerId !== "" &&
-    counterpartySessionPeerId !== "" &&
-    initiatorSessionAddrs.length > 0 &&
-    counterpartySessionAddrs.length > 0;
+    !!initiatorSessionPeerId &&
+    !!counterpartySessionPeerId &&
+    initiatorSessionAddrs?.length > 0 &&
+    counterpartySessionAddrs?.length > 0;
 
   if (!endpointsKnown) {
     return buildSessionEstablishmentTbs(sessionId, pubA, pubB, genesisPrevRoot, timestamp);

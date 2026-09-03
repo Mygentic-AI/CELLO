@@ -149,6 +149,32 @@ describe("H-2: session-establishment TBS drift guard", () => {
     expect(Buffer.from(local).equals(Buffer.from(short))).toBe(false);
   });
 
+  /**
+   * ALL FOUR clauses of the endpoints-known rule, one empty field each.
+   *
+   * The file used to empty only the COUNTERPARTY, which left two of the four clauses unexercised:
+   * a mutation that disabled the initiator-peer-id clause passed the whole suite, because the
+   * counterparty clause was still there to catch every case the tests used. Review measured that
+   * and it was right — "another clause still gates it" is true of the inputs the tests happen to
+   * use, not of the clause being removed.
+   */
+  it.each([
+    ["initiator peer id empty",  "",                        ["/ip4/10.0.0.1/tcp/4001"], "12D3KooWCounterpartyPeerId", ["/ip4/10.0.0.2/tcp/4001"]],
+    ["initiator addrs empty",    "12D3KooWInitiatorPeerId", [],                         "12D3KooWCounterpartyPeerId", ["/ip4/10.0.0.2/tcp/4001"]],
+    ["counterparty addrs empty", "12D3KooWInitiatorPeerId", ["/ip4/10.0.0.1/tcp/4001"], "12D3KooWCounterpartyPeerId", []],
+  ] as Array<[string, string, string[], string, string[]]>)(
+    "falls back to the 5-field layout — %s",
+    (_label, initPeer, initAddrs, cpPeer, cpAddrs) => {
+      const timestamp = 1_700_000_000_000;
+      const local = buildAssignmentTbs(
+        sessionId, pubA, pubB, genesisPrevRoot, timestamp,
+        initPeer, initAddrs, cpPeer, cpAddrs, "relay", false, "",
+      );
+      const published = buildSessionEstablishmentTbs(sessionId, pubA, pubB, genesisPrevRoot, timestamp);
+      expect(Buffer.from(local).equals(Buffer.from(published))).toBe(true);
+    },
+  );
+
   it("falls back to 5-field layout when any M7 field is empty", () => {
     const timestamp = 1_700_000_000_000;
     // counterparty peer id empty → must fall back to the 5-field legacy layout.
