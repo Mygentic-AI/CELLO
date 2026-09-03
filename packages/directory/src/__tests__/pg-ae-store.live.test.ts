@@ -174,17 +174,69 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
     expect(advertised).toBe(peerComputed);
   });
 
-  it("REFUSES a heartbeat for a node whose identity row has not replicated — it does not invent one", async () => {
+  it("one unknown node does NOT discard the real heartbeats behind it in the same batch", async () => {
+    // The attack the containment exists for. The PEER chooses what serveTierB returns and in what
+    // order, so it serves the poisoned key FIRST. If the refusal aborted the batch, this peer would
+    // mute directory_nodes reconciliation every round, indefinitely — the guard costing the honest
+    // path everything and the attacker one string. Ordering matters, so the unknown key is deliberately
+    // first: with the records reversed this test would pass even with the batch-aborting behaviour.
+    const realNode = `${P}real-node`;
+    const fresh = 1785200060000;
+    await seedNode(realNode, 0);
+
+    const changed = await store.applyTierB("directory_nodes", [
+      { key: `${P}unknown-first`, body: { node_id: `${P}unknown-first`, last_heartbeat_at: String(fresh) } },
+      { key: realNode, body: { node_id: realNode, last_heartbeat_at: String(fresh) } },
+    ]);
+
+    expect(changed, "the real record behind the poisoned one must still apply").toBe(1);
+    const ms = (await pool.query(
+      `SELECT (EXTRACT(EPOCH FROM last_heartbeat_at)*1000)::bigint AS ms FROM directory_nodes WHERE node_id=$1`,
+      [realNode],
+    )).rows[0].ms;
+    expect(String(ms)).toBe(String(fresh));
+    // And the unknown one still created nothing.
+    expect((await pool.query(`SELECT 1 FROM directory_nodes WHERE node_id=$1`, [`${P}unknown-first`])).rows).toHaveLength(0);
+  });
+
+  it("a MALFORMED record still aborts the batch — only the unknown-key case is contained", async () => {
+    // The containment must not have widened into "Tier-B swallows everything". A type violation is a
+    // protocol violation by the peer and the kill switch must not merge from a peer we cannot parse,
+    // so this one still throws out of applyTierB.
+    const nodeId = `${P}abort-check`;
+    await seedNode(nodeId, 0);
+    await expect(
+      store.applyTierB("directory_nodes", [
+        { key: nodeId, body: { node_id: nodeId, last_heartbeat_at: 1785200060000 } as unknown as DirectoryNodeHeartbeatRecord },
+      ]),
+    ).rejects.toThrow(/last_heartbeat_at must be a string/);
+  });
+
+  it("REFUSES a heartbeat for a node whose identity row has not replicated — it does not invent one, and SAYS SO", async () => {
     // This entry owns ONE column of a row whose `region` is NOT NULL and belongs to the Tier-A spec.
     // There is no honest INSERT, and a fabricated identity row is what the tier split exists to
-    // prevent. Must fail LOUD and name the cause, not silently no-op.
+    // prevent. Skipping the record is correct; skipping it SILENTLY is not — a heartbeat that never
+    // lands and says nothing is indistinguishable from one that landed, so the log line is the whole
+    // difference between a contained refusal and a silent fallback.
+    const logged: Array<{ event: string; context: Record<string, unknown> }> = [];
+    const capturing = new PgAeStore(pool, undefined, {
+      error: (event: string, context: Record<string, unknown>) => logged.push({ event, context }),
+      warn: () => {}, info: () => {}, debug: () => {},
+    } as never);
+
     const nodeId = `${P}never-registered`;
     const body: DirectoryNodeHeartbeatRecord = { node_id: nodeId, last_heartbeat_at: "1785200060000" };
-    await expect(
-      store.applyTierB("directory_nodes", [{ key: nodeId, body }]),
-    ).rejects.toThrow(/heartbeat for unknown node/);
-    const rows = (await pool.query(`SELECT 1 FROM directory_nodes WHERE node_id=$1`, [nodeId])).rows;
-    expect(rows, "no row may be fabricated").toHaveLength(0);
+    const changed = await capturing.applyTierB("directory_nodes", [{ key: nodeId, body }]);
+
+    expect(changed, "nothing changed — the record was skipped, not applied").toBe(0);
+    expect((await pool.query(`SELECT 1 FROM directory_nodes WHERE node_id=$1`, [nodeId])).rows,
+      "no row may be fabricated").toHaveLength(0);
+
+    const refusal = logged.find((l) => l.event === "antientropy.apply.unknown_key");
+    expect(refusal, "the skip must reach the operator, not just return 0").toBeDefined();
+    expect(refusal!.context["table"]).toBe("directory_nodes");
+    expect(refusal!.context["key"]).toBe(nodeId);
+    expect(String(refusal!.context["reason"])).toMatch(/heartbeat for unknown node/);
   });
 
   it("heartbeat epoch coercion is node-TZ-INDEPENDENT (two regions must hash the same instant)", async () => {

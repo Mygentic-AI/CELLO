@@ -531,10 +531,13 @@ const DIRECTORY_NODE_HEARTBEATS: TierBPg = {
   // and the engine records it per table without starving the other Tier-B tables.
   insert: async (_client, body) => {
     const h = body as DirectoryNodeHeartbeatRecord;
-    throw new Error(
+    throw new TierBUnknownKeyError(
+      "directory_nodes",
+      h.node_id,
       `pg-ae-store: heartbeat for unknown node '${h.node_id}' — its directory_nodes identity row ` +
         `has not replicated yet (Tier-A carries node_id+region; this Tier-B entry carries only ` +
-        `last_heartbeat_at and must not invent one). Retries once Tier-A delivers the row.`,
+        `last_heartbeat_at and must not invent one). This record is skipped; the rest of the batch ` +
+        `still applies, and it resolves once Tier-A delivers the row.`,
     );
   },
   // Writes the MERGED epoch millis back (NOT now()) — the winning value must be preserved or the LWW
@@ -563,6 +566,32 @@ function tierB(table: string): TierBPg {
   const t = TIER_B.find((x) => x.spec.table === table);
   if (!t) throw new Error(`pg-ae-store: unknown Tier-B table '${table}'`);
   return t;
+}
+
+/**
+ * A Tier-B record naming a key this node holds no row for, in a table whose Tier-B entry owns only
+ * SOME of that row's columns and therefore cannot honestly create it.
+ *
+ * Distinguished from every other Tier-B failure ON PURPOSE, because the two need opposite handling.
+ * A key/body mismatch or a type violation is a protocol violation by the peer and correctly ABORTS
+ * the table's batch — the kill switch must not merge anything from a peer speaking a different
+ * encoding. This one is not a protocol violation at all: it is an ORDERING artifact, normal and
+ * self-healing, because Tier A applies before Tier B in every round and delivers the identity row.
+ *
+ * Aborting the batch on it would hand an authenticated peer a mute button. The peer chooses what
+ * `serveTierB` returns and in what order, so serving one unknown key FIRST would discard every real
+ * heartbeat behind it, every round, indefinitely — the guard costing the honest path everything and
+ * the attacker one string. So this is contained per record and the round continues.
+ */
+class TierBUnknownKeyError extends Error {
+  readonly table: string;
+  readonly key: string;
+  constructor(table: string, key: string, message: string) {
+    super(message);
+    this.name = "TierBUnknownKeyError";
+    this.table = table;
+    this.key = key;
+  }
 }
 
 /** pg unique-constraint / exclusion violation (SQLSTATE 23505) — the insert-race retry signal. */
@@ -804,7 +833,22 @@ export class PgAeStore implements AeStoreView {
     if (records.length === 0) return 0;
     const t = tierB(table);
     let changed = 0;
-    for (const rec of records) changed += await this.#applyOneTierB(t, rec);
+    for (const rec of records) {
+      try {
+        changed += await this.#applyOneTierB(t, rec);
+      } catch (err) {
+        // ONLY the unknown-key case is contained. Everything else — a key/body mismatch, a type
+        // violation, a pg error — still propagates and aborts the table's batch, because those are
+        // protocol violations and the kill switch must not merge from a peer we cannot parse. See
+        // TierBUnknownKeyError for why this one is the opposite case.
+        if (!(err instanceof TierBUnknownKeyError)) throw err;
+        this.#logger?.error("antientropy.apply.unknown_key", {
+          table: t.spec.table,
+          key: err.key,
+          reason: err.message,
+        });
+      }
+    }
     return changed;
   }
 
