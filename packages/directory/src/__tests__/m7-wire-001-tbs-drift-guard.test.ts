@@ -175,6 +175,38 @@ describe("H-2: session-establishment TBS drift guard", () => {
     },
   );
 
+  it("an UNDEFINED endpoint short-circuits to the short layout instead of throwing", () => {
+    /**
+     * The shape `!!` and `?.` exist for, and the one nothing tested. The peer-id parameters are
+     * typed optional at the caller and the call site silences that with `!`, so undefined can
+     * reach here. Written as `!== ""` the chain evaluates `undefined !== ""` as TRUE and walks on
+     * to `.length` on an undefined array — a TypeError that takes down the whole session-request
+     * handler, outside its try block, so the initiator gets no frame and no error at all.
+     *
+     * Both halves of that fix were individually redundant, which is why neither had teeth: with
+     * `?.` present the `!==""` mutant is harmless, and with `!!` present dropping `?.` is harmless
+     * for an undefined PEER ID because it short-circuits first. Only "peer id present, addrs
+     * undefined" separates them, and that is the second case below.
+     */
+    const timestamp = 1_700_000_000_000;
+    const short = buildSessionEstablishmentTbs(sessionId, pubA, pubB, genesisPrevRoot, timestamp);
+
+    const undefPeer = buildAssignmentTbs(
+      sessionId, pubA, pubB, genesisPrevRoot, timestamp,
+      undefined as unknown as string, undefined as unknown as string[],
+      "12D3KooWCounterpartyPeerId", ["/ip4/10.0.0.2/tcp/4001"], "relay", false, "",
+    );
+    expect(Buffer.from(undefPeer).equals(Buffer.from(short))).toBe(true);
+
+    // Peer id PRESENT, addrs undefined — the only shape that separates `!!` from `?.`.
+    const undefAddrs = buildAssignmentTbs(
+      sessionId, pubA, pubB, genesisPrevRoot, timestamp,
+      "12D3KooWInitiatorPeerId", undefined as unknown as string[],
+      "12D3KooWCounterpartyPeerId", ["/ip4/10.0.0.2/tcp/4001"], "relay", false, "",
+    );
+    expect(Buffer.from(undefAddrs).equals(Buffer.from(short))).toBe(true);
+  });
+
   it("falls back to 5-field layout when any M7 field is empty", () => {
     const timestamp = 1_700_000_000_000;
     // counterparty peer id empty → must fall back to the 5-field legacy layout.

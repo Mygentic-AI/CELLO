@@ -132,23 +132,31 @@ describe("017-TBS: the signed bytes survive the wire", () => {
     expect(wire["prior_relay_id"]).toBe("");
   });
 
-  it("does NOT put the two fields on the wire when they are NOT signed", () => {
-    /**
-     * The short layout does not cover them. Sending an unsigned `high_stakes` would let a MITM
-     * flip a value nothing can detect — the same reason `transport_mode` is gated. The client
-     * ignores them on this path regardless (its arity check needs the five M7 values first), so
-     * emitting them buys nothing and costs the integrity claim.
-     */
-    const unknownEndpoints = {
-      ...assignmentWith(true, "a".repeat(64)),
-      counterparty_session_peer_id: "",
-      counterparty_session_addrs: [],
-    };
-    const wire = wireFieldsOf(unknownEndpoints);
-    expect(wire["counterparty_session_peer_id"]).toBeUndefined();
-    expect(wire["high_stakes"], "unsigned on the short layout — must not ship").toBeUndefined();
-    expect(wire["prior_relay_id"], "unsigned on the short layout — must not ship").toBeUndefined();
-  });
+  /**
+   * ONE EMPTY FIELD AT A TIME, one case per clause of the encoder's `onLongLayout`.
+   *
+   * The first version of this test emptied BOTH counterparty fields at once, which left all four
+   * clauses individually mutation-proof: delete any one of them and the other three still gated the
+   * single case. That is the identical defect the drift guard was pulled up for one commit earlier,
+   * reproduced in the file written to fix it — so it is worth naming rather than quietly widening.
+   *
+   * What is being protected: on the short layout these two fields are NOT in the TBS. Shipping them
+   * anyway puts values on the wire that no signature covers, and a MITM could flip `high_stakes`
+   * with nothing able to detect it. Same reason `transport_mode` is gated.
+   */
+  it.each([
+    ["initiator peer id unknown",    { initiator_session_peer_id: "" }],
+    ["initiator addrs unknown",      { initiator_session_addrs: [] }],
+    ["counterparty peer id unknown", { counterparty_session_peer_id: "" }],
+    ["counterparty addrs unknown",   { counterparty_session_addrs: [] }],
+  ] as Array<[string, Record<string, unknown>]>)(
+    "does NOT put the two fields on the wire when they are NOT signed — %s",
+    (_label, override) => {
+      const wire = wireFieldsOf({ ...assignmentWith(true, "a".repeat(64)), ...override });
+      expect(wire["high_stakes"], "unsigned on the short layout — must not ship").toBeUndefined();
+      expect(wire["prior_relay_id"], "unsigned on the short layout — must not ship").toBeUndefined();
+    },
+  );
 
   it("a real prior relay id reaches the wire unchanged", () => {
     const priorRelayId = "a".repeat(64);
