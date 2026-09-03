@@ -20,21 +20,48 @@ micro orders (§7); write and pull those individually.
 
 ---
 
-## 0. ⚠️ THE ONE THING ANDRE MUST CONFIRM BEFORE UNIT 4
+## 0. ✅ RULED BY ANDRE 2026-09-03 — the offline counterparty. Do not re-open.
 
-**When the counterparty is OFFLINE at handover, we cannot get their tip attestation, so handover
-cannot complete.** Something has to happen anyway.
+**The question was:** the counterparty is offline when the relay dies, so their tip attestation
+cannot be obtained and the handover cannot complete. What happens?
 
-**Assumed, by me, not by Andre — flip it in one line if wrong:** the session **degrades** rather
-than blocking. The present party may keep talking; the receipt records that the handover was
-unattested, at the weaker evidence tier `UNILATERAL-1` already built. The operator is told at the
-moment it happens, not at the seal.
+**All three options originally offered here were REJECTED, and the reasoning is the important part:**
 
-**The two rejected alternatives, so the choice is legible:** *block* (refuse to continue until the
-counterparty returns — makes our relay outage their problem), or *wait indefinitely* (a pending
-state with no terminal answer, the failure mode this milestone keeps finding).
+> *"I don't think carrying on should mean having a conversation that can be part of the
+> cryptographic paper trail. It's just not what we do."*
 
-Units 1–3 do not depend on this. **Unit 4 does. Do not start unit 4 until it is confirmed.**
+**The ruling:**
+
+1. **The relay assignment DOES move.** The client gets a new witness assigned and is ready to go.
+   That part does not wait for anybody.
+2. **The conversation does NOT resume until the counterparty is back and has attested the tip.**
+   No new content enters the hash chain in the meantime.
+3. **Nothing unwitnessed is ever admitted to the paper trail.** There is no degraded tier, no
+   "carry on and mark it weak", no unattested stretch inside a receipt. A receipt covers witnessed
+   content or it does not exist.
+
+**Why this is better than what I proposed, stated so nobody re-litigates it:** a conversation needs
+two parties. If the counterparty is gone there is nothing to say to them anyway, so "let the present
+party keep talking" was solving a problem that does not arise — at the cost of the one property the
+product exists to provide. Andre: *"You can't have a conversation until the other person is back. If
+the other person isn't back, there's nothing new to start. You just have to wait."*
+
+### The one sub-question left open, and it is small
+
+**How the resume is TRIGGERED.** Andre: *"I'm not sure about retrying all the time."* He is right to
+flag it — a poll loop against a peer who may be gone for days is waste, and this milestone has
+already paid for one of those (2,675 reservation retries in a single daemon's log).
+
+**Resolve it in unit 3, and prefer event-driven over polling:** the daemon already learns when a
+counterparty comes back (presence/liveness is live and replicated — `agent_presence` is a Tier-B
+anti-entropy table). Attempt the handover on that signal, not on a timer. **Decide it with a
+measurement, not a guess**, and write the choice into the unit's review.
+
+### What the operator sees while waiting
+
+Not specified here on purpose — it is one sentence of copy and **wording is Andre's call**
+(offer variants at unit 3, do not invent one). What it must convey: the conversation is intact and
+paused, not broken; it resumes by itself when the other side returns; nothing has been lost.
 
 ---
 

@@ -686,7 +686,14 @@ public repo surfaces in an afternoon.
   take the same path as a mismatched one?
 - Fix every hit. **Rewrite — do not delete — every nearby comment asserting a property the code does
   not enforce.**
-- **⚠️ OPEN CALL FOR ANDRE — this line is unbounded as written** (*"unknown scope by construction"*,
+> **✅ BOUNDED BY ANDRE 2026-09-03: the handlers a STRANGER CAN REACH from outside, not every
+> verification call in both packages.** The open call below is answered and closed. Scope is now the
+> externally-reachable frame handlers and their verification paths; an internal-only call site is
+> out of scope unless a reachable handler leads to it. Rationale: the relay third of this sweep
+> produced exactly ONE real hit, so the yield is low per call site, while the class is precisely
+> what a coding agent pointed at the public repo surfaces. Unbounded, nobody starts it.
+
+- **⚠️ ~~OPEN CALL FOR ANDRE~~ — ANSWERED ABOVE. This line WAS unbounded as written** (*"unknown scope by construction"*,
   §0z), and it is now a visible open row rather than a parked one. Worth bounding at pull time to the
   handlers a stranger can actually reach, rather than every verification call in both packages. Not
   narrowed here: quietly shrinking a gate line is not a coder's call.
@@ -920,6 +927,26 @@ an attacker walks around.
   block of peer-authored text an operator ever receives — gets only the character denylist.
 
 ### `DOD-M15-HEARTBEAT-1` — ❌ Directory nodes can see each other's heartbeats
+> **BUILD IT — ruled by Andre 2026-09-03, on the migration argument.** *"Anything that's going to
+> change the tables in the directories I'd rather build now, because we don't want to invalidate or
+> do a whole lot of backward-compatibility work once we have users."* Same reasoning Tier 4 was
+> ruled in on: a schema change is cheapest against an empty database and never gets cheaper.
+>
+> **⚙️ SIZED 2026-09-03, and it is SMALLER than the cost note below implies — ONE micro order.**
+> The note is right that this needs a Tier-B mutable merge with a version column, and wrong to leave
+> the impression that the mechanism must be built. **Tier-B already exists and already carries a
+> table of exactly this shape.** `pg-ae-store.ts` has `const TIER_B = [SUSPENSIONS, PRESENCE]`, and
+> `PRESENCE` (`agent_presence`) is a mutable, per-key, merged-across-nodes record with
+> `last_seen_at` / `updated_at` — structurally what a heartbeat is. The wire protocol, the digest
+> and version-map exchange, and the merge plumbing are all live. **The work is a third entry in a
+> two-entry list**, following the `PRESENCE` template (`spec`, `keyColumn`, `select`, `merge`,
+> `rowToBody`, `toVersionRow`, `validateBody`), plus its migration and its merge function.
+>
+> **What it buys the operator:** a sealed receipt today is confirmed by ONE node's own say-so — the
+> local checkpoint path writes it unilaterally, which is why receipts do finish. The federated
+> 2-of-3 countersignature has never once succeeded. This is what makes "you do not have to trust a
+> single directory" true rather than aspirational.
+
 `DOD-HEARTBEAT-REPLICATION-1`. Every node reads the other two as never-heartbeated and counts
 `availableNodes: 1` against `requiredThreshold: 2`; federation checkpoints have **never once
 succeeded**.
@@ -1325,7 +1352,13 @@ an improvement, not a mitigation we are counting on; the fleet is two relays reg
   healthy** — exactly the silent-loss-of-inbound failure `DOD-NAT-REACHABILITY-1` was built to kill.
   Whoever pulls this line starts by explaining those numbers, not by adding relays under them.
 
-### `DOD-M15-RELAYFANOUT-1` — ❌ A single relay's account of a conversation can be cross-checked
+### `DOD-M15-RELAYFANOUT-1` — ⬇️ OUT OF GATE (Andre 2026-09-03) · was ❌ A single relay's account of a conversation can be cross-checked
+> **Ruled post-launch by Andre, 2026-09-03.** It only bites if a relay is DISHONEST, and we run the
+> relays. It is not findable by reading the repo (the §Priority Override filter demotes exactly
+> this), and building it is one of the largest remaining pieces in the milestone. **Not dropped** —
+> the reasoning below still stands and it is still the right thing to build; launch does not wait
+> for it. Note it serves `DOD-M15-UNILATERAL-1`'s evidenced-absence too, which is already ✅ without
+> it.
 Serves **three** separate problems, which is a good sign it is the right thing to build: truncation
 resistance at seal, evidenced absence for `DOD-M15-UNILATERAL-1`, and the corroboration layer below.
 - **Truncation** is not caught by more verifiers: a primary directory that has honestly relayed the
