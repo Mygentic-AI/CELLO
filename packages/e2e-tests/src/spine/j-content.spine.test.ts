@@ -1102,9 +1102,11 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
    *      is restart the daemon, which is exactly what erased the old in-memory notice.
    *
    * The screener is the real one — the enforcing gateway sidecar the shipped binary spawns, not a
-   * test double. The message is predominantly Cyrillic, which trips IN-003's language allowlist
+   * test double. The message is predominantly HAN, which trips IN-003's language allowlist
    * (`inbound_language_blocked`, terminal) with no model installed, so this exercises a genuine
-   * content detector rather than a seam. A terminal block is not an error path: it leafs the
+   * content detector rather than a seam. **It must not be Cyrillic** — see the payload below, which
+   * carries the measurement; naming the wrong script here is an instruction to reintroduce the
+   * exact payload that makes this test stop testing a block. A terminal block is not an error path: it leafs the
    * original hash at its canonical position and ACKS the sender, so nothing fails and nothing
    * retries — which is precisely why it had no notice and why the silence was total.
    */
@@ -1187,7 +1189,12 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
       "the DETECTOR's reason, not a generic seam label — the remedy differs per detector (Invariant 3)",
     ).toBe("inbound_language_blocked");
     expect(notice!.impact, "it says the sender was acked, so nobody sits waiting for a resend").toMatch(/acknowledged/);
-    expect(before.guidance, "and the advice travels WITH the notice, never separately").toMatch(/Waiting longer will not help/);
+    // The header must be the one for a BLOCK, not the refused-kind sentence: this message WAS
+    // verified, it IS in the chain, and the sender WAS acknowledged, so "received and refused, not
+    // verified, neither ingested nor shown" is false in three clauses. The operator reads the
+    // header first.
+    expect(before.guidance, "and the advice travels WITH the notice, never separately").toMatch(/BLOCKED by its screener/);
+    expect(before.guidance, "and must not carry a header that is false for this row").not.toMatch(/were not verified/);
     // The blocked content NEVER travels. A screener that can be talked into surfacing what it
     // blocked is not a screener, and the inbox is a surface an agent reads directly.
     expect(JSON.stringify(before), "the blocked message must not appear in the notice").not.toContain(BLOCKED);
