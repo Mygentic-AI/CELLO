@@ -125,7 +125,15 @@ export class AeSyncService {
   readonly #cfg: AeSyncConfig;
   #timer: ReturnType<typeof setInterval> | undefined;
   /** Per-peer consecutive fork-signature counter (pulled>0 && applied===0). */
-  readonly #forkStreak = new Map<string, number>();
+  /**
+   * peerNodeId → (`${tier}:${table}` → consecutive rounds showing the fork signature).
+   *
+   * Per TABLE, not per peer. A single round-wide counter was correct only while every synced table
+   * changed on an event; `directory_nodes.last_heartbeat_at` changes on every node every 30-60s, so
+   * a round-wide "applied === 0" now essentially never holds and would mask a fork in any other
+   * table — including the kill switch.
+   */
+  readonly #forkStreak = new Map<string, Map<string, number>>();
 
   constructor(cfg: AeSyncConfig) {
     this.#cfg = cfg;
@@ -400,27 +408,50 @@ export class AeSyncService {
       // mid-round write; a STREAK is a same-key/different-content fork that will never converge.
       // A shortfall or a table failure must NOT reset the streak: both mean this round proved
       // nothing, and clearing the counter on a round that proved nothing is how a fork hides.
+      //
+      // ⚠️ PER (PEER, TIER, TABLE) — NOT ROUND-WIDE TOTALS, and the difference is load-bearing.
+      // Round-wide, the signature is `pulled > 0 && applied === 0`, which requires EVERY table to
+      // apply nothing. That held while every synced table changed on an EVENT (a suspension, a
+      // presence edge, a new profile), so a quiet round was the normal case. It stopped holding when
+      // `directory_nodes.last_heartbeat_at` joined Tier B (DOD-M15-HEARTBEAT-1): every node
+      // heartbeats every 30-60s, so almost every round now pulls and applies a fresher heartbeat.
+      // A genuine fork on `agent_suspensions` — the KILL SWITCH — would then report
+      // `pulled=2, applied=1`, `applied === 0` would be false, the streak would never increment, and
+      // the alarm would never fire. Keying the streak per table is what keeps one chatty table from
+      // masking every other table's divergence, and it is what `unconverged` was introduced for.
+      const forkKeys = unconverged
+        .filter((u) => u.pulled > 0 && u.applied === 0)
+        .map((u) => `${u.tier}:${u.table}`);
+
       if (shortfall > 0 || failures.length > 0) {
-        // leave the streak untouched — neither confirmed nor cleared
-      } else if (pulled > 0 && applied === 0) {
-        const streak = (this.#forkStreak.get(peerNodeId) ?? 0) + 1;
-        this.#forkStreak.set(peerNodeId, streak);
-        if (streak >= 2) {
-          logger.error("antientropy.round.fork_suspected", {
-            peerNodeId, consecutive: streak, correlationId, unconverged,
-            // READ THE TIER before treating this as divergence. Tier-A: a record whose hash we do not
-            // hold was fetched and inserted nothing, so the same natural key carries different
-            // content — a real fork insert-if-absent can never resolve. Tier-B: `applied` counts
-            // rows whose VERSION MOVED, so a merge confirming the local copy already won is healthy
-            // and lands here anyway. This alarm ran for a day on totals alone with no way to tell
-            // the two apart, and answering it took diffing every table off two live nodes.
-            reason: unconverged.some((u) => u.tier === "A")
-              ? "a Tier-A table fetched records that did not insert — same natural key, different content"
-              : "Tier-B only — may be a benign merge that confirmed the local copy, NOT necessarily divergence",
-          });
-        }
+        // leave every streak untouched — neither confirmed nor cleared
       } else {
-        this.#forkStreak.delete(peerNodeId);
+        const perTable = this.#forkStreak.get(peerNodeId) ?? new Map<string, number>();
+        this.#forkStreak.set(peerNodeId, perTable);
+        // Clear the streak for any table that DID converge this round, so a resolved fork stops
+        // alarming; only the tables still showing the signature carry their counter forward.
+        for (const tracked of [...perTable.keys()]) {
+          if (!forkKeys.includes(tracked)) perTable.delete(tracked);
+        }
+        for (const tableKey of forkKeys) {
+          const streak = (perTable.get(tableKey) ?? 0) + 1;
+          perTable.set(tableKey, streak);
+          if (streak >= 2) {
+            const [tier, table] = tableKey.split(":");
+            logger.error("antientropy.round.fork_suspected", {
+              peerNodeId, tier, table, consecutive: streak, correlationId, unconverged,
+              // READ THE TIER before treating this as divergence. Tier-A: a record whose hash we do
+              // not hold was fetched and inserted nothing, so the same natural key carries different
+              // content — a real fork insert-if-absent can never resolve. Tier-B: `applied` counts
+              // rows whose VERSION MOVED, so a merge confirming the local copy already won is healthy
+              // and lands here anyway. This alarm ran for a day on totals alone with no way to tell
+              // the two apart, and answering it took diffing every table off two live nodes.
+              reason: tier === "A"
+                ? "a Tier-A table fetched records that did not insert — same natural key, different content"
+                : "Tier-B only — may be a benign merge that confirmed the local copy, NOT necessarily divergence",
+            });
+          }
+        }
       }
     } catch (err) {
       logger.warn("antientropy.round.failed", {

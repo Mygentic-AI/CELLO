@@ -24,6 +24,7 @@ import type { AeStoreView, TierARecord, TierBRecord } from "../anti-entropy-engi
 import { computeTableDigest } from "../set-reconciliation.js";
 import { tierBTableDigest } from "../ae-round.js";
 import { encodeTierARecord, AGENT_REVOCATIONS_SPEC } from "../ae-table-encoders.js";
+import { encodeTierBVersion, DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC } from "../ae-mutable-version.js";
 
 // ── In-memory lp-capable Stream pair (send() feeds the peer's async iterator) ────────────────
 interface Inbox { chunks: Array<Uint8Array | null>; waiters: Array<() => void> }
@@ -76,22 +77,37 @@ const manifest: ConsortiumManifest = {
 type RevRow = { agent_id: string; epoch_id: string | null; reason: string | null; signature: string; revoked_at: string };
 class MemStore implements AeStoreView {
   revocations = new Map<string, RevRow>();
+  /**
+   * node_id → epoch-millis, modelling `directory_nodes`' Tier-B heartbeat: the first synced table
+   * that changes on a TIMER rather than on an event. Empty by default, so every test written before
+   * it sees `tierBTables() === []` and is unaffected.
+   */
+  heartbeats = new Map<string, string>();
   tierATables(): string[] { return ["agent_revocations"]; }
-  tierBTables(): string[] { return []; }
+  tierBTables(): string[] { return this.heartbeats.size > 0 ? ["directory_nodes"] : []; }
   tierARecordHashes(): string[] {
     return [...this.revocations.values()].map((r) => encodeTierARecord(AGENT_REVOCATIONS_SPEC, r).hash);
   }
   // Digest-first advertisement: the O(1)-per-table divergence check (design §3 step 1).
   tierATableDigest(): string { return computeTableDigest(this.tierARecordHashes()); }
   tierBTableDigest(): string { return tierBTableDigest(this.tierBVersions()); }
-  tierBVersions(): Map<string, string> { return new Map(); }
+  tierBVersions(): Map<string, string> {
+    return new Map([...this.heartbeats].map(([node_id, last_heartbeat_at]) => [
+      node_id,
+      encodeTierBVersion(DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC, { node_id, last_heartbeat_at }).versionHash,
+    ]));
+  }
   serveTierA(_t: string, hashes: readonly string[]): TierARecord[] {
     const want = new Set(hashes);
     return [...this.revocations.values()]
       .map((r) => ({ hash: encodeTierARecord(AGENT_REVOCATIONS_SPEC, r).hash, body: r }))
       .filter((rec) => want.has(rec.hash));
   }
-  serveTierB(): TierBRecord[] { return []; }
+  serveTierB(_t: string, keys: readonly string[]): TierBRecord[] {
+    return keys
+      .filter((k) => this.heartbeats.has(k))
+      .map((k) => ({ key: k, body: { node_id: k, last_heartbeat_at: this.heartbeats.get(k)! } }));
+  }
   applyTierA(_t: string, records: readonly TierARecord[]): number {
     let n = 0;
     for (const rec of records) {
@@ -100,7 +116,19 @@ class MemStore implements AeStoreView {
     }
     return n;
   }
-  applyTierB(): number { return 0; }
+  /** Freshest-wins, matching `mergeDirectoryNodeHeartbeat`; counts rows whose value actually moved. */
+  applyTierB(_t: string, records: readonly TierBRecord[]): number {
+    let n = 0;
+    for (const rec of records) {
+      const incoming = rec.body as { node_id: string; last_heartbeat_at: string };
+      const local = this.heartbeats.get(incoming.node_id);
+      if (local === undefined || Number(incoming.last_heartbeat_at) > Number(local)) {
+        this.heartbeats.set(incoming.node_id, incoming.last_heartbeat_at);
+        n++;
+      }
+    }
+    return n;
+  }
 }
 const rev = (id: string): RevRow => ({ agent_id: id, epoch_id: "e1", reason: "c", signature: "ab".repeat(64), revoked_at: "1785200000000" });
 
@@ -263,6 +291,49 @@ describe("AeSyncService — libp2p-face wiring", () => {
     expect(completed.at(-1)![1].unconverged).toEqual([
       { tier: "A", table: "agent_revocations", planned: 1, pulled: 1, applied: 0 },
     ]);
+  });
+
+  it("a CHATTY table applying every round does not mask a fork in another table", async () => {
+    // The regression DOD-M15-HEARTBEAT-1 would have introduced. The alarm used to test round-wide
+    // totals — `pulled > 0 && applied === 0` — which requires EVERY table to apply nothing. That was
+    // true while every synced table changed only on an event. `directory_nodes.last_heartbeat_at`
+    // changes on every node every 30-60s, so from now on almost every round applies something.
+    //
+    // Here agent_revocations is genuinely forked (same key, different content — pulled, never
+    // applied) while a second table applies normally in the same round. Round-wide the totals are
+    // pulled=2 / applied=1, `applied === 0` is FALSE, and the streak would never increment: the fork
+    // — on the kill-switch-shaped table — would be invisible forever. Per-table, it still fires.
+    const respStore = new MemStore();
+    const dialStore = new MemStore();
+    // (a) the FORKED table — same natural key, different content on each side. Pulled every round,
+    //     applied never. This is the kill-switch-shaped failure the alarm exists for.
+    respStore.revocations.set("agFork", rev("agFork"));
+    dialStore.revocations.set("agFork", { ...rev("agFork"), reason: "different" });
+    // (b) the CHATTY table — directory_nodes' heartbeat, where the responder is simply always
+    //     fresher, exactly as a node heartbeating every 30-60s is. It applies on every round.
+    dialStore.heartbeats.set("node-a", "1785200000000");
+    respStore.heartbeats.set("node-a", "1785200060000");
+
+    const { respService, dialService, dialLogger } = pairServices({ respStore, dialStore });
+    await respService.start();
+    respService.stop();
+
+    await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+    // Second round: the heartbeat moves again, so this round ALSO applies something. Without the
+    // per-table streak the round-wide `applied === 0` is false on both rounds and no streak forms.
+    respStore.heartbeats.set("node-a", "1785200120000");
+    await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+
+    // Confirm the masking condition really was present — otherwise this test could pass for the
+    // trivial reason that the chatty table applied nothing and the round looked quiet after all.
+    const rounds = dialLogger.events.filter(([e]) => e === "antientropy.round.completed");
+    expect(Number(rounds.at(-1)![1].applied), "the chatty table must have applied this round").toBeGreaterThan(0);
+
+    const forks = dialLogger.events.filter(([e]) => e === "antientropy.round.fork_suspected");
+    expect(forks.length, "the fork must still be reported when another record applied").toBe(1);
+    // Name the TABLE, not just a count — the alarm has to say which one.
+    expect(forks[0][1].table).toBe("agent_revocations");
+    expect(forks[0][1].consecutive).toBe(2);
   });
 
   it("a healthy round carries NO unconverged field — the alarm's input must not be noise", async () => {
