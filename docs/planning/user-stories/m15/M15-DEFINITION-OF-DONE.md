@@ -958,6 +958,36 @@ succeeded**.
 - **A code comment blaming a "BIGSERIAL `id` collision" is wrong** and would send the repairer at the
   wrong fix; rewrite it (Invariant / `DOD-M15-CLAIM-COMMENTS-1`).
 
+### `DOD-M15-SCREENBLOCK-SILENT-1` — ❌ When we catch an attack aimed at you, you are told
+**Found 2026-09-03, [[2026-09-03_1158_relay-overload-and-the-four-things-underneath-it]]. Ruled BLOCKS by Andre 2026-09-03.**
+
+**What happens to you today:** the screener catches a prompt injection aimed at your agent. It is
+blocked correctly and never reaches the model. A leaf is recorded so both hash chains stay aligned,
+and the sender is acked so they stop retrying. **You are told nothing.** It is a line in a log file
+you have no reason to open.
+
+- **Only THREE refusal reasons reach the operator** — unknown hash algorithm, unavailable salt, hash
+  mismatch. `DOD-M15-REFUSED-INBOUND-SILENT-1` wired those on 2026-08-24 and that was the right first
+  cut (a version skew silences a conversation permanently). **The screener block was never wired, and
+  it is the one the product is about.**
+- **Also unsurfaced, from that unit's own pass-2 list:** `counterparty_gone`, `delivery_impaired`,
+  `content_undeliverable`. **`counterparty_gone` is the dangerous one** — it tells the operator their
+  peer *"may have crashed or gone offline — call `cello_close_session` to seal"* while the daemon
+  holds the real reason in memory. It hands them a network story for a verification fault **and
+  steers them toward sealing**, which read against `WITHHOLD-SEAL-1` is a nudge into exactly the
+  truncated close.
+- **⚠️ CHECK BEFORE SCOPING:** whether those pass-2 ACs actually landed on a later unit or exist only
+  in a closing note. Decides whether this is tracked work or forgotten work.
+- **`DOD-M15-SEALREJECT-MUTE-1` is the SAME SHAPE at a different door** (post-launch backlog: the seal
+  rejection tells nobody either). Nobody had connected the two. **Whether it follows this line into
+  the gate is Andre's call and is NOT assumed here.**
+- **Good model to copy:** the park path already fails closed, refuses by name, and remembers refusals
+  (`recoverParkedEntry`). The direct path does none of that.
+- **One crack to record:** a direct-path refusal sends no delivery ack, so the sender's backstop parks
+  the message and it can be **accepted** seconds later on the park path. A frame refused by name on
+  one path is accepted on the other, and the two events are not tied together.
+- **Enforcer:** journey — a screened message produces an operator-visible refusal naming the cause.
+
 # Tier 4 — Own the encryption, then bind the receipt
 
 **The largest coupled pair in the milestone, and both are inside the gate** — ruled on the migration
@@ -1178,6 +1208,84 @@ T-of-N log Decisions 1 and 2, plus its Part 4.
 
 ---
 
+### `DOD-M15-AUTHORSHIP-ABSENT-1` — ❌ A message with no proof of who wrote it is refused, not delivered
+**Found 2026-09-03, [[2026-09-03_1158_relay-overload-and-the-four-things-underneath-it]] — by accident, and it is the sharpest thing in that document. Ruled BLOCKS by
+Andre 2026-09-03.**
+
+**Andre's description, which is the whole line:** *"I show up with my passport and the photo doesn't
+match, I'm blocked. But if I arrive at immigration with no passport, they let me through."*
+
+- A proof record **present and wrong** (bad signature, or signed by someone who is not your
+  counterparty) → the session is **frozen**. Loud, immediate, correct.
+- A proof record **absent entirely** → the message is **ingested and delivered to your agent**, with
+  no check on who wrote it. **Fail-open on absence.**
+- **The code states the defect in its own words:** *"the per-message signer check is opt-in for the
+  sender — a party that passed the peer gate and wants to avoid the comparison simply omits the
+  proof."* That is the discoverability filter's exact shape: a reader with a coding agent finds this
+  in an afternoon and the comment hands it to them.
+- **Why it was built this way, and why the reason covers only half:** the proof and the message's
+  SEQUENCE NUMBER are welded into one structure, and the sequence comes from the relay. So an honest
+  peer genuinely cannot produce the record when the relay is unreachable, and refusing on absence
+  would make the relay a precondition for reading your mail. **That reasoning is sound for the
+  sequence and wrong for the signature** — a sender can always sign their own message; that never
+  needed the relay. **Fix shape: split them. Signature mandatory, sequence soft.**
+- **What it is NOT:** not a stranger walking in. The sender was still the authenticated peer, and the
+  screener and hash cross-check still run. What is lost is **proof of who wrote each message**, which
+  is the product.
+- **⚠️ SCOPE IMPACT ON [[M15-STORY-RELAYHANDOVER]]:** a real session may therefore contain leaves
+  with no signature, and handover's replay verifier REQUIRES one per leaf. Units 2–3 must decide what
+  happens to an unsigned leaf on replay — refuse the handover, or drop the leaf — and neither is
+  free. **Closing this line first makes that question disappear.**
+- **Where:** `cello-client/core/daemon/src/session-node-manager.ts` ~13614–13656 (the `else` branch),
+  `#recordFrameOrdering` ~13195, `ingestReceivedContent` ~8528 and its `verifiedAuthorship` doc
+  comment ~8546–8559.
+- **Enforcer:** unit — a message arriving with no authorship proof is refused by name, with a test
+  that reddens when the refusal is removed.
+
+### `DOD-M15-WITHHOLD-SEAL-1` — ❌ A counterparty cannot hide their last message and seal without it
+**Found 2026-09-03, [[2026-09-03_1158_relay-overload-and-the-four-things-underneath-it]]. Ruled BLOCKS by Andre 2026-09-03.** *"The receipt is the product. A path that
+lets the guilty party remove themselves from it is not a papercut."*
+
+**What happens to you:** somebody does something malicious in a conversation — an injection attempt,
+a wallet drain — and wants the paper trail not to contain it. Two ways out today:
+
+- **Force close:** refuse to take part in any closing ceremony. You are left with your local log and
+  no notarised receipt.
+- **Truncate:** seal unilaterally at N−1, omitting their last message. Every leaf validly signed,
+  nothing false, only something missing.
+
+**Andre's argument, and it is the fix:** to attack me at all you had to send me a properly formed
+message, signed by you and chained to the one before. **I hold your signature.** I cannot forge it
+and you cannot disown it. So I must be able to seal unilaterally **including** your message,
+whatever you do afterwards.
+
+- **The verification design ALREADY allows this — checked, do not re-derive.** The unilateral path is
+  deliberately asymmetric: your OWN leaves each need a relay receipt (your signature covers content,
+  not sequence, so without receipts you could renumber yourself), while the COUNTERPARTY's leaves
+  carry no receipt at all and are pinned by their own sender signature plus contiguity against your
+  receipt-pinned leaves. **Carrying the attacker's signed message with no receipt is exactly the case
+  the design anticipates.**
+- **The hole underneath it:** **only the sender submits a hash to the relay.** `submitMessageHash`
+  has one production caller, on the send path — **nothing submits a hash for a message RECEIVED.** So
+  on a DIRECT connection a malicious client delivers message N and never witnesses it; the relay's
+  account genuinely ends at N−1 and a truncated seal agrees with the witness.
+- **Composed with `AUTHORSHIP-ABSENT-1` it is worse:** the withheld message can also arrive with no
+  authorship proof, because absence is soft. Direct session, no ordering record, nothing witnessed
+  anywhere — and the code's own named mitigation for the missing signer check is relay-side
+  corroboration, which is the thing being withheld.
+- **The fix: the RECEIVER submits the hash of what it received.** It holds the sender's signature so
+  it cannot fabricate a leaf, and the relay can verify that before accepting. Closes withholding for
+  every direct session and gives the unilateral seal a witnessed leaf to stand on.
+- **Pairing available now:** relay-only routing is an operator setting and `high_stakes` landed in the
+  signed assignment in `017-TBS`. Forcing relay routing for high-stakes sessions is the obvious
+  pairing — accept the IP disclosure in exchange for a guaranteed witness.
+- **⚠️ CHECK BEFORE SCOPING (not blocking a decision):** does the daemon **assemble** a carried leaf
+  for a message that arrived with no relay ordering record? The verifier would accept one. If the
+  client already builds it, this requirement holds TODAY and the work is smaller than it looks.
+- **This line is why `DOD-M15-RELAYFANOUT-1` can safely leave the gate** — see the note there.
+- **Enforcer:** journey — a counterparty that withholds its last message cannot produce a seal the
+  other side's evidence does not contradict.
+
 # Tier 5 — Abuse controls, relay redundancy, infrastructure
 
 Parallel with Tier 4 — different disciplines, no shared files.
@@ -1359,6 +1467,16 @@ an improvement, not a mitigation we are counting on; the fleet is two relays reg
 > the reasoning below still stands and it is still the right thing to build; launch does not wait
 > for it. Note it serves `DOD-M15-UNILATERAL-1`'s evidenced-absence too, which is already ✅ without
 > it.
+>
+> **⚠️ THE RULING RESTED ON AN INCOMPLETE THREAT MODEL, CORRECTED 2026-09-03 — the conclusion still
+> holds, but ONLY because of what replaced it.** It was ruled out on "this only bites if a RELAY is
+> dishonest, and we run the relays." **That is wrong.** `DOD-M15-WITHHOLD-SEAL-1` establishes that a
+> **COUNTERPARTY can truncate with no relay dishonesty at all** — only the sender submits a hash, so
+> on a direct connection a malicious peer delivers a message, never witnesses it, and the relay's
+> account honestly ends one short. **Truncation cover is therefore load-bearing, and is now carried
+> by `WITHHOLD-SEAL-1` (in the gate), whose receiver-side hash submission is cheaper and more
+> targeted than fanning out to more relays.** If `WITHHOLD-SEAL-1` is ever descoped, THIS LINE COMES
+> BACK INTO THE GATE WITH IT — the gate must never be left with no truncation cover at all.
 Serves **three** separate problems, which is a good sign it is the right thing to build: truncation
 resistance at seal, evidenced absence for `DOD-M15-UNILATERAL-1`, and the corroboration layer below.
 - **Truncation** is not caught by more verifiers: a primary directory that has honestly relayed the
@@ -2118,6 +2236,75 @@ and, for the made-true rows, the units that make them true.
 ---
 
 # POST-LAUNCH BACKLOG
+
+### `DOD-M15-RESERVE-PURPOSE-1` — 🅿️ POST-LAUNCH. A relay grants forwarding rows without asking what they are for
+**Found 2026-09-03, [[2026-09-03_1158_relay-overload-and-the-four-things-underneath-it]]. Ruled POST-LAUNCH by Andre 2026-09-03:** it needs 128 registered agents,
+and invite-only makes that expensive today. **Revisit before open signup — that is the trigger.**
+
+**What it would do to you:** your agent is behind a router, like almost everyone, so it needs the
+relay to hold a forwarding row for it. If the table is full your agent is **unreachable by anyone
+NAT'd while its own status reads perfectly healthy**, and the refusal in the relay's log names the
+attacker, not you being turned away.
+
+**The arithmetic:** 4,096 rows per relay - 32 per agent - **128 agents fill a relay** - two relays -
+**256 covers the fleet.** Registration is one Telegram round trip and an emailed code, 5/hour per
+requester, and **nothing caps how many agents one account may register** — roughly a day of one
+invited account per relay.
+
+- **32 cannot simply be lowered.** It mirrors the daemon's own `MAX_SESSION_NODES = 32`, so an
+  attacker holding 32 looks exactly like a busy legitimate agent. Tightening it caps real concurrency.
+- **A row is granted on request, not on need** — the relay never checks whether you are actually
+  NAT'd — and the reaper only runs above 80 per cent full and spares any row that carried traffic in
+  six hours, which is one message per row, a trickle.
+- **The fix (Andre's shape):** the reserve request states its purpose. Standing receiver → capped
+  small, no manifest (none can exist yet). Session → present the manifest, which is a
+  **reclassification** moving the row from the small budget to the session budget. Ceiling becomes
+  "a couple of receivers plus one per brokered session."
+- **⚠️ SHIPS WITH A DIRECTORY SESSION COUNTER, NEVER ALONE.** The fix moves the ceiling from 32 to
+  "however many sessions the directory brokers", and **nothing counts that today** — no quota, no
+  rate limit, no concurrent-session count anywhere in the directory. Without a meter the fix is worse
+  arithmetic than the status quo.
+- **Overlaps `DOD-M15-MULTIRELAY-1` (in the gate),** which names the same attack from the defender's
+  side — flooding the relay an agent's reservation landed on. **MULTIRELAY owns spreading an honest
+  agent's reservations; this line owns stopping an attacker occupying them.** Do not let either
+  absorb the other silently.
+- **Shares the restart hazard with `DOD-M15-MULTIDEVICE-1`** — see that line.
+- **Where:** `packages/relay/src/relay-connection-gater.ts` (`SLOT_CAP_PER_AGENT` 48,
+  `DEFAULT_SLOT_CEILING` 79, `admitSlot` 371, `reapIdleSlots` 479);
+  `packages/interfaces/src/relay-online-token.ts` (104 bytes — agent key, expiry, signature; **no
+  operator, no quota**); `packages/directory/db/migrations/V18__federation_schema.sql:20` (the live
+  `sessions` row records **no participants**, which is why sessions-per-operator is uncountable).
+
+### `DOD-M15-MULTIDEVICE-1` — 🅿️ POST-LAUNCH. One identity on two devices, and the second silently takes the first's traffic
+**Found 2026-09-03, [[2026-09-03_1158_relay-overload-and-the-four-things-underneath-it]]. Ruled POST-LAUNCH by Andre 2026-09-03:** it affects one operator's own
+two machines. Annoying, not a trust failure.
+
+**What happens to you:** you run the same agent on a laptop and a desktop. Both are legitimate.
+**The relay's delivery stream is keyed by public key**, so the second device's authentication
+overwrites the first and the first device's incoming leaves arrive at a node with no handler. **The
+directory routes inbound session offers through a map keyed by public key too** — last device to
+authenticate wins, and the first stops receiving invitations **with no indication on either machine.**
+Circuit dials are fine; it is the two pubkey-keyed maps that collapse, found independently in two
+repositories.
+
+- **THE POLICY IS DECIDED (Andre, 2026-09-03) even though the work is deferred:** multiple devices on
+  one identity **are allowed**, but they **may not share a relay** — *"Sorry, this public key is
+  already in use on this relay."* A relay cannot see what another holds, so it refuses locally and
+  the client falls back, which it already does (it requests reservations with every known relay).
+  Fixes the delivery-stream overwrite as a side effect.
+- **⚠️ 3a — THE RESTART TIEBREAK IS NEEDED IN THE GATE EVEN THOUGH THIS LINE IS NOT.** A daemon that
+  dies ungracefully returns with a **new peer ID under the same key**; a relay that has not noticed
+  the old one leave refuses the agent **its own front door**. That is the outage that forced the
+  reservation ceiling up from 15, so it is not hypothetical. **The same tiebreak is required by
+  `DOD-M15-RESERVE-PURPOSE-1` and by [[M15-STORY-RELAYHANDOVER]], which IS in the gate — so build it
+  once, there, not three times.** Andre's preferred shape: the newcomer wins, but only once the
+  incumbent's connection is **provably dead**.
+- **3b — which device gets an incoming offer is NOT solved by the relay rule and is still open.**
+  Both devices authenticate to directory signalling under the same key whatever relays they use.
+  Options recorded: offer to every device (first to accept wins — the only one where an invitation is
+  never silently lost), or today's last-active behaviour made deliberate and visible.
+- **Where:** `packages/relay/src/relay-node.ts` ~1420–1432; `packages/directory/src/directory-node.ts`
+  2060–2078 (`#streams` single pubkey-keyed vs `#agentStreams` a set used only for liveness counting).
 
 ### `DOD-M15-SCREENER-IDENTIFIER-FALSEPOS-1` — the secrets screener redacts CamelCase TYPE NAMES as credentials
 **FOUND 2026-08-24 by `CELLO_Coder_1`, in our own traffic, twice — filed here because BLOCKS is
