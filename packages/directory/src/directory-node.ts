@@ -346,6 +346,8 @@ export function buildAssignmentTbs(
   counterpartySessionPeerId: string,
   counterpartySessionAddrs: string[],
   transportMode: "direct" | "relay",
+  highStakes: boolean,
+  priorRelayId: string,
 ): Uint8Array {
   const endpointsKnown =
     initiatorSessionPeerId !== "" &&
@@ -357,6 +359,12 @@ export function buildAssignmentTbs(
     return buildSessionEstablishmentTbs(sessionId, pubA, pubB, genesisPrevRoot, timestamp);
   }
 
+  /**
+   * `highStakes` and `priorRelayId` are REQUIRED parameters, not optional ones, and that is the
+   * point: the caller must state them. An optional pair would default to `undefined`, the builder
+   * would drop to the 10-field layout, and the high-stakes flag would go on being signed over
+   * nothing — silently, which is the exact defect this change exists to close.
+   */
   return buildSessionEstablishmentTbs(
     sessionId,
     pubA,
@@ -368,6 +376,8 @@ export function buildAssignmentTbs(
     counterpartySessionPeerId,
     counterpartySessionAddrs,
     transportMode,
+    highStakes,
+    priorRelayId,
   );
 }
 
@@ -4276,6 +4286,13 @@ export class CelloDirectoryNode {
       counterpartySessionPeerId,
       counterpartySessionAddrs,
       transportMode,
+      // The flag the TARGET could not see. It arrives on the initiator's session_request and was
+      // recorded locally in #sessionHighStakes; signing it here is what finally tells the other
+      // side which tier it is being held to.
+      highStakes,
+      // "" on a fresh session. A resume assignment names the relay that witnessed up to the
+      // handover, and 017 stops here: nothing requests one yet, so this is always "" today.
+      "",
     );
 
     // SESSION-004 Step 4: Conflict detection (MEDIUM-N1 fix + IMPORTANT-N3 fix)
@@ -4392,6 +4409,12 @@ export class CelloDirectoryNode {
         counterparty_session_peer_id: counterpartySessionPeerId,
         counterparty_session_addrs: counterpartySessionAddrs,
         transport_mode: transportMode,
+        // 017-TBS. UNCONDITIONAL, unlike the two optional hints below, because these are inside the
+        // signature: the client rebuilds the TBS from the frame, and a field omitted here would
+        // send it to the 10-field layout while this assignment was signed over 12. Both are sent
+        // as values — `false` and `""` are answers, and dropping either would be the same bug.
+        high_stakes: highStakes,
+        prior_relay_id: "",
         // MONIKER-2 AC1b: unsigned pass-through hint; omitted from the wire when absent.
         ...(initiatorMoniker !== undefined ? { moniker: initiatorMoniker } : {}),
         // DOD-PRESENT-1: verified trust signals forwarded to the target (survivors of the dumb check).

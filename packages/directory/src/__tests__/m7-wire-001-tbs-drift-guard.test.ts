@@ -52,6 +52,8 @@ describe("H-2: session-establishment TBS drift guard", () => {
       "",
       [],
       "relay",
+      false,
+      "",
     );
 
     const published = buildSessionEstablishmentTbs(
@@ -79,6 +81,8 @@ describe("H-2: session-establishment TBS drift guard", () => {
       "",
       [],
       "direct",
+      false,
+      "",
     );
     const published = buildSessionEstablishmentTbs(
       sessionId,
@@ -116,6 +120,8 @@ describe("H-2: session-establishment TBS drift guard", () => {
       counterpartyPeerId,
       counterpartyAddrs,
       transportMode,
+      false,
+      "",
     );
 
     const published = buildSessionEstablishmentTbs(
@@ -129,6 +135,8 @@ describe("H-2: session-establishment TBS drift guard", () => {
       counterpartyPeerId,
       counterpartyAddrs,
       transportMode,
+      false,
+      "",
     );
 
     expect(Buffer.from(local).equals(Buffer.from(published))).toBe(true);
@@ -155,6 +163,8 @@ describe("H-2: session-establishment TBS drift guard", () => {
       "",
       [],
       "relay",
+      false,
+      "",
     );
     const published = buildSessionEstablishmentTbs(
       sessionId,
@@ -164,5 +174,57 @@ describe("H-2: session-establishment TBS drift guard", () => {
       timestamp,
     );
     expect(Buffer.from(local).equals(Buffer.from(published))).toBe(true);
+  });
+  it("12-field: high_stakes and prior_relay_id reach the same bytes the client rebuilds", () => {
+    // The layout a current directory actually signs. Both new values are carried as VALUES, so a
+    // directory that dropped either would produce a TBS the client cannot reconstruct.
+    const timestamp = 1_700_000_000_000;
+    const args: [string, string[], string, string[], "direct" | "relay"] = [
+      "12D3KooWInitiatorPeerId",
+      ["/ip4/10.0.0.1/tcp/4001"],
+      "12D3KooWCounterpartyPeerId",
+      ["/ip4/10.0.0.2/tcp/4001"],
+      "relay",
+    ];
+
+    for (const [highStakes, priorRelayId] of [
+      [false, ""],                 // fresh, standard tier — the common case
+      [true, ""],                  // fresh, high stakes
+      [false, "a".repeat(64)],     // resume
+      [true, "b".repeat(64)],      // resume, high stakes
+    ] as Array<[boolean, string]>) {
+      const local = buildAssignmentTbs(
+        sessionId, pubA, pubB, genesisPrevRoot, timestamp, ...args, highStakes, priorRelayId,
+      );
+      const published = buildSessionEstablishmentTbs(
+        sessionId, pubA, pubB, genesisPrevRoot, timestamp, ...args, highStakes, priorRelayId,
+      );
+      expect(Buffer.from(local).equals(Buffer.from(published))).toBe(true);
+
+      // And it is genuinely the 12-field layout, not the 10-field one that happens to match:
+      // a 10-field build of the same inputs must differ.
+      const ten = buildSessionEstablishmentTbs(
+        sessionId, pubA, pubB, genesisPrevRoot, timestamp, ...args,
+      );
+      expect(Buffer.from(local).equals(Buffer.from(ten))).toBe(false);
+    }
+  });
+
+  it("12-field: the two new values are DISTINGUISHED, not merely present", () => {
+    // Without this, a builder that ignored both and emitted constants would pass everything above.
+    const timestamp = 1_700_000_000_000;
+    const args: [string, string[], string, string[], "direct" | "relay"] = [
+      "12D3KooWInitiatorPeerId",
+      ["/ip4/10.0.0.1/tcp/4001"],
+      "12D3KooWCounterpartyPeerId",
+      ["/ip4/10.0.0.2/tcp/4001"],
+      "relay",
+    ];
+    const build = (hs: boolean, prid: string) =>
+      Buffer.from(buildAssignmentTbs(sessionId, pubA, pubB, genesisPrevRoot, timestamp, ...args, hs, prid));
+
+    expect(build(false, "").equals(build(true, ""))).toBe(false);
+    expect(build(false, "").equals(build(false, "a".repeat(64)))).toBe(false);
+    expect(build(false, "a".repeat(64)).equals(build(false, "b".repeat(64)))).toBe(false);
   });
 });
