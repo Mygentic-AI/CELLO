@@ -88,6 +88,27 @@ unauthenticated by design. A tier description described a gate that did not exis
 
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
+### 🔴 FIRST, AHEAD OF EVERYTHING BELOW — the wire change (Andre, 2026-09-03)
+
+> **`DOD-M15-WITHHOLD-SEAL-1`'s wire half — add `last_seen_hash` to `Structure1` — is the next thing
+> built. It outranks every row in the table below and every tier.**
+
+**Why it is first and not merely important.** It is a **wire format change**, and wire changes are
+the one class of work that gets more expensive every hour it waits: the field has to be in the bytes
+before anything signs, verifies, replays or seals against them. `017-TBS` is extending the assignment
+TBS *right now*; relay handover replays a leaf chain against a verifier that requires a sender
+signature per leaf. Everything downstream is cheaper if the structure is already right.
+
+**What it is, in one line:** a sender signs `last_seen_seq`, **a number**, so an acknowledgement
+attests to a *position* and never to *content*. Adding `last_seen_hash` alongside it makes the
+acknowledgement bind to what was actually received — and hold with no relay involved.
+
+**Scope, decided and not to be re-opened:** ADD the field, do **not** replace `last_seen_seq`. It is
+a v2 of `Structure1` (field order is signed over). The first message of a session has seen nothing,
+and that must be a **defined value, never an absent field**. Full clauses on the line itself.
+
+---
+
 ### The ranking, with sizes — smalls first, because a quick win is a real win
 
 Sizes are the WORK, not the importance. Every line below is already in a tier; this ranks them, it
