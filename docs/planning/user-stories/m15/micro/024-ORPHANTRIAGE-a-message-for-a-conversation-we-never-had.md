@@ -235,6 +235,12 @@ verified — not because a fixture said "known".
 11. `DOD-M15-ORPHANTRIAGE-1` flipped to ✅ in `M15-DEFINITION-OF-DONE.md`, in the same commit as the
     verdict.
 
+> **⚠️ REPORTING NEEDS SOMETHING TO SEND, AND TODAY THERE IS NOTHING.** Every refusal discards the
+> message — `023-REFUSEDEVIDENCE` is the unit that retains it. This unit owns WHO to tell and WHAT to
+> advise; that one owns the artifact existing. **Neither is useful alone**: an action that says
+> "report it" with nothing to attach is an instruction the operator cannot carry out. If 023 has not
+> landed when this runs, say in the guidance that the message itself was not retained.
+
 **Not in scope:** `last_seen_hash` (another lane, and this unit must not wait for it); whether the
 standing receiver should have accepted the connection at all (below); what CELLO does with a report
 once it has one.

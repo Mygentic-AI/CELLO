@@ -1041,40 +1041,53 @@ is unavailable; naming a verb nobody can perform is Invariant 4's failure.
 - **Enforcer:** journey — unsigned, signed-but-unknown, and signed-by-a-known-contact each produce a
   notice offering exactly ONE action, with no contact verb present in the first two.
 
-### `DOD-M15-BLOCKEDEVIDENCE-1` — ❌ A blocked message is still evidence, so it is still kept
+### `DOD-M15-REFUSEDEVIDENCE-1` — ❌ Nothing is refused without keeping what was refused
 
 **THE RULE, Andre 2026-09-03:**
-> *"The point of maintaining signed messages and a seal is that you can use it to prove malicious
-> behavior. So the transcript in its entirety, in its whole chain, needs to be available and the
-> signed hashes need to be maintained. If we don't store this, then we can never use it."*
+> *"Every case where there's something that potentially needs to be reported needs to be stored. It
+> just doesn't make it to the LLM. We need something. Some evidence."*
 
-**Measured 2026-09-03, in `ingestReceivedContent`.** A screener-blocked message takes
-`appendSessionLeaf` (the content hash into the tree) instead of `#appendVerifiedContent` (which is
-the branch that calls `recordTranscriptMessage`). So the daemon keeps the HASH and nothing else — no
-plaintext, no `sender_pubkey`, no `sender_sig`. `GatewayRecordStore` records a hash and a
-disposition too, never content.
+**RETENTION IS UNIVERSAL. DELIVERY IS WHAT IS WITHHELD.**
 
-**A hash with no original proves nothing to anybody.** You cannot show what they sent, and you cannot
-show they signed it. The one category of message an operator would most want to prove is the one
-CELLO keeps the least evidence for.
+**Measured 2026-09-03.** Every refusal in `ingestReceivedContent` is `return { ok: false, reason }`
+and the bytes are dropped. The screener's terminal block is the only one that keeps anything, and it
+keeps the **content hash alone** — it takes `appendSessionLeaf` instead of `#appendVerifiedContent`,
+which is the branch that calls `recordTranscriptMessage` and writes plaintext, `sender_pubkey` and
+`sender_sig`. `GatewayRecordStore` stores a hash and a disposition too. **A `grep` for a refused-
+content store in `core/daemon/src` returns only the DOCUMENT layer.**
 
-**The fix is a branch, not an architecture:** a blocked message follows the ordinary path — full
-transcript row, under the seal, at the same leaf index — and only the LAST step changes, the agent
-being told it was blocked rather than handed the content.
+**So a hash with no original proves nothing.** You cannot show what they sent or that they signed it,
+and there is nothing to hand `CELLO_Reporting`. The categories an operator would most want to produce
+— an injection aimed at their agent, a stranger probing a peer ID, a tampered frame — are the ones
+with no evidence behind them.
+
+**The fix is a flag, not a second store** (Andre): *"Normally conversations are stored in the
+database. But these aren't — or if they are, and I don't think it's so bad if they are, they need to
+be flagged as quarantined."* The row goes where every message goes; the FLAG is what excludes it from
+delivery and from unread counts. **Without exclusion-by-construction this recreates `DOD-UNREAD-1
+D4a`'s phantom-session residue**, which is the whole reason those rows were refused in the first
+place.
+
+**No truncation.** A message is capped at `MAX_CONTENT_BYTES` and a conversation at the sender's tier
+bound, so what can be stored is already bounded — and a truncated message cannot be verified against
+its signature, which turns provable evidence into an unprovable sample.
 
 **⚠️ THE ACCESS DESIGN IS RULED AND ITS OPPOSITE IS THE OBVIOUS ANSWER — see the order.** Framing,
-not friction: hiding the payload does not remove the LLM from the path, it removes the WARNING from
-the path, because a human who cannot find the file tells their agent to go find it. Base64 encoding,
-CLI-only access and a separate quarantine store were each proposed and rejected in writing. And the
-framing carries **no closing delimiter** — a payload can forge its own "end of message" marker and
-make everything after it read as trusted.
+not friction: hiding the payload does not remove the LLM from the path, it removes the WARNING,
+because a human who cannot find the file tells their agent to go find it. Base64, CLI-only access and
+a separate unsealed store were each proposed and rejected in writing. The framing carries **no
+closing delimiter** — a payload can forge its own "end of message" marker and make everything after
+it read as trusted. **Storing hostile content is safe (bound parameters, blob columns); interpolating
+it on the way out is the actual risk.**
 
-- **Order:** `micro/023-BLOCKEDEVIDENCE-a-blocked-message-is-still-evidence.md`
-- **Found by:** Andre, reviewing 022-REFUSALVISIBLE's operator-facing wording — the question was
-  "where would a human read the blocked text?", and the answer was that there is nowhere.
-- **Enforcer:** journey — a blocked message is in the receiver's transcript with a signature that
-  VERIFIES against the sender's key, `cello_receive` still never returns it, and the session still
-  seals with matching roots.
+- **Order:** `micro/023-REFUSEDEVIDENCE-nothing-is-refused-without-keeping-it.md`
+- **Found by:** Andre, reviewing 022's operator wording — *"what happens to this message? Where is
+  it? For all reporting purposes we need the daemon to be able to send over what it got."*
+- **Pairs with `DOD-M15-ORPHANTRIAGE-1`,** which owns `CELLO_Reporting` and the decision of what to
+  do. This line owns there being something to send. **Neither is useful alone.**
+- **Enforcer:** journey — a screener-blocked message is in the receiver's transcript with a signature
+  that VERIFIES, `cello_receive` still never returns it and it is not counted unread, and the session
+  still seals with matching roots.
 
 ### `DOD-M15-NO-SILENT-REFUSAL-1` — ✅ Nothing is refused silently. If we refuse it, the operator is told
 
