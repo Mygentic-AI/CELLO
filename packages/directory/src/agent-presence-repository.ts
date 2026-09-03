@@ -172,17 +172,21 @@ export async function listAccountAgentsWithPresence(
   // conjunct keeps this surface consistent with discovery. nodeFreshnessMs is now unused (kept in the
   // signature for call-site/test stability).
   //
-  // ⚠️ DOD-M15-CLAIM-COMMENTS-1 — WHY THE HEARTBEAT DOES NOT REPLICATE, corrected. This blamed a
+  // ⚠️ DOD-M15-CLAIM-COMMENTS-1 — WHY THE HEARTBEAT DID NOT REPLICATE, corrected. This blamed a
   // "BIGSERIAL id collision". That is wrong, and it is the kind of wrong that costs a day: it sends
   // whoever picks this up at a surrogate-key problem that does not exist. `id` is simply not in the
-  // replication spec either. The actual cause is that **`last_heartbeat_at` is MUTABLE, and Tier A
-  // carries immutable columns only** — so making it replicate means giving `directory_nodes` a
-  // Tier-B mutable merge with a version column, a new merge table rather than a one-line spec edit.
+  // replication spec either. The actual cause was that **`last_heartbeat_at` is MUTABLE, and Tier A
+  // carries immutable columns only** — so making it replicate meant giving `directory_nodes` a
+  // Tier-B mutable merge with a version column, a new merge rather than a one-line spec edit.
   //
   // The same wrong explanation was corrected in `discovery-lookup.ts`; this was its second copy.
-  // Tracked as `DOD-M15-HEARTBEAT-1`, which is NOT launch-blocking: no user-facing surface reads the
-  // heartbeat any more (this one and discovery both dropped the conjunct, deliberately), and the
-  // only live consumer is the federation checkpoint, which is parked.
+  //
+  // ✅ BUILT — DOD-M15-HEARTBEAT-1 (V65 + a Tier-B entry keyed on node_id). The heartbeat now
+  // travels, so the conjunct this function drops is once again AVAILABLE. It stays dropped on
+  // purpose: re-gating on freshness would darken live remote agents during ordinary anti-entropy
+  // lag, which is the regression the 2026-07-05 Option A decision exists to prevent. Turning the
+  // gate back on is a behaviour change needing its own decision, not a tidy-up that rides along
+  // with the column starting to replicate. `nodeFreshnessMs` therefore stays unused.
   void nodeFreshnessMs;
   const res = await db.query<{
     k_local_pubkey: string;

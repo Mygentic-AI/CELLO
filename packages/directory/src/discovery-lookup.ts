@@ -39,12 +39,21 @@ export function resolveDiscoveryState(
   // CROSS-NODE LIVENESS (2026-07-05 decision, Option A): trust the replicated presence.online flag —
   // do NOT darken an online agent when its owning node's heartbeat is stale/missing. The dark-node
   // freshness check only ever fires for a REMOTE owning node (a node's own heartbeat is always fresh),
-  // and a remote node's heartbeat NEVER lands: `last_heartbeat_at` is mutable, and the Tier-A
-  // anti-entropy spec for `directory_nodes` carries `node_id` and `region` only. (An earlier version
-  // of this comment blamed a "BIGSERIAL id collision" — that is wrong and would send the next reader
-  // to fix the wrong thing; `id` is simply not in the spec either. DOD-HEARTBEAT-REPLICATION-1.)
-  // Requiring freshness therefore darkened
-  // EVERY cross-node lookup. Discovery is ADVISORY by design: the target node's live #streams check is
+  // and when this decision was taken a remote node's heartbeat NEVER landed: `last_heartbeat_at` is
+  // mutable, and the Tier-A anti-entropy spec for `directory_nodes` carries `node_id` and `region`
+  // only. (An earlier version of this comment blamed a "BIGSERIAL id collision" — that is wrong and
+  // would send the next reader to fix the wrong thing; `id` is simply not in the spec either.
+  // DOD-HEARTBEAT-REPLICATION-1.) Requiring freshness therefore darkened
+  // EVERY cross-node lookup.
+  //
+  // ⚠️ THAT PREMISE NO LONGER HOLDS, AND THIS BRANCH IS DELIBERATELY UNCHANGED. Remote heartbeats DO
+  // replicate now — V65 plus a Tier-B entry for the same table's mutable column (DOD-M15-HEARTBEAT-1)
+  // — so the freshness signal is available here for the first time. Re-gating on it is a BEHAVIOUR
+  // change, not a cleanup: it would darken agents again during any anti-entropy lag, which is the
+  // exact regression Option A was chosen to end, and it needs its own decision rather than being
+  // taken as a side effect of the column starting to travel. The reasoning below stands on its own
+  // merits and is why the gate should probably stay off regardless.
+  // Discovery is ADVISORY by design: the target node's live #streams check is
   // authoritative, the owning_node is manifest-validated before any dial, and a stale "online" just
   // triggers the client's bounded re-discover→retry (which surfaces counterparty_offline if the node
   // is genuinely dead). So online-with-stale-heartbeat is safe to report as online. staleHeartbeat is

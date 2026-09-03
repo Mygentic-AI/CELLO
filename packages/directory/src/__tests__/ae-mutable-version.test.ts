@@ -86,6 +86,13 @@ describe("DOD-AE-MUTABLE-1: Tier-B version summaries", () => {
     ["directory_nodes", DIRECTORY_NODE_HEARTBEAT_MERGE_COLUMNS],
   ]);
 
+  it("directory_nodes' heartbeat spec is REGISTERED in TIER_B_SPECS, not merely written", () => {
+    // A spec that exists but is not in this list is never advertised, so a peer never learns we hold
+    // the table and no pull is ever planned — replication silently does not happen, with every unit
+    // test on the spec itself still green.
+    expect(TIER_B_SPECS).toContain(DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC);
+  });
+
   it("every registered Tier-B spec declares its merge columns (a new table cannot skip the check)", () => {
     // Without this, adding a spec to TIER_B_SPECS and forgetting the merge registry would leave the
     // equality test below iterating over a table it never sees — green, and proving nothing.
