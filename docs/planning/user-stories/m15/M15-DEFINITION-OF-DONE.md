@@ -271,6 +271,19 @@ a bounded property**.
 - **Partially true is false.** A row whose claim survives only with a qualifier gets rewritten or
   withdrawn, never softened.
 - A claim with no row is an unaudited claim; the line is not ✅ while a surface is unswept.
+- **⚠️ SEPARATE THE RECEIPT FROM THE LOG. They read identically in prose and one is true.** Added
+  2026-09-03 (Order 021) because I made this exact conflation and it stood for hours:
+  - **RECEIPT-level — TRUE, keep it.** *"Countersigned by several independent directories", "no
+    single directory can forge it."* A seal is FROST threshold-signed and every co-signer rebuilds
+    the root from the leaves itself before contributing a share.
+  - **LOG-level — FALSE today.** *"Tamper-evident record", "you can prove it is in our permanent
+    log", "multi-node anchored", "immutable audit log."* The periodic checkpoint an inclusion proof
+    resolves against is written by ONE node with ZERO signatures
+    (`DOD-M15-CHECKPOINT-COUNTERSIGN-1`, OPEN, post-launch).
+  - **The sweep must therefore read every "tamper-evident" / "verifiable" sentence twice** and ask
+    which of the two it is asserting. `DOD-M15-SEALWIRE-1` makes the receipt-level reading true; it
+    does nothing for the log-level one, so a disposition of *made-true by SEALWIRE-1* is only
+    correct for the first reading.
 
 ### `DOD-M15-AUDITME-1` — 🅿️ `AUDIT-ME.md` survives the audit it invites
 **Trigger: the last Tier 1 line to be worked, and not before Tier 4 lands** (Andre, 2026-08-22).
@@ -2248,6 +2261,19 @@ nothing would say so if the two diverged. The row is a claim defect, not an expl
 and makes the sentence true. It must not ship before that line lands — a claim that becomes true is
 still false until it does.
 
+> **⚠️ RE-READ ROW 6 BEFORE CLOSING IT — "tamper-evident" has a SECOND reading this disposition does
+> not cover** (added 2026-09-03, Order 021). Applied to the CONVERSATION's own signed, chained
+> transcript, "tamper-evident" is true and `SEALWIRE-1` finishes the job. Applied to the DIRECTORY's
+> permanent log — *"we can prove your conversation is in the record and the record was not
+> rewritten"* — it is **false and `SEALWIRE-1` does not touch it**: the periodic checkpoint an
+> inclusion proof resolves against is written by one node with zero signatures
+> (`DOD-M15-CHECKPOINT-COUNTERSIGN-1`, OPEN, post-launch).
+>
+> The sentence as written is about the conversation, so this is not a new finding against Row 6. It
+> is a warning that the neighbouring sentence — anywhere in the swept surfaces — may be the log
+> claim, and it would inherit this row's disposition by resemblance. Decide which reading each
+> sentence asserts before dispositioning it.
+
 **Rows 7–9 were checked, not assumed**, and all three hold. Row 8 verified structurally:
 `session_name` appears in **no** wire type in `core/protocol-types/src`. Recorded so a later sweep
 does not re-open them.
@@ -2410,9 +2436,12 @@ could in principle re-issue a checkpoint over a different set of conversations; 
 would all still verify, because they are signed independently of the log they sit in.
 
 **Why post-launch:** the customer gets a working, threshold-signed, verifiable receipt on day one.
-The gap is in the tamper-evidence of the LOG, not the receipt. **Before launch, check the claims
-ledger for any copy about the LOG being tamper-evident or multi-node anchored** — copy about the
-receipt being countersigned by several directories is TRUE and should stay.
+The gap is in the tamper-evidence of the LOG, not the receipt.
+
+**The copy check is NOT a separate task and must not become one** — it belongs to
+`DOD-M15-LEDGER-1`, which already sweeps all four live surfaces, and to `DOD-M15-AUDITME-1` for
+`AUDIT-ME.md`. The receipt/log distinction this entry turns on is written into LEDGER-1's bullets and
+beside Claims Ledger Row 6. Do not add a third line for it.
 
 **Measured while closing Order 021:** `directory_checkpoints` has TWO writers. The federated one in
 `checkpoint-coordinator.ts` collects signatures and returns at the threshold check before writing.
