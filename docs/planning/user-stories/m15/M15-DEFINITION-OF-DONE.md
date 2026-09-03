@@ -1043,7 +1043,105 @@ an attacker walks around.
 > an inclusion proof resolves against — is the unsigned thing. Two different artifacts; conflating
 > them produced a false "receipts are signed by one node" claim that stood for several hours.
 
-### `DOD-M15-NO-SILENT-REFUSAL-1` — ❌ Nothing is refused silently. If we refuse it, the operator is told
+### `DOD-M15-ORPHANTRIAGE-1` — ❌ A message for a conversation we never had gets triaged, not a nudge to make contact
+
+**`022-REFUSALVISIBLE` made `session_orphaned` visible and shipped the wrong advice** — *"ask the
+counterparty to start a NEW session"*. When this is a stranger probing a harvested peer ID, telling
+the operator to make contact **is the probe succeeding**: they learn somebody is home and that the
+agent responds, from a message that was refused.
+
+**THE RULE, Andre 2026-09-03 — exactly TWO actions, never a third:**
+> *"Report to CELLO, or reach out using the public key to the other entity. And those are the only
+> two actions you should take. And whether to reach out depends on whether we can verify they are a
+> known contact in their address book. And if they are a known contact and this was an ongoing
+> conversation until this point, then a separate session with them — and it must be a separate
+> session — is warranted."*
+>
+> *"The message should say: when in doubt, report it."*
+
+**The gate is the SIGNATURE, and it is the thing that makes a contact list worth anything:**
+> *"If this is a public key with an unsigned message, it does not prove that person sent it. So even
+> if it's in their contact list, it proves nothing. It means nothing to send a message unless it
+> includes a public key and the message is signed and you can prove it was signed by that public
+> key."*
+
+A verified signature proves **possession of the private key** — not identity, and not legitimacy.
+The value of reaching out to a known key is partly the denial: *"Bob says 'no, I didn't — somebody
+has my private key', which is a good thing to uncover, because then they can pause or burn the agent
+identity."*
+
+**The daemon already holds the evidence and ignores it.** `ingestReceivedContent` takes
+`verifiedAuthorship`; the orphan branch is the first check in that method and returns before looking
+at it. **Falsify first:** the caller matches the signer to *this session's counterparty*, and there
+is no session here — so the value may be absent for a reason unrelated to the sender.
+
+**Reporting must name something reachable.** The mechanism is CELLO itself: an agent,
+**`CELLO_Reporting`**, that an operator's agent opens a session with — the product demonstrating its
+own use. **It does not exist yet**, so the unit either provisions it or says plainly that reporting
+is unavailable; naming a verb nobody can perform is Invariant 4's failure.
+
+- **Order:** `micro/024-ORPHANTRIAGE-a-message-for-a-conversation-we-never-had.md`
+- **Found by:** Andre, reviewing 022's operator-facing wording.
+- **Depends on nothing.** `last_seen_hash` (`DOD-M15-ACKHASH-1`) would add a fourth, stronger signal
+  when it lands — **do not wait for it.**
+- **Enforcer:** journey — unsigned, signed-but-unknown, and signed-by-a-known-contact each produce a
+  notice offering exactly ONE action, with no contact verb present in the first two.
+
+### `DOD-M15-REFUSEDEVIDENCE-1` — ❌ Nothing is refused without keeping what was refused
+
+**THE RULE, Andre 2026-09-03:**
+> *"Every case where there's something that potentially needs to be reported needs to be stored. It
+> just doesn't make it to the LLM. We need something. Some evidence."*
+
+**RETENTION IS UNIVERSAL. DELIVERY IS WHAT IS WITHHELD.**
+
+**Measured 2026-09-03.** Every refusal in `ingestReceivedContent` is `return { ok: false, reason }`
+and the bytes are dropped. The screener's terminal block is the only one that keeps anything, and it
+keeps the **content hash alone** — it takes `appendSessionLeaf` instead of `#appendVerifiedContent`,
+which is the branch that calls `recordTranscriptMessage` and writes plaintext, `sender_pubkey` and
+`sender_sig`. `GatewayRecordStore` stores a hash and a disposition too. **A `grep` for a refused-
+content store in `core/daemon/src` returns only the DOCUMENT layer.**
+
+**So a hash with no original proves nothing.** You cannot show what they sent or that they signed it,
+and there is nothing to hand `CELLO_Reporting`. The categories an operator would most want to produce
+— an injection aimed at their agent, a stranger probing a peer ID, a tampered frame — are the ones
+with no evidence behind them.
+
+**The fix is a flag, not a second store** (Andre): *"Normally conversations are stored in the
+database. But these aren't — or if they are, and I don't think it's so bad if they are, they need to
+be flagged as quarantined."* The row goes where every message goes; the FLAG is what excludes it from
+delivery and from unread counts. **Without exclusion-by-construction this recreates `DOD-UNREAD-1
+D4a`'s phantom-session residue**, which is the whole reason those rows were refused in the first
+place.
+
+**No truncation.** A message is capped at `MAX_CONTENT_BYTES` and a conversation at the sender's tier
+bound, so what can be stored is already bounded — and a truncated message cannot be verified against
+its signature, which turns provable evidence into an unprovable sample.
+
+**⚠️ THE ACCESS DESIGN IS RULED AND ITS OPPOSITE IS THE OBVIOUS ANSWER — see the order.** Framing,
+not friction: hiding the payload does not remove the LLM from the path, it removes the WARNING,
+because a human who cannot find the file tells their agent to go find it. Base64, CLI-only access and
+a separate unsealed store were each proposed and rejected in writing. The framing carries **no
+closing delimiter** — a payload can forge its own "end of message" marker and make everything after
+it read as trusted. **Storing hostile content is safe (bound parameters, blob columns); interpolating
+it on the way out is the actual risk.**
+
+- **Order:** `micro/023-REFUSEDEVIDENCE-nothing-is-refused-without-keeping-it.md`
+- **Found by:** Andre, reviewing 022's operator wording — *"what happens to this message? Where is
+  it? For all reporting purposes we need the daemon to be able to send over what it got."*
+- **Pairs with `DOD-M15-ORPHANTRIAGE-1`,** which owns `CELLO_Reporting` and the decision of what to
+  do. This line owns there being something to send. **Neither is useful alone.**
+- **Enforcer:** journey — a screener-blocked message is in the receiver's transcript with a signature
+  that VERIFIES, `cello_receive` still never returns it and it is not counted unread, and the session
+  still seals with matching roots.
+
+### `DOD-M15-NO-SILENT-REFUSAL-1` — ✅ Nothing is refused silently. If we refuse it, the operator is told
+
+> **✅ 2026-09-03 (022-REFUSALVISIBLE).** Twelve reasons now file a durable notice keyed on
+> `agent_id`, surfaced as their own `refusals` category in `cello_inbox` — the door for an agent
+> nobody is attending — and surviving a daemon restart, which the in-memory map did not.
+> `counterparty_gone` no longer asserts a crash nor leads with the seal. Journey (both enforcer
+> legs, screener block + byte cap) green as separate OS processes; each made to fail on purpose.
 > **RENAMED from `DOD-M15-SCREENBLOCK-SILENT-1` on the day it was written.** It was scoped to the
 > screener; Andre widened it to the principle within the hour, and an ID naming one door would have
 > mis-sold the line to whoever pulled it.
@@ -2488,6 +2586,42 @@ invitation. Re-gate and this becomes a liveness lie an attacker pins.
 
 **The fix:** clamp on ingest — reject or floor an incoming timestamp more than a small skew allowance
 beyond `now()`, and log the rejection. State it as a shared rule for both merges, not a one-off.
+### `DOD-M15-GATEWAY-HARDEN-1` — 🅿️ POST-LAUNCH. The screening sidecar can go down, and half of it is not running at all
+**Found 2026-09-03 while reviewing `022-REFUSALVISIBLE`'s operator wording. Ruled POST-LAUNCH by
+Andre 2026-09-03:** nothing to do now beyond recording it — the message that explains the outage to
+the operator is written and approved. **The trigger is launch: look at the gateway properly before
+opening signup.**
+
+**What it would do to you:** your screener is a separate child process the daemon spawns and talks
+to over a unix socket. When it is not answering, the daemon **fails closed** — every inbound message
+from every counterparty is held undelivered rather than passed through unscreened, which is the right
+default. So a screener that is down does not leak anything; it stops your agent receiving anything.
+Nothing is lost (senders redeliver on their own once it recovers), but until then you are off the
+air, and the only thing that tells you is the refusal notice.
+
+**Four ways it stops answering, all logged:** it crashed (`security.gateway.exited`), it never
+started (`security.gateway.spawn_failed`), it took too long on one message (`governance_timeout`), or
+it errored internally while screening one (`screen_error`, logged as
+`security.gateway.inbound.blocked`).
+
+**⚠️ AND THE HALF THAT JUDGES MEANING IS OFF BY DEFAULT.** The deterministic layer — sanitizer,
+pattern matching, the language allowlist — is always on. The **semantic injection classifier requires
+a model to be installed**, and without one the daemon announces `security.gateway.layer2: "off:no"`
+at startup and every inbound frame short-circuits past it. So an injection phrased in ordinary prose
+is caught by pattern matching or not at all. This is already known and stated honestly at startup;
+what belongs here is the question of whether that is the right default at launch, and what a fresh
+install should do about it.
+
+**What "harden" would mean, for whoever picks this up:** supervision and restart behaviour on the
+sidecar (there is a restart path — is it used, and does it back off?); what a repeated crash should
+tell the operator, versus one transient timeout; whether the model ships, is fetched, or is opt-in;
+and whether an operator can tell at a glance which layers are live without reading a log line.
+
+- **Related, and NOT the same:** `DOD-M15-NO-SILENT-REFUSAL-1` (✅) made the outage VISIBLE — the
+  operator is now told, in plain terms, that the screener could not check a message and that the
+  sender will redeliver. That line owns telling them. This one owns the gateway not going down in
+  the first place, and running with all of itself switched on.
+
 
 ### `DOD-M15-RESERVE-PURPOSE-1` — 🅿️ POST-LAUNCH. A relay grants forwarding rows without asking what they are for
 **Found 2026-09-03, [[2026-09-03_1158_relay-overload-and-the-four-things-underneath-it]]. Ruled POST-LAUNCH by Andre 2026-09-03:** it needs 128 registered agents,

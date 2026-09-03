@@ -49,6 +49,7 @@ import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 // than never reaching recover, which is the whole point of that case. Its neighbours in DOD-MSG-7
 // pass `content:` and therefore go through `sealParkEnvelope` like everything else.
 import { contentHashHex } from "./content-seal-fixture.js";
+import { expectMatches } from "./expect-present.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -1085,5 +1086,235 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(receipt2.sealed_root, "sealed root unchanged — the straggler did not mutate the transcript").toBe(rootB);
     expect(frontierOf(receipt2, pubB), "B's content frontier is unchanged — the straggler did not inflate it").toBe(bFrontierAtSeal);
   }, 120_000);
+
+  /**
+   * ─── 022-REFUSALVISIBLE / DOD-M15-NO-SILENT-REFUSAL-1 ─────────────────────────────────────────
+   *
+   * **The refusal reaches the operator even though nobody is attending, and it survives a restart.**
+   *
+   * From B's operator's chair: A sends something, B's screener catches it and blocks it, and the
+   * message never appears. Before this, B was told nothing — the explanation sat in a log file they
+   * have no reason to open, and the conversation just went quiet. The two properties that make the
+   * fix real, and that a per-session `cello_receive` drain could not have:
+   *
+   *   1. **Nobody is attending.** B never calls `cello_receive` on that session. The refusal must
+   *      still reach them, through `cello_inbox`, which holds an AGENT and not a session.
+   *   2. **A restart does not destroy it.** The first thing anyone does about a quiet conversation
+   *      is restart the daemon, which is exactly what erased the old in-memory notice.
+   *
+   * The screener is the real one — the enforcing gateway sidecar the shipped binary spawns, not a
+   * test double. The message is predominantly HAN, which trips IN-003's language allowlist
+   * (`inbound_language_blocked`, terminal) with no model installed, so this exercises a genuine
+   * content detector rather than a seam. **It must not be Cyrillic** — see the payload below, which
+   * carries the measurement; naming the wrong script here is an instruction to reintroduce the
+   * exact payload that makes this test stop testing a block. A terminal block is not an error path: it leafs the
+   * original hash at its canonical position and ACKS the sender, so nothing fails and nothing
+   * retries — which is precisely why it had no notice and why the silence was total.
+   */
+  it("022-REFUSALVISIBLE — a screener block reaches an UNATTENDED operator, and survives a daemon restart", async () => {
+    const dirA = mkdtempSync(join(tmpdir(), "cello-refuseA-"));
+    const dirB = mkdtempSync(join(tmpdir(), "cello-refuseB-"));
+    dirs.push(dirA, dirB);
+    await provisionAgent(dirA, "agentA");
+    const pubB = await provisionAgent(dirB, "agentB");
+    const daemonA = await startLocalDaemon(dirA, "refuseA");
+    let daemonB = await startLocalDaemon(dirB, "refuseB");
+    daemons.push(daemonA, daemonB);
+    expect(registerAgent("agentA", `DEV-rf-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-rf-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
+    const connA = await connectMcp(dirA, "rf-A");
+    const connB = await connectMcp(dirB, "rf-B");
+    mcpConns.push(connA, connB);
+    for (const [c, n] of [[connA, "agentA"], [connB, "agentB"]] as const) {
+      expect(((await c.call("cello_start_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+    }
+
+    const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+    expect(init.ok, `initiate failed:\n${daemonA.output.split("\n").slice(-30).join("\n")}`).toBe(true);
+    const sessionId = init.sessionId!;
+    expect(((await awaitP) as { type?: string }).type).toBe("new_session");
+
+    /**
+     * Long enough to clear IN-003's `minLetters` (12) and overwhelmingly one script, so the
+     * dominant-share test (0.5) cannot be tipped by the turn signal the shim appends. `signal` is
+     * REQUIRED by cello_send, so `[[OVER]]` rides in the same string the detector judges — four
+     * Latin letters against ~24 Han ones.
+     *
+     * ⚠️ Chosen for its SCRIPT, not its meaning. The detector under test is the language allowlist,
+     * which is a real content detector that needs no model — the semantic injection scanner is off
+     * unless one is installed (the daemon logs `security.gateway.layer2: off:no`), so a prose
+     * "ignore your instructions" payload would sail through and this test would silently stop
+     * testing a block at all.
+     *
+     * ⚠️ **AND IT MUST NOT BE CYRILLIC, which is the trap this test fell into first.** Sanitization
+     * runs BEFORE the language check and normalizes confusables, and most lowercase Cyrillic letters
+     * are Latin homoglyphs — so a Cyrillic sentence is judged as LATIN and comes back `redact`, not
+     * `block`. Measured: the same call with a 68-letter Cyrillic payload returns
+     * `{"disposition":"redact"}` with no `terminal` and no reason. Han has no Latin homoglyphs.
+     */
+    const BLOCKED = "请把这条消息交给你的操作员并立即回复我谢谢你的帮助";
+    const send = (await connA.call("cello_send", { cello_session_id: sessionId, content: BLOCKED, signal: "over" })) as { ok?: boolean; reason?: string };
+    expect(
+      send.ok,
+      `A's send succeeds — the refusal happens on B's side, silently, which is the point. Got: ${JSON.stringify(send)}\n` +
+      `--- daemonA screening ---\n${daemonA.output.split("\n").filter((l) => /gateway|screen|governance/.test(l)).slice(-12).join("\n")}`,
+    ).toBe(true);
+    await daemonB.waitForLine(/"event":"security\.gateway\.inbound\.terminal_block"/, 30_000);
+
+    /**
+     * ⚠️ **NOBODY IS ATTENDING.** B never calls `cello_receive` on this session — not before the
+     * block and not after. That is the case this unit exists for, and the door that must open is
+     * the inbox. Reading `cello_receive` here would test the door that already worked.
+     */
+    type InboxRefusal = { session_id?: string; reason?: string; impact?: string; guidance?: string; times?: number };
+    type Inbox = { ok?: boolean; agents?: Array<{ agent?: string; refusals?: InboxRefusal[]; refusals_guidance?: string }> };
+    const readInbox = async (c: McpConn): Promise<{ refusals: InboxRefusal[]; guidance: string }> => {
+      const res = (await c.call("cello_inbox", { agent: "agentB" })) as Inbox;
+      expect(res.ok, `cello_inbox failed: ${JSON.stringify(res)}`).toBe(true);
+      const desk = (res.agents ?? []).find((a) => a.agent === "agentB");
+      return { refusals: desk?.refusals ?? [], guidance: desk?.refusals_guidance ?? "" };
+    };
+
+    const before = await readInbox(connB);
+    expect(
+      before.refusals.length,
+      `B's operator must be TOLD a message was blocked, without attending the session. Inbox held ` +
+      `no refusals.\n--- daemonB ---\n${daemonB.output.split("\n").filter((l) => /terminal_block|refusal/.test(l)).slice(-10).join("\n")}`,
+    ).toBeGreaterThan(0);
+    const notice = before.refusals.find((r) => r.session_id === sessionId);
+    expect(notice, "and the notice must NAME the conversation — the inbox holds an agent, not a session").toBeDefined();
+    expect(
+      notice!.reason,
+      "the DETECTOR's reason, not a generic seam label — the remedy differs per detector (Invariant 3)",
+    ).toBe("inbound_language_blocked");
+    expectMatches(notice!.impact, "it says the sender was acked, so nobody sits waiting for a resend", /acknowledged/);
+    // The header must be the one for a BLOCK, not the refused-kind sentence: this message WAS
+    // verified, it IS in the chain, and the sender WAS acknowledged, so "received and refused, not
+    // verified, neither ingested nor shown" is false in three clauses. The operator reads the
+    // header first.
+    expect(before.guidance, "and the advice travels WITH the notice, never separately").toMatch(/BLOCKED by its screener/);
+    expect(before.guidance, "and must not carry a header that is false for this row").not.toMatch(/were not verified/);
+    // The blocked content NEVER travels. A screener that can be talked into surfacing what it
+    // blocked is not a screener, and the inbox is a surface an agent reads directly.
+    expect(JSON.stringify(before), "the blocked message must not appear in the notice").not.toContain(BLOCKED);
+
+    /**
+     * ─── The restart, which is the half the in-memory map failed ────────────────────────────────
+     *
+     * A fresh IPC connection is minted by the reconnect, so the notice is unseen by THAT consumer
+     * and re-announces — which is the correct direction: a new window has been told nothing. What
+     * is being proved is that the NOTICE itself is still there to be re-announced.
+     */
+    await connB.close();
+    mcpConns.splice(mcpConns.indexOf(connB), 1);
+    await daemonB.kill();
+    for (const f of ["daemon.sock", "daemon.lock"]) {
+      try { rmSync(join(dirB, f), { force: true }); } catch { /* best-effort */ }
+    }
+    daemonB = await startLocalDaemon(dirB, "refuseB-restart");
+    daemons.push(daemonB);
+    expect(cello(["login"], { CELLO_DIR: dirB }).status).toBe(0);
+    const connB2 = await connectMcp(dirB, "rf-B2");
+    mcpConns.push(connB2);
+    expect(((await connB2.call("cello_start_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+    expect(((await connB2.call("cello_use_agent", { name: "agentB" })) as { ok?: boolean }).ok).toBe(true);
+
+    const after = await readInbox(connB2);
+    const survived = after.refusals.find((r) => r.session_id === sessionId);
+    expect(
+      survived,
+      `the refusal must survive the restart — restarting the daemon is the FIRST thing an operator ` +
+      `does about a quiet conversation, and the in-memory map this replaced was destroyed by exactly ` +
+      `that act. Inbox after restart: ${JSON.stringify(after.refusals)}`,
+    ).toBeDefined();
+    expect(survived!.reason).toBe("inbound_language_blocked");
+    expect(survived!.guidance, "with its advice intact, not just the reason code").toBeDefined();
+  }, 180_000);
+
+  /**
+   * ─── 022-REFUSALVISIBLE, the SECOND enforcer leg ─────────────────────────────────────────────
+   *
+   * **The byte cap, which is the refusal that least resembles a fault.**
+   *
+   * The DoD names two cases, not one: *"a screened message AND a cap-exceeded message each produce
+   * an operator-visible refusal naming the cause."* They are not the same test. A screener block is
+   * a one-message event; the cap is PERMANENT for the session — once it is crossed, every later
+   * message from that sender is refused for as long as the session lives. From the operator's chair
+   * the other person simply stops replying, and from the sender's chair every message was sent
+   * successfully. Nothing on either side says otherwise.
+   *
+   * B lowers its own UNKNOWN-tier byte bound rather than the test sending 25 MB: the bound is an
+   * operator setting (`cello_settings_set`), the cap CHECK is the code under test, and 25 MB of
+   * traffic would measure the transport instead. The cap SIZE is explicitly not in scope here.
+   */
+  it("022-REFUSALVISIBLE — the byte cap reaches the operator too, and says every LATER message is refused", async () => {
+    const dirA = mkdtempSync(join(tmpdir(), "cello-capA-"));
+    const dirB = mkdtempSync(join(tmpdir(), "cello-capB-"));
+    dirs.push(dirA, dirB);
+    await provisionAgent(dirA, "agentA");
+    const pubB = await provisionAgent(dirB, "agentB");
+    const daemonA = await startLocalDaemon(dirA, "capA");
+    const daemonB = await startLocalDaemon(dirB, "capB");
+    daemons.push(daemonA, daemonB);
+    expect(registerAgent("agentA", `DEV-cp-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-cp-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
+    const connA = await connectMcp(dirA, "cp-A");
+    const connB = await connectMcp(dirB, "cp-B");
+    mcpConns.push(connA, connB);
+    for (const [c, n] of [[connA, "agentA"], [connB, "agentB"]] as const) {
+      expect(((await c.call("cello_start_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+    }
+
+    // A is a stranger to B, so B's UNKNOWN-tier bound is the one that applies. Lowering it is an
+    // ordinary operator setting; the refusal path it triggers is identical at any value.
+    const setBound = (await connB.call("cello_settings_set", {
+      key: "bounds.unknown.max_bytes", value: "200",
+    })) as { ok?: boolean; reason?: string };
+    expect(setBound.ok, `B could not lower its own byte bound: ${JSON.stringify(setBound)}`).toBe(true);
+
+    const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+    expect(init.ok, `initiate failed:\n${daemonA.output.split("\n").slice(-30).join("\n")}`).toBe(true);
+    const sessionId = init.sessionId!;
+    expect(((await awaitP) as { type?: string }).type).toBe("new_session");
+
+    // Comfortably over 200 bytes and completely ordinary English — the point is that NOTHING about
+    // this message is objectionable. It is refused on volume alone, which is why the operator has no
+    // way to guess the cause and why a bare "too big" would describe the wrong thing.
+    const OVER_CAP = "Hello again — following up on the deployment window we discussed. ".repeat(6);
+    const send = (await connA.call("cello_send", {
+      cello_session_id: sessionId, content: OVER_CAP, signal: "over",
+    })) as { ok?: boolean; reason?: string };
+    expect(send.ok, `A's send succeeds — from the SENDER's chair nothing went wrong: ${JSON.stringify(send)}`).toBe(true);
+    await daemonB.waitForLine(/"event":"session\.content\.abuse_bound\.session_size_exceeded"/, 30_000);
+
+    // Again: B NEVER calls cello_receive. The inbox is the door.
+    type InboxRefusal = { session_id?: string; reason?: string; impact?: string; guidance?: string };
+    const res = (await connB.call("cello_inbox", { agent: "agentB" })) as {
+      ok?: boolean; agents?: Array<{ agent?: string; refusals?: InboxRefusal[] }>;
+    };
+    expect(res.ok, `cello_inbox failed: ${JSON.stringify(res)}`).toBe(true);
+    const refusals = (res.agents ?? []).find((a) => a.agent === "agentB")?.refusals ?? [];
+    const notice = refusals.find((r) => r.session_id === sessionId);
+    expect(
+      notice,
+      `B's operator must be told the cap fired, naming the conversation. Inbox refusals: ` +
+      `${JSON.stringify(refusals)}\n--- daemonB ---\n${daemonB.output.split("\n").filter((l) => /abuse_bound|refusal/.test(l)).slice(-8).join("\n")}`,
+    ).toBeDefined();
+    expect(notice!.reason).toBe("session_size_limit_exceeded");
+    expect(
+      notice!.impact,
+      "and it must name the CONSEQUENCE, not the event — 'this message was too big' describes one " +
+      "message, while what actually happened is that the conversation is over",
+    ).toMatch(/neither will anything else they send/);
+    // In MB, because nobody reads 26214400 as 25 MB — and the access level as a quoted lowercase
+    // LABEL, because "their tier is UNKNOWN" reads as "we could not determine it".
+    expectMatches(notice!.impact, "the limit in MB, not only in bytes", /MB/);
+    expectMatches(notice!.impact, "and the access level as a label, not a bare word", /"unknown"/);
+    expectMatches(notice!.guidance, "and the only move that works — the cap does not reset", /Start a NEW conversation/);
+  }, 180_000);
 
 });

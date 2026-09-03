@@ -1021,6 +1021,32 @@ and is dispatched on any unit touching a verification path — it hunts exactly 
 
 - **One branch per unit, named `m15/<unit>`**, pushed on creation.
 - **🚨 COMMIT BY EXPLICIT PATH. NEVER `git add -A`.** Non-negotiable with a shared checkout.
+
+> ### 🔐 A NEW WORKTREE IS A NEW PERMISSION ROOT — load `/worktree-permissions` BEFORE creating one
+>
+> **The symptom is Andre being approval-spammed, one prompt per grep, until he interrupts the work.**
+> It happened on 020-ACKHASH and it will happen to every lane, because the cause is structural rather
+> than a bad habit: a worktree of an allowed repo is a **different path**, and this project's
+> `permissions.additionalDirectories` lists repo roots. Add to that the project's `Read(./.env)` deny
+> rule and every file-touching command aimed at an unlisted root has to be approved individually.
+>
+> **Two causes, and fixing one leaves the prompts coming:**
+> 1. **The path is on no allowed root** — fixed by adding the worktree PARENT to
+>    `.claude/settings.local.json` (gitignored, so it never reaches the repo).
+> 2. **The command cannot be resolved** — `cd <dir> && grep <relative path>` prompts *even under an
+>    allowed root*. `grep -rn "x" /abs/path` and `git -C /abs/path diff` do not. This half works
+>    immediately; the directory list may need a session restart.
+>
+> **Subagents are the acute case and cannot be corrected mid-run** — a reviewer runs dozens of greps
+> and the only remedy is to kill it. **Every subagent prompt carries the absolute-path rule verbatim**;
+> `/worktree-permissions` has the paste-ready block.
+>
+> **Never delete a deny rule to stop prompts.** `Read(./.env)` keeps secrets out of context. Widening
+> the allowed roots is the fix; removing the guard is not.
+>
+> **Prune when the lane's worktrees are deleted.** The same skill's script adds and prunes in one
+> pass, and removes only paths that no longer exist on disk.
+
 - **A reviewed-green unit MERGES — it does not sit.** Rebase onto `main` at every session start for
   any branch older than a session.
 - **Two branches must never touch the same file.** If they must, they are one unit.
@@ -1118,6 +1144,9 @@ relocates trust rather than closing it), then the rest of Phase 1.
 - **Vitest: one worker, foreground, timeout, filtered.** Never background a test process.
 - **NEVER `pkill -f cello-daemon`** — it kills the production daemon. Test daemons die by captured
   PID; the harness owns its processes.
+- **A NEW WORKTREE IS A NEW PERMISSION ROOT — load `/worktree-permissions` before creating one, and
+  give every subagent the absolute-path rule.** Otherwise Andre is approval-spammed one prompt per
+  grep until he interrupts the work. The full why lives in §2e — **a pointer here, not a copy.**
 - **Deferrals get a home** — DoD Explicitly Beyond + a trigger + journal. No silent deferral, and no
   item leaves this milestone entirely.
 

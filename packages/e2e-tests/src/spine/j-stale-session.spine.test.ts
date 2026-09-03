@@ -183,7 +183,6 @@ describe.skip("J-STALE-SESSION — a document act across a session that outlived
       expect(wrote.ok, `write failed: ${JSON.stringify(wrote)}`).toBe(true);
       // WHAT A BELIEVES. `published: false` means A knows it did not go — a different defect from
       // A believing it went and it vanishing.
-      // eslint-disable-next-line no-console
       console.log(`STALE-SESSION A's write returned: ${JSON.stringify(wrote)}`);
 
       // How long until B holds it? The production sweep's first tick is 2 minutes, so anything
@@ -200,7 +199,6 @@ describe.skip("J-STALE-SESSION — a document act across a session that outlived
         }
         await sleep(2000);
       }
-      // eslint-disable-next-line no-console
       console.log(
         `STALE-SESSION RESULT: B converged after ${elapsedMs}ms ` +
           `(${elapsedMs < 0 ? "NEVER — within 5 minutes" : elapsedMs < 120_000 ? "direct path" : "waited for a sweep"})`,
@@ -213,15 +211,12 @@ describe.skip("J-STALE-SESSION — a document act across a session that outlived
       const aReconcile = a.daemon.countLines(/document\.reconcile\.initiated/);
       const bGotFrames = b.daemon.countLines(/session\.document\.received/);
       const bInbound = b.daemon.countLines(/document\.inbound\./);
-      // eslint-disable-next-line no-console
       console.log(
         `STALE-SESSION A: sent=${aSends} parked=${aParked} reconcileInitiated=${aReconcile} ` +
           `sweepFailed=${aSweepFail} || B(after restart): framesReceived=${bGotFrames} inbound=${bInbound}`,
       );
       if (elapsedMs < 0) {
-        // eslint-disable-next-line no-console
         console.log(`STALE-SESSION A tail:\n${a.daemon.lastLines(25).join("\n")}`);
-        // eslint-disable-next-line no-console
         console.log(`STALE-SESSION B tail:\n${b.daemon.lastLines(25).join("\n")}`);
       }
       expect(elapsedMs, "B never converged at all within five minutes").toBeGreaterThan(-1);
