@@ -5,6 +5,13 @@ date: 2026-09-02
 status: in-progress
 claimed_by: CELLO_Support lane — worktree /Users/andrep/Documents/code/m15-017, branches m15/017-tbs in BOTH repos
 claimed_at: 2026-09-03
+blocked_on: >
+  The npm `latest` promotion, which only Andre runs. Every DoD clause except 5 and 6 is met and
+  reviewed. Clause 6 CANNOT be green for trustless-cello from a clean checkout until then: the
+  lockfile pins protocol-types 0.0.61, the source needs 0.0.67, and `latest` is still one behind.
+  NOT marked complete deliberately — a green tag here would be exactly the false pass this
+  milestone exists to prevent. Sequence: promote → upgrade the EC2 demo and Hermes boxes →
+  `pnpm install` → commit the lockfile → re-run the gate → merge → only then roll the directory.
 description: >
   The session-assignment TBS has a DUPLICATED builder — the directory keeps a local copy of a helper
   that is now published — and relay handover needs two new fields in it. Delete the copy first, then
@@ -206,7 +213,10 @@ load, including the second one in the same session.
 |---|---|
 | cello-client | `/Users/andrep/Documents/code/m15-017/cello-client` → merged to `main` at `126c8a5` |
 | trustless-cello | `/Users/andrep/Documents/code/m15-017/trustless-cello`, branch `m15/017-tbs` |
-| Published | tag `v0.0.268` — all seven on `beta`; **`latest` NOT promoted (Andre's)** |
+| Published | tags `v0.0.268` then `v0.0.269` (the HIGH-2 fix) — all seven on `beta`; **`latest` NOT promoted (Andre's)** |
+
+**Current beta versions — these are what to promote:** `protocol-types@0.0.67`, `crypto@0.0.63`,
+`transport@0.0.69`, `gateway@0.0.47`, `daemon@0.0.187`, `cli@0.0.194`, `connect@0.0.162`.
 
 ### ⚠️ Part 1's opening instruction is wrong as written, and falsifying it first is what saved the sessions
 
@@ -276,8 +286,11 @@ tamper-after-signing case per field.
 
 ### Gates — exit codes read, not tails
 
-- **cello-client**: test=0 (420 files, 4766 tests) · lint=0 · typecheck=0 · build=0
-- **trustless-cello**: test=0 (189 files, 1938 tests) · lint=0 (5 pre-existing warnings) · typecheck=0
+- **cello-client**: test=0 (420 files, **4767** tests) · lint=0 · typecheck=0 · build=0
+- **trustless-cello**: test=0 (190 files, **1947** tests) · lint=0 (5 pre-existing warnings) ·
+  typecheck=0 — **but see HIGH-3: this ran against a `node_modules` the committed lockfile does not
+  describe.** It is NOT reproducible from a clean checkout until the promotion, and I am not
+  claiming clause 6 as met.
 
 ### Publish (DoD 5) — done except the half only Andre can run
 
@@ -302,9 +315,45 @@ refs remain and the worktree is clean. **The lockfile therefore does NOT yet rec
 cannot until promotion.** Promote all seven at the versions above, then run `pnpm install` in
 `trustless-cello` and commit the lockfile. That closes DoD 5.
 
-### Reviewer verdict
+### Reviewer verdict — `cello-unit-reviewer`, quoted
 
-*(pending — `cello-unit-reviewer` dispatched across both repos)*
+> **11 findings — 3 HIGH [blocking], 5 MEDIUM (1 blocking as an un-journaled spec deviation),
+> 3 LOW.**
+>
+> - **SPEC: DEVIATIONS FOUND** — clause 3 is met at the builder and unmet on the production path
+> - **SILENT FALLBACKS FOUND** — HIGH-1: "the encoder silently omits two signed fields, and the
+>   system reports a signed, well-formed assignment that cannot verify"
+> - **ERROR SUBSTITUTION FOUND** — HIGH-2: "a directory-side encoding bug surfaces as
+>   `counterparty_primary_key_changed`, with guidance to clear a correct identity pin"
+> - **HOLLOW TESTS FOUND** — "the unit has no test of the encode→decode→verify path, which is the
+>   only place HIGH-1 could have been caught"
+> - **REMOVALS PROVEN** — across both repos, source and artifacts
+>
+> **Do not merge and do not deploy the directory until HIGH-1 is fixed with a red-first end-to-end
+> wire test.**
+
+**The review earned its keep. It found a defect that would have broken every real session**, and
+no test in the unit could have caught it, because every test stopped at the builder.
+
+| # | Finding | Disposition |
+|---|---|---|
+| **HIGH-1** | The directory signs 12 fields and `encodeSessionAssignment` — a different file, untouched — puts 10 on the wire. Client rebuilds 10, signature fails, **every session on the real path refused.** | **FIXED** (`aba595f7`). Both fields encoded unconditionally. Red-first with a NEW encode→decode→rebuild test: 6 red (`expected undefined to be false` on the wire), 6 green after. |
+| **HIGH-2** | A pinned counterparty whose assignment failed for ANY reason was reported as an identity change, with guidance to run `cello_contact_remove` — destroying a correct pin over a directory-side bug. | **FIXED** (`82d0d7c`). Only `signer_not_pinned` is an identity change now. Still refused, still loud. Red-first. |
+| **HIGH-3** | The branch does not build from its own lockfile — it pins protocol-types 0.0.61 while the source needs 0.0.66, and my green gate ran against a `node_modules` the lockfile does not describe. | **ACKNOWLEDGED, NOT FIXABLE HERE.** Genuinely blocked on the promotion. **Clause 6 is NOT green for trustless-cello from a clean checkout and I am not claiming it is.** Sequence: promote → `pnpm install` → commit lockfile → re-run gate → merge. |
+| **MEDIUM-4** | Clause 2 asks for a 10-field guard case; there is none and there cannot be, since `buildAssignmentTbs` takes both new values as required. | **DEVIATION RECORDED** (here). A current directory can only sign 5 or 12. The 10-field layout stays pinned by golden hex in `wire-001-tbs.test.ts`. |
+| **MEDIUM-5** | My surviving mutant was a real coverage gap, not an ineffective mutation — two of the four endpoint clauses were never exercised, because every short-layout case emptied the counterparty. | **FIXED.** Each field emptied in turn; the clause-1 mutant now reddens. **My reasoning was wrong and the reviewer's was right.** |
+| **MEDIUM-6** | Rewriting a truthiness chain as `!== ""` changed behaviour: `undefined !== ""` is true, so an undefined peer id would reach `.length` and throw instead of falling back. | **FIXED.** Back to `!!`. |
+| **MEDIUM-7** | Nothing reads `high_stakes` on the responder side, so the defect my commit claimed to close is not closed. | **CLAIM CORRECTED** — see *Newly discovered* #4. The field is in the signature; acting on it is a later unit. |
+| **MEDIUM-8** | Bilateral rollout unsequenced — a 12-field directory breaks every client below daemon 0.0.187. | **RECORDED** — see the deployment sequence below. |
+| **LOW-9** | A comment claimed the relay gate mirrors the client-facing one; it does not. | **REWRITTEN, not deleted.** |
+| **LOW-10** | `cello-client` `main` had a stale `dist/`. | Rebuilt. |
+| **LOW-11** | `prior_relay_id` has no consumer. | By design; noted. |
+
+**⚠️ DEPLOYMENT SEQUENCE (MEDIUM-8) — the directory must NOT roll first.** A directory emitting the
+12-field wire refuses every client below daemon 0.0.187, and the demo agent on EC2 and the Hermes
+box both run installed clients. Order: **promote `latest` → upgrade both boxes → then roll the
+directory.** Rolling the directory first takes both agents offline with
+`assignment_signature_invalid`.
 
 ## Newly discovered
 
@@ -318,16 +367,59 @@ copies in the tree and produces a type-identity error (`SealRejectionReason` not
 **Classification: POST-LAUNCH (docs/process).** No customer impact; the fix is a one-line correction
 to whichever order next names these refs.
 
-### 2. CI's publish verification retries for 60s, and npm propagation can exceed it
+### 2. CI's publish verification retries for 60s, npm propagation exceeds it, and it happened BOTH times on the same package
 
-The tag run went red on a publish that had in fact succeeded — and took the whole downstream chain
-with it, so `smoke-tag`, the real success signal, was SKIPPED. The run that exists to tell you the
-publish is good tells you nothing precisely when the publish was slow.
+Not a flake. Two tag runs, two red publish jobs, both on `daemon` and nothing else:
 
-**Classification: POST-LAUNCH (CI).** Widen the retry, or re-check once after a longer sleep before
-failing. Not touched here — outside this order.
+```
+v0.0.268: FAIL: @cello-protocol/daemon local=0.0.186 beta=0.0.185 after retries
+v0.0.269: FAIL: @cello-protocol/daemon local=0.0.187 beta=0.0.186 after retries
+```
+
+Both were false. The registry had the new version each time. `daemon` is by far the largest tarball
+(≈378 kB `dist/daemon.js` alone), so it is reliably the one whose read-after-write outruns a
+60-second window — which makes this deterministic, not luck.
+
+**The cost is not the red tick.** The failure takes the whole downstream chain with it, so
+`smoke-tag` — the clean-install check that is the *real* success signal per the publish skill — was
+SKIPPED on both runs. The job that exists to tell you the publish is good tells you nothing,
+precisely when the publish was slow. I verified against the registry and the tarballs by hand
+instead, twice.
+
+**Classification: POST-LAUNCH (CI).** Widen the retry for `daemon`, or re-check once after a longer
+sleep before failing. Untouched here — outside this order.
 
 ### 3. `prior_relay_id` is signed but nothing produces a non-empty one yet
 
 By design — the order is wire and plumbing only and the resume path is a later unit. Recorded so the
 next reader does not mistake the constant `""` at the call site for an oversight.
+
+### 4. `high_stakes` is now signed, and STILL nothing reads it — my commit message overclaimed
+
+I wrote that forwarding it *"is what finally tells the other side which tier it is being held to."*
+That is not true yet. The reviewer grepped every non-test source file: the only consumer of
+`assignment.high_stakes` is the TBS rebuild in the verifier. **The field is inside the signature; the
+behaviour is not there.** The defect the directory's own comment describes — a target held to a
+longer floor and a mandatory-evidence bar it never opted into and cannot see — is *unblocked* by this
+unit, not closed by it.
+
+The true statement, and the one to carry forward: *the tier is now inside the signed bytes, so a
+later unit can act on it.* Recorded rather than quietly corrected, because "no consumer, no ship" is
+a standing rule and this is a field shipped without one — knowingly, and it needs to stay visible
+until something reads it.
+
+**Classification: POST-LAUNCH.** Nothing regresses; the tier behaves exactly as it did before.
+
+### 5. A directory-side encoding bug can only be caught by a test that crosses the encode boundary
+
+Generalising HIGH-1, because the shape will recur. `encodeSessionAssignment` builds its output as an
+explicit field-by-field literal, so **any** field added to the TBS and to the assignment object is
+silently dropped unless someone also edits that function. Every test in this unit compared one
+builder against another, which cannot see across that gap.
+
+`tbs-017-wire-roundtrip.test.ts` now closes it for these two fields. It does not close it for the
+next field somebody adds.
+
+**Classification: POST-LAUNCH.** The durable fix is a test that walks the assignment type's own
+fields and asserts each signed one survives encoding — a check that fails when a field is added and
+not encoded, rather than one that has to be remembered.
