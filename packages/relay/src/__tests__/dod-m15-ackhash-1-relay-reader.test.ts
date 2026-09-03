@@ -97,3 +97,43 @@ describe("020-ACKHASH: the relay's decodeStructure1 branches on the version", ()
   });
 });
 
+
+// ─── The canonical timestamp encoding, which no relay test had ever seen ──────
+
+describe("020-ACKHASH: a uint64 timestamp decodes exactly as the legacy float64 one", () => {
+  /**
+   * THIS IS THE ENCODING PRODUCTION NOW EMITS ON EVERY FRAME, AND THIS DECODER HAD NEVER SEEN ONE —
+   * review F5.
+   *
+   * Deleting the daemon's duplicate `encodeStructure1` moved the wire timestamp from a CBOR float64
+   * to a uint64: the local copy passed `Date.now()` straight through, while the published encoder
+   * promotes anything above 2^32-1 to a BigInt, which is what the canonical vector has always
+   * pinned. This decoder's guard is `number | bigint` and nothing reads the value, so the change is
+   * inert — but every fixture in this repo still builds the float64 form, so without this the shape
+   * the relay now receives on 100% of frames appears in no test at all.
+   */
+  it("reads identical fields from both encodings", () => {
+    const asFloat = decodeStructure1(s1(1, CONTENT_HASH, SENDER_PUBKEY, SESSION_ID, 3, TIMESTAMP));
+    const asUint = decodeStructure1(s1(1, CONTENT_HASH, SENDER_PUBKEY, SESSION_ID, 3, BigInt(TIMESTAMP)));
+    expect(asFloat).not.toBeNull();
+    expect(asUint).not.toBeNull();
+    // Name the encodings, so this fails if either stops being what it claims to be.
+    expect(typeof asFloat!.timestamp).toBe("number");
+    expect(typeof asUint!.timestamp).toBe("bigint");
+    expect(Buffer.from(asUint!.content_hash).toString("hex")).toBe(Buffer.from(asFloat!.content_hash).toString("hex"));
+    expect(asUint!.last_seen_seq).toBe(asFloat!.last_seen_seq);
+    expect(Number(asUint!.timestamp)).toBe(Number(asFloat!.timestamp));
+  });
+
+  it("a v1 seven-array with a uint64 timestamp still yields its submission id", () => {
+    // The regression case and the new encoding together — this is exactly what a SUBMIT-ID client
+    // running the post-020 encoder puts on the wire.
+    const f = decodeStructure1(
+      s1(1, CONTENT_HASH, SENDER_PUBKEY, SESSION_ID, 3, BigInt(TIMESTAMP), new Uint8Array(16).fill(0x5b)),
+    );
+    expect(f).not.toBeNull();
+    expect(typeof f!.timestamp).toBe("bigint");
+    expect(f!.submission_id).toBeDefined();
+    expect(f!.last_seen_hash).toBeUndefined();
+  });
+});

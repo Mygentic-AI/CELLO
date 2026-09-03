@@ -24,7 +24,7 @@ import { describe, it, expect } from "vitest";
 import { Encoder } from "cbor-x";
 import { generateKeypair } from "@cello-protocol/crypto";
 import { decodeStructure1Fields } from "../directory-node.js";
-import { verifyLeafProvenance } from "../seal-final-root.js";
+import { verifyLeafProvenance, SEAL_FINAL_ROOT_REASONS } from "../seal-final-root.js";
 import { buildSealLegibility } from "../seal-legibility.js";
 import { buildSeal, type Kp } from "./helpers/seal-fixture.js";
 
@@ -121,6 +121,22 @@ describe("020-ACKHASH: the seal readers behave identically on a v2 leaf set", ()
     );
     const verdict = verifyLeafProvenance(bad.leaves, sessionId, [pubA, pubB]);
     expect(verdict.ok).toBe(false);
+    /**
+     * NAME THE REASON — `ok === false` alone would be satisfied by a refusal for some unrelated
+     * cause, which is not what this test claims to be about. The leaf is signed by a real
+     * participant, so the only thing wrong with it is that its Structure 1 layout has no name here.
+     *
+     * ⚠️ AND THE REASON CODE IS MISLABELLED, WHICH IS WHY THE DETAIL IS ASSERTED TOO. `PAYLOAD_MALFORMED`
+     * is documented as "the payload bytes are not a decodable SEAL payload" — but nothing here looked
+     * at a SEAL payload; the STRUCTURE 1 failed to decode. The `detail` string says so correctly. This
+     * is pre-existing (`seal-final-root.ts`, the `s1 === null` branch) and 020-ACKHASH only widens what
+     * reaches it, so it is recorded under the order's *Newly discovered* rather than renamed here —
+     * a new reason code ripples into SEAL_FINAL_ROOT_GUIDANCE and its consumers. Asserting the detail
+     * means this test still fails if the branch stops being about Structure 1 at all.
+     */
+    if (verdict.ok) return;
+    expect(verdict.reason).toBe(SEAL_FINAL_ROOT_REASONS.PAYLOAD_MALFORMED);
+    expect(verdict.detail).toContain("structure1_cbor is not decodable");
   });
 
   it("buildSealLegibility derives the SAME signed frontier from a v2 leaf as from a v1 one", async () => {
@@ -171,16 +187,40 @@ describe("020-ACKHASH: the seal readers behave identically on a v2 leaf set", ()
   });
 });
 
-// ─── Nothing emits ────────────────────────────────────────────────────────────
+// ─── The canonical timestamp encoding, which no server-side test had ever seen ─
 
-describe("020-ACKHASH: this unit ships READING only", () => {
-  it("the fixture is the only thing in this repo that can build a v2 claim", async () => {
-    // Guards the unit's own boundary: if a production builder ever starts emitting v2, this repo
-    // gains a second place that constructs the layout, and this assertion is where that shows up.
-    const [a] = [generateKeypair()];
-    const seal = await buildSeal([{ key: a, kind: "msg" }], new Uint8Array(16).fill(0x42));
-    const only = decodeStructure1Fields(seal.leaves[0]!.structure1_cbor);
-    expect(only).not.toBeNull();
-    expect(only!.last_seen_hash).toBeUndefined();
+describe("020-ACKHASH: a uint64 timestamp decodes exactly as the legacy float64 one", () => {
+  /**
+   * THIS IS THE ENCODING PRODUCTION NOW EMITS ON EVERY FRAME, AND NOTHING HERE HAD EVER DECODED ONE
+   * — review F5.
+   *
+   * Deleting the daemon's duplicate `encodeStructure1` moved the wire timestamp from a CBOR float64
+   * to a uint64: the local copy passed `Date.now()` straight through, while the published encoder
+   * promotes anything above 2^32-1 to a BigInt, which is what the canonical vector has always
+   * pinned. Both decoders accept `number | bigint` and neither reads the value, so the change is
+   * inert — but "inert by inspection, untested" is the wrong place to stand on a wire change, and
+   * every fixture in this repo still builds the float64 form.
+   */
+  it("the relay and directory read identical fields from both encodings", () => {
+    const asFloat = decodeStructure1Fields(s1(1, CONTENT_HASH, SENDER_PUBKEY, SESSION_ID, 3, TIMESTAMP));
+    const asUint = decodeStructure1Fields(s1(1, CONTENT_HASH, SENDER_PUBKEY, SESSION_ID, 3, BigInt(TIMESTAMP)));
+    expect(asFloat).not.toBeNull();
+    expect(asUint).not.toBeNull();
+    // Name the encodings, so this test fails if either side stops being what it claims to be.
+    expect(typeof asFloat!.timestamp).toBe("number");
+    expect(typeof asUint!.timestamp).toBe("bigint");
+    // Every field the directory actually consumes is identical across the two.
+    expect(Buffer.from(asUint!.content_hash).toString("hex")).toBe(Buffer.from(asFloat!.content_hash).toString("hex"));
+    expect(asUint!.last_seen_seq).toBe(asFloat!.last_seen_seq);
+    expect(Number(asUint!.timestamp)).toBe(Number(asFloat!.timestamp));
+  });
+
+  it("a v2 claim carrying the canonical uint64 timestamp still yields its ack hash", () => {
+    const f = decodeStructure1Fields(
+      s1(2, CONTENT_HASH, SENDER_PUBKEY, SESSION_ID, 3, BigInt(TIMESTAMP), LAST_SEEN_HASH),
+    );
+    expect(f).not.toBeNull();
+    expect(typeof f!.timestamp).toBe("bigint");
+    expect(Buffer.from(f!.last_seen_hash!).toString("hex")).toBe(Buffer.from(LAST_SEEN_HASH).toString("hex"));
   });
 });
