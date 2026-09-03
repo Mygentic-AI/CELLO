@@ -273,9 +273,23 @@ interface Structure1Fields {
    * identical content twice in one conversation is two messages, not a duplicate.
    */
   submission_id?: Uint8Array;
+  /**
+   * 020-ACKHASH — the content the sender is ACKNOWLEDGING, on a v2 claim only.
+   *
+   * `last_seen_seq` is a NUMBER, so it attests to a POSITION and never to content. This binds the
+   * acknowledgement to what was actually received. Present only when `protocol_version` is 2; a v1
+   * claim carries none, and that is a layout fact, not a missing value.
+   *
+   * The relay does not yet check it against anything — this unit ships READING only, so that an
+   * emitter can follow without every frame in flight being refused by a relay that predates it.
+   */
+  last_seen_hash?: Uint8Array;
 }
 
-function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
+// Exported for 020-ACKHASH unit coverage of the version branch — in particular the v1 seven-array
+// (submission id) regression, which is the shape the deployed fleet already tolerates and the one a
+// length-only reader misreads as an ack hash. Pure function; no state.
+export function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
   let arr: unknown;
   try {
     arr = decode(cbor);
@@ -293,12 +307,26 @@ function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
    * Still a fixed set of lengths rather than `>= 6`: an arbitrarily long array is a frame this
    * version does not understand, and accepting it would mean verifying a signature over bytes whose
    * meaning is not agreed.
+   *
+   * ⚠️ 020-ACKHASH — THE VERSION DECIDES INDEX 6, AND A LENGTH CHECK CANNOT.
+   *
+   * `last_seen_hash` also lands at index 6, so a seven-field array now has TWO meanings. This code
+   * previously accepted any `protocol_version` and validated index 6 only as a submission id — and
+   * a 32-byte ack hash passes that validation, so a v2 claim would have been silently ingested with
+   * its hash filed as a submission id. Both slots are the same bytes; only `arr[0]` separates them.
+   *
+   *   v1 + 6 fields  ⇒  the original layout
+   *   v1 + 7 fields  ⇒  submission id at index 6 (unchanged — this is what the deployed fleet emits)
+   *   v2 + 7 fields  ⇒  last_seen_hash at index 6
+   *   anything else  ⇒  refused; the caller answers `submit_malformed`
    */
-  if (!Array.isArray(arr) || (arr.length !== 6 && arr.length !== 7)) return null;
+  if (!Array.isArray(arr)) return null;
 
-  const [_pv, _ch, _spk, _sid, _lss, _ts, _subId] = arr;
+  const [_pv, _ch, _spk, _sid, _lss, _ts, _tail] = arr;
 
-  if (typeof _pv !== "number") return null;
+  const isV1 = _pv === 1 && (arr.length === 6 || arr.length === 7);
+  const isV2 = _pv === 2 && arr.length === 7;
+  if (!isV1 && !isV2) return null;
   const chBytes = _ch instanceof Uint8Array ? _ch : Buffer.isBuffer(_ch) ? new Uint8Array(_ch as Buffer) : null;
   const spkBytes = _spk instanceof Uint8Array ? _spk : Buffer.isBuffer(_spk) ? new Uint8Array(_spk as Buffer) : null;
   const sidBytes = _sid instanceof Uint8Array ? _sid : Buffer.isBuffer(_sid) ? new Uint8Array(_sid as Buffer) : null;
@@ -308,13 +336,23 @@ function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
   if (typeof _lss !== "number") return null;
   if (typeof _ts !== "number" && typeof _ts !== "bigint") return null;
 
+  // Index 6, read as whatever the VERSION says it is — never as both, and never as neither.
   let subIdBytes: Uint8Array | undefined;
+  let lastSeenHashBytes: Uint8Array | undefined;
   if (arr.length === 7) {
-    const b = _subId instanceof Uint8Array ? _subId : Buffer.isBuffer(_subId) ? new Uint8Array(_subId as Buffer) : null;
-    // Present-but-malformed is REFUSED, not ignored. Silently dropping it would give the sender a
-    // fresh position for what they declared a retry — the exact defect, wearing a valid ack.
-    if (!b || b.length === 0 || b.length > 32) return null;
-    subIdBytes = b;
+    const b = _tail instanceof Uint8Array ? _tail : Buffer.isBuffer(_tail) ? new Uint8Array(_tail as Buffer) : null;
+    if (isV2) {
+      // A SHA-256 root, so exactly 32 — not "at most 32". Present-but-malformed is REFUSED: a v2
+      // whose hash we cannot read is a content acknowledgement we cannot check, and admitting it
+      // with the field dropped would let the sender downgrade to an unchecked ack by sending junk.
+      if (!b || b.length !== 32) return null;
+      lastSeenHashBytes = b;
+    } else {
+      // Present-but-malformed is REFUSED, not ignored. Silently dropping it would give the sender a
+      // fresh position for what they declared a retry — the exact defect, wearing a valid ack.
+      if (!b || b.length === 0 || b.length > 32) return null;
+      subIdBytes = b;
+    }
   }
 
   return {
@@ -325,6 +363,7 @@ function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
     last_seen_seq: _lss,
     timestamp: _ts,
     ...(subIdBytes ? { submission_id: subIdBytes } : {}),
+    ...(lastSeenHashBytes ? { last_seen_hash: lastSeenHashBytes } : {}),
   };
 }
 

@@ -219,9 +219,18 @@ export function sealContentHash(payload: Uint8Array): Uint8Array {
 /**
  * The content hash the CLIENT SIGNED, decoded from `structure1_cbor`.
  *
- * Structure 1 TBS is `[protocol_version, content_hash, sender_pubkey, session_id, last_seen_seq,
- * timestamp]` — the exact byte string the sender's Ed25519 signature covers. Decoded here rather
- * than taken from `s2` so this module's central claim is enforced by this module (review F1).
+ * Structure 1 TBS:
+ *   v1: `[1, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]`
+ *   v2: `[2, …the same five…, last_seen_hash]`          ← 020-ACKHASH
+ *
+ * — the exact byte string the sender's Ed25519 signature covers. Decoded here rather than taken
+ * from `s2` so this module's central claim is enforced by this module (review F1). The two fields
+ * read below sit at indices 1 and 3 in both layouts; the field was appended at 6 so they did not
+ * move.
+ *
+ * A (version, length) pair this build cannot name is refused, never coerced into the nearest known
+ * layout — the version tag is what separates a v1 seven-array's submission id from a v2's ack hash,
+ * and they are both just bytes at index 6.
  *
  * Returns null rather than throwing: these bytes arrive off a wire, and a decode failure is a
  * refusal to report, never an exception escaping into a stream handler.
@@ -233,7 +242,11 @@ function decodeStructure1Signed(cbor: Uint8Array): { content_hash: Uint8Array; s
   } catch {
     return null;
   }
-  if (!Array.isArray(arr) || arr.length !== 6) return null;
+  if (!Array.isArray(arr)) return null;
+  const version = arr[0];
+  const isV1 = version === 1 && (arr.length === 6 || arr.length === 7);
+  const isV2 = version === 2 && arr.length === 7;
+  if (!isV1 && !isV2) return null;
   const bytesAt = (i: number, len: number): Uint8Array | null => {
     const v = arr[i];
     const b = v instanceof Uint8Array ? v : Buffer.isBuffer(v) ? new Uint8Array(v as Buffer) : null;

@@ -47,9 +47,18 @@ export const SEAL_RECEIPT_DISCLAIMER =
 
 /**
  * Decode the signed last_seen_seq from a Structure 1 TBS CBOR.
- * Structure 1 TBS = [protocol_version, content_hash, sender_pubkey, session_id,
- *                    last_seen_seq, timestamp]. last_seen_seq is index 4.
- * Returns null on malformed input (so a malformed leaf cannot inflate a frontier).
+ *
+ * Structure 1 TBS:
+ *   v1: [1, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]
+ *   v2: [2, …the same five…, last_seen_hash]           ← 020-ACKHASH
+ *
+ * `last_seen_seq` is index 4 in BOTH — the new field was appended at 6 precisely so this read did
+ * not move. Only the length assumption changed.
+ *
+ * The check was `length < 5`, which admits an array of ANY length ≥ 5 and reads index 4 out of it.
+ * That is not tolerance, it is fail-open: a shape this build cannot name would have had a number
+ * lifted out of it and used as a signed frontier. A leaf whose layout is unrecognised yields null,
+ * exactly as a malformed one does — so it cannot inflate a frontier either way.
  */
 function decodeSignedLastSeenSeq(cbor: Uint8Array): number | null {
   let arr: unknown;
@@ -58,7 +67,11 @@ function decodeSignedLastSeenSeq(cbor: Uint8Array): number | null {
   } catch {
     return null;
   }
-  if (!Array.isArray(arr) || arr.length < 5) return null;
+  if (!Array.isArray(arr)) return null;
+  const version = arr[0];
+  const isV1 = version === 1 && (arr.length === 6 || arr.length === 7);
+  const isV2 = version === 2 && arr.length === 7;
+  if (!isV1 && !isV2) return null;
   const lss = arr[4];
   if (typeof lss === "number") return lss;
   if (typeof lss === "bigint") return Number(lss);
