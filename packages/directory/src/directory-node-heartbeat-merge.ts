@@ -24,8 +24,9 @@ export interface DirectoryNodeHeartbeatRecord {
   /** The node's stable identifier — the natural key. Never `region`, which is a separate fact. */
   node_id: string;
   /**
-   * Epoch-millis as a string (pg BIGINT). NOT NULL since V65, where `0` means "registered, never
-   * heartbeated" — the value a freshness comparison rejects exactly as the old NULL did.
+   * Epoch-millis as a string (pg BIGINT). `0` means "registered, never heartbeated" — the DB column
+   * is nullable and the AE SELECT coalesces NULL to 0, so both encode paths agree on one
+   * representation. A freshness comparison rejects 0 exactly as it rejected NULL.
    */
   last_heartbeat_at: string;
 }

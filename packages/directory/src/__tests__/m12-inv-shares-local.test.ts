@@ -119,7 +119,18 @@ describe("DOD-INV-SHARES-LOCAL: the share table is unreachable through anti-entr
       // verify a seal it was never told about.
       "seal_certificate_fields",
     ]);
-    expect(store.tierBTables()).toEqual(["agent_suspensions", "agent_presence"]);
+    expect(store.tierBTables()).toEqual([
+      "agent_suspensions",
+      "agent_presence",
+      // DOD-M15-HEARTBEAT-1. The per-node liveness heartbeat, and the ONE table that appears in both
+      // tiers — Tier A carries its immutable identity (node_id, region) under insert-if-absent, this
+      // carries only the mutable `last_heartbeat_at` under an LWW merge. Audited for what it lets
+      // leave the node, which is the question this allowlist exists to force: the Tier-B body is
+      // node_id + a timestamp, both already published facts about a node the manifest names. No key
+      // material, no PII, and no `endpoint` — a dialable address must come from the SIGNED manifest,
+      // never from a replicated row.
+      "directory_nodes",
+    ]);
 
     // Registry and specs now agree EXACTLY. They did not until DOD-AE-CHAINED-TABLES-1: the specs
     // declared four Tier-A tables and the registry served two, so seal receipts existed only on the

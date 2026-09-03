@@ -146,15 +146,27 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
     expect(String(ms)).toBe(String(local));
   });
 
-  it("the ADVERTISE version equals the SERVED-body version (no null↔\"null\" split)", async () => {
-    // The failure V65's NOT NULL removes: advertise hashes the RAW pg row, a peer hashes the SERVED
-    // body. With a nullable column those routes disagree (`null` vs the string "null"), so two nodes
-    // holding IDENTICAL state advertise different versions forever and re-pull every round without
-    // converging. agent_suspensions.origin_node hit exactly this.
+  it("a NULL last_heartbeat_at: the ADVERTISE version equals the SERVED-body version (no null↔\"null\" split)", async () => {
+    // The failure the SELECT's COALESCE removes. Advertise hashes the RAW pg row; a peer hashes the
+    // SERVED body. Without the coalesce those routes disagree (`null` vs the string "null"), so two
+    // nodes holding IDENTICAL state advertise different versions forever and re-pull every round
+    // without converging. agent_suspensions.origin_node hit exactly this.
+    //
+    // The fixture is a genuine NULL, not the epoch-0 stand-in: the column IS nullable (every node
+    // registers before it first heartbeats), so NULL is the shape that reaches production, and a
+    // test seeded with 0 would pass over the defect it is named for.
     const nodeId = `${P}us-central1`;
-    await seedNode(nodeId, 0); // the shape that used to be NULL — the one that broke
+    await pool.query(
+      `INSERT INTO directory_nodes (node_id, region, status, last_heartbeat_at)
+       VALUES ($1, $2, 'active', NULL)`,
+      [nodeId, `${nodeId}-region`],
+    );
     const advertised = (await store.tierBVersions("directory_nodes")).get(nodeId);
     const served = (await store.serveTierB("directory_nodes", [nodeId]))[0].body as DirectoryNodeHeartbeatRecord;
+    // Name the VALUE, not just the agreement: the two hashes would also agree if BOTH paths yielded
+    // the string "null". Pinning it to "0" is what makes this assert the coalesce rather than a
+    // coincidence, and "0" is the value the merge treats as never-heartbeated.
+    expect(served.last_heartbeat_at).toBe("0");
     const peerComputed = encodeTierBVersion(
       DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC,
       served as unknown as Record<string, string>,

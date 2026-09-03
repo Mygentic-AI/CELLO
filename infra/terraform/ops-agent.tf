@@ -299,14 +299,15 @@ variable "ops_agent_image_tag" {
 
 variable "ops_agent_expected_migration_version" {
   type        = string
-  default     = "65"
+  default     = "64"
   description = "Schema version the ops agent asserts. Bump with every new V{N} migration — a stale value crash-loops it on a fresh deploy."
 }
 
-# 64 → 65 on 2026-09-03, with V65 directory_nodes heartbeat replication (DOD-M15-HEARTBEAT-1), in
-# the same commit as the migration. NOT YET APPLIED: no terraform apply and no node roll has run for
-# this change, so production is still on V64 with this file asserting 65. Whoever deploys must run
-# the migration and the roll together — that ordering is the whole point of the note below.
+# NOT bumped for DOD-M15-HEARTBEAT-1 (2026-09-03), because that unit ships NO migration. Heartbeat
+# replication needed no schema change: the encoding is fixed at the anti-entropy SELECT, the same
+# chokepoint `origin_node` uses. A bump here with no V65 to match would assert a version the database
+# will never reach and crash-loop the ops agent on the next fresh deploy — the exact failure this
+# variable exists to prevent, arrived at from the opposite direction.
 
 # 63 → 64 on 2026-09-02, with V64 sessions.high_stakes (DOD-M15-UNILATERAL-1), in the same commit as
 # the migration for the reason the 2026-08-22 note gives.

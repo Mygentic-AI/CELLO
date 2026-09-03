@@ -483,11 +483,24 @@ const PRESENCE: TierBPg = {
 const DIRECTORY_NODE_HEARTBEATS: TierBPg = {
   spec: DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC,
   keyColumn: "node_id",
-  // TIMESTAMPTZ → absolute UTC epoch millis, no AT TIME ZONE (see file header). NOT NULL since V65,
-  // so this is total — no COALESCE is needed and a null could not reach the encoders.
+  // TIMESTAMPTZ → absolute UTC epoch millis, no AT TIME ZONE (see file header).
+  //
+  // COALESCE TO 0 IS LOAD-BEARING, and it is the same fix `origin_node` carries three entries above.
+  // `last_heartbeat_at` is NULLABLE — a node that has registered but never heartbeated. This one
+  // SELECT feeds BOTH encode paths: `tierBVersions` hashes the RAW row it returns, `serveTierB`
+  // hashes `rowToBody(row)`. A NULL travels those two differently — raw `null` versus `String(null)`
+  // === the literal `"null"` — so two nodes holding IDENTICAL state would advertise DIFFERENT
+  // version hashes, pull each other every round, and never converge. Coalescing here makes both
+  // paths see `0`, which is also exactly what the merge treats as "never heartbeated": it loses to
+  // every real timestamp, and a freshness comparison rejects it just as it rejected NULL.
+  //
+  // Deliberately NOT fixed with `SET NOT NULL` + a backfill: `PERSIST-003 DB-001` forbids UPDATE DML
+  // in a migration (it locks the table and breaks the append-only contract), and there is no way to
+  // make an existing nullable column NOT NULL without one. The chokepoint is the correct place
+  // regardless — it is where the two encodings are guaranteed to agree.
   select:
     `SELECT node_id,
-            (EXTRACT(EPOCH FROM last_heartbeat_at)*1000)::bigint AS last_heartbeat_at
+            (EXTRACT(EPOCH FROM COALESCE(last_heartbeat_at, to_timestamp(0)))*1000)::bigint AS last_heartbeat_at
        FROM directory_nodes`,
   merge: (a, b) => mergeDirectoryNodeHeartbeat(a as DirectoryNodeHeartbeatRecord, b as DirectoryNodeHeartbeatRecord),
   rowToBody: (r): DirectoryNodeHeartbeatRecord => ({
