@@ -191,7 +191,7 @@ write V66.
 **`node:sqlite` is forbidden in this project.** Not relevant to the directory (it is Postgres), but
 noted because the daemon side of the fleet uses SQLCipher and the rule is absolute.
 
-**ANOTHER LANE IS RUNNING.** `020-REFUSALVISIBLE` is in `cello-client`, so it cannot touch your
+**ANOTHER LANE IS RUNNING.** `022-REFUSALVISIBLE` is in `cello-client`, so it cannot touch your
 files — but it may bring up Postgres. **Export a `COMPOSE_PROJECT_NAME` unique to your worktree AND
 a unique `CELLO_PG_HOST_PORT`.** The port alone does NOT isolate you: both worktrees derive the same
 compose project name, the second lane silently reuses the first's container on the first's port, and

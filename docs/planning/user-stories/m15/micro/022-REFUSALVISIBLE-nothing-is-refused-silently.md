@@ -1,5 +1,5 @@
 ---
-name: 020-REFUSALVISIBLE — Nothing is refused silently
+name: 022-REFUSALVISIBLE — Nothing is refused silently
 type: micro-work-order
 date: 2026-09-03
 status: open
@@ -11,7 +11,7 @@ description: >
   CLOSES DOD-M15-NO-SILENT-REFUSAL-1.
 ---
 
-# **<ins>MICRO</ins>** WORK ORDER 020-REFUSALVISIBLE — Nothing is refused silently
+# **<ins>MICRO</ins>** WORK ORDER 022-REFUSALVISIBLE — Nothing is refused silently
 
 > ## THE RULES OF A MICRO WORK ORDER
 >
