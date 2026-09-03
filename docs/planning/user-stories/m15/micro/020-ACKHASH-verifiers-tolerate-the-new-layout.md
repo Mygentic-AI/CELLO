@@ -308,8 +308,16 @@ silent message loss rather than a visible outage.
 
 _(write findings here and keep going — do not fix them)_
 
-- **⚠️ SPEC DEVIATION, and it is the one the reviewer required be written here. The two encoders were
-  NEVER byte-identical, so Part 1's "behaviour must not change" could not be satisfied as written.**
+- **⚠️ SPEC DEVIATION — RULED BY ANDRE 2026-09-03, SETTLED, DO NOT RE-OPEN. The canonical uint64
+  encoder wins; the wire timestamp moves float64 → uint64.** Presented as three options (keep the
+  published encoder / make it match what production actually emitted, editing the canonical vector to
+  bless the drift / restore the duplicate builder). He chose the first. The reasoning that decided it:
+  nothing anywhere reads `.timestamp`, every decoder in both repos already accepts either form, and
+  signatures cover the bytes as sent so no stored message is affected — making the alternative a
+  permanent documentation cost paid to avoid a change with no reachable consequence.
+
+  **The two encoders were NEVER byte-identical, so Part 1's "behaviour must not change" could not be
+  satisfied as written.**
   The daemon's local copy passed `Date.now()` straight to CBOR, which encodes an integer above
   2^32-1 as a **float64** (`fb4278bcfe56800000`); the published encoder promotes to a **uint64**
   (`1b0000018bcfe56800`), the same idiom `buildSessionEstablishmentTbs` uses. Measured, not inferred.
