@@ -382,9 +382,10 @@ You run the same agent identity on a laptop and a desktop. Both are legitimate; 
 Circuit dials are fine — those name a peer ID and route unambiguously. It is the two pubkey-keyed
 maps that collapse, and they were found independently in two different repositories.
 
-## Andre's rule, and it is enforceable
+## The rule — DECIDED by Andre, 2026-09-03
 
-**"Sorry, this public key is already in use on this relay."** A relay cannot see what another relay
+**Multiple devices on one identity are allowed. They may not share a relay.** In practice:
+*"Sorry, this public key is already in use on this relay."* A relay cannot see what another relay
 holds, so it cannot force you onto a different one — but it can refuse the second reservation
 locally, and the client already requests reservations with every known relay, so the fallback path
 exists. It fixes the delivery-stream overwrite as a side effect.
@@ -401,25 +402,135 @@ an ungraceful restart locks an agent out of its own front door.
 
 ---
 
-# What needs a decision, and why it is Andre's
+# Decisions
 
-1. **Classification.** Findings 1 and 3 are protocol-level authentication and evidence holes; my read
-   is that they belong in the gate. Finding 2 is a scaling problem with an adversarial tail. Findings
-   4 and 5 are arguable. `M15-PROCEDURE §0z.1` says classify at creation, and unclear blocks — but
-   that rule has been sending things into the gate all week, and weighing that against runway is not
-   my call.
+Four things need a call from Andre. Each one below says **what you are deciding**, **the options**,
+and **what I would do**. Nothing here is blocked on more investigation.
 
-2. **`session_size_limit_exceeded`** — pass 2's request to move it out of post-launch has been sitting
-   on Andre since 2026-08-24.
+---
 
-3. **Multi-device policy.** Refuse a second reservation per key per relay, or allow it and fix the
-   two pubkey-keyed maps. This discussion only brushes against it.
+## Decision 1 — Are these five findings launch blockers, or post-launch?
 
-## Two facts to check before any of this is built
+**What you are deciding:** which of the five go into the M15 gate (launch waits for them) and which go
+into the post-launch backlog. `M15-PROCEDURE §0z.1` says classify at creation time with one line of
+reasoning, and that unclear cases block.
 
-- Does the daemon assemble a carried seal leaf for a message that arrived with **no** relay ordering
-  record? Decides whether finding 3's requirement holds today.
-- Did pass 2's carried ACs actually land on a later unit, or do they exist only in that closing note?
+**My recommendation, finding by finding:**
+
+| # | Finding | I would put it | Why |
+|---|---|---|---|
+| 1 | A message with no authorship proof is ingested | **GATE** | Somebody pointing a coding agent at the repo finds this in an afternoon, and the code comment hands it to them. It undoes the guarantee the product is sold on. |
+| 3 | Withhold + force-close to escape the seal | **GATE** | The receipt is the product. A path that lets the guilty party remove themselves from it is not a papercut. |
+| 4 | A caught injection tells the operator nothing | **GATE** | Screening is one of the three things the launch intent names as core value. Catching an attack silently is most of the way to not catching it. |
+| 2 | Relay reservations granted without purpose | **BACKLOG** | Needs 128 registered agents. Invite-only makes that expensive today, and the fix is a capacity problem, not a hole. Revisit before open signup. |
+| 5 | Two devices, last-writer-wins | **BACKLOG** | Affects one operator's own two machines. Annoying, not a trust failure. |
+
+**If you disagree with any row, the argument to make is the launch-triage one** — would this
+fundamentally ruin a prospective customer, or could they forgive it?
+
+---
+
+## Decision 2 — The session byte cap that kills a conversation silently
+
+**What this actually is** (I described it wrongly at first, and it is not about session counts):
+
+Every sender has a **total-bytes budget per session**, set by their trust tier. A stranger gets
+**25 MB**; known contacts get more. Once the running total of bytes you have received from that
+person in that session crosses their cap, **every later message from them is refused for the rest of
+the session.** Neither of you is told. From your chair the other person simply stops replying, and
+nothing you do brings the conversation back — it is dead for good.
+
+The review that found this argued it should come out of the post-launch backlog, because it is the
+same permanent-silence shape as the three refusals that *were* wired, and the remedy is entirely the
+operator's. **That argument has been sitting with you unanswered since 2026-08-24.**
+
+**Your options:**
+
+- **A — Wire it now.** Add it to the operator refusal surface alongside the three that are already
+  there. Small: the strings exist, they just have no reader.
+- **B — Leave it in post-launch.** Accept that a long conversation can die silently before launch.
+- **C — Wire it and raise the cap.** If 25 MB is low for a real working session, the cap itself is
+  also worth a look.
+
+**I would do A.** It is the same one-line wiring as the three already done, and this is finding 4
+wearing different clothes — we catch something and tell nobody.
+
+---
+
+## Decision 3 — Multi-device policy
+
+**DECIDED by Andre, 2026-09-03:** running the same agent identity on multiple devices **is allowed**,
+but those devices **may not use the same relay**. A relay refuses a second standing receiver for a
+public key it is already serving, and the client falls back to another relay.
+
+**Two things that ruling does not yet cover, and both need an answer:**
+
+### 3a — When a daemon restarts, who wins?
+
+A daemon that dies ungracefully comes back with a **new peer ID under the same key**. The relay still
+thinks the old one is there, sees "this key is already in use here," and **refuses the agent its own
+front door.** That is the outage that forced the reservation ceiling up from 15 in the first place, so
+it is not hypothetical.
+
+- **A — Newcomer wins, but only once the incumbent's connection is provably dead.** The relay checks
+  liveness before refusing.
+- **B — Newcomer always wins.** Simple, but that is last-writer-wins, which is the thing this rule
+  exists to remove.
+- **C — Incumbent wins until it times out.** Safe against takeover, but an agent is locked out of
+  itself for the length of the timeout after every crash.
+
+**I would do A.** It is the only one that is both safe and doesn't punish a crash.
+
+### 3b — Which device gets an incoming session offer?
+
+**The relay rule does not solve this.** Both devices still authenticate to directory signalling under
+the same key, whichever relays they use, and the directory routes offers through a map keyed by
+public key — **last device to authenticate wins, silently.** Your laptop stops receiving invitations
+the moment your desktop comes online, with no indication on either machine.
+
+- **A — Offer goes to every device**, first to accept takes the session.
+- **B — Offer goes to the most recently active device** (today's behaviour, made deliberate and
+  visible instead of accidental).
+- **C — One device is designated primary** and the others are send-only.
+
+**I would do A**, because it is the only one where the operator never silently loses an invitation.
+It is also the most work, so B made explicit is a reasonable interim.
+
+---
+
+## Decision 4 — Does the directory get a session counter?
+
+**What you are deciding:** whether to record, per operator, how many sessions are open right now.
+
+This is not a cap and would refuse nobody. It exists because **every option you have floated for
+later needs it** — detection, post-a-bond, priority for long track records, freemium tiers on
+concurrent agents. None of them can be built without knowing whose load is whose, and history cannot
+be reconstructed after the fact.
+
+**Half of it already exists:** agents are already linked to accounts. **The missing half:** the
+sessions table does not record who is in a session.
+
+- **A — Build the counter now**, alongside the relay purpose fix. They ship together, because the
+  relay fix moves the ceiling from 32 to "however many sessions the directory brokers," and without a
+  meter that is worse arithmetic than what we have.
+- **B — Build neither now.** Defer both to post-launch as one unit.
+- **C — Build the counter alone**, ahead of the relay fix, so the data starts accumulating.
+
+**I would do B**, consistent with putting finding 2 in the backlog — but if finding 2 goes into the
+gate, then it has to be A, never the relay fix on its own.
+
+---
+
+# Two facts to check before any of this is built
+
+Neither is blocking a decision; both would change how the work is scoped.
+
+1. **Does the daemon build a carried seal leaf for a message that arrived with no relay ordering
+   record?** The verifier would accept one. If the client already builds it, finding 3's requirement
+   holds today and the work is smaller than it looks.
+2. **Did the earlier review's carried ACs actually land on a later unit**, or do they only exist in
+   that closing note? Decides whether `counterparty_gone` and its two siblings are tracked work or
+   forgotten work.
 
 ---
 
