@@ -277,7 +277,65 @@ authorship proof, because absence is soft. Direct session, no ordering record, n
 anywhere — and the code's own named mitigation for the missing signer check is *relay-side
 corroboration*, which is the thing being withheld.
 
-## The fix
+## The root cause, found later in the discussion — the acknowledgement does not say what it acknowledged
+
+**Andre's mental model was that each message carries the signed HASH of the message it is replying
+to, making the conversation a cryptographic linked list. That is not what happens, and the gap is
+exactly where this attack lives.**
+
+What a sender actually signs (`Structure1`) is:
+
+```
+[version, hash of THEIR OWN content, sender pubkey, session id, last_seen_seq, timestamp]
+```
+
+`last_seen_seq` is **a number** — the position of the last message they saw. Not its hash.
+
+| The model | What it does |
+|---|---|
+| I sign the **hash** of your message | I sign the **sequence number** of your message |
+| Proof I received *what you sent* | Proof I saw *something at position 7* |
+| Binds to content | Binds to a position |
+
+**The link you want does exist — but it is assembled from two separate signatures that only meet at
+the relay:**
+
+1. **The counterparty signs:** "I saw position 7."
+2. **The relay signs** (`buildRelayAckTbs`): "position 7 held content hash X."
+
+Chain those and you get "they saw content X." **So the relay is load-bearing for the acknowledgement
+itself**, not merely for ordering.
+
+**Which is precisely why withholding works.** On a direct session with no submit, there is no receipt
+binding position 7 to any content, and a signed `last_seen_seq: 7` becomes an unbacked number.
+
+**And `prev_root` does not rescue it.** It sits in `Structure2`, the seal checks it, and it is signed
+by **neither party and not by the relay** — the relay's receipt covers content hash, sequence and
+timestamp only. It is a consistency check the sealing party computes, not a mutual attestation.
+Cousin of the backlog line `DOD-M15-RELAYSEQ-UNSIGNED-1`, *"dedup trusts a position nobody signed."*
+
+## The fix — DECIDED by Andre, 2026-09-03: ADD `last_seen_hash`
+
+**`Structure1` gains a field. `last_seen_seq` stays.** The sequence number is doing real work for
+ordering and dedup and must not be replaced; it simply cannot carry the acknowledgement as well.
+
+```
+[version, content_hash, sender_pubkey, session_id, last_seen_seq, last_seen_hash, timestamp]
+```
+
+With that, an acknowledgement binds to **content**, is signed by the acknowledging party, and holds
+**with no relay involved at all**. It closes this finding at the root rather than working around it.
+
+**Two things to get right when building it:**
+
+- **`Structure1`'s field order is signed over**, so this is a v2 of the structure. The version tag is
+  already the first field for exactly this reason — *"a v1 claim can never read as a v2 one."*
+- **The first message of a session has seen nothing. That value must be a VALUE, never an absence** —
+  a defined genesis constant, or 32 zero bytes. An absent field here recreates finding 1's fail-open
+  one layer down, and it is the same trap `017-TBS` records in its own words: `high_stakes: false`
+  and `prior_relay_id: ""` are values, not absences.
+
+## The other fix, still worth doing
 
 **The receiver submits the hash of what it received.** It holds the sender's signature, so it cannot
 fabricate a leaf the sender did not write, and the relay can verify that before accepting. This
