@@ -2359,20 +2359,39 @@ and, for the made-true rows, the units that make them true.
 
 # POST-LAUNCH BACKLOG
 
-### `DOD-M15-CHECKPOINT-COUNTERSIGN-1` — 🅿️ POST-LAUNCH. A sealed receipt is countersigned by one node, not several
+### `DOD-M15-CHECKPOINT-COUNTERSIGN-1` — 🅿️ POST-LAUNCH. The LOG ANCHOR is unsigned (the receipt itself is fine)
 **Found 2026-09-03 (Order 021), while closing `DOD-M15-HEARTBEAT-1`. POST-LAUNCH under §0z.4 — a
 lane may not add to the gate. Andre decides if it blocks.**
 
-**What it costs the operator:** the pitch is that a receipt does not rest on any single directory's
-word. Today it does. A separate LOCAL single-node checkpoint path writes the row unilaterally on a
-scheduler, which is why receipts still finish and inclusion proofs still resolve — so this is not
-"receipts are broken". What is missing is the property the product is sold on.
+> **⚠️ FIRST WORDING OF THIS ENTRY WAS WRONG, and the error is worth keeping.** It said *"a sealed
+> receipt is countersigned by one node, not several."* **False.** The SEAL CERTIFICATE is FROST
+> threshold-signed with the initiator's group key, whose shares live on the directory nodes, and
+> `seal-cosign-evidence.ts` makes each co-signer rebuild the certified root and leaf count from the
+> raw signed leaves and refuse its share if they do not match. No single directory can produce a
+> valid seal certificate alone. The closing ceremony is real and it does what it claims.
+>
+> **The confusion was between two different artifacts**, and anyone reading this later will make it
+> too, so: the SEAL CERTIFICATE (per conversation, at close, FROST T-of-N, each node re-derives the
+> root) is sound. The CHECKPOINT (periodic, over the whole log, "my log holds N conversations and its
+> top hash is X") is what this entry is about, and it is written by one node with no signatures.
 
-**Why it is post-launch rather than urgent:** a customer gets a working, verifiable receipt. What
-they do not get is the multi-node countersignature, and nothing in the product currently claims to
-them that they have it. **The claims-ledger row for "countersigned by several independent nodes" is
-the thing to check before launch** — if any outward-facing copy asserts it, the copy is the
-launch-blocking half, not the code.
+**What it costs the operator, stated correctly:** your receipt is genuine and independently
+verifiable — that part holds. What is weak is the later question *"prove my conversation is in your
+permanent record and that record was not rewritten."* That is answered by an INCLUSION PROOF, which
+resolves against a checkpoint, and the checkpoint is published on one node's say-so. A directory
+could in principle re-issue a checkpoint over a different set of conversations; the seal certificates
+would all still verify, because they are signed independently of the log they sit in.
+
+**Why post-launch:** the customer gets a working, threshold-signed, verifiable receipt on day one.
+The gap is in the tamper-evidence of the LOG, not the receipt. **Before launch, check the claims
+ledger for any copy about the LOG being tamper-evident or multi-node anchored** — copy about the
+receipt being countersigned by several directories is TRUE and should stay.
+
+**Measured while closing Order 021:** `directory_checkpoints` has TWO writers. The federated one in
+`checkpoint-coordinator.ts` collects signatures and returns at the threshold check before writing.
+The one that actually runs is in `mmr-store.ts` and writes the row with no signature collection at
+all, so `checkpoint_node_signatures` is empty — a published checkpoint carries ZERO directory
+signatures, not one.
 
 **Three independent blockers, all measured — do not re-derive:**
 1. `CHECKPOINT_PEER_ADDRS` is set **nowhere in IaC**, so `getPeerNodeIds()` returns `[]` and
