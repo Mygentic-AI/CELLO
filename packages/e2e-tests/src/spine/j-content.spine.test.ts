@@ -1308,9 +1308,12 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
       notice!.impact,
       "and it must name the CONSEQUENCE, not the event — 'this message was too big' describes one " +
       "message, while what actually happened is that the conversation is over",
-    ).toMatch(/neither will any later message/);
-    expect(notice!.impact, "with the tier named, since that is what says whether raising it is even available").toMatch(/UNKNOWN/);
-    expect(notice!.guidance, "and the only move that works — the cap does not reset").toMatch(/Start a NEW session/);
+    ).toMatch(/neither will anything else they send/);
+    // In MB, because nobody reads 26214400 as 25 MB — and the access level as a quoted lowercase
+    // LABEL, because "their tier is UNKNOWN" reads as "we could not determine it".
+    expect(notice!.impact, "the limit in MB, not only in bytes").toMatch(/MB/);
+    expect(notice!.impact, "and the access level as a label, not a bare word").toMatch(/"unknown"/);
+    expect(notice!.guidance, "and the only move that works — the cap does not reset").toMatch(/Start a NEW conversation/);
   }, 180_000);
 
 });
