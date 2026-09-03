@@ -819,9 +819,19 @@ you control only one of them.
   whether this is a product defect or a harness artifact. Record which.
 - **Enforcer:** journey — `j-content` DOD-MSG-3 green, plus the live check above.
 
-### `DOD-M15-PARKERROR-1` — ❌ A failed park deposit says what went wrong
-> **⚙️ THE REPORTING HALF IS DONE (2026-09-03, `019-PARKERROR`) — the text below describes the state
-> BEFORE that unit and is kept because the second half is still open.** The daemon's IPC error path
+### `DOD-M15-PARKERROR-1` — ✅ A failed park deposit says what went wrong
+> **CLOSED 2026-09-03 (`019-PARKERROR`). The enforcer is met: "a failing deposit names its cause in
+> the response and in the log."** It does — the response carries the extracted cause, and a new
+> `daemon.ipc.request.failed` log line carries it with the structured `reason` beside it.
+> Reviewer: `cello-unit-reviewer` on `9a1408a`, one blocking finding (MEDIUM-3, the log dropped
+> `reason`) fixed in `f69a47d` and pinned by a mutation-proven assertion.
+>
+> **This line was briefly left ❌ after the work shipped, which was a bookkeeping error, not a
+> judgement.** What the fixed reporting REVEALED is a different defect with its own line below
+> (`DOD-M15-PARKCONN-1`) — a new finding does not keep its discoverer's line open.
+>
+> **The text below describes the state BEFORE the unit** and is kept for the trail. The daemon's
+> IPC error path
 > no longer flattens a thrown object: `extractErrorMessage` moved to its own module and all three
 > `String(err)` sites in `ipc-server.ts` now use it, so a failing call names its cause in the
 > response **and** in the log. That was daemon-wide, not park-specific — every IPC method inherited
@@ -860,6 +870,35 @@ was stringified where a reason belonged, so the cause is destroyed at the point 
   argument for keeping it: it is on the same offline path, and while it stands, any other defect
   there is undiagnosable.
 - **Enforcer:** unit — a failing deposit names its cause in the response and in the log.
+
+### `DOD-M15-PARKCONN-1` — ❌ A message to an offline counterparty does not intermittently fail
+**Found 2026-09-03 by `019-PARKERROR`, the moment the reporting was fixed — this is what
+`"[object Object]"` had been hiding since before 2026-08-23.** Nobody had ever read it.
+
+**What the operator lives through:** they message someone whose agent is offline. Sometimes it
+parks. Sometimes it fails, and until yesterday they were told only *"An unexpected error
+occurred."* Same action, two outcomes, no way to tell which they will get.
+
+- **The cause, read for the first time:** `content_park_deposit` throws
+  `No open connection to peer <relay>` — the daemon has no live libp2p connection to the relay at
+  the moment it tries to deposit. Thrown by the transport's `openStream` as a plain object, not an
+  `Error`, which is why it flattened.
+- **Two separate defects, and they want separate fixes.** (a) **The deposit path throws where its
+  siblings return** `{ ok: false, reason }` — `content-park.ts` returns structured refusals
+  everywhere else, so an ordinary "the relay is not connected right now" is routed into
+  `internal_error` with no reason code and no next step. (b) **Why the connection is missing at
+  deposit time is UNREAD.**
+- **Rate: intermittent, ~1 run in 3, in the spine harness.** Not measured against the live fleet.
+  **Investigation opened by Andre 2026-09-03**, including why it reproduces sometimes and not
+  others.
+- **⚠️ CLASSIFICATION IS ANDRE'S** (§0z.4). It is on the advertised journey — a message to an
+  offline counterparty is precisely what park exists for — but the real-world rate is unmeasured,
+  which is what the investigation is for. It sits in the gate meanwhile under "unclear ⇒ blocks".
+- **NOT the same as `DOD-MSG-7`.** `019` predicted MSG-5 and MSG-7 shared this cause; they do not.
+  MSG-7 fails on `content_park_recover` returning `ok: false` — undiagnosed, unowned, and not this
+  line.
+- **Enforcer:** journey — `j-content` DOD-MSG-5 green across three consecutive runs, plus a named
+  reason on the response when the relay genuinely is unreachable.
 
 ### `DOD-M15-BACKUP-1` — ✅ An identity can be exported and restored
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-BACKUP-1`.
