@@ -2,7 +2,9 @@
 name: 017-TBS — One assignment TBS builder, and the layout the handover needs
 type: micro-work-order
 date: 2026-09-02
-status: open
+status: in-progress
+claimed_by: CELLO_Support lane — worktree /Users/andrep/Documents/code/m15-017, branches m15/017-tbs in BOTH repos
+claimed_at: 2026-09-03
 description: >
   The session-assignment TBS has a DUPLICATED builder — the directory keeps a local copy of a helper
   that is now published — and relay handover needs two new fields in it. Delete the copy first, then
