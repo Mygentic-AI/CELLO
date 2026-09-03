@@ -49,6 +49,7 @@ import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
 // than never reaching recover, which is the whole point of that case. Its neighbours in DOD-MSG-7
 // pass `content:` and therefore go through `sealParkEnvelope` like everything else.
 import { contentHashHex } from "./content-seal-fixture.js";
+import { expectMatches } from "./expect-present.js";
 
 let cluster: SpineCluster;
 const daemons: Proc[] = [];
@@ -1188,7 +1189,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
       notice!.reason,
       "the DETECTOR's reason, not a generic seam label — the remedy differs per detector (Invariant 3)",
     ).toBe("inbound_language_blocked");
-    expect(notice!.impact, "it says the sender was acked, so nobody sits waiting for a resend").toMatch(/acknowledged/);
+    expectMatches(notice!.impact, "it says the sender was acked, so nobody sits waiting for a resend", /acknowledged/);
     // The header must be the one for a BLOCK, not the refused-kind sentence: this message WAS
     // verified, it IS in the chain, and the sender WAS acknowledged, so "received and refused, not
     // verified, neither ingested nor shown" is false in three clauses. The operator reads the
@@ -1311,9 +1312,9 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     ).toMatch(/neither will anything else they send/);
     // In MB, because nobody reads 26214400 as 25 MB — and the access level as a quoted lowercase
     // LABEL, because "their tier is UNKNOWN" reads as "we could not determine it".
-    expect(notice!.impact, "the limit in MB, not only in bytes").toMatch(/MB/);
-    expect(notice!.impact, "and the access level as a label, not a bare word").toMatch(/"unknown"/);
-    expect(notice!.guidance, "and the only move that works — the cap does not reset").toMatch(/Start a NEW conversation/);
+    expectMatches(notice!.impact, "the limit in MB, not only in bytes", /MB/);
+    expectMatches(notice!.impact, "and the access level as a label, not a bare word", /"unknown"/);
+    expectMatches(notice!.guidance, "and the only move that works — the cap does not reset", /Start a NEW conversation/);
   }, 180_000);
 
 });
