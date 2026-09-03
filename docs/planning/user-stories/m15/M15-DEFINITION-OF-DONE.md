@@ -958,35 +958,67 @@ succeeded**.
 - **A code comment blaming a "BIGSERIAL `id` collision" is wrong** and would send the repairer at the
   wrong fix; rewrite it (Invariant / `DOD-M15-CLAIM-COMMENTS-1`).
 
-### `DOD-M15-SCREENBLOCK-SILENT-1` — ❌ When we catch an attack aimed at you, you are told
-**Found 2026-09-03, [[2026-09-03_1158_relay-overload-and-the-four-things-underneath-it]]. Ruled BLOCKS by Andre 2026-09-03.**
+### `DOD-M15-NO-SILENT-REFUSAL-1` — ❌ Nothing is refused silently. If we refuse it, the operator is told
+> **RENAMED from `DOD-M15-SCREENBLOCK-SILENT-1` on the day it was written.** It was scoped to the
+> screener; Andre widened it to the principle within the hour, and an ID naming one door would have
+> mis-sold the line to whoever pulled it.
 
-**What happens to you today:** the screener catches a prompt injection aimed at your agent. It is
-blocked correctly and never reaches the model. A leaf is recorded so both hash chains stay aligned,
-and the sender is acked so they stop retrying. **You are told nothing.** It is a line in a log file
-you have no reason to open.
+**THE RULE, Andre 2026-09-03 — this is a standing principle, not one line's scope:**
+> *"Things shouldn't be silently refused. If you're refusing someone for something, your human
+> operator should know about it."*
 
-- **Only THREE refusal reasons reach the operator** — unknown hash algorithm, unavailable salt, hash
-  mismatch. `DOD-M15-REFUSED-INBOUND-SILENT-1` wired those on 2026-08-24 and that was the right first
-  cut (a version skew silences a conversation permanently). **The screener block was never wired, and
-  it is the one the product is about.**
-- **Also unsurfaced, from that unit's own pass-2 list:** `counterparty_gone`, `delivery_impaired`,
-  `content_undeliverable`. **`counterparty_gone` is the dangerous one** — it tells the operator their
-  peer *"may have crashed or gone offline — call `cello_close_session` to seal"* while the daemon
-  holds the real reason in memory. It hands them a network story for a verification fault **and
-  steers them toward sealing**, which read against `WITHHOLD-SEAL-1` is a nudge into exactly the
-  truncated close.
-- **⚠️ CHECK BEFORE SCOPING:** whether those pass-2 ACs actually landed on a later unit or exist only
-  in a closing note. Decides whether this is tracked work or forgotten work.
-- **`DOD-M15-SEALREJECT-MUTE-1` is the SAME SHAPE at a different door** (post-launch backlog: the seal
-  rejection tells nobody either). Nobody had connected the two. **Whether it follows this line into
-  the gate is Andre's call and is NOT assumed here.**
-- **Good model to copy:** the park path already fails closed, refuses by name, and remembers refusals
-  (`recoverParkedEntry`). The direct path does none of that.
-- **One crack to record:** a direct-path refusal sends no delivery ack, so the sender's backstop parks
-  the message and it can be **accepted** seconds later on the park path. A frame refused by name on
-  one path is accepted on the other, and the two events are not tied together.
-- **Enforcer:** journey — a screened message produces an operator-visible refusal naming the cause.
+**It settles three questions that were open separately.** The screener block (finding 4 of
+[[2026-09-03_1158_relay-overload-and-the-four-things-underneath-it]]), the session byte cap that had been sitting unanswered since 2026-08-24, and whether
+`DOD-M15-SEALREJECT-MUTE-1` follows into the gate. **All three are the same defect, and the answer
+to all three is the same.**
+
+## The count — bounded, so this is a normal unit and not a sweep
+
+**THREE refusal reasons reach the operator today. NINE do not.** Measured 2026-09-03, on the inbound
+path in `session-node-manager.ts` plus the pass-2 list.
+
+**Wired (`noteContentRefusal`, 3 call sites):** `content_hash_alg_unknown`,
+`content_hash_salt_unavailable`, `content_hash_mismatch`. `DOD-M15-REFUSED-INBOUND-SILENT-1` wired
+these on 2026-08-24 and it was the right first cut — a version skew silences a conversation
+permanently and that was the urgent case.
+
+**NOT wired — the deliverable is these:**
+
+| Reason | What it costs the operator |
+|---|---|
+| `inbound_screen_blocked` | **We catch a prompt injection aimed at your agent and tell you nothing.** The one the product is *about*. |
+| `governance_timeout` / `gateway_unavailable` | A transient block. Nothing is recorded and nothing is acked, so it silently redelivers — or does not. |
+| `session_size_limit_exceeded` | **Every later message from that person is refused for the rest of the session.** From your chair they simply stop replying and nothing brings it back. |
+| `session_committed` | The session is sealed; their message can never land. They are not told either. |
+| `session_orphaned` | Same shape. |
+| `sender_unresolved` | We could not establish who sent it — and we say nothing about that. |
+| `transcript_write_failed` | Our own storage failed and the message is gone. |
+| `counterparty_gone` | **The dangerous one — see below.** |
+| `delivery_impaired` / `content_undeliverable` | Carried on the same pass-2 list, never surfaced. |
+
+- **The cap SIZE is not the question.** 25 MB is the lowest tier (a stranger); known contacts get
+  more, and Andre's point is the **silence**, not the number. Do not "fix" this by raising the cap.
+- **`counterparty_gone` is actively misleading, not merely absent.** It tells the operator their peer
+  *"may have crashed or gone offline — call `cello_close_session` to seal"* while the daemon holds
+  the real reason in memory. **It hands them a network story for a verification fault and steers them
+  toward sealing** — which, read against `DOD-M15-WITHHOLD-SEAL-1`, is a nudge into exactly the
+  truncated close. Fixing the silence without fixing this string leaves the worse half.
+- **`DOD-M15-SEALREJECT-MUTE-1` COMES INTO THE GATE with this** (Andre 2026-09-03) — *"the one moment
+  the system catches the attack it was built for is the moment it tells nobody"*, the same principle
+  at the seal door. It keeps its own line; this one does not absorb it. Nobody had connected the two.
+- **Good model to copy, already in the tree:** the park path fails closed, refuses by name, never
+  confirm-deletes so a forgery cannot evict itself, and remembers refusals so a re-pull is not an
+  amplification vector (`recoverParkedEntry`). The direct path does none of that.
+- **One crack to record, not necessarily to fix here:** a direct-path refusal sends no delivery ack,
+  so the sender's backstop parks the message and it can be **accepted** on the park path seconds
+  later. A frame refused by name on one path is accepted on the other, and the two events are not
+  tied together. The code knows and logs it.
+- **Where:** `cello-client/core/daemon/src/session-node-manager.ts` — `noteContentRefusal` 8435, the
+  three wired sites 8650 / 8706 / 8730, the screener's terminal block ~8919–8967 (it leafs, it acks,
+  it never notes), and the refusal exits between 8528 and 9200.
+- **Enforcer:** journey — a screened message and a cap-exceeded message each produce an
+  operator-visible refusal naming the cause, with a test that reddens when the notification is
+  removed.
 
 # Tier 4 — Own the encryption, then bind the receipt
 
@@ -1283,6 +1315,8 @@ whatever you do afterwards.
   for a message that arrived with no relay ordering record? The verifier would accept one. If the
   client already builds it, this requirement holds TODAY and the work is smaller than it looks.
 - **This line is why `DOD-M15-RELAYFANOUT-1` can safely leave the gate** — see the note there.
+- **Pairs with `DOD-M15-NO-SILENT-REFUSAL-1`:** its `counterparty_gone` string steers a victim
+  toward sealing while the daemon knows better — the nudge into exactly this truncated close.
 - **Enforcer:** journey — a counterparty that withholds its last message cannot produce a seal the
   other side's evidence does not contradict.
 
@@ -2931,7 +2965,16 @@ tested, and already receiving the bytes.
 
 ---
 
-### `DOD-M15-SEALREJECT-MUTE-1` — 🅿️ POST-LAUNCH BACKLOG. The one moment the system catches the attack it was built for is the moment it tells nobody
+### `DOD-M15-SEALREJECT-MUTE-1` — ⬆️ MOVED INTO THE GATE (Andre 2026-09-03) · was 🅿️ POST-LAUNCH. The one moment the system catches the attack it was built for is the moment it tells nobody
+> **Andre's standing rule, 2026-09-03:** *"Things shouldn't be silently refused. If you're refusing
+> someone for something, your human operator should know about it."* A seal rejection is a refusal,
+> so this follows the rule into the gate. It is the **same defect at a different door** as
+> `DOD-M15-NO-SILENT-REFUSAL-1` (the inbound door) — and until 2026-09-03 nobody had connected the
+> two, which is why one sat in the backlog while the other was being written as urgent.
+>
+> **It keeps its own line rather than being folded in**, because the two doors have different code,
+> different call sites and different tests; folding would hide one of them inside the other's
+> checklist. Pull them together if that suits the lane, but neither closes on the other's evidence.
 **Raised by review pass 1 on `DOD-M15-SEALWIRE-1` bullets 3+4 (findings F2 and F7), filed as ONE
 line because they are one operator-visible problem. Verified in code, not taken from the review.**
 
