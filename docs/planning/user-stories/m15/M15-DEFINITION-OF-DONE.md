@@ -2418,6 +2418,43 @@ and, for the made-true rows, the units that make them true.
 
 # POST-LAUNCH BACKLOG
 
+### `DOD-M15-GATEWAY-HARDEN-1` — 🅿️ POST-LAUNCH. The screening sidecar can go down, and half of it is not running at all
+**Found 2026-09-03 while reviewing `022-REFUSALVISIBLE`'s operator wording. Ruled POST-LAUNCH by
+Andre 2026-09-03:** nothing to do now beyond recording it — the message that explains the outage to
+the operator is written and approved. **The trigger is launch: look at the gateway properly before
+opening signup.**
+
+**What it would do to you:** your screener is a separate child process the daemon spawns and talks
+to over a unix socket. When it is not answering, the daemon **fails closed** — every inbound message
+from every counterparty is held undelivered rather than passed through unscreened, which is the right
+default. So a screener that is down does not leak anything; it stops your agent receiving anything.
+Nothing is lost (senders redeliver on their own once it recovers), but until then you are off the
+air, and the only thing that tells you is the refusal notice.
+
+**Four ways it stops answering, all logged:** it crashed (`security.gateway.exited`), it never
+started (`security.gateway.spawn_failed`), it took too long on one message (`governance_timeout`), or
+it errored internally while screening one (`screen_error`, logged as
+`security.gateway.inbound.blocked`).
+
+**⚠️ AND THE HALF THAT JUDGES MEANING IS OFF BY DEFAULT.** The deterministic layer — sanitizer,
+pattern matching, the language allowlist — is always on. The **semantic injection classifier requires
+a model to be installed**, and without one the daemon announces `security.gateway.layer2: "off:no"`
+at startup and every inbound frame short-circuits past it. So an injection phrased in ordinary prose
+is caught by pattern matching or not at all. This is already known and stated honestly at startup;
+what belongs here is the question of whether that is the right default at launch, and what a fresh
+install should do about it.
+
+**What "harden" would mean, for whoever picks this up:** supervision and restart behaviour on the
+sidecar (there is a restart path — is it used, and does it back off?); what a repeated crash should
+tell the operator, versus one transient timeout; whether the model ships, is fetched, or is opt-in;
+and whether an operator can tell at a glance which layers are live without reading a log line.
+
+- **Related, and NOT the same:** `DOD-M15-NO-SILENT-REFUSAL-1` (✅) made the outage VISIBLE — the
+  operator is now told, in plain terms, that the screener could not check a message and that the
+  sender will redeliver. That line owns telling them. This one owns the gateway not going down in
+  the first place, and running with all of itself switched on.
+
+
 ### `DOD-M15-RESERVE-PURPOSE-1` — 🅿️ POST-LAUNCH. A relay grants forwarding rows without asking what they are for
 **Found 2026-09-03, [[2026-09-03_1158_relay-overload-and-the-four-things-underneath-it]]. Ruled POST-LAUNCH by Andre 2026-09-03:** it needs 128 registered agents,
 and invite-only makes that expensive today. **Revisit before open signup — that is the trigger.**
