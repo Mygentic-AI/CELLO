@@ -997,6 +997,50 @@ succeeded**.
 - **A code comment blaming a "BIGSERIAL `id` collision" is wrong** and would send the repairer at the
   wrong fix; rewrite it (Invariant / `DOD-M15-CLAIM-COMMENTS-1`).
 
+### `DOD-M15-ORPHANTRIAGE-1` — ❌ A message for a conversation we never had gets triaged, not a nudge to make contact
+
+**`022-REFUSALVISIBLE` made `session_orphaned` visible and shipped the wrong advice** — *"ask the
+counterparty to start a NEW session"*. When this is a stranger probing a harvested peer ID, telling
+the operator to make contact **is the probe succeeding**: they learn somebody is home and that the
+agent responds, from a message that was refused.
+
+**THE RULE, Andre 2026-09-03 — exactly TWO actions, never a third:**
+> *"Report to CELLO, or reach out using the public key to the other entity. And those are the only
+> two actions you should take. And whether to reach out depends on whether we can verify they are a
+> known contact in their address book. And if they are a known contact and this was an ongoing
+> conversation until this point, then a separate session with them — and it must be a separate
+> session — is warranted."*
+>
+> *"The message should say: when in doubt, report it."*
+
+**The gate is the SIGNATURE, and it is the thing that makes a contact list worth anything:**
+> *"If this is a public key with an unsigned message, it does not prove that person sent it. So even
+> if it's in their contact list, it proves nothing. It means nothing to send a message unless it
+> includes a public key and the message is signed and you can prove it was signed by that public
+> key."*
+
+A verified signature proves **possession of the private key** — not identity, and not legitimacy.
+The value of reaching out to a known key is partly the denial: *"Bob says 'no, I didn't — somebody
+has my private key', which is a good thing to uncover, because then they can pause or burn the agent
+identity."*
+
+**The daemon already holds the evidence and ignores it.** `ingestReceivedContent` takes
+`verifiedAuthorship`; the orphan branch is the first check in that method and returns before looking
+at it. **Falsify first:** the caller matches the signer to *this session's counterparty*, and there
+is no session here — so the value may be absent for a reason unrelated to the sender.
+
+**Reporting must name something reachable.** The mechanism is CELLO itself: an agent,
+**`CELLO_Reporting`**, that an operator's agent opens a session with — the product demonstrating its
+own use. **It does not exist yet**, so the unit either provisions it or says plainly that reporting
+is unavailable; naming a verb nobody can perform is Invariant 4's failure.
+
+- **Order:** `micro/024-ORPHANTRIAGE-a-message-for-a-conversation-we-never-had.md`
+- **Found by:** Andre, reviewing 022's operator-facing wording.
+- **Depends on nothing.** `last_seen_hash` (`DOD-M15-ACKHASH-1`) would add a fourth, stronger signal
+  when it lands — **do not wait for it.**
+- **Enforcer:** journey — unsigned, signed-but-unknown, and signed-by-a-known-contact each produce a
+  notice offering exactly ONE action, with no contact verb present in the first two.
+
 ### `DOD-M15-BLOCKEDEVIDENCE-1` — ❌ A blocked message is still evidence, so it is still kept
 
 **THE RULE, Andre 2026-09-03:**
