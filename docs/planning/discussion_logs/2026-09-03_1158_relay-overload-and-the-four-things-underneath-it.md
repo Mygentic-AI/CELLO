@@ -326,6 +326,17 @@ ordering and dedup and must not be replaced; it simply cannot carry the acknowle
 With that, an acknowledgement binds to **content**, is signed by the acknowledging party, and holds
 **with no relay involved at all**. It closes this finding at the root rather than working around it.
 
+**Why this is cheaper than it looks: the relay already receives the identical signed structure.**
+A submit carries `session_id`, `leaf_kind`, **`structure1_cbor`** and **`sender_signature`** — the
+sender's whole signed claim, minus the plaintext (message bodies never reach a relay; only a seal
+ctrl leaf may carry content, and there is a local guard that refuses to send bytes on any other
+kind). The relay then adds only two fields of its own: the sequence number and `prev_root`.
+
+**So `last_seen_hash` reaches the relay for free** — no new frame, no new wire field on that path —
+and the **witness can enforce the chain live**, the same way it already verifies each arriving hash
+against the two expected participants. The fix does not just let the two parties prove the chain to
+each other; it lets the relay refuse a break as it happens.
+
 **Two things to get right when building it:**
 
 - **`Structure1`'s field order is signed over**, so this is a v2 of the structure. The version tag is

@@ -1305,9 +1305,32 @@ whatever you do afterwards.
   authorship proof, because absence is soft. Direct session, no ordering record, nothing witnessed
   anywhere — and the code's own named mitigation for the missing signer check is relay-side
   corroboration, which is the thing being withheld.
-- **The fix: the RECEIVER submits the hash of what it received.** It holds the sender's signature so
-  it cannot fabricate a leaf, and the relay can verify that before accepting. Closes withholding for
-  every direct session and gives the unilateral seal a witnessed leaf to stand on.
+- **⚠️ THE ROOT CAUSE, found later the same day: OUR ACKNOWLEDGEMENT NEVER SAYS WHAT IT
+  ACKNOWLEDGED.** A sender signs `Structure1` = `[version, content_hash, sender_pubkey, session_id,
+  last_seen_seq, timestamp]` — and **`last_seen_seq` is a NUMBER.** "I saw position 7" attests to a
+  position, not to content. The chain people believe exists is really TWO signatures meeting at the
+  relay: the counterparty signs *"I saw position 7"*, the relay's receipt (`buildRelayAckTbs` =
+  content_hash ‖ seq ‖ timestamp) signs *"position 7 held hash X"*. **So the relay is load-bearing
+  for the acknowledgement itself**, not merely for ordering — which is exactly why a withheld submit
+  breaks it: with no receipt, a signed `last_seen_seq` is an unbacked number. **`prev_root` does not
+  rescue it** — it is signed by neither party and not by the relay, whose receipt covers content hash,
+  sequence and timestamp only. (Cousin of `DOD-M15-RELAYSEQ-UNSIGNED-1`.)
+- **THE FIX IS DECIDED (Andre, 2026-09-03): ADD `last_seen_hash` to `Structure1`. Do NOT replace
+  `last_seen_seq`** — the sequence number does real work for ordering and dedup. Position and
+  content-binding, both signed, side by side. The acknowledgement then holds **with no relay involved
+  at all**, which closes this line at its root instead of adding a witness to work around it.
+  - **⚠️ `Structure1`'s field order is SIGNED OVER, so this is a v2.** The version tag is already the
+    first field for exactly this reason — *"a v1 claim can never read as a v2 one."*
+  - **⚠️ THE FIRST MESSAGE HAS SEEN NOTHING, AND THAT MUST BE A VALUE, NEVER AN ABSENCE.** A defined
+    genesis constant or 32 zero bytes. An absent field recreates `DOD-M15-AUTHORSHIP-ABSENT-1` one
+    layer down, and is the same trap `017-TBS` records: `high_stakes: false` and `prior_relay_id: ""`
+    are values, not absences.
+  - **The relay gets it for free.** The submit already carries `structure1_cbor` verbatim — the
+    identical signed claim minus the plaintext — so the WITNESS can enforce the chain live, the way
+    `DOD-M15-CORROBORATE-1` already verifies each hash on arrival. No new frame, no new wire field.
+- **Defence in depth, still worth doing: the RECEIVER submits the hash of what it received.** It holds
+  the sender's signature so it cannot fabricate a leaf, and the relay can verify that before
+  accepting. Weaker than the root fix and worth having anyway.
 - **Pairing available now:** relay-only routing is an operator setting and `high_stakes` landed in the
   signed assignment in `017-TBS`. Forcing relay routing for high-stakes sessions is the obvious
   pairing — accept the IP disclosure in exchange for a guaranteed witness.

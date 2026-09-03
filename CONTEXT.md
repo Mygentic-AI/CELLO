@@ -107,7 +107,7 @@ The domain context string is the cross-ceremony confusion guard — an establish
 
 **directory node** — the bookend authority. Handles registration, session establishment signaling (signed SessionAssignment), FROST ceremony coordination, and conversation seal recomputation. Dormant during active sessions. Never sees message content.
 
-**Structure 1** — the sender-signed Merkle leaf. TBS: `[protocol_version, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]`.
+**Structure 1** — the sender-signed Merkle leaf. TBS: `[protocol_version, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]`. The signature is over these canonical CBOR bytes directly (Ed25519 hashes its own input), so every field listed is signed. The same bytes go to the counterparty AND to the relay — a submit carries `structure1_cbor` verbatim, minus the plaintext body. ⚠️ **Decided 2026-09-03, NOT YET BUILT:** a `last_seen_hash` field joins this list (a v2; `last_seen_seq` stays). Today `last_seen_seq` is a NUMBER, so an acknowledgement binds to a POSITION and not to content — see `DOD-M15-WITHHOLD-SEAL-1`. Update this line when it ships, not before.
 
 **Structure 2** — the relay-built Merkle leaf. Includes Structure 1 plus the relay-assigned canonical sequence number and `prev_root`.
 
