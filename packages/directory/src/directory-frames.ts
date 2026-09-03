@@ -170,11 +170,53 @@ export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Arr
   if (a.counterparty_session_addrs && a.counterparty_session_addrs.length > 0) {
     encodedAssignment["counterparty_session_addrs"] = a.counterparty_session_addrs;
   }
-  // Only encode transport_mode when both peer IDs are present (10-field TBS covers it).
-  // When counterparty is absent (5-field TBS), transport_mode is not signed and must
-  // not appear on the wire — otherwise a MITM could modify it without breaking verification.
-  if (a.transport_mode && a.initiator_session_peer_id && a.counterparty_session_peer_id) {
+  /**
+   * A field that is not SIGNED must not appear on the wire — otherwise a MITM can modify it and
+   * nothing breaks verification. `transport_mode`, `high_stakes` and `prior_relay_id` are all
+   * covered only by the long layout, so all three share one gate.
+   *
+   * They did not used to. `transport_mode`'s own gate tested the two peer ids and ignored the
+   * address arrays, which is WIDER than the layout rule — "peer id present, addrs empty" would
+   * have shipped it unsigned. Unreachable today only because `directory-node.ts` refuses a
+   * session_request without initiator addrs and records an offer_accept only when the
+   * counterparty has both. That is a guard in a different method with nothing pointing back here,
+   * and relaxing it (a peer id alone is DHT-dialable, so this is a plausible future change) would
+   * have re-opened it silently. One expression removes the coupling.
+   */
+  const onLongLayout =
+    !!a.initiator_session_peer_id &&
+    !!a.counterparty_session_peer_id &&
+    !!a.initiator_session_addrs?.length &&
+    !!a.counterparty_session_addrs?.length;
+  if (onLongLayout && a.transport_mode) {
     encodedAssignment["transport_mode"] = a.transport_mode;
+  }
+  /**
+   * 017-TBS. UNCONDITIONAL, and deliberately unlike every gated field above it.
+   *
+   * Those gates are correct for what they guard: an absent session endpoint is not in the TBS, so
+   * putting it on the wire would let a MITM change a value no signature covers. These two are the
+   * opposite — they ARE in the signed bytes whenever the endpoints are known, so omitting either
+   * one leaves the client rebuilding the shorter layout and refusing an assignment that is
+   * perfectly valid.
+   *
+   * A presence gate here would fail exactly on the common case, because the common case is
+   * `high_stakes: false` and `prior_relay_id: ""` — both falsy, both real answers. `!== undefined`
+   * is the only correct test: it lets `false` and `""` through and still omits the fields for a
+   * pre-017 assignment that genuinely has neither.
+   *
+   * This encoder builds its output as an explicit literal, so a field added to the TBS and to the
+   * assignment object does NOT arrive here on its own. It was missed once already, and the only
+   * thing that catches it is `__tests__/tbs-017-wire-roundtrip.test.ts`, which crosses the encode
+   * boundary rather than comparing two builders.
+   */
+  // Same gate, same reason — see above. The client ignores these on the short layout anyway (its
+  // arity check needs the five M7 values first), so sending them there buys nothing.
+  if (onLongLayout && a.high_stakes !== undefined) {
+    encodedAssignment["high_stakes"] = a.high_stakes;
+  }
+  if (onLongLayout && a.prior_relay_id !== undefined) {
+    encodedAssignment["prior_relay_id"] = a.prior_relay_id;
   }
   // FED-OPTIONB-SETUP-001 (Option B): the per-node directory signature over the relay TBS. Present only
   // for relay-mode sessions (the directory sets it alongside the relay block). The CLIENT carries it to

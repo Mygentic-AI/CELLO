@@ -115,7 +115,7 @@ import * as lp from "it-length-prefixed";
 import { verify, buildMerkleTree, merkleRoot, CONTEXT_SESSION_ESTABLISHMENT, CONTEXT_PRIMARY_RELEASE, FrostThresholdSigner, verifyRelayRegistrationSignature, computeCheckpointHash, verifyCapability, decodeCapability } from "@cello-protocol/crypto";
 
 import type { KeyProvider, LeafInput, IThresholdSigner, RefreshContribution } from "@cello-protocol/crypto";
-import { encodeStructure2, computeGenesisPrevRoot, buildSealTbs, buildPrimaryTransferTbs } from "@cello-protocol/protocol-types";
+import { encodeStructure2, computeGenesisPrevRoot, buildSealTbs, buildPrimaryTransferTbs, buildSessionEstablishmentTbs } from "@cello-protocol/protocol-types";
 import { computeDkgTopology } from "./dkg-topology.js";
 import { reconstructCarriedSealLeaves, validateSealSubmissionLeaves } from "./seal-unilateral-verify.js";
 import type { AgentProfile } from "@cello-protocol/protocol-types";
@@ -317,22 +317,25 @@ const CBOR_ENC = new Encoder({ tagUint8Array: false });
  */
 const SEAL_UPGRADE_ACK_DOMAIN = "cello-seal-upgrade-ack-v1";
 
-// M7-WIRE-001: Local TBS builder for the 10-field session-establishment TBS.
-//
-// SINGLE-SOURCE-OF-TRUTH NOTE (H-2): the canonical 5-field builder is
-// `buildSessionEstablishmentTbs` exported from @cello-protocol/protocol-types.
-// The published version (0.0.4) only supports the 5-field legacy layout — the
-// 10-field M7 extension is NOT yet published — so this local copy cannot simply
-// import and delegate for the 10-field path. It MUST stay byte-for-byte
-// compatible with the protocol-types helper for the 5-field path and with the
-// client-side verifier for the 10-field path. Drift is guarded by
-// `__tests__/m7-wire-001-tbs-drift-guard.test.ts`, which fails if either layout
-// diverges. Remove this copy and delegate to protocol-types after the 10-field
-// helper is published (AC-021).
-//
-// Uses 10-field path only when ALL M7 fields are non-empty; otherwise falls back to
-// 5-field legacy path so the client-side verifier reconstructs an identical TBS.
-export function buildSessionEstablishmentTbsM7(
+/**
+ * The directory's session-establishment TBS entry point. Contains NO encoding of its own:
+ * `buildSessionEstablishmentTbs` in @cello-protocol/protocol-types is the single builder, and the
+ * client-side verifier calls that same function. What lives here is the one thing the two sides do
+ * NOT share — the directory's rule for deciding whether the M7 session endpoints are known.
+ *
+ * That rule is load-bearing and is why this wrapper exists rather than a bare call. The two sides
+ * read an unknown endpoint differently: the directory holds `""`/`[]` for an endpoint it never
+ * learned, while the published builder treats any non-`undefined` argument as a real value and
+ * emits the long layout for it. Passing `""` straight through would therefore sign a long TBS for a
+ * session whose endpoints are blank. The client's parser maps `""` back to `undefined` before
+ * verifying and would rebuild the SHORT one — the signature would not verify and the session would
+ * fail for a reason nothing on either side names.
+ *
+ * So: omit the arguments entirely when the endpoints are unknown, which is what makes both sides
+ * reach the same layout. Measured, not assumed — `__tests__/m7-wire-001-tbs-drift-guard.test.ts`
+ * compares this function's output against the published builder's on every layout.
+ */
+export function buildAssignmentTbs(
   sessionId: Uint8Array,
   pubA: Uint8Array,
   pubB: Uint8Array,
@@ -343,36 +346,44 @@ export function buildSessionEstablishmentTbsM7(
   counterpartySessionPeerId: string,
   counterpartySessionAddrs: string[],
   transportMode: "direct" | "relay",
+  highStakes: boolean,
+  priorRelayId: string,
 ): Uint8Array {
-  const tsEncoded = timestamp > 0xffffffff ? BigInt(timestamp) : timestamp;
+  // `!!` and not `!== ""`. The caller's peer-id parameters are typed optional and the call site
+  // silences that with `!`, so `undefined` can reach here: `undefined !== ""` is TRUE, and the
+  // chain would walk on to `.length` on an undefined array and throw, taking down the whole
+  // session-request handler instead of falling back to the short layout. The pre-refactor code was
+  // a plain truthiness chain and short-circuited correctly; this keeps that behaviour exactly.
+  const endpointsKnown =
+    !!initiatorSessionPeerId &&
+    !!counterpartySessionPeerId &&
+    initiatorSessionAddrs?.length > 0 &&
+    counterpartySessionAddrs?.length > 0;
 
-  if (
-    initiatorSessionPeerId &&
-    counterpartySessionPeerId &&
-    initiatorSessionAddrs.length > 0 &&
-    counterpartySessionAddrs.length > 0
-  ) {
-    return CBOR_ENC.encode([
-      sessionId,
-      pubA,
-      pubB,
-      genesisPrevRoot,
-      tsEncoded,
-      initiatorSessionPeerId,
-      JSON.stringify(initiatorSessionAddrs.slice().sort()),
-      counterpartySessionPeerId,
-      JSON.stringify(counterpartySessionAddrs.slice().sort()),
-      transportMode,
-    ]) as Uint8Array;
+  if (!endpointsKnown) {
+    return buildSessionEstablishmentTbs(sessionId, pubA, pubB, genesisPrevRoot, timestamp);
   }
 
-  return CBOR_ENC.encode([
+  /**
+   * `highStakes` and `priorRelayId` are REQUIRED parameters, not optional ones, and that is the
+   * point: the caller must state them. An optional pair would default to `undefined`, the builder
+   * would drop to the 10-field layout, and the high-stakes flag would go on being signed over
+   * nothing — silently, which is the exact defect this change exists to close.
+   */
+  return buildSessionEstablishmentTbs(
     sessionId,
     pubA,
     pubB,
     genesisPrevRoot,
-    tsEncoded,
-  ]) as Uint8Array;
+    timestamp,
+    initiatorSessionPeerId,
+    initiatorSessionAddrs,
+    counterpartySessionPeerId,
+    counterpartySessionAddrs,
+    transportMode,
+    highStakes,
+    priorRelayId,
+  );
 }
 
 /**
@@ -4265,10 +4276,11 @@ export class CelloDirectoryNode {
     // override with the AutoNAT probe result. Defaults to 'relay' when absent.
     const transportMode: "direct" | "relay" = requestedTransportMode ?? "relay";
 
-    // SESSION-004 Step 3: Build TBS — single source of truth via protocol-types (HIGH-5)
-    // M7-WIRE-001: Extended to 10 fields. Uses local buildSessionEstablishmentTbsM7
-    // until @cello-protocol/protocol-types ≥0.0.5 is published (AC-021).
-    const tbs = buildSessionEstablishmentTbsM7(
+    // SESSION-004 Step 3: Build TBS — single source of truth via protocol-types (HIGH-5).
+    // The local 10-field copy is gone: protocol-types now publishes that layout, so
+    // `buildAssignmentTbs` holds only the directory's endpoints-known rule and delegates the
+    // encoding to the one builder the client verifies with.
+    const tbs = buildAssignmentTbs(
       session_id,
       new Uint8Array(initiatorPubkey),
       new Uint8Array(targetPubkey),
@@ -4279,6 +4291,13 @@ export class CelloDirectoryNode {
       counterpartySessionPeerId,
       counterpartySessionAddrs,
       transportMode,
+      // The flag the TARGET could not see. It arrives on the initiator's session_request and was
+      // recorded locally in #sessionHighStakes; signing it here is what finally tells the other
+      // side which tier it is being held to.
+      highStakes,
+      // "" on a fresh session. A resume assignment names the relay that witnessed up to the
+      // handover, and 017 stops here: nothing requests one yet, so this is always "" today.
+      "",
     );
 
     // SESSION-004 Step 4: Conflict detection (MEDIUM-N1 fix + IMPORTANT-N3 fix)
@@ -4395,6 +4414,12 @@ export class CelloDirectoryNode {
         counterparty_session_peer_id: counterpartySessionPeerId,
         counterparty_session_addrs: counterpartySessionAddrs,
         transport_mode: transportMode,
+        // 017-TBS. UNCONDITIONAL, unlike the two optional hints below, because these are inside the
+        // signature: the client rebuilds the TBS from the frame, and a field omitted here would
+        // send it to the 10-field layout while this assignment was signed over 12. Both are sent
+        // as values — `false` and `""` are answers, and dropping either would be the same bug.
+        high_stakes: highStakes,
+        prior_relay_id: "",
         // MONIKER-2 AC1b: unsigned pass-through hint; omitted from the wire when absent.
         ...(initiatorMoniker !== undefined ? { moniker: initiatorMoniker } : {}),
         // DOD-PRESENT-1: verified trust signals forwarded to the target (survivors of the dumb check).
@@ -4408,11 +4433,16 @@ export class CelloDirectoryNode {
         // M-4: the relay binds initiator_session_peer_id / counterparty_session_peer_id
         // into #sessionPeerIdBindings. Those Peer IDs MUST be covered by the signature
         // the relay verifies, or the relay binds data the directory never authenticated.
-        // Append the two Peer IDs after the original 4 fields when both are present,
-        // mirroring the presence gate used for the client-facing 10-field TBS. When
-        // either is absent (pre-M7 / initiator-only), fall back to the original 4-field
-        // layout so legacy assignments still verify. The relay's recordAssignment uses
-        // the identical gate and field order on the verification side.
+        // Append the two Peer IDs after the original 4 fields when both are present; when either
+        // is absent (pre-M7 / initiator-only), fall back to the original 4-field layout so legacy
+        // assignments still verify. The relay's recordAssignment uses the identical gate and field
+        // order on the verification side.
+        //
+        // This gate is its OWN, and does not track the client-facing one. It tests the two peer ids
+        // only, while `buildAssignmentTbs`'s endpoints-known rule also requires non-empty address
+        // arrays — so the two can disagree, and that is fine: this signature covers only what the
+        // relay binds, which is the peer ids. Do not "align" them without checking what the relay
+        // actually verifies.
         const relayTbsFields: unknown[] = [
           session_id,
           new Uint8Array(initiatorPubkey),
