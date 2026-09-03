@@ -176,6 +176,31 @@ export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Arr
   if (a.transport_mode && a.initiator_session_peer_id && a.counterparty_session_peer_id) {
     encodedAssignment["transport_mode"] = a.transport_mode;
   }
+  /**
+   * 017-TBS. UNCONDITIONAL, and deliberately unlike every gated field above it.
+   *
+   * Those gates are correct for what they guard: an absent session endpoint is not in the TBS, so
+   * putting it on the wire would let a MITM change a value no signature covers. These two are the
+   * opposite — they ARE in the signed bytes whenever the endpoints are known, so omitting either
+   * one leaves the client rebuilding the shorter layout and refusing an assignment that is
+   * perfectly valid.
+   *
+   * A presence gate here would fail exactly on the common case, because the common case is
+   * `high_stakes: false` and `prior_relay_id: ""` — both falsy, both real answers. `!== undefined`
+   * is the only correct test: it lets `false` and `""` through and still omits the fields for a
+   * pre-017 assignment that genuinely has neither.
+   *
+   * This encoder builds its output as an explicit literal, so a field added to the TBS and to the
+   * assignment object does NOT arrive here on its own. It was missed once already, and the only
+   * thing that catches it is `__tests__/tbs-017-wire-roundtrip.test.ts`, which crosses the encode
+   * boundary rather than comparing two builders.
+   */
+  if (a.high_stakes !== undefined) {
+    encodedAssignment["high_stakes"] = a.high_stakes;
+  }
+  if (a.prior_relay_id !== undefined) {
+    encodedAssignment["prior_relay_id"] = a.prior_relay_id;
+  }
   // FED-OPTIONB-SETUP-001 (Option B): the per-node directory signature over the relay TBS. Present only
   // for relay-mode sessions (the directory sets it alongside the relay block). The CLIENT carries it to
   // its chosen relay (client_record_assignment), replacing the directory→relay dial. Cast because the
