@@ -368,8 +368,10 @@ const LOCAL_BY_DECISION: ReadonlyMap<string, string> = new Map([
   ["directory_nodes.last_heartbeat_at",
    "BUILT — IT TRAVELS, VIA TIER B (DOD-M15-HEARTBEAT-1). Correctly absent from the TIER-A spec, " +
    "which is what this map is about: the column is MUTABLE and Tier A carries immutable columns " +
-   "only. It replicates through a Tier-B entry on the SAME table keyed on node_id, with V65 making " +
-   "the column NOT NULL DEFAULT epoch 0 so the version hash is total. directory_nodes is the one " +
+   "only. It replicates through a Tier-B entry on the SAME table keyed on node_id. NO migration: the " +
+   "column stays nullable and the AE SELECT coalesces NULL to epoch 0, so both encode paths agree — " +
+   "the same fix origin_node carries, and PERSIST-003 DB-001 forbids the backfill UPDATE that " +
+   "SET NOT NULL would have required. directory_nodes is the one " +
    "table in both tiers, carrying disjoint columns: Tier A owns node_id+region under " +
    "insert-if-absent, Tier B owns this column under an LWW merge — which is what lets a peer move a " +
    "timestamp but never restate another node's identity. History, kept because it is why the gap " +
@@ -377,7 +379,9 @@ const LOCAL_BY_DECISION: ReadonlyMap<string, string> = new Map([
    "column, so the requirement was dropped by the act of closing it, and every node read the other " +
    "two as never-heartbeated. NOTE the federated checkpoint still does not confirm in production, " +
    "and NOT for this reason: CHECKPOINT_PEER_ADDRS is set nowhere in IaC, so the coordinator's peer " +
-   "set is empty independently of any heartbeat. Tracked separately."],
+   "set is empty independently of any heartbeat, and M12-P5 PARKED cross-signing after retiring the " +
+   "/cello/checkpoint/1.0.0 proposal channel as unauthenticated in both directions. Wiring the peer " +
+   "addresses would re-enable that retired channel, so it is deliberately not done here."],
   ["directory_nodes.endpoint",
    "NO PRODUCTION READER — and the first version of this reason was WRONG about why. It said " +
    "'never selected'; there IS a select, `SELECT * FROM directory_nodes` in getDirectoryNode, which " +

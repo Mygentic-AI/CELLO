@@ -165,12 +165,12 @@ export async function listAccountAgentsWithPresence(
   nodeFreshnessMs: number,
 ): Promise<AgentWithPresence[]> {
   // CROSS-NODE LIVENESS (2026-07-05, Option A — mirrors resolveDiscoveryState): trust the replicated
-  // ap.online flag; do NOT gate on the owning node's directory_nodes heartbeat freshness. That gate is
-  // structurally unreliable cross-node (directory_nodes heartbeats don't replicate — see below),
-  // so for a remote-homed owning node dn.last_heartbeat_at is NULL and the AND darkened
-  // every live remote agent → the portal showed a user's working agent as OFFLINE. Dropping the
-  // conjunct keeps this surface consistent with discovery. nodeFreshnessMs is now unused (kept in the
-  // signature for call-site/test stability).
+  // ap.online flag; do NOT gate on the owning node's directory_nodes heartbeat freshness. WHEN THAT
+  // WAS DECIDED the gate was structurally unreliable cross-node — directory_nodes heartbeats did not
+  // replicate, so for a remote-homed owning node dn.last_heartbeat_at was always NULL and the AND
+  // darkened every live remote agent → the portal showed a user's working agent as OFFLINE. Dropping
+  // the conjunct keeps this surface consistent with discovery. nodeFreshnessMs is now unused (kept in
+  // the signature for call-site/test stability).
   //
   // ⚠️ DOD-M15-CLAIM-COMMENTS-1 — WHY THE HEARTBEAT DID NOT REPLICATE, corrected. This blamed a
   // "BIGSERIAL id collision". That is wrong, and it is the kind of wrong that costs a day: it sends
@@ -181,7 +181,8 @@ export async function listAccountAgentsWithPresence(
   //
   // The same wrong explanation was corrected in `discovery-lookup.ts`; this was its second copy.
   //
-  // ✅ BUILT — DOD-M15-HEARTBEAT-1 (V65 + a Tier-B entry keyed on node_id). The heartbeat now
+  // ✅ BUILT — DOD-M15-HEARTBEAT-1 (a Tier-B entry keyed on node_id; no migration was needed, the
+  // encoding is coalesced at the anti-entropy SELECT). The heartbeat now
   // travels, so the conjunct this function drops is once again AVAILABLE. It stays dropped on
   // purpose: re-gating on freshness would darken live remote agents during ordinary anti-entropy
   // lag, which is the regression the 2026-07-05 Option A decision exists to prevent. Turning the

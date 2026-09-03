@@ -4007,10 +4007,17 @@ export class CelloDirectoryNode {
         state: decision.state,
         owningNode: decision.owningNodeIds[0] ?? null,
         // online but the owning node's heartbeat is not fresh in THIS node's (replicated) view — we
-        // trust the online flag anyway (advisory + dial-retry). NOTE: this fires for ~every remote-
-        // homed online agent (directory_nodes heartbeats don't replicate cross-node), so it is NOT a
-        // dead-node detector — the real signal is the client's terminal counterparty_offline after
-        // cross-node retry exhaustion. Kept as a lightweight breadcrumb only.
+        // trust the online flag anyway (advisory + dial-retry).
+        //
+        // ⚠️ ITS MEANING CHANGED, IN THE GOOD DIRECTION. This used to fire for ~EVERY remote-homed
+        // online agent, because directory_nodes heartbeats did not replicate cross-node and a remote
+        // node's heartbeat therefore read as absent no matter how healthy it was — a flag raised on
+        // the normal case, which is a flag that means nothing. Heartbeats replicate as of
+        // DOD-M15-HEARTBEAT-1, so this now fires only when a peer's heartbeat is GENUINELY stale in
+        // our replicated view: either that node is dark, or anti-entropy has not reached us from it.
+        // Still not a dead-node detector on its own — the authoritative signal remains the client's
+        // terminal counterparty_offline after cross-node retry exhaustion — but it is no longer
+        // noise, and a sustained run of it is now worth reading.
         reason: decision.staleHeartbeat ? "owning_node_stale_heartbeat_trusted" : undefined,
         correlationId,
       });

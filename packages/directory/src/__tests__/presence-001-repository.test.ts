@@ -112,8 +112,10 @@ describeLive("PRESENCE-001 — agent_presence repository + read rule (real schem
     expect((await readAgents())[0].online).toBe(true);
 
     // Node X's heartbeat goes stale (the row still says online). Under the OLD READ-001 dark-node rule
-    // this aged the agent to offline — but that gate is cross-node-unreliable (directory_nodes
-    // heartbeats don't replicate), so it darkened every live REMOTE agent. Option A trusts ap.online.
+    // this aged the agent to offline — but at the time that gate was cross-node-unreliable, because
+    // directory_nodes heartbeats did not replicate, so it darkened every live REMOTE agent. Heartbeats
+    // DO replicate now (DOD-M15-HEARTBEAT-1); Option A still trusts ap.online, deliberately, because
+    // re-gating on freshness would darken agents again during ordinary anti-entropy lag.
     await client.query(
       `UPDATE directory_nodes SET last_heartbeat_at = now() - interval '1 hour' WHERE node_id = $1`,
       [NODE_X],
