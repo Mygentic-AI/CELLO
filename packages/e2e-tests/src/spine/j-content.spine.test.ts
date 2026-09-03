@@ -1225,4 +1225,85 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(survived!.guidance, "with its advice intact, not just the reason code").toBeDefined();
   }, 180_000);
 
+  /**
+   * ─── 022-REFUSALVISIBLE, the SECOND enforcer leg ─────────────────────────────────────────────
+   *
+   * **The byte cap, which is the refusal that least resembles a fault.**
+   *
+   * The DoD names two cases, not one: *"a screened message AND a cap-exceeded message each produce
+   * an operator-visible refusal naming the cause."* They are not the same test. A screener block is
+   * a one-message event; the cap is PERMANENT for the session — once it is crossed, every later
+   * message from that sender is refused for as long as the session lives. From the operator's chair
+   * the other person simply stops replying, and from the sender's chair every message was sent
+   * successfully. Nothing on either side says otherwise.
+   *
+   * B lowers its own UNKNOWN-tier byte bound rather than the test sending 25 MB: the bound is an
+   * operator setting (`cello_settings_set`), the cap CHECK is the code under test, and 25 MB of
+   * traffic would measure the transport instead. The cap SIZE is explicitly not in scope here.
+   */
+  it("022-REFUSALVISIBLE — the byte cap reaches the operator too, and says every LATER message is refused", async () => {
+    const dirA = mkdtempSync(join(tmpdir(), "cello-capA-"));
+    const dirB = mkdtempSync(join(tmpdir(), "cello-capB-"));
+    dirs.push(dirA, dirB);
+    await provisionAgent(dirA, "agentA");
+    const pubB = await provisionAgent(dirB, "agentB");
+    const daemonA = await startLocalDaemon(dirA, "capA");
+    const daemonB = await startLocalDaemon(dirB, "capB");
+    daemons.push(daemonA, daemonB);
+    expect(registerAgent("agentA", `DEV-cp-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-cp-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
+    const connA = await connectMcp(dirA, "cp-A");
+    const connB = await connectMcp(dirB, "cp-B");
+    mcpConns.push(connA, connB);
+    for (const [c, n] of [[connA, "agentA"], [connB, "agentB"]] as const) {
+      expect(((await c.call("cello_start_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+    }
+
+    // A is a stranger to B, so B's UNKNOWN-tier bound is the one that applies. Lowering it is an
+    // ordinary operator setting; the refusal path it triggers is identical at any value.
+    const setBound = (await connB.call("cello_settings_set", {
+      key: "bounds.unknown.max_bytes", value: "200",
+    })) as { ok?: boolean; reason?: string };
+    expect(setBound.ok, `B could not lower its own byte bound: ${JSON.stringify(setBound)}`).toBe(true);
+
+    const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+    expect(init.ok, `initiate failed:\n${daemonA.output.split("\n").slice(-30).join("\n")}`).toBe(true);
+    const sessionId = init.sessionId!;
+    expect(((await awaitP) as { type?: string }).type).toBe("new_session");
+
+    // Comfortably over 200 bytes and completely ordinary English — the point is that NOTHING about
+    // this message is objectionable. It is refused on volume alone, which is why the operator has no
+    // way to guess the cause and why a bare "too big" would describe the wrong thing.
+    const OVER_CAP = "Hello again — following up on the deployment window we discussed. ".repeat(6);
+    const send = (await connA.call("cello_send", {
+      cello_session_id: sessionId, content: OVER_CAP, signal: "over",
+    })) as { ok?: boolean; reason?: string };
+    expect(send.ok, `A's send succeeds — from the SENDER's chair nothing went wrong: ${JSON.stringify(send)}`).toBe(true);
+    await daemonB.waitForLine(/"event":"session\.content\.abuse_bound\.session_size_exceeded"/, 30_000);
+
+    // Again: B NEVER calls cello_receive. The inbox is the door.
+    type InboxRefusal = { session_id?: string; reason?: string; impact?: string; guidance?: string };
+    const res = (await connB.call("cello_inbox", { agent: "agentB" })) as {
+      ok?: boolean; agents?: Array<{ agent?: string; refusals?: InboxRefusal[] }>;
+    };
+    expect(res.ok, `cello_inbox failed: ${JSON.stringify(res)}`).toBe(true);
+    const refusals = (res.agents ?? []).find((a) => a.agent === "agentB")?.refusals ?? [];
+    const notice = refusals.find((r) => r.session_id === sessionId);
+    expect(
+      notice,
+      `B's operator must be told the cap fired, naming the conversation. Inbox refusals: ` +
+      `${JSON.stringify(refusals)}\n--- daemonB ---\n${daemonB.output.split("\n").filter((l) => /abuse_bound|refusal/.test(l)).slice(-8).join("\n")}`,
+    ).toBeDefined();
+    expect(notice!.reason).toBe("session_size_limit_exceeded");
+    expect(
+      notice!.impact,
+      "and it must name the CONSEQUENCE, not the event — 'this message was too big' describes one " +
+      "message, while what actually happened is that the conversation is over",
+    ).toMatch(/neither will any later message/);
+    expect(notice!.impact, "with the tier named, since that is what says whether raising it is even available").toMatch(/UNKNOWN/);
+    expect(notice!.guidance, "and the only move that works — the cap does not reset").toMatch(/Start a NEW session/);
+  }, 180_000);
+
 });
