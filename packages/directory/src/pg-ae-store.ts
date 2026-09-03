@@ -31,8 +31,15 @@
  * under FOR UPDATE and merges it (burn preserved via the merge's OR). No merge logic is duplicated in
  * SQL, and the seam needs no change.
  *
- * **Scope.** Six tables round-trip: Tier-A agent_profiles, agent_revocations, user_accounts and
- * seal_notarizations; Tier-B agent_suspensions and agent_presence.
+ * **Scope.** Tier-A agent_profiles, agent_revocations, user_accounts and seal_notarizations (among
+ * others — `TIER_A` is the list, not this sentence); Tier-B agent_suspensions, agent_presence and
+ * directory_nodes' heartbeat column.
+ *
+ * **`directory_nodes` appears in BOTH tiers, carrying disjoint columns of one row.** Tier A owns the
+ * immutable identity (`node_id`, `region`) under insert-if-absent; Tier B owns the mutable
+ * `last_heartbeat_at` under an LWW merge. The wire keeps `tierA`/`tierB` as separate digest maps
+ * with separate pull frames, so the shared table name is never a shared key. It is the only table in
+ * both, and its Tier-B `insert` REFUSES rather than fabricating the identity columns it does not own.
  *
  * **Hash-chained Tier-A tables apply through the INJECTED `ChainWriter`, never the generic INSERT** —
  * that would write them outside the tamper-evident chain that is their reason for existing. Chain
@@ -63,10 +70,11 @@ import {
 } from "./ae-table-encoders.js";
 import {
   encodeTierBVersion, type TierBVersionSpec, type MutableRow,
-  SUSPENSION_VERSION_SPEC, PRESENCE_VERSION_SPEC,
+  SUSPENSION_VERSION_SPEC, PRESENCE_VERSION_SPEC, DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC,
 } from "./ae-mutable-version.js";
 import { mergeSuspension, type SuspensionRecord } from "./suspension-merge.js";
 import { mergePresence, type PresenceRecord } from "./presence-merge.js";
+import { mergeDirectoryNodeHeartbeat, type DirectoryNodeHeartbeatRecord } from "./directory-node-heartbeat-merge.js";
 import type { AeStoreView, TierARecord, TierBRecord } from "./anti-entropy-engine.js";
 import { computeTableDigest } from "./set-reconciliation.js";
 import { tierBTableDigest } from "./ae-round.js";
@@ -467,7 +475,71 @@ const PRESENCE: TierBPg = {
   },
 };
 
-const TIER_B: readonly TierBPg[] = [SUSPENSIONS, PRESENCE];
+/**
+ * directory_nodes' MUTABLE half (DOD-M15-HEARTBEAT-1) — the per-node liveness heartbeat. The same
+ * table's immutable half (`node_id`, `region`) is a Tier-A entry; see the version spec's header for
+ * why the split is what stops a peer rewriting a node's identity.
+ */
+const DIRECTORY_NODE_HEARTBEATS: TierBPg = {
+  spec: DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC,
+  keyColumn: "node_id",
+  // TIMESTAMPTZ → absolute UTC epoch millis, no AT TIME ZONE (see file header). NOT NULL since V65,
+  // so this is total — no COALESCE is needed and a null could not reach the encoders.
+  select:
+    `SELECT node_id,
+            (EXTRACT(EPOCH FROM last_heartbeat_at)*1000)::bigint AS last_heartbeat_at
+       FROM directory_nodes`,
+  merge: (a, b) => mergeDirectoryNodeHeartbeat(a as DirectoryNodeHeartbeatRecord, b as DirectoryNodeHeartbeatRecord),
+  rowToBody: (r): DirectoryNodeHeartbeatRecord => ({
+    node_id: r.node_id as string,
+    last_heartbeat_at: String(r.last_heartbeat_at), // BIGINT epoch-millis string
+  }),
+  toVersionRow: (body): MutableRow => body as MutableRow,
+  validateBody: (body): string | null => {
+    const b = body as Record<string, unknown>;
+    if (typeof b["node_id"] !== "string") return "node_id must be a string";
+    // A string on the wire; the merge normalises non-finite to -Infinity, but a non-string here
+    // still means the peer is not speaking the encoding both sides hash.
+    if (typeof b["last_heartbeat_at"] !== "string") {
+      return `last_heartbeat_at must be a string (epoch millis), got ${typeof b["last_heartbeat_at"]}`;
+    }
+    return null;
+  },
+  // REFUSES rather than inventing the row. Every other Tier-B table owns its whole row, so an absent
+  // key is simply a row we have not seen yet and inserting it is correct. This one owns ONE COLUMN of
+  // a row whose identity columns (`region` NOT NULL) belong to the Tier-A spec — so there is no
+  // honest INSERT here: we would have to fabricate a region for a node we know nothing about, and a
+  // fabricated identity row is exactly what the Tier-A/Tier-B split exists to prevent.
+  //
+  // This is reachable only when Tier-A has not yet delivered the node's identity row. It does not
+  // linger: `runAntiEntropyRound` applies ALL Tier-A tables before ANY Tier-B table, so within one
+  // round the identity row lands first and the next round's UPDATE path merges the heartbeat. If it
+  // fires repeatedly, that is a real signal — Tier-A replication of `directory_nodes` is broken —
+  // and the engine records it per table without starving the other Tier-B tables.
+  insert: async (_client, body) => {
+    const h = body as DirectoryNodeHeartbeatRecord;
+    throw new Error(
+      `pg-ae-store: heartbeat for unknown node '${h.node_id}' — its directory_nodes identity row ` +
+        `has not replicated yet (Tier-A carries node_id+region; this Tier-B entry carries only ` +
+        `last_heartbeat_at and must not invent one). Retries once Tier-A delivers the row.`,
+    );
+  },
+  // Writes the MERGED epoch millis back (NOT now()) — the winning value must be preserved or the LWW
+  // ordering is lost and the next round re-triggers. to_timestamp writes the exact instant into the
+  // TIMESTAMPTZ column, node-TZ-independent (no AT TIME ZONE). Touches ONLY the heartbeat column:
+  // region/endpoint/status are not this entry's to write.
+  update: async (client, body) => {
+    const h = body as DirectoryNodeHeartbeatRecord;
+    await client.query(
+      `UPDATE directory_nodes
+          SET last_heartbeat_at = to_timestamp($2/1000.0)
+        WHERE node_id = $1`,
+      [h.node_id, h.last_heartbeat_at],
+    );
+  },
+};
+
+const TIER_B: readonly TierBPg[] = [SUSPENSIONS, PRESENCE, DIRECTORY_NODE_HEARTBEATS];
 
 function tierA(table: string): TierAPg {
   const t = TIER_A.find((x) => x.spec.table === table);

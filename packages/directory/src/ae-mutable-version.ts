@@ -15,6 +15,10 @@
  *    clock skew alone never moves the version → never a spurious pull, and — matching the merge —
  *    only paused/burned/reason/authorized_by_account/suspension_seq/origin_node move it.
  *  - agent_presence INCLUDES `updated_at` (its merge is wall-clock LWW), so a newer write is seen.
+ *  - directory_nodes INCLUDES `last_heartbeat_at` — that column IS both the value and the LWW
+ *    ordering key, so there is no second timestamp to include or exclude. It carries NONE of
+ *    `region`/`endpoint`/`status`: region belongs to the same table's Tier-A spec, and the other two
+ *    replicate nowhere.
  *
  * Representation normalization (load-bearing — the version hash is compared ACROSS nodes, so it
  * must not depend on how each node's driver typed the value). The mutable tables have columns pg
@@ -70,7 +74,29 @@ export const PRESENCE_VERSION_SPEC: TierBVersionSpec = {
   versionColumns: ["k_local_pubkey", "online", "owning_node_id", "last_seen_at", "updated_at"],
 };
 
-export const TIER_B_SPECS: readonly TierBVersionSpec[] = [SUSPENSION_VERSION_SPEC, PRESENCE_VERSION_SPEC];
+/**
+ * directory_nodes — the per-node liveness heartbeat (DOD-M15-HEARTBEAT-1). Merge-relevant set
+ * matches directory-node-heartbeat-merge.ts (last_heartbeat_at) + the node_id key.
+ * `last_heartbeat_at` IS included: the merge is wall-clock LWW, as presence's is.
+ *
+ * The same table also has a Tier-A spec, and that is deliberate rather than an oversight. The two
+ * tiers carry DISJOINT columns of one row: Tier A owns the immutable identity (`node_id`, `region`)
+ * under insert-if-absent, this owns the one mutable column under a merge. Splitting them is what
+ * keeps a peer able to move a timestamp but unable to rewrite a node's identity. Nothing collides:
+ * the wire advertises `tierA` and `tierB` as separate digest maps and pulls with separate frames,
+ * so the shared table NAME is never a shared key.
+ */
+export const DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC: TierBVersionSpec = {
+  table: "directory_nodes",
+  key: ["node_id"],
+  versionColumns: ["node_id", "last_heartbeat_at"],
+};
+
+export const TIER_B_SPECS: readonly TierBVersionSpec[] = [
+  SUSPENSION_VERSION_SPEC,
+  PRESENCE_VERSION_SPEC,
+  DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC,
+];
 
 /**
  * The natural key + version hash for one mutable row. A shared key with a differing version hash

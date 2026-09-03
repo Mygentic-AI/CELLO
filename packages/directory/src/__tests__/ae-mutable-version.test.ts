@@ -15,9 +15,11 @@ import {
   TIER_B_SPECS,
   SUSPENSION_VERSION_SPEC,
   PRESENCE_VERSION_SPEC,
+  DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC,
 } from "../ae-mutable-version.js";
 import { SUSPENSION_MERGE_COLUMNS } from "../suspension-merge.js";
 import { PRESENCE_MERGE_COLUMNS } from "../presence-merge.js";
+import { DIRECTORY_NODE_HEARTBEAT_MERGE_COLUMNS } from "../directory-node-heartbeat-merge.js";
 
 describe("DOD-AE-MUTABLE-1: Tier-B version summaries", () => {
   const suspRow = {
@@ -72,12 +74,44 @@ describe("DOD-AE-MUTABLE-1: Tier-B version summaries", () => {
     }
   });
 
-  it("versionColumns ⊇ the merge-consulted set (the load-bearing direction)", () => {
-    // Guards the real invariant: a column the MERGE reads but the version hash omits would leave
-    // two nodes silently divergent. Asserts against the columns each merge module declares it uses,
-    // so adding a field to a merge without adding it to versionColumns fails here.
-    for (const c of SUSPENSION_MERGE_COLUMNS) expect(SUSPENSION_VERSION_SPEC.versionColumns).toContain(c);
-    for (const c of PRESENCE_MERGE_COLUMNS) expect(PRESENCE_VERSION_SPEC.versionColumns).toContain(c);
+  /**
+   * table → the columns that table's MERGE module declares it consults. Driven off TIER_B_SPECS
+   * below rather than asserted table-by-table: a hand-listed pair per table is a fact about when
+   * someone last looked, and the failure it misses (a NEW Tier-B table whose spec nobody compared to
+   * its merge) is the one that produces permanent silent divergence.
+   */
+  const MERGE_COLUMNS_BY_TABLE: ReadonlyMap<string, readonly string[]> = new Map([
+    ["agent_suspensions", SUSPENSION_MERGE_COLUMNS],
+    ["agent_presence", PRESENCE_MERGE_COLUMNS],
+    ["directory_nodes", DIRECTORY_NODE_HEARTBEAT_MERGE_COLUMNS],
+  ]);
+
+  it("every registered Tier-B spec declares its merge columns (a new table cannot skip the check)", () => {
+    // Without this, adding a spec to TIER_B_SPECS and forgetting the merge registry would leave the
+    // equality test below iterating over a table it never sees — green, and proving nothing.
+    for (const spec of TIER_B_SPECS) {
+      expect(
+        MERGE_COLUMNS_BY_TABLE.has(spec.table),
+        `Tier-B table '${spec.table}' has no entry in MERGE_COLUMNS_BY_TABLE — its versionColumns are unchecked against its merge`,
+      ).toBe(true);
+    }
+  });
+
+  it("versionColumns EQUALS the merge-consulted set, for every registered Tier-B table", () => {
+    // Both directions are load-bearing and they fail differently:
+    //  - a column the MERGE reads but the version hash OMITS → two nodes hold rows the merge would
+    //    resolve differently while their version hashes agree, so no pull ever fires and the
+    //    divergence is permanent;
+    //  - a column in the version hash the merge IGNORES → the hash moves on a value that changes no
+    //    outcome, so nodes pull each other forever over rows that are already converged.
+    for (const spec of TIER_B_SPECS) {
+      const mergeCols = MERGE_COLUMNS_BY_TABLE.get(spec.table);
+      expect(mergeCols, `no merge columns registered for '${spec.table}'`).toBeDefined();
+      expect(
+        [...spec.versionColumns].sort(),
+        `versionColumns and merge columns disagree for '${spec.table}'`,
+      ).toEqual([...mergeCols!].sort());
+    }
   });
 
   it("normalizes representation — boolean, Date, and their string forms hash identically", () => {
