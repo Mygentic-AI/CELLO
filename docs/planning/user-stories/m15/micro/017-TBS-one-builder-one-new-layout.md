@@ -2,7 +2,9 @@
 name: 017-TBS — One assignment TBS builder, and the layout the handover needs
 type: micro-work-order
 date: 2026-09-02
-status: open
+status: in-progress
+claimed_by: CELLO_Support lane — worktree /Users/andrep/Documents/code/m15-017, branches m15/017-tbs in BOTH repos
+claimed_at: 2026-09-03
 description: >
   The session-assignment TBS has a DUPLICATED builder — the directory keeps a local copy of a helper
   that is now published — and relay handover needs two new fields in it. Delete the copy first, then
@@ -198,8 +200,134 @@ load, including the second one in the same session.
 
 ## Review
 
-*(the coder fills this in — evidence, mutation proofs, the reviewer's verdict quoted)*
+### Where this work lives
+
+| | |
+|---|---|
+| cello-client | `/Users/andrep/Documents/code/m15-017/cello-client` → merged to `main` at `126c8a5` |
+| trustless-cello | `/Users/andrep/Documents/code/m15-017/trustless-cello`, branch `m15/017-tbs` |
+| Published | tag `v0.0.268` — all seven on `beta`; **`latest` NOT promoted (Andre's)** |
+
+### ⚠️ Part 1's opening instruction is wrong as written, and falsifying it first is what saved the sessions
+
+*"Prove the delegation is byte-identical before you touch anything else"* cannot succeed by straight
+deletion. The directory's copy and the published builder disagree on one input class. Measured on
+built artifacts, with an all-present control proving the comparison works:
+
+```
+DIFFER  all empty M7 args        local=129B published=143B
+DIFFER  counterparty id empty    local=129B published=177B
+SAME    all present (control)    local=211B published=211B
+```
+
+The copy treats `""`/`[]` as ABSENT (short layout); the published builder treats any non-`undefined`
+argument as a value (long layout). **That case is live** — `directory-node.ts` documents the
+`no_offer_sent` path as leaving the counterparty session endpoint blank, and
+`counterpartySessionPeerId` initialises to `""`. A straight delegation would have signed a long TBS
+there, while the client's parser maps `""` back to `undefined` and rebuilds the short one. Every such
+session would fail signature verification with nothing on either side naming the cause.
+
+**Decision (Andre): preserve today's bytes.** The encoder is delegated; only the RULE stays behind,
+in `buildAssignmentTbs` — zero CBOR, and when the endpoints are unknown it OMITS the arguments
+rather than passing blanks. The guard's two empty-argument cases still pass untouched, which is the
+byte-identical proof the order asked for.
+
+### The legacy layouts are unchanged — proven against the DEPLOYED artifact, not against my own source
+
+The test pins golden hex captured before the change. Stronger, the same comparison was re-run
+against the **previously published `protocol-types@0.0.65` tarball**:
+
+```
+5-field  published-0.0.65 == new : true
+10-field published-0.0.65 == new : true
+control: 12 differs from 10      : true
+```
+
+### Mutation proofs — 9 mutants, each COMPILING (so a red is a catch, not a build error), each against a printed non-zero baseline
+
+| # | Mutation | Result |
+|---|---|---|
+| 1 | drop `priorRelayId` from the encoded array | RED |
+| 2 | drop `highStakes` from the encoded array | RED |
+| 3 | **12-field path made conditional on `priorRelayId !== ""`** — the order's named trap | RED, `expected 227 to be greater than 227` |
+| 4 | parser reads `high_stakes` by truthiness | RED, `expected undefined to be false` |
+| 5 | parser maps `prior_relay_id: ""` to undefined | RED, `expected undefined to be ''` |
+| 6 | verifier stops passing both fields | RED (2 of 10) |
+| 7 | `buildAssignmentTbs` passes constants, ignoring its parameters | RED |
+| 8 | long path drops the two new arguments | RED |
+| 9 | endpoints-known rule replaced wholesale with `true` | RED (3 of 6) |
+
+**One mutant survived, and it was MY mutation that was wrong, not the tests.** Replacing only the
+first clause of the four-clause `endpointsKnown &&` chain left all six green — the other three
+clauses still gated it. Widening to #9 reddens. Recorded because a survivor taken at face value is
+how a coverage gap gets invented that does not exist.
+
+**And a false CAUGHT I nearly recorded:** an early verifier mutation "failed" with exit 1 that was
+actually *no test files found* — two paths handed to vitest matched nothing. Re-run against a real
+file with a printed baseline (#6). Exactly the trap §2's mutation rules describe, hit live.
+
+### The verifier's new path had NO test until I added one
+
+Dropping both arguments from `verifyAssignmentSignature` left every existing test green: the
+fixtures signed 10 fields and the verifier rebuilt 10, so the two halves agreed with each other and
+proved nothing. The fixtures now sign 12 on request (opts only, so existing fixtures keep testing
+the 10-field shape an older directory sends), and four tests cover the round trip — including a
+tamper-after-signing case per field.
+
+### Gates — exit codes read, not tails
+
+- **cello-client**: test=0 (420 files, 4766 tests) · lint=0 · typecheck=0 · build=0
+- **trustless-cello**: test=0 (189 files, 1938 tests) · lint=0 (5 pre-existing warnings) · typecheck=0
+
+### Publish (DoD 5) — done except the half only Andre can run
+
+`/cello-publish` loaded for THIS publish. All seven bumped per the skill. Tag `v0.0.268`.
+
+**CI's publish job reported FAILURE and it was a false negative.** It said
+`daemon local=0.0.186 beta=0.0.185 after retries`. Verified against the REGISTRY rather than the
+log: npm read-after-write lag beat CI's 60-second retry window, and `daemon@0.0.186` is published
+with `beta` pointing at it. (A separate `cannot publish over 0.0.3` line in the same log is
+`interfaces`, swallowed by `|| true` — a red herring that reads like the daemon's failure.)
+
+Verified from the tarballs, not the source tree: `protocol-types@0.0.66` `dist/session.js` carries
+`priorRelayId` (6 hits); `daemon@0.0.186` ships `dist/error-message.js` and its parser carries
+`prior_relay_id` (3); negative control `buildSessionEstablishmentTbsM7` = 0. Cross-pins are real
+versions (`cli@0.0.193` → `daemon@0.0.186`).
+
+**⛔ WHAT IS LEFT FOR ANDRE — the `latest` promotion, and DoD 5's lockfile half depends on it.**
+`latest` is one behind on all seven, so `trustless-cello` cannot resolve `protocol-types@0.0.66`
+yet. The directory half was verified by temporarily resolving `beta` (the skill's stated exception
+for testing a build not yet promoted), and every ref was then reverted to `latest` — zero `"beta"`
+refs remain and the worktree is clean. **The lockfile therefore does NOT yet record 0.0.66, and
+cannot until promotion.** Promote all seven at the versions above, then run `pnpm install` in
+`trustless-cello` and commit the lockfile. That closes DoD 5.
+
+### Reviewer verdict
+
+*(pending — `cello-unit-reviewer` dispatched across both repos)*
 
 ## Newly discovered
 
-*(anything found and NOT acted on, per rule 3)*
+### 1. FIVE packages reference protocol-types, not the two this order names
+
+`packages/{directory,relay,e2e-tests,interfaces,test-fixtures}`. All say `latest`, so they move
+together on promotion and nothing is broken today. But flipping a SUBSET puts two incompatible
+copies in the tree and produces a type-identity error (`SealRejectionReason` not assignable to
+`SealRejectionReason`) that reads like a code bug and is not one. Cost two rounds here.
+
+**Classification: POST-LAUNCH (docs/process).** No customer impact; the fix is a one-line correction
+to whichever order next names these refs.
+
+### 2. CI's publish verification retries for 60s, and npm propagation can exceed it
+
+The tag run went red on a publish that had in fact succeeded — and took the whole downstream chain
+with it, so `smoke-tag`, the real success signal, was SKIPPED. The run that exists to tell you the
+publish is good tells you nothing precisely when the publish was slow.
+
+**Classification: POST-LAUNCH (CI).** Widen the retry, or re-check once after a longer sleep before
+failing. Not touched here — outside this order.
+
+### 3. `prior_relay_id` is signed but nothing produces a non-empty one yet
+
+By design — the order is wire and plumbing only and the resume path is a later unit. Recorded so the
+next reader does not mistake the constant `""` at the call site for an oversight.
