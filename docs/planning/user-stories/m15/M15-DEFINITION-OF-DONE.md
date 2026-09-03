@@ -820,6 +820,26 @@ you control only one of them.
 - **Enforcer:** journey — `j-content` DOD-MSG-3 green, plus the live check above.
 
 ### `DOD-M15-PARKERROR-1` — ❌ A failed park deposit says what went wrong
+> **⚙️ THE REPORTING HALF IS DONE (2026-09-03, `019-PARKERROR`) — the text below describes the state
+> BEFORE that unit and is kept because the second half is still open.** The daemon's IPC error path
+> no longer flattens a thrown object: `extractErrorMessage` moved to its own module and all three
+> `String(err)` sites in `ipc-server.ts` now use it, so a failing call names its cause in the
+> response **and** in the log. That was daemon-wide, not park-specific — every IPC method inherited
+> the bug.
+>
+> **What the error turned out to be, read for the first time:** `content_park_deposit` throws
+> `No open connection to peer <relay>` — a plain object, not an `Error`, thrown by the transport's
+> `openStream`, which is why it flattened. **Two things remain, and they are not the same thing:**
+> (a) the deposit path *throws* where its siblings *return* `{ ok: false, reason }`, so an ordinary
+> "the relay is not connected right now" reaches the operator as *"An unexpected error occurred"*;
+> (b) **why there is no open connection at deposit time is UNREAD** — an investigation was opened by
+> Andre on 2026-09-03, including why it reproduces about 1 run in 3.
+>
+> **The classification question below is still open and still Andre's**, now with a measured rate to
+> weigh: intermittent, ~1 in 3, in a harness — not measured against the live fleet.
+> **`DOD-MSG-7` is NOT this line.** `019` predicted MSG-5 and MSG-7 shared this cause; they do not.
+> MSG-7 fails on `content_park_recover` returning `ok: false`, undiagnosed and unowned.
+
 **Found by the same run (`j-content` DOD-MSG-5 / MSG-7). Red in the 2026-08-23 baseline too**, so
 this is long-standing rather than new — it was simply never inside `JCONTENT-DELIVERY-1`'s four.
 
@@ -1205,6 +1225,14 @@ Split from `DOD-M15-RELAYADMIN-1` once its deletion premise was disproved and th
 > Full entry in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYSLOTS-1`. → Entry S15.
 
 ### `DOD-M15-SESSION-RELAY-PINNED-1` — ❌ A live conversation survives its relay going away
+> **⚙️ MEASURED, AND UNIT 1 OF 4 IS DONE — do not re-open either.** The first clause below demanded a
+> measurement; `016-RELAYLOSS` ran it (relay killed mid-conversation, two real daemons) and its
+> recommendation is that this line **stays in the gate**: the conversation neither parks cleanly nor
+> seals, and the two parties are told contradictory things about their own close. The fix is
+> [[M15-STORY-RELAYHANDOVER]], whose unit 1 closed 2026-09-03 (`017-TBS` — the assignment TBS now
+> carries `prior_relay_id`). Units 2–4 are open; unit 4 is blocked on Andre's call in the story's §0.
+> **016 also shipped the honesty half**: a send the relay did not witness now says so at the moment
+> it happens, on all five of `cello_send`'s return paths. What is unfixed is the seal.
 **Found 2026-09-02 by tracing, in answer to Andre's question "does multi-relay solve a relay going
 down mid-conversation?" It does not, and neither does `RELAYFANOUT-1`.** Two relays are involved in
 a session and only one of them recovers:
@@ -1236,6 +1264,13 @@ receipt is the product; a path that can silently cost one is not something to cl
 - **Enforcer:** journey — two daemons, a real relay, killed mid-conversation.
 
 ### `DOD-M15-MULTIRELAY-1` — ❌ An agent's reachability does not rest on one relay
+> **⚙️ UNIT 1 OF 4 IS DONE — do not re-scope this line from scratch.** The fix for this line and for
+> `SESSION-RELAY-PINNED-1` is one story, [[M15-STORY-RELAYHANDOVER]], and its first unit closed on
+> 2026-09-03 (`017-TBS`): the assignment TBS now carries `prior_relay_id`, so a directory can name
+> the previous witness inside signed bytes. **The churn numbers this line demands an explanation for
+> were measured by `016-RELAYLOSS`** — read its Review before re-measuring anything. Units 2–4
+> (directory resume path, relay-side replay + verifier, client rebind) are still open, and unit 4
+> is blocked on Andre's call in the story's §0.
 **Scoped by `DOD-M15-SPIKE-1(c)` → Entry 1. This line is AVAILABILITY ONLY.** The client already
 requests reservations with every known relay (`reservationsRequested: 2`) — the audit's "reserves
 with exactly one relay" was the outcome, not the request. But one relay carries **2,648 of 2,675**
