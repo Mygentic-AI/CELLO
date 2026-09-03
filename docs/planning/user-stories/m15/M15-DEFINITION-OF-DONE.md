@@ -1021,7 +1021,14 @@ an attacker walks around.
 > still collect no signatures.
 >
 > So this line closes on heartbeat replication — a real defect, really fixed. The federated
-> countersignature is **not** this line's to claim; it sits in the POST-LAUNCH BACKLOG under §0z.4.
+> countersignature is **not** this line's to claim: it is `DOD-M15-CHECKPOINT-COUNTERSIGN-1` in the
+> POST-LAUNCH BACKLOG, **still OPEN**, ruled ship-it-fix-after-launch by Andre 2026-09-03 on the
+> verified answer that building it later forces no client migration.
+>
+> **And read that entry before repeating the mistake this one made:** the SEAL CERTIFICATE is FROST
+> threshold-signed and sound. The CHECKPOINT — the periodic published summary of the whole log that
+> an inclusion proof resolves against — is the unsigned thing. Two different artifacts; conflating
+> them produced a false "receipts are signed by one node" claim that stood for several hours.
 
 ### `DOD-M15-NO-SILENT-REFUSAL-1` — ❌ Nothing is refused silently. If we refuse it, the operator is told
 > **RENAMED from `DOD-M15-SCREENBLOCK-SILENT-1` on the day it was written.** It was scoped to the
@@ -2359,9 +2366,29 @@ and, for the made-true rows, the units that make them true.
 
 # POST-LAUNCH BACKLOG
 
-### `DOD-M15-CHECKPOINT-COUNTERSIGN-1` — 🅿️ POST-LAUNCH. The LOG ANCHOR is unsigned (the receipt itself is fine)
-**Found 2026-09-03 (Order 021), while closing `DOD-M15-HEARTBEAT-1`. POST-LAUNCH under §0z.4 — a
-lane may not add to the gate. Andre decides if it blocks.**
+### `DOD-M15-CHECKPOINT-COUNTERSIGN-1` — ❌ OPEN · 🅿️ POST-LAUNCH. The LOG ANCHOR is unsigned (the receipt itself is fine)
+> **RULED BY ANDRE 2026-09-03: SHIP IT, FIX AFTER LAUNCH. This requirement stays OPEN — it is
+> deferred, not dropped, and it is not closed by anything in M15.**
+>
+> **The question he stopped on, and the answer that decided it:** *"If we do this later, do I hit a
+> breaking change — people redo their agents, or lose the ability to prove previous conversations?"*
+> **No.** Verified before the ruling, not assumed:
+> - **What a client holds is the seal certificate**, and its fields are `session_id`, `seal_type`,
+>   `leaf_count`, `signer_pubkey`, `legibility` — **no checkpoint reference at all.** It is FROST
+>   signed over the transcript root and leaf count, so nothing done to checkpoints can invalidate it.
+> - **Inclusion proofs are computed LIVE on demand**, joining the leaf to its checkpoint at request
+>   time. No client holds a proof that must keep verifying.
+> - **Everything the fix touches is directory-side:** an env var, MMR tables joining replication, and
+>   `checkpoint_node_signatures`, which **already exists** (V18). The directory↔directory AE channel
+>   is not a client-facing wire. **No client DB change, no wire-contract change, no forced upgrade.**
+>
+> **Two caveats recorded so the next person does not rediscover them:** the rebuild needs a shared
+> leaf order and will likely renumber MMR positions, so an inclusion proof someone SAVED TO A FILE
+> stops verifying (re-fetch fixes it; the certificate is the durable artifact). And making clients
+> CHECK the checkpoint signatures is a later client-side addition — additive and opt-in, since an old
+> client ignores a field it does not read.
+
+**Found 2026-09-03 (Order 021), while closing `DOD-M15-HEARTBEAT-1`. POST-LAUNCH under §0z.4.**
 
 > **⚠️ FIRST WORDING OF THIS ENTRY WAS WRONG, and the error is worth keeping.** It said *"a sealed
 > receipt is countersigned by one node, not several."* **False.** The SEAL CERTIFICATE is FROST
