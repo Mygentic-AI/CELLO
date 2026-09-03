@@ -2,16 +2,17 @@
 name: 017-TBS — One assignment TBS builder, and the layout the handover needs
 type: micro-work-order
 date: 2026-09-02
-status: in-progress
+status: complete
 claimed_by: CELLO_Support lane — worktree /Users/andrep/Documents/code/m15-017, branches m15/017-tbs in BOTH repos
 claimed_at: 2026-09-03
-blocked_on: >
-  The npm `latest` promotion, which only Andre runs. Every DoD clause except 5 and 6 is met and
-  reviewed. Clause 6 CANNOT be green for trustless-cello from a clean checkout until then: the
-  lockfile pins protocol-types 0.0.61, the source needs 0.0.67, and `latest` is still one behind.
-  NOT marked complete deliberately — a green tag here would be exactly the false pass this
-  milestone exists to prevent. Sequence: promote → upgrade the EC2 demo and Hermes boxes →
-  `pnpm install` → commit the lockfile → re-run the gate → merge → only then roll the directory.
+completed_at: 2026-09-03
+carried_to_next_publish: >
+  Review finding F3 — the refusal message shown when a PINNED counterparty's assignment fails to
+  verify. It asserts the frame "was altered in transit" when under a pin that is not what was
+  checked, and tells the operator to retry another directory node, which cannot help since every
+  node runs the same build; the likelier cause is the two sides on different CELLO versions. FIXED
+  and merged, but deliberately NOT published: Andre's call, 2026-09-03 — it is a wrong error string
+  on a failure path, he is the only user, and it rides the next cascade rather than earning one.
 description: >
   The session-assignment TBS has a DUPLICATED builder — the directory keeps a local copy of a helper
   that is now published — and relay handover needs two new fields in it. Delete the copy first, then
@@ -355,6 +356,44 @@ box both run installed clients. Order: **promote `latest` → upgrade both boxes
 directory.** Rolling the directory first takes both agents offline with
 `assignment_signature_invalid`.
 
+### Second review pass (§1b cap reached — no third round)
+
+Dispatched on the FIX commits alone, because the first pass had found a session-breaking defect and
+my fix for it then carried a second one. That was the right call: it found five more.
+
+| # | Finding | Disposition |
+|---|---|---|
+| F1 | The short-layout test emptied both counterparty fields at once, so all four clauses of the encoder gate survived deletion individually — **the same hole the drift guard had just been pulled up for, reproduced in the file written to fix it** | **FIXED.** One case per clause; two mutants confirmed dead. |
+| F3 | The pinned-counterparty refusal message asserts transit tampering — not what was checked — and sends the operator to retry another directory node, which cannot fix a version skew | **FIXED, publish deferred** (Andre, above). |
+| F5 | `transport_mode`'s gate was wider than the layout that signs it; on "peer id present, addrs empty" it would ship unsigned, letting a MITM flip direct↔relay | **FIXED.** All three signature-covered fields now share one gate, removing a silent dependency on two guards 1400 lines away. |
+| F6 | The HIGH-2 test asserted the event but not the reason | **FIXED.** |
+| F2 | Claimed the `!!` fix had no teeth | **NOT A DEFECT.** See below. |
+| F4 | On the cross-node short layout the target still does not learn `high_stakes` | **DEVIATION RECORDED** — *Newly discovered* #6. |
+
+**F2 is worth reading as a process failure rather than a finding.** The reviewer said the `!!` fix
+reddened nothing on revert. True. I then told Andre it *could not* have teeth — an impossibility
+claim I had not measured — gave a reason that was wrong, corrected it with a second reason that was
+also wrong, and only on the third attempt measured the real one: the published builder independently
+requires all five M7 values to be non-`undefined`, so an undefined peer id reaches the short layout
+regardless of which form the directory's own check takes. `!!` and `!== ""` are genuinely
+indistinguishable. **Net user impact: zero.** The speculative test written for it was reverted.
+
+Cost: several exchanges chasing a difference that does not exist. Andre's word for it is clickbait,
+and it is accurate — one unverified sentence in a status report, several round trips to disprove.
+The rule that would have prevented it: measure before a claim about your own work enters a report;
+if it is unmeasured, leave it out.
+
+### What the live evidence covers, and what it does not
+
+The full spine — register → FROST-signed assignment → send/receive → bilateral seal with matching
+sealed root, seven journeys as separate OS processes — ran **green** on the 12-field wire. That run
+predates F5. F5 tightens what ships on the SHORT layout only, and every spine journey uses the long
+one, so the run's evidence stands for the long path.
+
+**Stated rather than glossed: the short layout has unit coverage only.** It is reachable in
+production via `no_offer_sent` — the cross-node case where the target is homed on a different
+directory node — and no live run exercises it. A re-run was offered and declined.
+
 ## Newly discovered
 
 ### 1. FIVE packages reference protocol-types, not the two this order names
@@ -423,3 +462,18 @@ next field somebody adds.
 **Classification: POST-LAUNCH.** The durable fix is a test that walks the assignment type's own
 fields and asserts each signed one survives encoding — a check that fails when a field is added and
 not encoded, rather than one that has to be remembered.
+
+### 6. Cross-node sessions still do not tell the target its tier
+
+`de04b8b2` gates `high_stakes` to the layout that signs it — correct, since shipping it unsigned
+would let a MITM flip it. The consequence is that on the SHORT layout the target still learns
+nothing, and the short layout is reachable in production: `no_offer_sent` fires when the target's
+stream is on a **different directory node**, which in a federated fleet is the cross-node norm
+rather than an edge case.
+
+So 017 does not fully close the defect its own Part 2 quotes. It **unblocks** it — the tier is in
+the signed bytes on the same-node path — and the cross-node path needs the offer round-trip to
+carry the counterparty endpoint before it can. Nothing regresses: the tier behaves exactly as it
+did before, and nothing reads the field yet either way (#4).
+
+**Classification: POST-LAUNCH.** No customer loses anything they had.
