@@ -195,10 +195,21 @@ export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Arr
    * thing that catches it is `__tests__/tbs-017-wire-roundtrip.test.ts`, which crosses the encode
    * boundary rather than comparing two builders.
    */
-  if (a.high_stakes !== undefined) {
+  // ...but only on the layout that SIGNS them. Same reasoning as `transport_mode` directly above:
+  // the long layout is reached only when both peer ids and both address arrays are present, and on
+  // the short layout these two are outside the TBS entirely. Emitting them there would put fields
+  // on the wire that no signature covers — a MITM could flip `high_stakes` and nothing would
+  // detect it. The client ignores them on that path anyway (its arity check needs the five M7
+  // values first), so sending them buys nothing and costs the integrity claim.
+  const onLongLayout =
+    !!a.initiator_session_peer_id &&
+    !!a.counterparty_session_peer_id &&
+    !!a.initiator_session_addrs?.length &&
+    !!a.counterparty_session_addrs?.length;
+  if (onLongLayout && a.high_stakes !== undefined) {
     encodedAssignment["high_stakes"] = a.high_stakes;
   }
-  if (a.prior_relay_id !== undefined) {
+  if (onLongLayout && a.prior_relay_id !== undefined) {
     encodedAssignment["prior_relay_id"] = a.prior_relay_id;
   }
   // FED-OPTIONB-SETUP-001 (Option B): the per-node directory signature over the relay TBS. Present only

@@ -132,6 +132,24 @@ describe("017-TBS: the signed bytes survive the wire", () => {
     expect(wire["prior_relay_id"]).toBe("");
   });
 
+  it("does NOT put the two fields on the wire when they are NOT signed", () => {
+    /**
+     * The short layout does not cover them. Sending an unsigned `high_stakes` would let a MITM
+     * flip a value nothing can detect — the same reason `transport_mode` is gated. The client
+     * ignores them on this path regardless (its arity check needs the five M7 values first), so
+     * emitting them buys nothing and costs the integrity claim.
+     */
+    const unknownEndpoints = {
+      ...assignmentWith(true, "a".repeat(64)),
+      counterparty_session_peer_id: "",
+      counterparty_session_addrs: [],
+    };
+    const wire = wireFieldsOf(unknownEndpoints);
+    expect(wire["counterparty_session_peer_id"]).toBeUndefined();
+    expect(wire["high_stakes"], "unsigned on the short layout — must not ship").toBeUndefined();
+    expect(wire["prior_relay_id"], "unsigned on the short layout — must not ship").toBeUndefined();
+  });
+
   it("a real prior relay id reaches the wire unchanged", () => {
     const priorRelayId = "a".repeat(64);
     expect(wireFieldsOf(assignmentWith(true, priorRelayId))["prior_relay_id"]).toBe(priorRelayId);
