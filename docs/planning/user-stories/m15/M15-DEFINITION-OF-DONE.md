@@ -997,7 +997,13 @@ succeeded**.
 - **A code comment blaming a "BIGSERIAL `id` collision" is wrong** and would send the repairer at the
   wrong fix; rewrite it (Invariant / `DOD-M15-CLAIM-COMMENTS-1`).
 
-### `DOD-M15-NO-SILENT-REFUSAL-1` — ❌ Nothing is refused silently. If we refuse it, the operator is told
+### `DOD-M15-NO-SILENT-REFUSAL-1` — ✅ Nothing is refused silently. If we refuse it, the operator is told
+
+> **✅ 2026-09-03 (022-REFUSALVISIBLE).** Twelve reasons now file a durable notice keyed on
+> `agent_id`, surfaced as their own `refusals` category in `cello_inbox` — the door for an agent
+> nobody is attending — and surviving a daemon restart, which the in-memory map did not.
+> `counterparty_gone` no longer asserts a crash nor leads with the seal. Journey (both enforcer
+> legs, screener block + byte cap) green as separate OS processes; each made to fail on purpose.
 > **RENAMED from `DOD-M15-SCREENBLOCK-SILENT-1` on the day it was written.** It was scoped to the
 > screener; Andre widened it to the principle within the hour, and an ID naming one door would have
 > mis-sold the line to whoever pulled it.

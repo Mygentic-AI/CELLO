@@ -2,7 +2,7 @@
 name: 022-REFUSALVISIBLE — Nothing is refused silently
 type: micro-work-order
 date: 2026-09-03
-status: open
+status: complete
 description: >
   Three refusal reasons reach the operator; NINE do not, including the screener block — the moment
   the product catches the attack it exists to catch. The three that ARE wired live in an in-memory
@@ -215,11 +215,141 @@ failure reads as a killed container rather than a collision. Measured 2026-09-03
 ## Review
 
 ### Where this work lives
-*(worktree path, branch, and the `COMPOSE_PROJECT_NAME` / `CELLO_PG_HOST_PORT` you used)*
 
-### The rest
-*(the journey output, the mutation proof from DoD 6, the reviewer's verdict)*
+- **cello-client:** `/Users/andrep/Documents/code/m15-022/cello-client`, branch `m15/022-refusalvisible`
+- **trustless-cello:** `/Users/andrep/Documents/code/m15-022/trustless-cello`, same branch name (a
+  PAIRED worktree, because the spine harness resolves `../cello-client` — without it the journey
+  runs the main checkout's `dist` and measures the wrong tree)
+- `COMPOSE_PROJECT_NAME=m15022`, `CELLO_PG_HOST_PORT=5437`
+
+### What shipped
+
+**Part 1.** `content_refusal_notices` + `content_refusal_reads`, two SQLCipher tables created inline
+beside `contact_rename_notices` and keyed the same way, on `agent_id` — the map was keyed on
+`agent_name`, a mutable display label, which was its second defect. The reads table carries
+per-consumer state so two windows attending one agent are both told, and the order-of-magnitude
+re-announce survives. `refusalSection` is spread into both inbox shapes. Notices are NOT torn down at
+session teardown: `session_committed` refusals exist only because the session was already sealed.
+
+**Part 2.** All twelve reasons file, each with an impact and a guidance — and `kind`, `impact` and
+`guidance` are all REQUIRED parameters now, so "every reason calls this with both" is a compile error
+rather than something a reviewer checks by reading thirteen call sites. `content_undeliverable` and
+`delivery_impaired` are noted at their PRODUCERS, not at the `cello_receive` exits that report them:
+those exits read in-memory state and only run if somebody is attending.
+
+`counterparty_gone` names one dropped libp2p connection, denies establishing a crash, points at the
+refusals first (unconditionally — both doors share a read position, so a sibling window may have
+taken the notice), and names the unilateral seal last as irreversible.
+
+### The journey (DoD 5) — two daemons, separate OS processes, 3-node consortium + real relay
+
+```
+ ✓ 022-REFUSALVISIBLE — a screener block reaches an UNATTENDED operator, and survives a daemon restart  5109ms
+ ✓ 022-REFUSALVISIBLE — the byte cap reaches the operator too, and says every LATER message is refused  2202ms
+ Test Files  1 passed (1)
+      Tests  2 passed | 10 skipped (12)
+```
+
+### The mutation proof (DoD 6)
+
+Baseline printed green before each set; every mutant re-run alone, typechecked (a mutant that fails
+compilation is not a catch), and the restore verified after each.
+
+**On the journey.** Screener notice disabled + `dist` rebuilt → RED, with daemonB's own log showing
+`security.gateway.inbound.terminal_block reason:inbound_language_blocked` and the inbox holding zero
+refusals: the block fired and nobody was told. Both `#noteSizeCapRefusal` calls disabled → the cap
+leg RED (`incoming:417 cap:200 tier:1`, inbox `[]`) while the screener leg stayed GREEN, so the red
+came from the path the mutation was aimed at.
+
+**On the unit tests, 21 mutants, all RED in the test named for them:** each `noteContentRefusal` call
+site individually; the inbox section returning empty; `CREATE TEMP TABLE` (durability); per-consumer
+replaced by a shared bucket on BOTH doors; the re-announce condition; the `counterparty_gone`
+wording; the fallback write and the fallback read; the retraction; `ORDER BY`/`LIMIT`; the `rowid`
+tiebreak; the N4 SQL filter; the header composition and its kind prefix; the combined cap; the
+fallback reverse; the inbox read guard.
+
+**Two failures of the loop itself, recorded because they are the point of the rule.** A one-line
+`grep` for `if (false)` reported the mutant absent from `dist` when `tsc` had merely split it across
+two lines — a false negative that would have made the next run prove nothing. And one loop ran
+against a DIRTY tree and its `git checkout` destroyed six uncommitted fixes; they were reconstructed
+and committed *before* the loop was run again. Commit first, then mutate.
+
+### Gate (DoD 7)
+
+`pnpm run test` 4790 passed / 11 skipped, `lint`, `typecheck`, `build` — all exit 0 in cello-client.
+`lint` + `typecheck` clean in trustless-cello. **Nothing published:** no `package.json` touched, no
+version bumped, no tag.
+
+### Reviewer verdict (DoD 8) — `cello-unit-reviewer`, two passes
+
+**Pass 1 — eight findings, three blocking.** Verbatim:
+
+> **SPEC: FAITHFUL** … **SILENT FALLBACKS FOUND** — F6 (MEDIUM) … **ERROR SUBSTITUTION FOUND** — F4
+> (blocking): the shared header asserts "received and refused, not verified, not ingested" over
+> notices for which each clause is false, most sharply `delivery_impaired`, where it names the wrong
+> direction of travel and sends the operator to the counterparty for a fault on their own outbound
+> path. **HOLLOW TESTS FOUND** — F2 (blocking): four of the nine wired reasons have no assertion;
+> deleting their `noteContentRefusal` calls leaves the gate green. **REMOVALS PROVEN** **NO
+> COMPATIBILITY DEBT**
+>
+> Blocking before close: **F1**, **F2**, **F4**.
+
+**Pass 2 (the hard cap) — six of eight closed cleanly, seven new findings.** Verbatim:
+
+> **SPEC: FAITHFUL** — all seven clauses hold; clause 3 is now compiler-enforced rather than
+> reviewer-enforced, which is a real improvement over what the DoD asked for. **NO SILENT
+> FALLBACKS** — F6's fallback is announced and preserves the surface. N2 is a bounding defect, not a
+> masking one. **ERRORS NAME THEIR CAUSE** — F4 closed. **HOLLOW TESTS FOUND** — N1: the F3, F4 and
+> F6 fixes each fail the revert test. F2's four producers are genuinely closed, with the retraction
+> test asking as a different consumer, which is the detail that makes it real. **REMOVALS PROVEN**
+> **NO COMPATIBILITY DEBT**
+>
+> Blocking before close, in order: **N1**, **N2**, **N3**.
+
+**Every finding from both passes is fixed** — F1–F8 and N1–N7 — each with a test and a mutant, except
+N5, which is carried below as a design change rather than taken here.
 
 ## Newly discovered
 
-*(anything found and NOT acted on, per rule 3)*
+*(found and NOT acted on, per rule 3)*
+
+1. **A retraction resets the count, so a flapping session never re-announces (N5).**
+   `#clearContentRefusal` deletes the row, count included. A counterparty on an intermittent
+   connection impairs and heals repeatedly, and each heal resets to zero — so a direct path that has
+   failed fifty times is indistinguishable from one that failed once. The count is now LOGGED on the
+   way out (`session.refusal.retracted`, `timesBeforeRetraction`), so the flapping is greppable, but
+   the operator-facing notice cannot show it. **The fix is a design change** — keep the row and
+   rewrite its impact into the past tense ("this session's direct path has failed and recovered N
+   times") — and it is out of this order's mission. *Classification: POST-LAUNCH. An operator on a
+   flaky link is told each time it breaks; what they lose is the pattern, which is a diagnosis
+   nicety, not the core value.*
+
+2. **There is no way for an operator to DISMISS a refusal notice.** `contact_rename_notices`, the
+   template, clears on operator action; these clear only for `delivery_impaired`, which self-heals.
+   With the cap and newest-first ordering the acute problem is gone, but the list only grows. This is
+   a unit, not a fix: a dismissal verb is a new MCP tool AND a consent question — who may dismiss a
+   security notice, and does an agent dismissing on the operator's behalf recreate the silence this
+   line exists to end? *Classification: POST-LAUNCH.*
+
+3. **`http-manifest-poll.test.ts > AC-004` failed once and could not be reproduced.** Under a full
+   423-file suite it returned `ok:false` where it polls a loopback HTTP server behind a 10s
+   `AbortController`; it passes alone and passed on the runs either side, and none of the four
+   production files this order touched is in that module's import graph. **Stated as the observation,
+   not as "load-induced"** — that is a hypothesis, and the kind of attribution that gets copied
+   forward and stops anyone looking. **The line worth acting on is about the TEST, not the flake:**
+   its assertion captures only `ok:false`, so a timed-out abort and a refused connection are
+   indistinguishable from its output, and every future occurrence will be attributed the same way for
+   the same reason. A poll test that cannot say which of the two happened is the defect.
+   *Classification: POST-LAUNCH.*
+
+4. **Five pre-existing lint warnings in `packages/e2e-tests/src/spine/j-stale-session.spine.test.ts`**
+   (unused `eslint-disable` directives for `no-console`). Zero errors, a file this order does not
+   touch. Noted only so the next reader knows the trustless-cello lint output is not clean and that
+   it is not this unit's doing.
+
+> **⚠️ FOUR ITEMS TRIPS THE §0z.2 SPAWN TRIP-WIRE (more than two).** Reported rather than started, per
+> the rule. **The vein has turned:** items 1 and 2 are design questions about a surface that now
+> works, item 3 is test hygiene, and item 4 is lint in a file nobody touched. **None is a production
+> defect** — the production defects this unit found (a header that was false for nine of twelve
+> reasons, a notice that outlived its own truth, four producers with no coverage) were all fixed
+> inside it. Andre decides whether any of these becomes a unit.
