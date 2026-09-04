@@ -621,6 +621,52 @@ probe.
 The relay logs the redial and the seal still fails, and `relay.directory.dial.failed` has **never**
 appeared — so the dial does not throw, yet nothing is repaired. That is the gap `7838bbeb` measures.
 
+## ⏳ PENDING — a fleet roll to `1e2a56f3` is READY AND OWED, blocked only on gcloud reauth (2026-09-04)
+
+**Nothing in GCP was changed by the session that wrote this.** The fleet is still on `7e9c56f4`
+below. This entry exists so the next person does not have to re-derive what is owed.
+
+**The client half is DONE.** The npm cascade shipped and was promoted to `latest`:
+`crypto@0.0.64`, `protocol-types@0.0.68`, `transport@0.0.70`, `gateway@0.0.48`, `daemon@0.0.188`,
+`cli@0.0.195`, `connect@0.0.163` (git tag `v0.0.270`). That clears the *"a second client publish is
+owed"* line in the `7e9c56f4` entry below — **it is no longer owed.**
+
+**The server half is not started.** `main` is at `1e2a56f3`, which carries three units the fleet has
+never run: **017-TBS** (the directory signs `high_stakes` and stops carrying its own copy of the
+assignment encoder), **020-ACKHASH** (four readers accept a v2 Structure 1; one was refusing seven
+fields outright), **021-HEARTBEAT** (`directory_nodes` heartbeats replicate as Tier B).
+
+### What is already done, so it does not need redoing
+
+- **The lockfile now resolves the server to the packages that were just published** (`1e2a56f3`).
+  This mattered: both Dockerfiles install with `--frozen-lockfile`, so the lockfile — not the
+  `latest` range in `package.json` — is what lands in the image. It still recorded
+  `protocol-types@0.0.67`, and 017-TBS moved the session-establishment TBS encoder into that
+  package precisely so both sides encode identically.
+- **Gate green on `1e2a56f3`:** typecheck, lint, and 2569 tests, run with `CELLO_ENV=local` against
+  a Postgres rebuilt from the current migrations.
+- **`ops_agent_expected_migration_version` needs no bump** — it is `64` and correct. 021-HEARTBEAT
+  withdrew V65 (`e4601f43`) and shipped no migration; the note in `ops-agent.tf` explains why.
+
+### What is blocked, and it is the ONLY thing
+
+`gcloud` cannot authenticate non-interactively: **`Reauthentication failed. cannot prompt during
+non-interactive execution`** on `andre@mygentic.ai`, for both the CLI credential and ADC. There is
+no service account key on disk, the second account (`apemmelaar@gmail.com`) authenticates but has no
+`compute.instances.list` on `cello-infra`, and the GitHub repo holds no GCP secret — only
+`NPM_TOKEN`. So no build can be submitted and no `terraform apply` can run.
+
+**To resume, one interactive command clears it:** `gcloud auth login`. Then follow
+`/cello-deploy-gcp` from step 1 with `SHA=1e2a56f3e650f94e30b5bdddfba71945b7355306` —
+**capacity-probe all five (zone, machine-type) pairs BEFORE anything is deleted**, then relays
+first, directories second, one node at a time.
+
+> ⚠️ **`terraform.tfvars` was deliberately NOT pinned to `1e2a56f3`.** The images do not exist yet —
+> the builds never ran. A committed tag pointing at an image that was never pushed plans cleanly and
+> fails at instance creation, which is a worse trap than an unpinned file.
+
+---
+
 ## 🟢 CURRENT — WHOLE FLEET ON `7e9c56f4` (the seal block: 012/013/014/015), ALL 5 ROLLED (2026-09-02)
 
 **Every node confirmed by reading the RUNNING instance's metadata, not the template or the tag.**
