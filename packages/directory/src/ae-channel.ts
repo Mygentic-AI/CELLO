@@ -361,7 +361,15 @@ export interface AeDialerInput {
   /** The peer's libp2p PeerId as observed on the live Noise connection (never a wire claim). */
   actualRemotePeerId: string;
   store: AeStoreView;
-  /** How many pull rounds to run after auth (each = fresh advertisement + pulls). */
+  /**
+   * How many pull rounds to run after auth (each = fresh advertisement + pulls).
+   *
+   * ⚠️ RAISING THIS CHANGES THE FORK VERDICT for Tier-B tables with no witness (`agent_suspensions`,
+   * `agent_presence`). `PgAeStore.applyTierB` judges those per ROUND — divergent only when the round
+   * applied nothing — and `AeSyncService` sums the rounds. At 1 that is per-dial and reproduces the
+   * pre-M15 rule exactly; above 1, a round that applied nothing counts even though a sibling round
+   * applied something, which is strictly more sensitive on the kill switch (DOD-M15-FORKQUIET-1).
+   */
   rounds?: number;
   nowMs?: () => number;
   /** Per-frame receive deadline (default 30s) — a silent peer fails the exchange, never parks it. */
