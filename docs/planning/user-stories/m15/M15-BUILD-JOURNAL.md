@@ -10965,3 +10965,93 @@ compiled files were dropped into the installed `@cello-protocol/daemon@0.0.188` 
 Nothing published — the fix is committed on the branch and reaches operators on the next
 `/cello-publish` cascade, which is not this unit's to run.
 
+
+---
+
+## Entry 73 — 025-REFUSALTERMINAL: what the two reviews and the live daemon found AFTER Entry 72
+
+Entry 72 described a unit that was implemented and gate-green. It was not done. Twelve review
+findings and one live one followed, and three of them mattered enough to be worth reading.
+
+### The fix would not have started the daemon it was written for
+
+`CREATE TABLE IF NOT EXISTS` is a no-op against a table that already exists. The build taken for
+Entry 72's live measurement created `content_refusal_totals` **without** the `seeded` column added
+an hour later — so on Andre's own machine the `CREATE` did nothing, the backfill named a column that
+was not there, and the throw came out of schema init. **The daemon would not have opened.** The one
+machine that most needed the backfill is the one it would have bricked.
+
+This repo already records the identical hazard and its remedy three hundred lines above, for
+`held_content.origin` (`DOD-M12B-INDEX-1`). Knowing the pattern existed did not prevent repeating it;
+the reviewer reading the diff against a real database is what caught it. Fixed with the same
+`ALTER TABLE` + duplicate-column-catch idiom, and the test builds the pre-upgrade shape by hand
+rather than borrowing a neighbouring one.
+
+### The same lie, three times, each in a new costume
+
+The unit exists because `times: 58` described a refusal that had fired 232,056 times. Three separate
+versions of that same defect appeared inside the fix for it:
+
+1. **The tally started empty.** A new table with no backfill, so every daemon that already had
+   notices reported no lifetime figure at all — and the new guidance explained that absence as a
+   disk fault, sending an operator to check free space on a healthy machine.
+2. **The seed is not a total.** `count` is refusals since the last dismissal, so seeding from it
+   gives a floor, not a figure. Reporting 58 as `times_total` would have been the original lie with
+   the new name on it. Seeded rows now surface as `times_total_at_least` — a different field,
+   because a floor and a figure are different claims.
+3. **Found by the live daemon, not by either review.** After the reviewed build was installed the
+   inbox read `times_since_dismissed: 78, times_total: 12` — an *exact* lifetime figure smaller than
+   the number beside it, because that row began counting when the earlier build created the table
+   and `seeded` defaults to 0. `INSERT OR IGNORE` only fills rows that are ABSENT.
+
+The invariant that catches all of family 3: **`count` resets on dismissal and `total` does not, so
+`total >= count` always holds in healthy operation.** `count > total` therefore means one thing —
+this row did not start at the beginning. Repaired at every boot to a floor, which is also the repair
+for a totals write that failed while the notice's succeeded.
+
+**Worth naming as a pattern:** every one of these passed the gate, and two passed a review. What
+found the third was installing the build on a real machine with real history and reading one line of
+output. A fixture with the right shape would have caught it too — the reviewer said as much about
+the second — but nobody wrote that fixture until the live run said what shape to write.
+
+### The fix reproduced its own defect in the failure mode
+
+`#terminalRefusalsLoaded` was set only on a SUCCESSFUL read, so a database that throws sent the load
+back to SQLite on every witnessed leaf, logged an ERROR each time, and — because nothing was cached —
+left `alreadyKnown` false, so the mark's INFO fired on every refusal too. On a full disk the unit
+that exists to stop ~2 log lines per second would have produced ~2 log lines per second. Backed off
+to one attempt per session per minute.
+
+### Smaller, and all fixed
+
+- **The two writes were not atomic** though a comment claimed they were: each `.run()` autocommits,
+  so a notice could persist while its total threw, and the catch would then also write an in-memory
+  fallback for a notice already in the table — the same refusal reported twice, once blaming a disk
+  fault. `BEGIN`/`COMMIT` with best-effort `ROLLBACK`.
+- **The receive door** got the new field names spread straight out of the drain — camelCase in a
+  snake_case payload, with no sentence explaining them. The explanation is now one shared constant
+  used by both doors, because two copies is two things to keep true.
+- **`terminal_content_refusals` was durable, counterparty-fed and uncapped**, and the funnel writes
+  to it even after the byte cap has stopped retention. Capped at 512 per session, oldest-dropped,
+  eviction announced at WARN.
+- **Three tests pass with the whole fix reverted.** They are guards against over-applying the fix,
+  not coverage of it — including the one that killed mutant 5 — and each now says so, so no future
+  reader treats a green run as proof the fix is exercised.
+
+### DoD 7, re-measured properly
+
+The reviewer was right that a 3-minute window cannot speak for a 5-minute sweep. Over 12 minutes,
+spanning two sweeps: `12:06:56Z · 12:12:27Z · 17:30Z · 22:28Z`, six log lines each. The leaf-fetch
+arm this unit closed is at **zero** (5,954 → 0). The sweep arm is 72 lines an hour against ~7,200
+before, is a different mechanism, and is recorded POST-LAUNCH under the order's *Newly discovered*
+with a recommendation.
+
+### What is owed
+
+**The cascade.** `core/daemon` is published, and `@cello-protocol/connect` and `@cello-protocol/cli`
+depend on it. Until `/cello-publish` runs, every installed operator still has the 62-hour loop —
+Andre's machine only has the fix because its `dist/` was patched by hand for the measurement, with
+the originals kept at `/tmp/025-dist-backup`.
+
+Fifteen mutants, each re-run alone and typechecked first; one was discarded for failing to compile,
+which under §0z.3 proves nothing. Final gate: 4866 passed / 11 skipped, lint and typecheck clean.
