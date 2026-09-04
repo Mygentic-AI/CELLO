@@ -2,7 +2,7 @@
 name: 023-REFUSEDEVIDENCE — Nothing is refused without keeping what was refused
 type: micro-work-order
 date: 2026-09-03
-status: open
+status: complete
 description: >
   Every refusal path DISCARDS the message. The screener block keeps only a hash; every other refusal
   keeps nothing at all. So the messages an operator would most want to prove — an injection aimed at
@@ -307,7 +307,59 @@ before the worktrees were used (`/worktree-permissions`), and every command in t
 with absolute paths.
 
 ### The rest
-*(the journey output, the mutation proof from DoD 10, the reviewer's verdict)*
+
+**The live journey** — `packages/e2e-tests/src/spine/j-content.spine.test.ts`, extending the existing
+J-CONTENT screener journey. Two daemons in separate OS processes, a real three-node consortium, a
+real relay:
+
+```
+ ✓ src/spine/j-content.spine.test.ts (13 tests | 12 skipped) 66867ms
+   ✓ 023-REFUSEDEVIDENCE — a blocked message is KEPT with a signature that verifies, stays out of
+     delivery, and comes back FRAMED  7206ms
+ Test Files  1 passed (1)
+```
+
+B's own daemon log from the run:
+
+```
+{"event":"transcript.message.recorded","agentName":"agentB","sequence":2,"direction":"quarantined"}
+{"event":"session.content.quarantined","agentName":"agentB","reason":"inbound_language_blocked",
+ "sequence":2,"bytes":447,"signature":"verified"}
+```
+
+**DoD 10 — the mutation proof.** Thirteen mutants across two passes, every one typechecked, re-run
+alone and confirmed red for the expected reason, with the tree restored and the restore verified.
+The full table is in Entries 70 and 71. Two mutants died at the compiler and were correctly reported
+NOT A CATCH before being widened; one was reported SURVIVED when shell quoting had eaten the
+replacement, caught by a positive control and fixed by proving the mutation lands before any test
+runs.
+
+**Gates.** cello-client: 4823 passed, 11 skipped, lint clean, typecheck clean. trustless-cello:
+passed, lint clean, typecheck clean. **Nothing publishes** — the change is entirely in cello-client
+with no wire or crypto-type change, so it rides the next ordinary `/cello-publish` cascade and needs
+no trustless-cello re-pin.
+
+**The reviewer's verdict** (`cello-unit-reviewer`, one pass, no model override), verbatim:
+
+> **SPEC: DEVIATIONS FOUND** (clause 6 [blocking] — F2; clause 4 partial — F4)
+> **SILENT FALLBACKS FOUND** (F3 [blocking] — a retention failure reported to the operator as
+> retention success; F9)
+> **ERRORS NAME THEIR CAUSE** — no error substitution; the detector's own reason survives to the
+> row, the notice and the frame, and `quarantineFrameMeta` deliberately recomputes the hash rather
+> than reprinting the sender's claim, which is the right call on the tamper case
+> **HOLLOW TESTS FOUND** — one: clause 4's `cello_receive` proof never touches the `cello_receive`
+> handler, and that is precisely the gap F4 slipped through. Every other new assertion survives the
+> revert test; the spine's key-order assertion passes only on the agent-selected path
+> **REMOVALS PROVEN** — nothing deleted; both changed signatures traced to every consumer, two
+> consumers found unupdated (F4, F5)
+> **NO COMPATIBILITY DEBT**
+>
+> Blocking before close: **F1, F2, F3.** F4–F8 should go in the same pass — F4 and F7 are one line each.
+
+**All eleven findings fixed**, with the tests the reviewer named as missing added and each new
+assertion mutation-proven. Entry 71 carries the per-finding account; the sharpest is F1, where
+retention was spending the same monotonic budget that gates delivery, so one redelivered refusal
+could kill a conversation for honest traffic.
 
 ## Newly discovered
 

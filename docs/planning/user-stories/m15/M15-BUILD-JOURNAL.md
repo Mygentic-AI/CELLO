@@ -10403,3 +10403,114 @@ compiler proves nothing.
 next ordinary `/cello-publish` cascade — no wire-behaviour change, no crypto type change, no
 `trustless-cello` re-pin, so it is not a batch that has to ship with anything. `cello_quarantined` is
 a new MCP tool and a new CLI verb; both are additive.
+
+---
+
+## Entry 71 — 023-REFUSEDEVIDENCE: the review verdict, eleven fixes, and what it caught that the tests did not
+
+`cello-unit-reviewer`, one pass, no model override. Its closing verdict, verbatim:
+
+> **SPEC: DEVIATIONS FOUND** (clause 6 [blocking] — F2; clause 4 partial — F4)
+> **SILENT FALLBACKS FOUND** (F3 [blocking] — a retention failure reported to the operator as
+> retention success; F9)
+> **ERRORS NAME THEIR CAUSE** — no error substitution; the detector's own reason survives to the
+> row, the notice and the frame, and `quarantineFrameMeta` deliberately recomputes the hash rather
+> than reprinting the sender's claim, which is the right call on the tamper case
+> **HOLLOW TESTS FOUND** — one: clause 4's `cello_receive` proof never touches the `cello_receive`
+> handler, and that is precisely the gap F4 slipped through. Every other new assertion survives the
+> revert test; the spine's key-order assertion passes only on the agent-selected path
+> **REMOVALS PROVEN** — nothing deleted; both changed signatures traced to every consumer, two
+> consumers found unupdated (F4, F5)
+> **NO COMPATIBILITY DEBT**
+>
+> Blocking before close: **F1, F2, F3.** F4–F8 should go in the same pass — F4 and F7 are one line each.
+
+**Eleven findings. All eleven fixed.** Two commits: the fixes, then the tests the reviewer said were
+missing.
+
+### The three that were blocking, in the order they would have hurt
+
+**F1 — keeping the evidence was killing the conversation it protects.** Six of the seven retaining
+exits refuse WITHOUT acknowledging, which is exactly what makes the sender redeliver, and each
+redelivery wrote another full copy. Retained bytes spend the same monotonic budget that gates
+delivery. So: a counterparty on a newer build sends ONE message, the version skew refuses it
+un-acked, and twenty-five park drains later the conversation's 25 MB is gone — permanently, with the
+daemon telling the operator to start a new one. Retention now dedups on (session, reason, bytes);
+how often it arrived is what the refusal notice already counts.
+
+> **AND THE COUNTERBALANCE I WROTE IN ENTRY 69 WAS EVASIVE, WHICH IS WHERE F1 HID.** I wrote *"there
+> is none to name — retention constrains nobody, it is a local durability property."* It is not
+> free-standing: I had just made retained bytes spend the delivery budget, in the same unit, while
+> saying there was nothing to trade off. **It has a name — evidence and delivery share one monotonic
+> budget, and when evidence wins the conversation stops working** — and the moment that is said out
+> loud, both the missing dedup and the missing skip-notice are obvious. The lens fired; I answered
+> it with a dismissal instead of an answer.
+
+**F2 — three JSON keys were landing after the payload.** The framing has no closing delimiter on
+purpose, so the reader's one structural guarantee is that nothing follows the message. The IPC
+wrapper spread the sole-online-agent notice AFTER the handler's keys — genuine CELLO-authored prose
+after the payload region, which is the shape a forged ending imitates. Not a corner case: the CLI
+never sends `ipc.connect`, so every plain `cello quarantined` on a single-agent daemon took it. The
+notice spreads first now.
+
+**F3 — the operator was told the evidence was kept before anything had tried to keep it.** Three
+notices claimed retention unconditionally and all seven call sites discarded the return. The case
+that matters most — a session flooded until its budget is gone — was the case where the operator was
+told in writing that evidence existed, followed the named remedy, and got
+`no_refused_message_at_sequence`. The only trace was a `warn` line with no operator surface at all:
+*this guard fired and nobody heard it.*
+
+### F6 is the one worth reading twice
+
+`content-park.ts` terminally-blocks a message that arrived for an already-committed session and
+**discarded it** — the last such route in the tree, on the highest-suspicion case in the product
+(hostile bytes aimed at a conversation somebody has already sealed) — while the SKILL.md sentence
+this unit shipped told every operator that refused messages are kept. A claim made true by narrowing
+would have been the cheaper fix; it quarantines instead.
+
+### What the tests missed, and it is the same shape twice
+
+Both hollow spots were **assertions aimed at the mechanism instead of the named surface**:
+
+- Clause 4 names `cello_receive`. Every proof went through its READERS — `findNextReceivedAfter`,
+  `getUnreadSummary`, `getUnreadReceivedCount` — so an implementation leaving the handler's own
+  `readTranscript(...).length` unfiltered passed all eight tests. It shipped. That is F4.
+- The spine's key-order assertion passed because setup calls `cello_use_agent`, which is precisely
+  the path where the fallback does not fire. It asserted the property on the one path that could not
+  break it. That is F2's test.
+
+Both are now asserted at the surface the clause names: a `cello_receive` call over IPC against an
+orphan-quarantine id expecting `session_not_found`, and a second MCP connection that never selects an
+agent — which also asserts the fallback actually fired, so the leg cannot degrade into testing the
+same path twice.
+
+### Mutation pass over the review fixes — five more, all CAUGHT
+
+Same discipline: applied-check first, typecheck, re-run alone, restore verified.
+
+| Mutant | Result |
+|---|---|
+| the dedup block removed whole | **CAUGHT** — *"one message is ONE piece of evidence however many times it is redelivered"* |
+| the retention claim unconditional again | **CAUGHT** — *"a claim about durability is made AFTER the write"* |
+| `cello_receive` counts quarantined rows again | **CAUGHT** — `session_not_live` where `session_not_found` is owed |
+| the watermark walk stops at a blocked leaf again | **CAUGHT** — *"expected -1 to be 1"* |
+| the verb moves back into `text` | **CAUGHT** — *"text states the fact and names NO command"* |
+
+One mutant (`if (false && already)`) died at the compiler with TS18048 and was correctly reported
+**NOT A CATCH**, then widened to a whole-block removal — rule 4, and the second time this loop caught
+itself in one unit.
+
+### Final state
+
+| | |
+|---|---|
+| cello-client gate | **4823 passed**, 11 skipped, 423 files; lint clean; typecheck clean |
+| trustless-cello gate | passed; lint clean; typecheck clean |
+| live journey | `✓ 023-REFUSEDEVIDENCE — a blocked message is KEPT with a signature that verifies, stays out of delivery, and comes back FRAMED  7206ms` — separate OS processes, 3-node consortium, real relay |
+| mutation | 13 mutants across both passes, every one caught after typechecking and re-running alone |
+
+**Publish disposition: nothing publishes from this unit, and operators get none of it until something
+does.** The whole change is in `cello-client` — a new MCP tool, a new CLI verb, a SKILL.md section
+and the daemon behaviour behind them. There is no wire-behaviour or crypto-type change, so it is not
+a batch that has to ship with a directory or relay roll and needs no `trustless-cello` re-pin: it
+rides the next ordinary `/cello-publish` cascade.
