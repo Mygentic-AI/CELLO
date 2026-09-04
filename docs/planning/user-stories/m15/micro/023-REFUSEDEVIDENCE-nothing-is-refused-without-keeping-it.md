@@ -311,4 +311,27 @@ with absolute paths.
 
 ## Newly discovered
 
-*(anything found and NOT acted on, per rule 3)*
+**ONE item. FIXED here rather than deferred, because it blocked this order's own DoD 7.**
+
+### One blocked message made a conversation permanently unsealable
+
+**From the operator's chair:** your screener catches a hostile message — the protection working —
+and from that moment `cello_close_session` answers `session_incomplete` forever. Its guidance tells
+you it is *"waiting on an earlier message from the counterparty that has not arrived"* about a
+message that arrived, was judged, and is sitting in the chain. The only exit is a force-abandon,
+which forfeits the notarized receipt the whole conversation was earning.
+
+**Cause.** `sealReadiness` counts `missingLeaves` as the relay witnesses this tree has not credited,
+and the credit is dropped inside `#appendVerifiedContent`. A terminal screener block bypasses that
+function — it calls `appendSessionLeaf` directly — so the leaf was committed and the witness was
+never retired. Both terminal-block append sites leaked: the immediate one and the held-release one.
+
+**Measured live**, not inferred: `treeSize 3, highWaterSeq 2, missingLeaves 1`.
+
+**It is the THIRD instance of the same shape.** The document-frame branch had it and was fixed at
+`session-node-manager.ts:10593`, with a comment describing exactly this failure — nobody generalised
+the fix to the other branch that bypasses the same function.
+
+**Older than this unit and not caused by it.** It surfaced because 023's journey is the first test in
+the tree that ever blocked a message and then sealed. Fixed rather than filed because DoD 7 requires
+that seal, with a unit test that fails if either drop is removed.
