@@ -10287,3 +10287,119 @@ and cannot collide with another quarantine row.
 11. gate in cello-client; publish disposition stated
 12. `cello-unit-reviewer` verdict quoted
 13. DoD line flipped in the same commit as the verdict
+
+---
+
+## Entry 70 — 023-REFUSEDEVIDENCE: the evidence (live journey, mutation pass, and the defect the journey found)
+
+Continues Entry 69, which carries the plan, the ten-exit enumeration and the design decisions.
+**Review outstanding at the time of writing** — see Entry 71 for the verdict.
+
+### The live journey — separate OS processes, quoted
+
+`packages/e2e-tests/src/spine/j-content.spine.test.ts`, extending the existing J-CONTENT screener
+journey. Three real directory nodes, a real relay, two daemons in their own OS processes,
+`COMPOSE_PROJECT_NAME=m15023` on port 5443.
+
+```
+ ✓ src/spine/j-content.spine.test.ts (13 tests | 12 skipped) 64599ms
+   ✓ J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b) > 023-REFUSEDEVIDENCE — a
+     blocked message is KEPT with a signature that verifies, stays out of delivery, and comes back
+     FRAMED  7099ms
+ Test Files  1 passed (1)
+      Tests  1 passed | 12 skipped (13)
+```
+
+B's own daemon log, from the run:
+
+```
+{"event":"transcript.message.recorded","sessionId":"a43d73bd…","agentName":"agentB","sequence":2,
+ "direction":"quarantined","correlationId":"f346926a-…"}
+{"event":"session.content.quarantined","agentName":"agentB","sessionId":"a43d73bd…",
+ "reason":"inbound_language_blocked","sequence":2,
+ "contentHash":"f13c9dcc8de7b66bd0c9d2f2c4ed023bfc1864f9ea99120621cc9964858d39e2",
+ "bytes":447,"signature":"verified","correlationId":"f346926a-…"}
+```
+
+**The evidence claim is the third line of that log and the assertion behind it.** `signature:
+"verified"` is the daemon's own record; the journey then reads `sender_pubkey` and `sender_sig` out
+of B's SQLCipher transcript, reads `structure1_cbor` for that leaf out of `session_seal_leaves`, and
+runs `verify()` — A's key, over A's bytes, both fetched from B's store. Not `not.toBeNull()`.
+
+### Three fixture defects on the way, each worth recording because each looked like a code defect
+
+1. **The whole spine suite ran.** `pnpm --filter … test:spine -- <file>` did not pass the filename
+   through, so vitest loaded every journey. Killed and re-run as
+   `npx vitest run --config vitest.spine.config.ts src/spine/j-content.spine.test.ts -t …`.
+2. **The payload was never blocked.** The language detector blocks on a DOMINANT SHARE (0.5), and
+   the Latin the forged-ending lines need counts AGAINST the block: ~40 Han against ~50 Latin is
+   0.44. The message was DELIVERED — `direction:"received"`, leafIndex 2 — and the journey then sat
+   30s waiting for a `terminal_block` that was never coming. **That read exactly like a retention
+   defect.** Han block resized; the reasoning is written into the test.
+3. **The stored bytes were one token longer than expected.** `cello_send` appends the turn signal, so
+   the wire content ends ` [[OVER]]`. Corrected toward the WIRE form, which is the right direction:
+   evidence is what the sender actually transmitted and what their signature covers. It also makes
+   the framing case harder — the forged `END PAYLOAD` line is no longer last in the payload.
+
+### The defect the journey found — one blocked message made a session permanently unsealable
+
+Full write-up in the order's *Newly discovered*. In short: `sealReadiness` derives `missingLeaves`
+from `#witnessedSeq.size`, and the entry is retired inside `#appendVerifiedContent`. A terminal
+screener block bypasses that function, so the leaf was committed and the witness never retired.
+Measured live before the fix: `treeSize 3, highWaterSeq 2, missingLeaves 1` and
+`closeB: {"ok":false,"reason":"session_incomplete","missing_leaves":1}`.
+
+**The third instance of a shape already fixed once**, for document frames at
+`session-node-manager.ts:10593`, whose comment describes this exact failure. Nobody generalised it to
+the other branch that bypasses the same function. Both terminal-block sites are fixed here — the
+immediate append and the held release — with a unit test that goes red if either drop is removed.
+
+Older than this unit. It surfaced now because this is the first test in the tree that ever blocked a
+message and then sealed.
+
+### The mutation pass — DoD 10
+
+Eight mutants. Every one TYPECHECKED first, then re-run ALONE, then the tree restored and the
+restore verified clean.
+
+| Mutant | Result |
+|---|---|
+| `content_hash_mismatch` retains nothing (statement removed whole) | **CAUGHT** — 4 red, *"the refused message must be RETAINED"* |
+| the row is written `direction = 'received'` | **CAUGHT** — 5 red, retention AND exclusion |
+| `readTranscript` hands back the blob | **CAUGHT** — *"the payload must not travel on the transcript read"* |
+| the byte cap stops counting quarantined bytes | **CAUGHT** — *"the cap must SEE the quarantined bytes"* |
+| every orphan refusal takes sequence −1 | **CAUGHT** — *"a second orphaned refusal is a second row, not an overwrite"* |
+| the header drops *"There is no end marker"* | **CAUGHT** |
+| a footer is appended after the payload | **CAUGHT** — 2 red: payload-last AND the forged-ending case |
+| the terminal block leaves its witness outstanding | **CAUGHT** — *"the witness must be retired with its leaf"* |
+
+#### ⚠️ THE LOOP FAILED AGAIN, and it is the FALSE GREEN shape — the ninth instance
+
+**The byte-cap mutant was first reported SURVIVED, with 8/8 green.** The replacement string was
+mangled by zsh quoting inside the heredoc, so `str.replace` matched nothing and vitest ran against an
+**unmutated tree**. Nothing in the loop's output distinguished that from a real survival.
+
+Caught by the §🔎 positive control rather than by suspicion: a one-line check that the mutation
+TARGET still existed in the file. It did — so the mutation had not applied, and the verdict meant
+nothing.
+
+**The rule that would have caught it directly, and is now in the rerun script:** prove the mutation
+LANDED before running the tests — the file's byte count must change AND the new text must be present
+— and refuse to run otherwise. `git status --porcelain` guards the tree; nothing was guarding
+whether the edit happened at all.
+
+Two mutants also **failed to compile** on the first attempt (`void 0 &&` → TS2873; an undefined name
+→ TS2304). Both correctly reported *NOT A CATCH* and widened, per rule 4 — a mutant that dies at the
+compiler proves nothing.
+
+### Gates
+
+| Repo | test | lint | typecheck |
+|---|---|---|---|
+| cello-client | 4819 passed, 11 skipped, 423 files | clean | clean |
+| trustless-cello | passed | clean | clean |
+
+**Nothing publishes.** The change is entirely inside `cello-client`, and it reaches operators on the
+next ordinary `/cello-publish` cascade — no wire-behaviour change, no crypto type change, no
+`trustless-cello` re-pin, so it is not a batch that has to ship with anything. `cello_quarantined` is
+a new MCP tool and a new CLI verb; both are additive.
