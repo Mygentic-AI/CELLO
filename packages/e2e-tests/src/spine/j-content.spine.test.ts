@@ -24,7 +24,6 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pathToFileURL } from "node:url";
 import {
   startSpineCluster,
   startDaemon,
@@ -42,22 +41,8 @@ import {
   expectOwnTreeVerified,
   CELLO_CLIENT_ROOT,
 } from "./live-harness.js";
-
-/**
- * 023-REFUSEDEVIDENCE reads B's OWN database to prove what B retained — the daemon is SQLCipher, so
- * the test opens it through the same keyed adapter the daemon uses (dynamic-imported from the local
- * build the harness spawns, which reads `<dbPath>.key` itself). Same shape `j-persist` uses, plus
- * `run` — the orphan leg deletes a row.
- */
-type KeyedStmt = { all(...p: unknown[]): unknown[]; get(...p: unknown[]): unknown; run(...p: unknown[]): unknown };
-type KeyedDb = { prepare(sql: string): KeyedStmt; close(): void };
-async function openEncryptedDb(dbPath: string): Promise<KeyedDb> {
-  const mod = (await import(
-    pathToFileURL(join(CELLO_CLIENT_ROOT, "core/daemon/dist/sqlcipher-db.js")).href
-  )) as { openEncryptedDatabaseAtPath(p: string): KeyedDb };
-  return mod.openEncryptedDatabaseAtPath(dbPath);
-}
 import { spineDirectoryNode, spineNodeKeypair } from "./auth-manifest.js";
+import { pathToFileURL } from "node:url";
 // `sealToRecipient` is deliberately no longer imported. Every park in this file that feeds the
 // RECOVER path now deposits through the daemon's own `sealParkEnvelope` (via `content:`), because a
 // bare seal with no park envelope is the unsigned shape SEC-1 refuses. Exactly ONE raw
@@ -93,11 +78,33 @@ beforeAll(async () => {
     directoryCount: 3,
     directoryNodeKeysHex: [0, 1, 2].map((i) => spineNodeKeypair(i).privateKeyHex),
     directoryConsortiumManifestPath: consortiumManifestPath,
+    // 024-ORPHANTRIAGE needs ONE message on the wire with no signed ordering record — the shape a
+    // real sender emits when the relay did not answer. Inert while nothing black-holes it, so every
+    // other test in this file sees the relay exactly as before.
+    relayIngressProxy: true,
     onDirectoryUrlsReady: (urls) => {
       writeSignedManifestTo(consortiumManifestPath, urls.map((url, i) => spineDirectoryNode(i, url)));
     },
   });
 }, 300_000);
+
+/**
+ * 024-ORPHANTRIAGE opens B's own store to DELETE its `sessions` row underneath a running daemon.
+ *
+ * That is the production state the orphan branch exists for and the only one reachable from the
+ * wire: the peer gate and the content key both live in memory, so a session node keeps answering
+ * after its row is gone. Same keyed adapter the daemon uses; it reads `<dbPath>.key` itself.
+ */
+// `all` is 023-REFUSEDEVIDENCE's addition: it reads the SET of quarantined rows back, where 024
+// only needs one row and a delete. One helper, one shape — two would drift.
+type WriteStmt = { run(...p: unknown[]): unknown; get(...p: unknown[]): unknown; all(...p: unknown[]): unknown[] };
+type WriteDb = { prepare(sql: string): WriteStmt; close(): void };
+async function openEncryptedDb(dbPath: string): Promise<WriteDb> {
+  const mod = (await import(
+    pathToFileURL(join(CELLO_CLIENT_ROOT, "core/daemon/dist/sqlcipher-db.js")).href
+  )) as { openEncryptedDatabaseAtPath(p: string): WriteDb };
+  return mod.openEncryptedDatabaseAtPath(dbPath);
+}
 
 /** A daemon that KNOWS ITS OWN NODE — which is what lets two local agents talk to each other. */
 async function startLocalDaemon(celloDir: string, label: string): Promise<Proc> {
@@ -1644,6 +1651,208 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(qOrphan.refusal_reason).toBe("session_orphaned");
     expect(qOrphan.refused_message!.endsWith("into the void [[OVER]]"), "framed the same way — payload last").toBe(true);
     expect(qOrphan.signature, "and it says NOT SIGNED, because nothing verified a sender for it").toBe("NOT SIGNED");
+  }, 300_000);
+
+
+
+  /**
+   * 024-ORPHANTRIAGE — a message for a conversation B has no record of.
+   *
+   * ─── The failure, from B's operator's chair ──────────────────────────────────────────────────
+   *
+   * A message arrives naming a conversation their machine has never held. It is refused, correctly,
+   * and the notice used to end *"ask the counterparty to start a NEW session."* When the sender is a
+   * stranger who guessed a peer id, following that advice is what the message was FOR: it confirms
+   * somebody is home and that this agent answers.
+   *
+   * ─── How the orphan state is produced, and why this is the only honest way ───────────────────
+   *
+   * B's `sessions` row is deleted underneath a live daemon. That is not a shortcut around the
+   * transport — it is the one state the orphan branch is reachable from. The peer gate reads
+   * `#activeNodes` and the content key reads `#sessionContentKeys`, both in memory, so a session
+   * node keeps answering after its row is gone; and the park path cannot reach the branch at all
+   * (`authenticateParkedEntry` refuses `counterparty_unknown` from the same missing record first).
+   * Every message below is a REAL message from a REAL second daemon over the real wire.
+   *
+   * ─── The three cases, and what separates them ────────────────────────────────────────────────
+   *
+   * Nothing about the message changes between case 2 and case 3. The only difference is a row in
+   * B's own address book — which is the design: the signal that unlocks the reach-out branch is one
+   * the sender cannot cause from the wire. Case 3 is signed by A's real identity key and verified by
+   * the real verifier; no fixture ever tells B "this one is known".
+   */
+  it("024-ORPHANTRIAGE — a message for a conversation B never had names ONE action, and the signature decides which", async () => {
+    const dirA = mkdtempSync(join(tmpdir(), "cello-orphanA-"));
+    const dirB = mkdtempSync(join(tmpdir(), "cello-orphanB-"));
+    dirs.push(dirA, dirB);
+    const pubA = await provisionAgent(dirA, "agentA");
+    const pubB = await provisionAgent(dirB, "agentB");
+    const daemonA = await startLocalDaemon(dirA, "orphanA");
+    const daemonB = await startLocalDaemon(dirB, "orphanB");
+    daemons.push(daemonA, daemonB);
+    expect(registerAgent("agentA", `DEV-or-A-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirA }).status).toBe(0);
+    expect(registerAgent("agentB", `DEV-or-B-${randomBytes(6).toString("hex")}`, { CELLO_DIR: dirB }).status).toBe(0);
+    const connA = await connectMcp(dirA, "or-A");
+    const connB = await connectMcp(dirB, "or-B");
+    mcpConns.push(connA, connB);
+    for (const [c, n] of [[connA, "agentA"], [connB, "agentB"]] as const) {
+      expect(((await c.call("cello_start_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+      expect(((await c.call("cello_use_agent", { name: n })) as { ok?: boolean }).ok).toBe(true);
+    }
+
+    const awaitP = connB.call("cello_await_session", { timeout_ms: 25_000 });
+    const init = (await connA.call("cello_initiate_session", { target_pubkey: pubB })) as { ok?: boolean; sessionId?: string };
+    expect(init.ok, `initiate failed:\n${daemonA.output.split("\n").slice(-30).join("\n")}`).toBe(true);
+    const sessionId = init.sessionId!;
+    expect(((await awaitP) as { type?: string }).type).toBe("new_session");
+
+    // ─── A conversation that WAS working. This is what makes "ongoing" a real local signal. ─────
+    const first = (await connA.call("cello_send", { cello_session_id: sessionId, content: "the conversation while it worked", signal: "over" })) as { ok?: boolean };
+    expect(first.ok, `first send failed:\n${daemonA.output.split("\n").slice(-20).join("\n")}`).toBe(true);
+    await daemonB.waitForLine(/"event":"session\.content\.received"/, 30_000);
+
+    type InboxRefusal = { session_id?: string; reason?: string; impact?: string; guidance?: string };
+    type Inbox = { ok?: boolean; agents?: Array<{ agent?: string; refusals?: InboxRefusal[] }> };
+    /** The refusal B's operator sees WITHOUT attending the session — the inbox holds an agent. */
+    const orphanNotice = async (): Promise<InboxRefusal> => {
+      const res = (await connB.call("cello_inbox", { agent: "agentB" })) as Inbox;
+      expect(res.ok, `cello_inbox failed: ${JSON.stringify(res)}`).toBe(true);
+      const refusals = (res.agents ?? []).find((a) => a.agent === "agentB")?.refusals ?? [];
+      const notice = refusals.find((r) => r.session_id === sessionId && r.reason === "session_orphaned");
+      expect(
+        notice,
+        `B must be told a message arrived for a conversation it does not hold. Refusals: ${JSON.stringify(refusals)}\n` +
+        `--- daemonB ---\n${daemonB.output.split("\n").filter((l) => /orphan|refusal|ordering/.test(l)).slice(-12).join("\n")}`,
+      ).toBeDefined();
+      return notice!;
+    };
+    /** Clear the notice so the NEXT case is read on its own text, not on the previous case's row. */
+    const clear = async (): Promise<void> => { await connB.call("cello_dismiss", { cello_session_id: sessionId }); };
+    const countLines = (event: string): number => daemonB.output.split("\n").filter((l) => l.includes(`"event":"${event}"`)).length;
+    /**
+     * ⚠️ `waitForLine` RESOLVES ON A LINE ALREADY IN THE BUFFER, which is correct for it and useless
+     * here: every case after the first would match the PREVIOUS case's orphan line and assert
+     * against a notice that had not been rewritten yet. Three green cases, one of them measured.
+     */
+    const waitForNewLine = async (event: string, baseline: number, timeoutMs: number): Promise<void> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (countLines(event) > baseline) return;
+        await new Promise((r) => setTimeout(r, 200));
+      }
+      throw new Error(
+        `[orphanB] timed out after ${timeoutMs}ms waiting for a NEW ${event} (baseline ${baseline}).\n` +
+        `--- daemonB ---\n${daemonB.output.split("\n").slice(-25).join("\n")}`,
+      );
+    };
+
+    /**
+     * Every verb that would send B's operator to whoever sent this — including the ones a
+     * PROHIBITION would use. "Do not contact them" puts the verb on the page just as surely as an
+     * invitation does, and the page is read by an agent skimming for something to do.
+     */
+    const CONTACT_VERBS = [
+      /\bcontact\b/i, /reach out/i, /\breply\b/i, /\bget back to\b/i, /get in touch/i,
+      /cello_initiate_session/, /\bnew conversation\b/i, /\bnew session\b/i, /\bmessage them\b/i,
+      /\bask them\b/i, /\btell them\b/i, /\bnotify\b/i, /\bresend\b/i, /\banswer\b/i,
+      /\brespond\b/i, /\bping them\b/i, /\bwrite to them\b/i, /\blet them know\b/i,
+    ];
+    const expectReportOnly = (n: InboxRefusal, why: string): void => {
+      const notice = `${n.impact ?? ""} ${n.guidance ?? ""}`;
+      for (const verb of CONTACT_VERBS) {
+        expect(notice, `${why}: matched ${String(verb)} in\n${notice}`).not.toMatch(verb);
+      }
+      expectMatches(n.guidance, "the one action is report", /ONE thing to do: record it as a report/);
+      expectMatches(n.guidance, "and an unsure operator is caught", /When in doubt, report it/);
+    };
+
+    // ═══ CASE 2 — signed by a key B's address book does not hold ═══════════════════════════════
+    //
+    // B forgets A first (accepting a session auto-adds the counterparty), so the ONLY thing that
+    // differs from case 3 below is that address-book row.
+    // `removed` — not `ok`. `cello_contact_remove` returns ok:true for a key that was never stored,
+    // so asserting `ok` alone would leave "accepting a session auto-adds the counterparty" unproven,
+    // which is the thing that makes case 2 and case 3 differ by exactly one row.
+    const removal = (await connB.call("cello_contact_remove", { pubkey: pubA })) as { ok?: boolean; removed?: boolean };
+    expect(removal.removed, `B had A in its address book from accepting the session, and it is gone now: ${JSON.stringify(removal)}`).toBe(true);
+    const dbB = await openEncryptedDb(join(dirB, "sessions.db"));
+    dbB.prepare("DELETE FROM sessions WHERE session_id = ?").run(sessionId);
+    dbB.close();
+
+    const before2 = countLines("session.content.orphaned");
+    // The sender must never be told the message landed. Baselined HERE because the first message —
+    // the one that worked — was acknowledged, correctly.
+    const acksBeforeOrphans = countLines("content.delivery.ack.sent");
+    const send2 = (await connA.call("cello_send", { cello_session_id: sessionId, content: "for a conversation you do not have", signal: "over" })) as { ok?: boolean };
+    expect(send2.ok, `A's send must succeed — the refusal happens on B's side: ${JSON.stringify(send2)}`).toBe(true);
+    await waitForNewLine("session.content.orphaned", before2, 40_000);
+    const n2 = await orphanNotice();
+    expectReportOnly(n2, "a stranger who can sign is still a stranger");
+    expectMatches(n2.impact, "the key in FULL — the operator may need to paste, compare or report it", new RegExp(pubA));
+    expect(n2.impact, "and never abbreviated").not.toMatch(/…|\.\.\./);
+    expectMatches(n2.impact, "a verified signature proves possession of a key and nothing more", /proves only that whoever produced it holds the private key matching that public key/);
+    expectMatches(n2.impact, "and WHY they count as a stranger is said, not left as a silence", /absent from your address book, or present only because somebody dialled you, or blocked/);
+    for (const claim of [/message (is|was|came) from/i, /\bsent by\b/i]) {
+      expect(`${n2.impact} ${n2.guidance}`, `a signature identifies nobody; matched ${String(claim)}`).not.toMatch(claim);
+    }
+
+    // ═══ CASE 3 — the SAME key, once B's address book holds it ═════════════════════════════════
+    await clear();
+    expect(((await connB.call("cello_contact_add", { pubkey: pubA, moniker: "Bob" })) as { ok?: boolean }).ok).toBe(true);
+    const before3 = countLines("session.content.orphaned");
+    const send3 = (await connA.call("cello_send", { cello_session_id: sessionId, content: "still for a conversation you do not have", signal: "over" })) as { ok?: boolean };
+    expect(send3.ok, `A's send must succeed: ${JSON.stringify(send3)}`).toBe(true);
+    await waitForNewLine("session.content.orphaned", before3, 40_000);
+    const n3 = await orphanNotice();
+    expectMatches(n3.guidance, "reaching out is offered — and only in a NEW conversation", /open a NEW conversation with/);
+    expectMatches(n3.guidance, "the named conversation is off limits, and the reason is stated", /does not exist on this machine/);
+    expectMatches(n3.guidance, "and the outcome that makes it worth doing is named", /is being used by someone else, and they can pause or burn that agent identity/);
+    expectMatches(n3.impact, "possession, never identity", /does NOT prove they are "Bob"/);
+    expectMatches(n3.impact, "the operator's own name for the key is used", /vouched for in your address book as "Bob"/);
+    expectMatches(n3.impact, "and the local trace comes from B's OWN transcript", /still holds part of a conversation under that id/);
+    expectMatches(n3.guidance, "and the remedy admits CELLO cannot answer its own question — a thief holding the key answers it too", /comes from whoever holds that key, so a "yes, that was me" proves nothing new/);
+    expectMatches(n3.guidance, "naming the channel that can", /out of band/);
+    expectMatches(n3.guidance, "the unsure operator is caught HERE most of all", /When in doubt, report it/);
+
+    // ═══ CASE 1 — no signed ordering record on the frame at all ════════════════════════════════
+    //
+    // Produced the way production produces it: the relay does not answer, so the sender emits a
+    // frame with no `structure1_cbor`. Nothing is tampered and nothing is hand-built.
+    await clear();
+    cluster.relayIngress!.blackhole();
+    try {
+      const before1 = countLines("session.content.orphaned");
+      const absentBefore = countLines("session.content.ordering.absent");
+      const send1 = (await connA.call("cello_send", { cello_session_id: sessionId, content: "unsigned, for a conversation you do not have", signal: "over" })) as { ok?: boolean };
+      expect(send1.ok, `A's send must still reach B directly with the relay mute: ${JSON.stringify(send1)}`).toBe(true);
+      await waitForNewLine("session.content.ordering.absent", absentBefore, 60_000);
+      await waitForNewLine("session.content.orphaned", before1, 60_000);
+      const n1 = await orphanNotice();
+      expectReportOnly(n1, "an unsigned message must name no way to answer it");
+      expectMatches(n1.impact, "the absence of a signature is a FINDING, not a gap", /that is a finding, not a gap/);
+      expect(n1.impact, "and no key is claimed, because none was checked").not.toMatch(new RegExp(pubA));
+    } finally {
+      cluster.relayIngress!.restore();
+    }
+
+    // ═══ In every case: not delivered, and the sender was never acknowledged ═══════════════════
+    //
+    // Read from B's own transcript rather than from `cello_receive`, because the transcript is the
+    // durable record and the question is whether any of the three refused messages became one. The
+    // count is 1 — the message from before the session row vanished, and nothing since.
+    const dbCheck = await openEncryptedDb(join(dirB, "sessions.db"));
+    const leaves = dbCheck.prepare(
+      "SELECT COUNT(*) AS n FROM transcript WHERE session_id = ? AND direction = 'received'",
+    ).get(sessionId) as unknown;
+    dbCheck.close();
+    expect(
+      (leaves as { n: number } | undefined)?.n ?? -1,
+      "only the message from before the row vanished may be in B's transcript — a refused message must leave no leaf",
+    ).toBe(1);
+    expect(
+      countLines("content.delivery.ack.sent"),
+      "and the sender is never told one landed — an acknowledgement is exactly the confirmation a probe is after",
+    ).toBe(acksBeforeOrphans);
   }, 300_000);
 
 });

@@ -2,7 +2,7 @@
 name: 024-ORPHANTRIAGE — A message for a conversation we never had
 type: micro-work-order
 date: 2026-09-03
-status: open
+status: complete
 description: >
   A message arrives for a session this daemon holds no record of. Today the operator is told to ask
   the counterparty to start a new one — which, when this is a stranger probing a peer ID, is the
@@ -276,14 +276,119 @@ and `<lane>/trustless-cello` as siblings. And a new worktree is a new permission
 ## Review
 
 ### Where this work lives
-*(worktree paths, branch, and the `COMPOSE_PROJECT_NAME` / `CELLO_PG_HOST_PORT` you used)*
+
+Paired worktrees, both on branch `m15/024-orphantriage`, both pushed on creation:
+
+- `/Users/andrep/Documents/code/m15-024/cello-client`
+- `/Users/andrep/Documents/code/m15-024/trustless-cello`
+
+Postgres isolation for the spine run: `COMPOSE_PROJECT_NAME=m15024` and
+`DATABASE_URL=postgresql://postgres:dev@localhost:5439/cello_dev` (the harness derives
+`CELLO_PG_HOST_PORT` from that URL — one knob drives both which server comes up and which one it
+connects to).
 
 ### The rest
-*(the journey output, the mutation proof from DoD 8, the reviewer's verdict)*
+
+Full evidence is in the build journal, **Entry 024a** (the falsification, done before a single branch
+was written) and **Entry 024b** (what shipped, the journey output, the mutation table, the gates).
+
+**The falsification, because it changed the unit's first job.** `verifiedAuthorship` is ALWAYS
+absent on an orphaned session. `#recordFrameOrdering` verifies the sender's signature against the key
+inside the sender's own signed bytes — a check that needs no session at all — and then cross-checks
+the signer against `getSessionRecord(...)?.counterparty_pubkey`. With no record it returns
+`counterparty_unknown` and **discards the pubkey and signature it just verified**, one line before
+the code that needs them. So the unit's first job was the one this order anticipated: make the
+verified signer survive the session lookup, under its OWN name — not `senderPubkey`/`senderSig`,
+which mean *verified AND matched to the counterparty* and which seal-time attribution rests on.
+
+**The journey** (`J-CONTENT` › 024-ORPHANTRIAGE), two daemons as separate OS processes:
+
+```
+ ✓ src/spine/j-content.spine.test.ts (13 tests | 12 skipped) 73538ms
+   ✓ 024-ORPHANTRIAGE — a message for a conversation B never had names ONE action, and the
+     signature decides which  12933ms
+ Test Files  1 passed (1)
+      Tests  1 passed | 12 skipped (13)
+exit=0
+```
+
+**The mutation proof (DoD 8): nine mutants, all caught, each confirmed to fail for the reason
+claimed.** The loop refused a dirty tree, printed a baseline before the first mutant, and typechecked
+every mutant before trusting its run. The load-bearing one is **M1** — revert the single line that
+lets the verified signer survive the session lookup, and the SPINE goes red with *"It carried NO
+signature that could be checked"* against A's real identity key. Nothing short of the wire proves
+that the branch turns on the proof rather than on a fixture.
+
+**Part 2 took option (b).** `CELLO_Reporting` needs a registered identity, somewhere to run, and a
+pubkey published in shipped guidance — a pre-auth token and outward-facing wording, both outside a
+lane's authority. The guidance therefore says plainly that CELLO has no agent to receive reports yet
+and names what the operator CAN do: keep the key, the conversation id and the time, because that IS
+the report. **Parked with a trigger written beside the sentence it replaces**, in
+`orphan-triage.ts`.
+
+**023-REFUSEDEVIDENCE had not landed** when this ran, so the guidance says the message itself was
+not kept.
+
+**Gates.** cello-client 4827 passed / 11 skipped, lint 0, typecheck 0. trustless-cello 1982 passed /
+624 skipped / 4 todo, lint 0, typecheck 0. **Nothing publishes** — no version bump, so this is not
+yet in an operator's hands.
+
+### The review, and the finding that inverted the unit
+
+One pass by `cello-unit-reviewer`; every finding fixed; full detail in **Entry 024c**.
+
+> *"The unit does the hard part right … **But the single decision the whole unit turns on — 'is this
+> key a known contact?' — is wrong, and it is wrong in the direction that hands the prober exactly
+> what the unit was written to deny."***
+
+`knownContact` read *does a contacts row exist*. A row is written FROM THE WIRE — an inbound offer
+inside the acceptance bound writes one at `TIER.UNKNOWN` because the trust-signal foreign key needs
+something to point at — and blocking a contact leaves its row behind at `TIER.BLOCKED`. So a stranger
+who merely dialled, and a key the operator had deliberately blocked, were both offered *"open a NEW
+conversation with them and ask whether they sent it."* Now reads the TIER, which `DOD-TIER-4` had
+already settled and which retired `isContact` for exactly this reason. The reach-out also dropped a
+conjunct from Andre's own rule (`known AND ongoing`) and is now gated on both; and it now admits that
+a CELLO answer comes from whoever holds the key, so in the stolen-key case the thief is the one who
+answers.
+
+**The mutation loop then caught a fix that had no teeth** — the `not_checked` state added for the
+review's F6 could be turned straight back into a plain `false` with the whole suite green, because
+nothing exercised the failure path. Found by the loop, not by review and not by me. The test that
+kills it drops the `contacts` table so the real read throws.
+
+Lens lines: **SPEC: DEVIATIONS FOUND** · **SILENT FALLBACKS FOUND** · **ERRORS NAME THEIR CAUSE** ·
+**HOLLOW TESTS FOUND** · **REMOVALS PROVEN** (n/a) · **NO COMPATIBILITY DEBT**. The reviewer on its
+own pass: *"I do not think I am rubber-stamping this one … I found the defect where this reviewer's
+brief says to expect it: in the predicate that reads the contacts table."*
 
 ## Newly discovered
 
 *(anything found and NOT acted on, per rule 3)*
+
+- **Three of the twelve pre-existing `j-content` spine tests fail in this environment, and it is not
+  this unit.** `DOD-MSG-7`, `DOD-MSG-5` and `DOD-MSG-8` fail with *"No open connection to peer
+  12D3KooW… (the relay)"* — two on the raw `content_park_deposit` / `content_park_recover` IPC, one
+  on a `cello_send` returning false. **Measured, not assumed:** the same file was run at `origin/main`
+  with this unit's change reverted and produced the IDENTICAL three failures, so the relay ingress
+  proxy added here is exonerated. Not investigated, per rule 3. From the operator's chair this would
+  read as a message that never arrives with no error anywhere they can see, so it is worth a look —
+  but it belongs to whoever owns the park path, not to this unit.
+
+- **`getTier()` compares the pubkey CASE-SENSITIVELY, and `contacts.pubkey` is stored verbatim.**
+  Found by the reviewer while ruling on F1. `getTier` is the live tier read — `isKnown`,
+  `isAutoAccept` and the inbound reachability bounds all go through it — and it does
+  `WHERE agent_id = ? AND pubkey = ?`. A contact added through an interface that upper-cases the hex
+  reads back as tier UNKNOWN, so the operator sees the contact in `cello_contacts` while the system
+  treats them as a stranger: tighter inbound bounds, no auto-accept, a different away message. This
+  unit works around it with its own `lower(pubkey)` lookup rather than calling `getTier`, and does
+  not fix the shared read — that is a change to a security predicate with several callers, which is
+  not a micro order's to make. Not investigated further, per rule 3.
+
+  **It already has a home: `DOD-M15-SPINERED-1`** ("The multi-process evidence lane is HALF RED, and
+  nobody knew"), which is the milestone's open 🟡 and which records `j-content` as **10/10 green**
+  after its four deposit-side hash defects were closed. Today the file is **10 passed / 3 failed of
+  13**. Filed against that line rather than opened as a new item, so the count of things this unit
+  spawned stays at one.
 
 **Recorded at creation, NOT part of this unit:**
 

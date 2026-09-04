@@ -1043,7 +1043,17 @@ an attacker walks around.
 > an inclusion proof resolves against — is the unsigned thing. Two different artifacts; conflating
 > them produced a false "receipts are signed by one node" claim that stood for several hours.
 
-### `DOD-M15-ORPHANTRIAGE-1` — ❌ A message for a conversation we never had gets triaged, not a nudge to make contact
+### `DOD-M15-ORPHANTRIAGE-1` — ✅ A message for a conversation we never had gets triaged, not a nudge to make contact
+
+> **✅ 2026-09-04 (024-ORPHANTRIAGE).** The daemon was already proving the sender holds the private
+> key on the frame and then discarding that proof at the session lookup, so the notice advised making
+> contact — which is what a peer-id probe is sent to achieve. The orphan branch now names ONE action:
+> report, unless the signature verifies against a key the operator has VOUCHED for (tier KNOWN+, not
+> a mere row — a row is written from the wire) in a conversation this machine still holds part of.
+> Reporting is named as not-yet-reachable rather than as a verb that resolves to nothing; the
+> reach-out admits a CELLO answer comes from whoever holds the key. Journey green as two OS processes
+> (three real messages, three notices); fourteen mutants, one of which caught a review fix that had
+> no teeth. Reviewed, every finding fixed, verdict quoted. → Entries 024a, 024b, 024c
 
 **`022-REFUSALVISIBLE` made `session_orphaned` visible and shipped the wrong advice** — *"ask the
 counterparty to start a NEW session"*. When this is a stranger probing a harvested peer ID, telling
