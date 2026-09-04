@@ -2,7 +2,7 @@
 name: 026-FORKQUIET — A table that is always moving is not a fork
 type: micro-work-order
 date: 2026-09-04
-status: open
+status: complete
 description: >
   021-HEARTBEAT made directory_nodes an anti-entropy table. Every node rewrites its own
   last_heartbeat_at every ~30s, so two nodes can never agree on a hash of a table one of them is
@@ -193,15 +193,117 @@ replacement, and a zone with no capacity means the node does not come back.
 
 ## Review
 
+### What the fix turned out to be
+
+**The mechanism, measured rather than assumed.** A node rewrites its OWN `directory_nodes` row every
+~30 s, so it always holds a strictly fresher heartbeat for itself than any peer does. That row's
+version hash therefore differs from the peer's every round; it is pulled every round; the LWW merge
+correctly confirms the local copy already won; and nothing applies. The verdict was
+`pulled > 0 && applied === 0` — exactly that shape. **For an LWW table the old verdict could never
+mean anything**, which is why the event's own `reason` field already admitted it might be benign.
+
+**The verdict now comes from the STORE, per table**, because only the store knows which of a table's
+columns a merge is able to settle:
+
+| table | rule | why |
+|---|---|---|
+| `directory_nodes` | per RECORD, on the `status` witness; the heartbeat is not read | a witness disagreement belongs to one row and no sibling can vouch for it |
+| `agent_suspensions`, `agent_presence` | per TABLE — divergent only when the table applied NOTHING | unchanged from M12; see the F2 note below for why this matters |
+
+**`status` had to start travelling.** It replicated NOWHERE before this unit — not in the Tier-A
+`immutableColumns`, not in the Tier-B `versionColumns` — so DoD 4 was literally unreachable without
+putting it on the wire. It now rides the same Tier-B `SELECT` that already carried `021`'s
+`COALESCE` fix, which is the one place the version hash and the served body are guaranteed to agree.
+**The merge never takes it from the peer and the `UPDATE` never writes it**, so no peer can move our
+`status`, `region` or `endpoint` — the Tier-A/Tier-B split that `021` built is intact.
+
 ### Where this work lives
-*(worktree paths, branch, and the `COMPOSE_PROJECT_NAME` / `CELLO_PG_HOST_PORT` you used)*
+
+Worktree `/Users/andrep/Documents/code/m15-026/trustless-cello`, branch `m15/026-forkquiet`, merged
+to `main` as `12c493ff`. Local Postgres was the shared `docker compose` stack on :5433 (no
+`COMPOSE_PROJECT_NAME` override needed — no other lane held it).
 
 ### The roll
-*(capacity probe results, instance names before/after, health windows)*
+
+*(filled in below at roll time)*
 
 ### The rest
-*(the ≥15-minute quiet window from DoD 5, the mutation proof from DoD 8, the reviewer's verdict)*
+
+**DoD 8 — the mutation loop: 17 mutants, ALL killed.** The loop refused a dirty tree
+(`git status --porcelain`, which covers staged and untracked, not `git diff`), printed a baseline
+before the first mutant, and **typechecked + linted every mutant before running it** — two were
+reported BROKEN and widened rather than counted as catches. Every kill was re-run alone.
+
+**Three mutants survived first, and each exposed a real gap:**
+1. `M3b` — the merge's TIE branch `status` pin. My tie test used identical heartbeat strings, so the
+   tiebreak always returned the local side and the pin was invisible. The branch is reachable: a peer
+   sending `1e2` against `100` ties numerically and sorts higher, and `validateBody` requires only a
+   string. Fixed test, mutant died.
+2. `M6` — reverting the engine's push condition made `verdictOrThrow` fire, the throw was contained
+   as a per-table failure, and my *"zero `fork_suspected`"* assertion was satisfied by a table that
+   had **stopped reconciling altogether**. *"It did not alarm"* is a shadow. The test now also
+   asserts no `antientropy.round.table_failed`.
+3. Four store-rule mutants survived because the sync-service harness re-implements the verdict by
+   hand. Closed by three new live-pg tests against the real schema.
+
+**DoD 9 — the gate.** `pnpm run test` at root with `CELLO_ENV=local`: **2585 passed, 232 files,
+exit 0**. `lint` clean, `tsc --build` clean. **Nothing publishes** — no cello-client package changed;
+this is `packages/directory` only.
+
+**DoD 10 — reviewer verdict.** Two passes, the hard cap.
+
+> **Pass 1:** *"SPEC: DEVIATIONS FOUND … Blocking before the roll: F2 (decide and journal, or revert
+> to per-table for the two untouched tables) and F3 (the reason text)."* — 2 HIGH, 3 MEDIUM, 2 LOW.
+> All fixed.
+
+The two blocking ones were mine and both were real:
+- **F2** — I claimed my rule reproduced the pre-existing one for `agent_suspensions` and
+  `agent_presence`. It did not: the old rule was per TABLE, mine was per RECORD, which is strictly
+  more sensitive and would have put **the kill switch** on the same false alarm this unit exists to
+  remove. Fixed by the two-granularity design above, pinned by regression tests at both the engine
+  and the real-schema store layers.
+- **F3** — my replacement alarm text (*"a real disagreement, not a stale copy"*) is true for
+  `directory_nodes` and **false** for the other two, where divergence means precisely that the peer
+  IS stale. It would have sent an operator hunting a fork in the kill switch over replication lag.
+  The store now says which verdict applies; the engine refuses to label a divergence the store did
+  not classify rather than defaulting to either.
+
+> **Pass 2 (delta only):** *"SPEC: FAITHFUL … TESTS HAVE TEETH — every new test in the delta survives
+> the revert test, two of them I re-verified by mutation myself … **Safe to deploy.** F2, F3, F4 and
+> F6 are properly fixed, and the F2 regression in particular is now pinned at both the engine and the
+> real-schema store layers rather than only against a stub."*
+
+Pass 2 verified the `rounds ?? 1` bound independently (two production call sites, neither overrides)
+and confirmed the witness-less rule is exactly the pre-existing expression. Its four remaining notes
+are non-blocking and recorded below.
 
 ## Newly discovered
 
-*(anything found and NOT acted on, per rule 3)*
+*Per rule 3 — found, NOT acted on.*
+
+1. **`status` has no producer, so `directory_nodes` is now EFFECTIVELY SILENT, not watched.** Nothing
+   in CELLO writes a status other than `'active'`: the only production writer is
+   `refreshNodeHeartbeat`, whose conflict branch touches only the heartbeat; `insertDirectoryNode` is
+   test-only; and a Tier-A apply takes the column's DB default, which is also `'active'`. The same is
+   true of the Tier-A half — the sole writer sets `region = node_id`, so every node computes an
+   identical content hash. **The mechanism is kept and tested** (deleting it is the mute button this
+   order forbids, and a drain/decommission path would trip it the day one exists), but the bound is
+   written into `directory-node-heartbeat-merge.ts` so nobody reports it as active surveillance.
+2. **`agent_presence` carries the same structural shape this unit fixed.** Its `versionColumns`
+   include two wall-clock LWW timestamps, so a peer holding a staler row is pulled-without-applied
+   every time. It does not fire today only because presence changes on an EVENT rather than a timer,
+   so the streak rarely reaches 2. Out of scope (*"any other anti-entropy table"*). Worth its own
+   line if it ever starts alarming.
+3. **Tier-A's alarm still cannot name the row, and its verdict is over-claimed** (reviewer F8).
+   `applyTierA` returns a COUNT, so the engine cannot say WHICH record failed to insert, and it
+   labels every Tier-A shortfall `content_fork` — but a record also fails to insert on a malformed
+   BYTEA, an FK violation, or any pg error, which is not a fork at all. Pre-existing (main's text said
+   the same sentence); the fix is a return-shape change to `applyTierA`, not a round-three edit.
+4. **`verdictOrThrow` freezes the fork streak for EVERY table against that peer** (reviewer F9), via
+   the pre-existing `failures.length > 0 → leave every streak untouched`. Only a buggy store can reach
+   it and it is ERROR-loud every round. The clean fix is to make it a type-level impossibility (a
+   discriminated union on `divergent`) and delete the function.
+5. **One full-root gate run reddened `dod-m15-chainroundtrip-1` once and never reproduced** — not on
+   two later full-root runs, and not when I deliberately restored the sibling failure that ran
+   alongside it. My diff touches no hash-chained table and adds no writes to one. Recorded rather than
+   attributed; if it recurs, the shared dev database's accumulated state is the first thing to check.
