@@ -158,18 +158,20 @@ Found while publishing 020–024 and rolling the fleet, not by review. Recorded 
 out of a working conversation and would otherwise live only in a transcript. **None is in a tier
 yet** — tiering is Andre's call, and three of the four are behaviour changes that are his to decide.
 
-**Orders written 2026-09-04 — items 1+2 are ONE order, item 3 is its own:**
+**Orders written 2026-09-04 — items 1+2 are ONE order, items 3 and 5 are their own:**
 
 - `micro/025-REFUSALTERMINAL-a-refusal-that-can-never-succeed-stops.md` → `DOD-M15-REFUSALTERMINAL-1` (items 1 and 2)
 - `micro/026-FORKQUIET-a-table-that-always-moves-is-not-a-fork.md` → `DOD-M15-FORKQUIET-1` (item 3)
 - item 4 is a build, not a fix — no order, tracked here only
+- `micro/027-SCREENORDER-the-language-check-must-read-the-original.md` → `DOD-M15-SCREENORDER-1` (item 5)
 
 | # | What a reader would find | Status |
 |---|---|---|
 | **1** | **A refusal that can never succeed is retried forever.** `CELLO_Coder_1` knocked on a closed conversation **232,056 times over 62 hours**, ~2/second, growing `daemon.log` to **484 MB**. The loop is on the RECEIVER: it holds a leaf it cannot resolve, because resolving it means ingesting content that is refused every time, and nothing marks the refusal terminal. **Andre approved the fix 2026-09-04: *"a message refused should stop being retried."*** ⚠️ **`CELLO_Support` is OFFLINE right now as the only available mitigation** — `cello_dismiss` was measured and does NOT stop it. Bringing that agent back online restarts the loop. | ❌ approved, not started |
 | **2** | **The refusal count shown to the operator is wrong by three orders of magnitude.** `cello_inbox`'s `refusals.times` reported **58** for those 232,056 knocks. `022-REFUSALVISIBLE` made the refusal visible; it did not make its scale true, and 58 reads as a papercut rather than as something burning half a gigabyte. Same area as #1 and plausibly one work order with it. | ❌ not started |
 | **3** | **`021-HEARTBEAT` introduced a permanent false alarm.** `antientropy.round.fork_suspected` fires on `directory_nodes` **every 3 minutes, forever**: every node rewrites its own `last_heartbeat_at` every ~30 s, so two nodes can never agree on a hash of a table one of them is always mutating. It pages nobody and masks nothing (the event names its own table), but it is an ERROR-level cry-wolf on a healthy fleet. **Andre's steer 2026-09-04: judge agreement ignoring the heartbeat column** — NOT by muting the table, which would also hide a real `status` divergence. Costs a build and a five-node roll. | ❌ not started |
-| **4** | **The defensive half cannot be tested from a legitimate client, so it has never run live.** The sender's own `exfil:injection_artifact` guard refused two attempts to probe the receiving screener — including the forged `[[END PAYLOAD]]` framing that `023` was designed against — and it is not one of the five configurable guards, so every client refuses identically. **`024-ORPHANTRIAGE`, the screener block, and evidence-on-block have therefore never been exercised outside the in-process spine tests.** Needs a deliberately modified client. **Decided 2026-09-04: build it on a fresh GCP box, on credits.** | ❌ in progress |
+| **4** | **The defensive half cannot be tested from a legitimate client, so it has never run live.** The sender's own `exfil:injection_artifact` guard refused two attempts to probe the receiving screener — including the forged `[[END PAYLOAD]]` framing that `023` was designed against — and it is not one of the five configurable guards, so every client refuses identically. **`024-ORPHANTRIAGE`, the screener block, and evidence-on-block have therefore never been exercised outside the in-process spine tests.** Needs a deliberately modified client. **Built 2026-09-04: patched daemon on GCP (`cello-hostile-client`), agent `CELLO_Adversary`, driven straight over the daemon socket. Two attacks run — see item 5.** | ✅ rig built; findings below |
+| **5** | **The inbound language block is silently disarmed by the confusables step that runs before it.** Found by the hostile client (item 4): a 100%-Cyrillic jailbreak was Latinized to 25% Cyrillic by `normalizeConfusables` BEFORE `screenInboundLanguage` judged it, so the one deterministic inbound block that works without the semantic classifier saw "mostly Latin" and delivered it. The gateway IS live and enforcing (it transformed the payload exactly per its confusables map) — the defect is data flow: the language screen reads the normalized text when it needs the original. **Fix decided 2026-09-04: language screen judges the post-invisible-strip, pre-confusables text; everything downstream still reads the normalized text.** | ❌ order written, not started |
 
 > **Do not read #4's absence of live evidence as evidence the defence works.** "Could not reproduce
 > live" here means the attack could not be *sent* — not that it would have been *stopped*.
@@ -1162,6 +1164,30 @@ makes the false alarm rarer and degrades online/offline accuracy.
 
 - **Order:** `micro/026-FORKQUIET-a-table-that-always-moves-is-not-a-fork.md`
 - Costs a build and a five-node roll, so it is worth batching with the next directory change.
+
+### `DOD-M15-SCREENORDER-1` — ❌ The language check must read the original text, not the normalized one
+
+Found live 2026-09-04 by the hostile-client rig. Inbound sanitization runs, in order, invisible-strip
+→ **confusables-normalization** → special-token-strip, and the language allowlist screen then judges
+that fully-normalized text. Confusables rewrites Cyrillic/Greek homoglyphs to Latin, so a jailbreak
+sent in **100% Cyrillic** was Latinized to **25% Cyrillic** *before* the language screen saw it — and
+the screen, whose whole purpose is to hold non-English content an English-trained screener can't
+handle, concluded "mostly Latin" and delivered it.
+
+Measured: sent 165 letters / 100% Cyrillic; delivered 123 Latin + 42 Cyrillic. The transform matches
+`CYRILLIC_GREEK_CONFUSABLES` in `sanitize.ts` character-for-character, so the gateway is demonstrably
+live and enforcing — the defect is data flow, not a dead gateway. This is the one deterministic
+inbound BLOCK that works without the (uninstalled) semantic classifier, and confusables silently
+disarms it.
+
+**Fix (Andre 2026-09-04, *"the problem with the checks is the order"*):** the language screen judges
+the text **post-invisible-strip, pre-confusables**; every other consumer (pattern scanner,
+special-token strip, semantic input, delivered form) still reads the normalized text. Not a plain
+swap — see the order for the three wrong fixes ruled out.
+
+- **Order:** `micro/027-SCREENORDER-the-language-check-must-read-the-original.md`
+- Client-side (gateway) → ships in a client cascade; no directory/relay roll.
+- **Separate from `DOD-M15-SCREENINSTALL-1`** (the semantic classifier), which is a different layer.
 
 ### `DOD-M15-REFUSEDEVIDENCE-1` — ✅ Nothing is refused without keeping what was refused
 
