@@ -83,10 +83,29 @@ const mcpConns: McpConn[] = [];
  * be retried either, which is what keeps this from swallowing the defect it was written for.
  */
 const RECEIVER_WINDOW_MS = 20_000;
+/**
+ * The sender daemon's and the relay's own account of a failed deposit.
+ *
+ * The response alone says the dial failed and quotes the transport's message; it cannot say who
+ * closed the socket. `content.park.open.failed` carries the per-address reasons and the
+ * `dialOutcome` split (`all_addresses_failed` vs `dialed_then_lost`), and the relay's tail says
+ * whether it ever saw the connection — which is the difference between a relay that refused and
+ * something in front of it that never delivered the bytes.
+ */
+function depositDiag(sender?: Proc): string {
+  const lines = (p: Proc | undefined, re: RegExp, n: number) =>
+    (p?.output ?? "").split("\n").filter((l) => re.test(l)).slice(-n).join("\n") || "    (none)";
+  return (
+    `\n  sender daemon (content.park / dial):\n${lines(sender, /content\.park|dial|no_connection|standing_receiver/, 10)}` +
+    `\n  relay tail:\n${lines(cluster?.relay, /./, 10)}`
+  );
+}
+
 async function parkDeposit(
   celloDir: string,
   label: string,
   params: Record<string, unknown>,
+  sender?: Proc,
 ): Promise<{ ok?: boolean; reason?: string; cause?: string; guidance?: string }> {
   const deadline = Date.now() + RECEIVER_WINDOW_MS;
   let res: { ok?: boolean; reason?: string; cause?: string; guidance?: string };
@@ -103,7 +122,8 @@ async function parkDeposit(
   expect(
     res,
     `deposit (${label}) must be ACCEPTED — it RESOLVED, which is not the same as ok. ` +
-      `After ${attempts} attempt(s) over ${Date.now() - (deadline - RECEIVER_WINDOW_MS)}ms the response was: ${JSON.stringify(res)}`,
+      `After ${attempts} attempt(s) over ${Date.now() - (deadline - RECEIVER_WINDOW_MS)}ms the response was: ${JSON.stringify(res)}` +
+      depositDiag(sender),
   ).toMatchObject({ ok: true });
   return res;
 }
@@ -498,7 +518,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
         sessionId,
         senderAgentName: "agentA",
         ...args,
-      });
+      }, daemonA);
 
     // (1) HONEST — signed, and the claimed hash MATCHES the sealed content. Must be accepted.
     const honest = Buffer.from("honest recovered message");
@@ -653,7 +673,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
       sessionId,
       senderAgentName: "agentA",
       content: Buffer.from(msgBytes).toString("hex"),
-    });
+    }, daemonA);
     const rec = (await ipcCall(dirB, "content_park_recover", { relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB })) as { ok?: boolean; pulled?: number };
     expect(rec.ok).toBe(true);
     expect(rec.pulled).toBe(1);
@@ -1106,7 +1126,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
       sessionId,
       senderAgentName: "agentA",
       content: straggler.toString("hex"),
-    });
+    }, daemonA);
 
     const rec = (await ipcCall(dirB, "content_park_recover", {
       relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB,
