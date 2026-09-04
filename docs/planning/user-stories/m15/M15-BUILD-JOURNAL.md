@@ -10526,3 +10526,330 @@ that reads the contacts table."*
 - trustless-cello **1982 passed | 624 skipped | 4 todo**, lint 0, typecheck 0.
 - Spine journey re-run after every prose change: **1 passed | 12 skipped, 70.5s, exit 0.**
 - **Nothing publishes.** No version bump; this is not in an operator's hands yet.
+
+---
+
+## Entry 69 — 023-REFUSEDEVIDENCE: nothing is refused without keeping what was refused (PLAN + clause checklist)
+
+**Unit:** `micro/023-REFUSEDEVIDENCE`. Closes `DOD-M15-REFUSEDEVIDENCE-1`.
+**Worktrees:** `/Users/andrep/Documents/code/m15-023/trustless-cello` and
+`/Users/andrep/Documents/code/m15-023/cello-client`, both on branch `m15/023-refusedevidence`
+off `origin/main` (540e90cc / f724a51). Two repos: the daemon change lands in cello-client, the
+spine journey in trustless-cello.
+
+### The counterbalance, named before the code (§2b Invariant 1)
+
+**There is none to name, and that is the correct answer for this unit.** Retention is not a guard
+over the counterparty — it constrains nobody and asks nothing of them. It is a local durability
+property of the receiver's own machine, on content the receiver already holds in memory. A peer who
+rewrites their daemon cannot make this side store less; the only party who can is the operator whose
+disk it is, and the tier byte cap is the bound they already control. The lens fires and the answer
+is *"not a guard"*, stated rather than skipped.
+
+### What the ten refusal paths do — the DoD 1 enumeration
+
+`ingestReceivedContent` has ten exits that do not deliver. Seven retain; three cannot, and each says
+why here.
+
+| Exit | Retained? | Why |
+|---|---|---|
+| `session_orphaned` | **yes** | No session row, so no tier — bounded by the UNKNOWN-tier byte cap, sequence allocated negative. This is the one Part 5.6 tests. |
+| `session_committed` | **yes** | A post-seal straggler on the DIRECT path keeps nothing today. (The `sealed_session_annex` is a different path — the park drain and held-content drift — and does not cover this exit.) |
+| `content_hash_alg_unknown` | **yes** | |
+| `content_hash_salt_unavailable` | **yes** | |
+| `content_hash_mismatch` | **yes** | The tampered frame. Highest-value evidence in the list. |
+| `sender_unresolved` | **yes** | No counterparty pubkey, so no tier — UNKNOWN-tier cap, as above. |
+| screener TERMINAL block | **yes** | The flagship case. It already leafs at its canonical position; the row now carries the bytes at that same sequence. |
+| `session_size_limit_exceeded` (2 sites) | **no** | **Retaining would defeat the cap it enforces.** Andre, 2026-09-03: *"The message limit is the message limit, already handled by the cap. If you're unknown and you have 25 MB and you just tried to send me one gig, well that's it."* The abuse itself is still evidenced — the refusal notice records the reason, the cap and the tier. |
+| transient screen block | **no** | Nothing was recorded and **nothing was acknowledged** — the message is still with the sender, whose daemon redelivers it. When the gateway recovers it is screened, and if it is blocked it is retained *then*. Storing a copy of a message that is coming back is a second copy, not evidence. |
+| `transcript_write_failed` | **no** | The storage layer is the thing that just failed. A quarantine write is the same `INSERT` into the same table and fails identically; attempting it adds a second error line and no evidence. |
+
+### The design decision the order left to this unit — one store, not two
+
+**Taken: the first option. `session_orphaned` and `sender_unresolved` write a transcript row with a
+session id that has no `sessions` row.** The `transcript` table declares no foreign key, so the row
+is legal; the quarantine flag already excludes it from everything that would trip over it. A second
+table for two exits would be the "built worse and nobody knows which to look in" outcome the order
+names.
+
+### The flag is `direction`, and that is what makes exclusion BY CONSTRUCTION rather than by edit
+
+`direction` is already the delivery discriminator, it is in the primary key, and **every** delivery
+and unread reader filters it with an equality literal:
+
+- `findNextReceivedAfter` — `AND direction = 'received'`
+- `#UNREAD_RECEIVED_WHERE` — `t.direction = 'received'` (used by `getUnreadSummary`,
+  `getEndedUnread`, `getUnreadReceivedCount`)
+- `countReceivedMessages`, `#getReceivedBytesTotal` — same literal
+
+A row written `direction = 'quarantined'` cannot be returned by `WHERE direction = 'received'`. No
+existing query is modified to exclude it and no future one has to remember to. A boolean column
+alone would have been exclusion by *edit*, which is the half-flagged row the order refuses.
+
+`quarantine_reason TEXT` rides alongside as the evidence label. `attribution` needs no new value:
+the existing expression is `direction === "sent" ? … : authorship ? "verified_signature" : …`, and
+`'quarantined'` is not `'sent'`, so a verified frame lands `verified_signature` and an unverified one
+`local_session_state` — exactly the distinction `SEALWIRE-1` bullet 5 built the column for.
+
+### The bound, confirmed rather than assumed (DoD 2's precondition)
+
+Per-message: `MAX_CONTENT_BYTES` (1 MB), enforced on the frame before ingest.
+Per-session: the sender's tier bound — **and `#getReceivedBytesTotal` now counts quarantined rows
+too.** Without that, retention is an unbounded side channel: a counterparty who can get messages
+blocked stores bytes forever against a budget that cannot see them. With it, total retention per
+session is bounded by the same cap that bounds delivery. The quarantine write is gated on the same
+computation, so a session at its cap stores no more.
+
+**No new capability is handed to an attacker by that change.** The counterparty already spends the
+session's byte budget by sending ordinary messages; spending it with blocked ones costs them the
+same and gains them nothing.
+
+### Sequence allocation
+
+A terminal block has a canonical sequence and uses it — the leaf at that position and the quarantine
+row now describe the same event, and **DoD 7's leaf index is untouched.** An exit with no leaf gets
+the next negative sequence for that session (−1, −2, …), which cannot collide with a leaf position
+and cannot collide with another quarantine row.
+
+### Clause checklist (what the reviewer receives)
+
+1. every refusal path retains — table above, three accounted for in writing
+2. plaintext + `sender_pubkey` + `sender_sig` + `attribution` + flag + reason on the row
+3. the stored signature **verifies against the sender's key** — recomputed in the journey, not asserted non-null
+4. excluded by construction from `cello_receive` and unread — both proved
+5. `cello_transcript` returns the entry redacted, with reason and location
+6. every route frames it: metadata above, payload last, **no closing delimiter**, forged-ending case tested
+7. seal + both roots match
+8. nothing interpolates stored content into a log, error, path or prompt
+9. the spine journey green as separate OS processes, output quoted
+10. every new assertion made to fail on purpose — **committed before the mutation loop exists**
+11. gate in cello-client; publish disposition stated
+12. `cello-unit-reviewer` verdict quoted
+13. DoD line flipped in the same commit as the verdict
+
+---
+
+## Entry 70 — 023-REFUSEDEVIDENCE: the evidence (live journey, mutation pass, and the defect the journey found)
+
+Continues Entry 69, which carries the plan, the ten-exit enumeration and the design decisions.
+**Review outstanding at the time of writing** — see Entry 71 for the verdict.
+
+### The live journey — separate OS processes, quoted
+
+`packages/e2e-tests/src/spine/j-content.spine.test.ts`, extending the existing J-CONTENT screener
+journey. Three real directory nodes, a real relay, two daemons in their own OS processes,
+`COMPOSE_PROJECT_NAME=m15023` on port 5443.
+
+```
+ ✓ src/spine/j-content.spine.test.ts (13 tests | 12 skipped) 64599ms
+   ✓ J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b) > 023-REFUSEDEVIDENCE — a
+     blocked message is KEPT with a signature that verifies, stays out of delivery, and comes back
+     FRAMED  7099ms
+ Test Files  1 passed (1)
+      Tests  1 passed | 12 skipped (13)
+```
+
+B's own daemon log, from the run:
+
+```
+{"event":"transcript.message.recorded","sessionId":"a43d73bd…","agentName":"agentB","sequence":2,
+ "direction":"quarantined","correlationId":"f346926a-…"}
+{"event":"session.content.quarantined","agentName":"agentB","sessionId":"a43d73bd…",
+ "reason":"inbound_language_blocked","sequence":2,
+ "contentHash":"f13c9dcc8de7b66bd0c9d2f2c4ed023bfc1864f9ea99120621cc9964858d39e2",
+ "bytes":447,"signature":"verified","correlationId":"f346926a-…"}
+```
+
+**The evidence claim is the third line of that log and the assertion behind it.** `signature:
+"verified"` is the daemon's own record; the journey then reads `sender_pubkey` and `sender_sig` out
+of B's SQLCipher transcript, reads `structure1_cbor` for that leaf out of `session_seal_leaves`, and
+runs `verify()` — A's key, over A's bytes, both fetched from B's store. Not `not.toBeNull()`.
+
+### Three fixture defects on the way, each worth recording because each looked like a code defect
+
+1. **The whole spine suite ran.** `pnpm --filter … test:spine -- <file>` did not pass the filename
+   through, so vitest loaded every journey. Killed and re-run as
+   `npx vitest run --config vitest.spine.config.ts src/spine/j-content.spine.test.ts -t …`.
+2. **The payload was never blocked.** The language detector blocks on a DOMINANT SHARE (0.5), and
+   the Latin the forged-ending lines need counts AGAINST the block: ~40 Han against ~50 Latin is
+   0.44. The message was DELIVERED — `direction:"received"`, leafIndex 2 — and the journey then sat
+   30s waiting for a `terminal_block` that was never coming. **That read exactly like a retention
+   defect.** Han block resized; the reasoning is written into the test.
+3. **The stored bytes were one token longer than expected.** `cello_send` appends the turn signal, so
+   the wire content ends ` [[OVER]]`. Corrected toward the WIRE form, which is the right direction:
+   evidence is what the sender actually transmitted and what their signature covers. It also makes
+   the framing case harder — the forged `END PAYLOAD` line is no longer last in the payload.
+
+### The defect the journey found — one blocked message made a session permanently unsealable
+
+Full write-up in the order's *Newly discovered*. In short: `sealReadiness` derives `missingLeaves`
+from `#witnessedSeq.size`, and the entry is retired inside `#appendVerifiedContent`. A terminal
+screener block bypasses that function, so the leaf was committed and the witness never retired.
+Measured live before the fix: `treeSize 3, highWaterSeq 2, missingLeaves 1` and
+`closeB: {"ok":false,"reason":"session_incomplete","missing_leaves":1}`.
+
+**The third instance of a shape already fixed once**, for document frames at
+`session-node-manager.ts:10593`, whose comment describes this exact failure. Nobody generalised it to
+the other branch that bypasses the same function. Both terminal-block sites are fixed here — the
+immediate append and the held release — with a unit test that goes red if either drop is removed.
+
+Older than this unit. It surfaced now because this is the first test in the tree that ever blocked a
+message and then sealed.
+
+### The mutation pass — DoD 10
+
+Eight mutants. Every one TYPECHECKED first, then re-run ALONE, then the tree restored and the
+restore verified clean.
+
+| Mutant | Result |
+|---|---|
+| `content_hash_mismatch` retains nothing (statement removed whole) | **CAUGHT** — 4 red, *"the refused message must be RETAINED"* |
+| the row is written `direction = 'received'` | **CAUGHT** — 5 red, retention AND exclusion |
+| `readTranscript` hands back the blob | **CAUGHT** — *"the payload must not travel on the transcript read"* |
+| the byte cap stops counting quarantined bytes | **CAUGHT** — *"the cap must SEE the quarantined bytes"* |
+| every orphan refusal takes sequence −1 | **CAUGHT** — *"a second orphaned refusal is a second row, not an overwrite"* |
+| the header drops *"There is no end marker"* | **CAUGHT** |
+| a footer is appended after the payload | **CAUGHT** — 2 red: payload-last AND the forged-ending case |
+| the terminal block leaves its witness outstanding | **CAUGHT** — *"the witness must be retired with its leaf"* |
+
+#### ⚠️ THE LOOP FAILED AGAIN, and it is the FALSE GREEN shape — the ninth instance
+
+**The byte-cap mutant was first reported SURVIVED, with 8/8 green.** The replacement string was
+mangled by zsh quoting inside the heredoc, so `str.replace` matched nothing and vitest ran against an
+**unmutated tree**. Nothing in the loop's output distinguished that from a real survival.
+
+Caught by the §🔎 positive control rather than by suspicion: a one-line check that the mutation
+TARGET still existed in the file. It did — so the mutation had not applied, and the verdict meant
+nothing.
+
+**The rule that would have caught it directly, and is now in the rerun script:** prove the mutation
+LANDED before running the tests — the file's byte count must change AND the new text must be present
+— and refuse to run otherwise. `git status --porcelain` guards the tree; nothing was guarding
+whether the edit happened at all.
+
+Two mutants also **failed to compile** on the first attempt (`void 0 &&` → TS2873; an undefined name
+→ TS2304). Both correctly reported *NOT A CATCH* and widened, per rule 4 — a mutant that dies at the
+compiler proves nothing.
+
+### Gates
+
+| Repo | test | lint | typecheck |
+|---|---|---|---|
+| cello-client | 4819 passed, 11 skipped, 423 files | clean | clean |
+| trustless-cello | passed | clean | clean |
+
+**Nothing publishes.** The change is entirely inside `cello-client`, and it reaches operators on the
+next ordinary `/cello-publish` cascade — no wire-behaviour change, no crypto type change, no
+`trustless-cello` re-pin, so it is not a batch that has to ship with anything. `cello_quarantined` is
+a new MCP tool and a new CLI verb; both are additive.
+
+---
+
+## Entry 71 — 023-REFUSEDEVIDENCE: the review verdict, eleven fixes, and what it caught that the tests did not
+
+`cello-unit-reviewer`, one pass, no model override. Its closing verdict, verbatim:
+
+> **SPEC: DEVIATIONS FOUND** (clause 6 [blocking] — F2; clause 4 partial — F4)
+> **SILENT FALLBACKS FOUND** (F3 [blocking] — a retention failure reported to the operator as
+> retention success; F9)
+> **ERRORS NAME THEIR CAUSE** — no error substitution; the detector's own reason survives to the
+> row, the notice and the frame, and `quarantineFrameMeta` deliberately recomputes the hash rather
+> than reprinting the sender's claim, which is the right call on the tamper case
+> **HOLLOW TESTS FOUND** — one: clause 4's `cello_receive` proof never touches the `cello_receive`
+> handler, and that is precisely the gap F4 slipped through. Every other new assertion survives the
+> revert test; the spine's key-order assertion passes only on the agent-selected path
+> **REMOVALS PROVEN** — nothing deleted; both changed signatures traced to every consumer, two
+> consumers found unupdated (F4, F5)
+> **NO COMPATIBILITY DEBT**
+>
+> Blocking before close: **F1, F2, F3.** F4–F8 should go in the same pass — F4 and F7 are one line each.
+
+**Eleven findings. All eleven fixed.** Two commits: the fixes, then the tests the reviewer said were
+missing.
+
+### The three that were blocking, in the order they would have hurt
+
+**F1 — keeping the evidence was killing the conversation it protects.** Six of the seven retaining
+exits refuse WITHOUT acknowledging, which is exactly what makes the sender redeliver, and each
+redelivery wrote another full copy. Retained bytes spend the same monotonic budget that gates
+delivery. So: a counterparty on a newer build sends ONE message, the version skew refuses it
+un-acked, and twenty-five park drains later the conversation's 25 MB is gone — permanently, with the
+daemon telling the operator to start a new one. Retention now dedups on (session, reason, bytes);
+how often it arrived is what the refusal notice already counts.
+
+> **AND THE COUNTERBALANCE I WROTE IN ENTRY 69 WAS EVASIVE, WHICH IS WHERE F1 HID.** I wrote *"there
+> is none to name — retention constrains nobody, it is a local durability property."* It is not
+> free-standing: I had just made retained bytes spend the delivery budget, in the same unit, while
+> saying there was nothing to trade off. **It has a name — evidence and delivery share one monotonic
+> budget, and when evidence wins the conversation stops working** — and the moment that is said out
+> loud, both the missing dedup and the missing skip-notice are obvious. The lens fired; I answered
+> it with a dismissal instead of an answer.
+
+**F2 — three JSON keys were landing after the payload.** The framing has no closing delimiter on
+purpose, so the reader's one structural guarantee is that nothing follows the message. The IPC
+wrapper spread the sole-online-agent notice AFTER the handler's keys — genuine CELLO-authored prose
+after the payload region, which is the shape a forged ending imitates. Not a corner case: the CLI
+never sends `ipc.connect`, so every plain `cello quarantined` on a single-agent daemon took it. The
+notice spreads first now.
+
+**F3 — the operator was told the evidence was kept before anything had tried to keep it.** Three
+notices claimed retention unconditionally and all seven call sites discarded the return. The case
+that matters most — a session flooded until its budget is gone — was the case where the operator was
+told in writing that evidence existed, followed the named remedy, and got
+`no_refused_message_at_sequence`. The only trace was a `warn` line with no operator surface at all:
+*this guard fired and nobody heard it.*
+
+### F6 is the one worth reading twice
+
+`content-park.ts` terminally-blocks a message that arrived for an already-committed session and
+**discarded it** — the last such route in the tree, on the highest-suspicion case in the product
+(hostile bytes aimed at a conversation somebody has already sealed) — while the SKILL.md sentence
+this unit shipped told every operator that refused messages are kept. A claim made true by narrowing
+would have been the cheaper fix; it quarantines instead.
+
+### What the tests missed, and it is the same shape twice
+
+Both hollow spots were **assertions aimed at the mechanism instead of the named surface**:
+
+- Clause 4 names `cello_receive`. Every proof went through its READERS — `findNextReceivedAfter`,
+  `getUnreadSummary`, `getUnreadReceivedCount` — so an implementation leaving the handler's own
+  `readTranscript(...).length` unfiltered passed all eight tests. It shipped. That is F4.
+- The spine's key-order assertion passed because setup calls `cello_use_agent`, which is precisely
+  the path where the fallback does not fire. It asserted the property on the one path that could not
+  break it. That is F2's test.
+
+Both are now asserted at the surface the clause names: a `cello_receive` call over IPC against an
+orphan-quarantine id expecting `session_not_found`, and a second MCP connection that never selects an
+agent — which also asserts the fallback actually fired, so the leg cannot degrade into testing the
+same path twice.
+
+### Mutation pass over the review fixes — five more, all CAUGHT
+
+Same discipline: applied-check first, typecheck, re-run alone, restore verified.
+
+| Mutant | Result |
+|---|---|
+| the dedup block removed whole | **CAUGHT** — *"one message is ONE piece of evidence however many times it is redelivered"* |
+| the retention claim unconditional again | **CAUGHT** — *"a claim about durability is made AFTER the write"* |
+| `cello_receive` counts quarantined rows again | **CAUGHT** — `session_not_live` where `session_not_found` is owed |
+| the watermark walk stops at a blocked leaf again | **CAUGHT** — *"expected -1 to be 1"* |
+| the verb moves back into `text` | **CAUGHT** — *"text states the fact and names NO command"* |
+
+One mutant (`if (false && already)`) died at the compiler with TS18048 and was correctly reported
+**NOT A CATCH**, then widened to a whole-block removal — rule 4, and the second time this loop caught
+itself in one unit.
+
+### Final state
+
+| | |
+|---|---|
+| cello-client gate | **4823 passed**, 11 skipped, 423 files; lint clean; typecheck clean |
+| trustless-cello gate | passed; lint clean; typecheck clean |
+| live journey | `✓ 023-REFUSEDEVIDENCE — a blocked message is KEPT with a signature that verifies, stays out of delivery, and comes back FRAMED  7206ms` — separate OS processes, 3-node consortium, real relay |
+| mutation | 13 mutants across both passes, every one caught after typechecking and re-running alone |
+
+**Publish disposition: nothing publishes from this unit, and operators get none of it until something
+does.** The whole change is in `cello-client` — a new MCP tool, a new CLI verb, a SKILL.md section
+and the daemon behaviour behind them. There is no wire-behaviour or crypto-type change, so it is not
+a batch that has to ship with a directory or relay roll and needs no `trustless-cello` re-pin: it
+rides the next ordinary `/cello-publish` cascade.

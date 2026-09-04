@@ -2,7 +2,7 @@
 name: 023-REFUSEDEVIDENCE — Nothing is refused without keeping what was refused
 type: micro-work-order
 date: 2026-09-03
-status: open
+status: complete
 description: >
   Every refusal path DISCARDS the message. The screener block keeps only a hash; every other refusal
   keeps nothing at all. So the messages an operator would most want to prove — an injection aimed at
@@ -289,11 +289,101 @@ and `<lane>/trustless-cello` as siblings, and load `/worktree-permissions` befor
 ## Review
 
 ### Where this work lives
-*(worktree paths, branch, and the `COMPOSE_PROJECT_NAME` / `CELLO_PG_HOST_PORT` you used)*
+
+Paired worktrees, both on branch `m15/023-refusedevidence` off `origin/main`:
+
+- `/Users/andrep/Documents/code/m15-023/cello-client` (from `f724a51`) — the daemon change
+- `/Users/andrep/Documents/code/m15-023/trustless-cello` (from `540e90cc`) — the spine journey and these docs
+
+Sibling directories, so the spine harness's `../cello-client` resolves to this lane's build and not
+the main checkout's `dist`.
+
+Postgres isolation for the spine run (another lane was live on 5439 under project `m15024`):
+`COMPOSE_PROJECT_NAME=m15023`, `CELLO_PG_HOST_PORT=5443`,
+`DATABASE_URL=postgresql://postgres:dev@localhost:5443/cello_dev`.
+
+`.claude/settings.local.json` gained `/Users/andrep/Documents/code/m15-023` as a permission root
+before the worktrees were used (`/worktree-permissions`), and every command in this unit was written
+with absolute paths.
 
 ### The rest
-*(the journey output, the mutation proof from DoD 10, the reviewer's verdict)*
+
+**The live journey** — `packages/e2e-tests/src/spine/j-content.spine.test.ts`, extending the existing
+J-CONTENT screener journey. Two daemons in separate OS processes, a real three-node consortium, a
+real relay:
+
+```
+ ✓ src/spine/j-content.spine.test.ts (13 tests | 12 skipped) 66867ms
+   ✓ 023-REFUSEDEVIDENCE — a blocked message is KEPT with a signature that verifies, stays out of
+     delivery, and comes back FRAMED  7206ms
+ Test Files  1 passed (1)
+```
+
+B's own daemon log from the run:
+
+```
+{"event":"transcript.message.recorded","agentName":"agentB","sequence":2,"direction":"quarantined"}
+{"event":"session.content.quarantined","agentName":"agentB","reason":"inbound_language_blocked",
+ "sequence":2,"bytes":447,"signature":"verified"}
+```
+
+**DoD 10 — the mutation proof.** Thirteen mutants across two passes, every one typechecked, re-run
+alone and confirmed red for the expected reason, with the tree restored and the restore verified.
+The full table is in Entries 70 and 71. Two mutants died at the compiler and were correctly reported
+NOT A CATCH before being widened; one was reported SURVIVED when shell quoting had eaten the
+replacement, caught by a positive control and fixed by proving the mutation lands before any test
+runs.
+
+**Gates.** cello-client: 4823 passed, 11 skipped, lint clean, typecheck clean. trustless-cello:
+passed, lint clean, typecheck clean. **Nothing publishes** — the change is entirely in cello-client
+with no wire or crypto-type change, so it rides the next ordinary `/cello-publish` cascade and needs
+no trustless-cello re-pin.
+
+**The reviewer's verdict** (`cello-unit-reviewer`, one pass, no model override), verbatim:
+
+> **SPEC: DEVIATIONS FOUND** (clause 6 [blocking] — F2; clause 4 partial — F4)
+> **SILENT FALLBACKS FOUND** (F3 [blocking] — a retention failure reported to the operator as
+> retention success; F9)
+> **ERRORS NAME THEIR CAUSE** — no error substitution; the detector's own reason survives to the
+> row, the notice and the frame, and `quarantineFrameMeta` deliberately recomputes the hash rather
+> than reprinting the sender's claim, which is the right call on the tamper case
+> **HOLLOW TESTS FOUND** — one: clause 4's `cello_receive` proof never touches the `cello_receive`
+> handler, and that is precisely the gap F4 slipped through. Every other new assertion survives the
+> revert test; the spine's key-order assertion passes only on the agent-selected path
+> **REMOVALS PROVEN** — nothing deleted; both changed signatures traced to every consumer, two
+> consumers found unupdated (F4, F5)
+> **NO COMPATIBILITY DEBT**
+>
+> Blocking before close: **F1, F2, F3.** F4–F8 should go in the same pass — F4 and F7 are one line each.
+
+**All eleven findings fixed**, with the tests the reviewer named as missing added and each new
+assertion mutation-proven. Entry 71 carries the per-finding account; the sharpest is F1, where
+retention was spending the same monotonic budget that gates delivery, so one redelivered refusal
+could kill a conversation for honest traffic.
 
 ## Newly discovered
 
-*(anything found and NOT acted on, per rule 3)*
+**ONE item. FIXED here rather than deferred, because it blocked this order's own DoD 7.**
+
+### One blocked message made a conversation permanently unsealable
+
+**From the operator's chair:** your screener catches a hostile message — the protection working —
+and from that moment `cello_close_session` answers `session_incomplete` forever. Its guidance tells
+you it is *"waiting on an earlier message from the counterparty that has not arrived"* about a
+message that arrived, was judged, and is sitting in the chain. The only exit is a force-abandon,
+which forfeits the notarized receipt the whole conversation was earning.
+
+**Cause.** `sealReadiness` counts `missingLeaves` as the relay witnesses this tree has not credited,
+and the credit is dropped inside `#appendVerifiedContent`. A terminal screener block bypasses that
+function — it calls `appendSessionLeaf` directly — so the leaf was committed and the witness was
+never retired. Both terminal-block append sites leaked: the immediate one and the held-release one.
+
+**Measured live**, not inferred: `treeSize 3, highWaterSeq 2, missingLeaves 1`.
+
+**It is the THIRD instance of the same shape.** The document-frame branch had it and was fixed at
+`session-node-manager.ts:10593`, with a comment describing exactly this failure — nobody generalised
+the fix to the other branch that bypasses the same function.
+
+**Older than this unit and not caused by it.** It surfaced because 023's journey is the first test in
+the tree that ever blocked a message and then sealed. Fixed rather than filed because DoD 7 requires
+that seal, with a unit test that fails if either drop is removed.

@@ -1097,7 +1097,15 @@ is unavailable; naming a verb nobody can perform is Invariant 4's failure.
 - **Enforcer:** journey — unsigned, signed-but-unknown, and signed-by-a-known-contact each produce a
   notice offering exactly ONE action, with no contact verb present in the first two.
 
-### `DOD-M15-REFUSEDEVIDENCE-1` — ❌ Nothing is refused without keeping what was refused
+### `DOD-M15-REFUSEDEVIDENCE-1` — ✅ Nothing is refused without keeping what was refused
+
+> **✅ 2026-09-04 (023-REFUSEDEVIDENCE).** Seven of the ten non-delivering exits retain the message
+> — plaintext, sender key, sender signature, reason — flagged `direction = 'quarantined'`, which is
+> in the transcript PK and so excludes it from delivery and unread BY CONSTRUCTION. Three keep
+> nothing, each accounted for in writing. Live journey green as separate OS processes: the stored
+> signature VERIFIES against the sender's key, recomputed. Reviewer: 11 findings, all fixed; 13
+> mutants all caught. Found and fixed on the way: one blocked message made a session permanently
+> unsealable. → Entries 69, 70, 71.
 
 **THE RULE, Andre 2026-09-03:**
 > *"Every case where there's something that potentially needs to be reported needs to be stored. It
