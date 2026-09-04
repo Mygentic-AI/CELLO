@@ -133,35 +133,55 @@ npm view @cello-protocol/cli@{ver} dependencies      # @cello-protocol/daemon mu
 npm view @cello-protocol/connect@{ver} dependencies  # client/crypto/transport must be the NEW versions
 ```
 
-### 6. Promote to `latest` — REQUIRED (operator-run)
+### 6. Promote to `latest` — REQUIRED, and it runs in CI (no longer a human step)
 
-`beta` is what CI publishes; the default install path (`npx @cello-protocol/connect`, `npm i -g ...@latest`)
-uses `latest`. Promotion is manual and human-run (needs Andre's explicit go). **WE PROMOTE, WE DO NOT PIN**
-— pinning exact versions on operator machines is fragile and error-prone (Andre, 2026-07-07); the whole
-point of `latest` is that nobody has to pin. `connect` and `cli` are the two installed by name; the rest
-are transitive but **promote ALL SEVEN at their current published versions** so the whole `latest` graph is
-consistent (unchanged packages just print a `latest is already set` warning — harmless).
+`beta` is what CI publishes; the default install path (`npx @cello-protocol/connect`,
+`npm i -g ...@latest`) uses `latest`. **A release is not delivered until `latest` moves** — until
+then the published code is invisible to every install on every machine.
 
-Promote every package to `latest` at its exact published version — the canonical command set
-(fill in the actual versions from step 5's verify; this is the real 2026-07-07 run):
+**WE PROMOTE, WE DO NOT PIN** — pinning exact versions on operator machines is fragile and
+error-prone (Andre, 2026-07-07); the whole point of `latest` is that nobody has to pin. `connect`
+and `cli` are the two installed by name; the rest are transitive but **all seven promote together**
+so the whole `latest` graph is consistent.
+
+> ### ✅ THIS IS NO LONGER A BLOCKER THAT NEEDS ANDRE (2026-09-04)
+> It used to be a manual `npm dist-tag add` run from Andre's laptop, and it stalled every release
+> that happened while he was away from it. **It now runs in GitHub Actions**, where `NPM_TOKEN`
+> lives — the same secret `npm-credential-check.yml` proves publishable, and the only npm credential
+> that is reliably valid.
+>
+> **The laptop token is the reason.** It expires silently and answers `401` on `npm whoami` — always
+> discovered with a verified release already sitting on `beta` and nothing able to deliver it. That
+> is exactly what happened on 2026-09-04. Do not debug the local token; use the workflow.
 
 ```bash
-npm dist-tag add @cello-protocol/connect@0.0.61 latest
-npm dist-tag add @cello-protocol/cli@0.0.32 latest
-npm dist-tag add @cello-protocol/daemon@0.0.35 latest
-npm dist-tag add @cello-protocol/gateway@0.0.28 latest
-npm dist-tag add @cello-protocol/crypto@0.0.18 latest
-npm dist-tag add @cello-protocol/transport@0.0.16 latest
-npm dist-tag add @cello-protocol/protocol-types@0.0.18 latest
+# `confirm_connect` MUST equal connect's current beta version — it is the guard that stops a run
+# promoting a build nobody verified. Read it from step 5, do not type it from memory.
+gh workflow run npm-promote-latest.yml -f confirm_connect=<connect beta version> \
+  -R Mygentic-AI/cello-client
+
+gh run list --workflow=npm-promote-latest.yml --limit 1        # get the run id
+gh run watch <run-id> --exit-status --compact
 ```
 
-`npm dist-tag add` may prompt for a browser auth (`Authenticate your account at: https://…`) the first time
-per session — press ENTER, complete it, done. A `+latest: @cello-protocol/<pkg>@<ver>` line confirms each.
+The workflow promotes all seven in dependency order, at whatever version each package's `beta` tag
+points at, and **fails as a whole if any one of them fails** — a half-promoted graph is worse than
+an unpromoted one, because `latest` then resolves to a mix of old and new packages whose cross-pins
+disagree. Unchanged packages re-point at the version they already carry, which is a harmless no-op.
+It then re-verifies with its own propagation retry.
+
+**Fallback only if the workflow itself is broken** — the original manual form, which needs a working
+local token and may prompt for browser auth the first time per session:
+
+```bash
+npm dist-tag add @cello-protocol/connect@<ver> latest      # and cli, daemon, gateway,
+                                                            # crypto, transport, protocol-types
+```
 
 Verify `latest` resolves to the promoted versions:
 
 ```bash
-for p in connect cli daemon client crypto transport protocol-types; do echo "$p latest: $(npm view @cello-protocol/$p@latest version)"; done
+for p in connect cli daemon gateway crypto transport protocol-types; do echo "$p latest: $(npm view @cello-protocol/$p@latest version)"; done
 ```
 
 **Propagation-lag caveat:** `npm view @…@latest version` hits an npm CDN cache that can lag ~1–2 min behind a
