@@ -600,17 +600,38 @@ occurred."* Same action, two outcomes, no way to tell which they will get.
   everywhere else, so an ordinary "the relay is not connected right now" is routed into
   `internal_error` with no reason code and no next step. (b) **Why the connection is missing at
   deposit time is UNREAD.**
-- **Rate: intermittent, ~1 run in 3, in the spine harness.** Not measured against the live fleet.
-  **Investigation opened by Andre 2026-09-03**, including why it reproduces sometimes and not
-  others.
+- **Rate: NOT ESTABLISHED, and the "~1 in 3" this line used to state is withdrawn.** It came from
+  three runs, and `019` said so itself: three runs supports *"not always red"* and does not support a
+  rate. Never measured against the live fleet. **Investigation opened by Andre 2026-09-03.**
 - **⚠️ CLASSIFICATION IS ANDRE'S** (§0z.4). It is on the advertised journey — a message to an
   offline counterparty is precisely what park exists for — but the real-world rate is unmeasured,
   which is what the investigation is for. It sits in the gate meanwhile under "unclear ⇒ blocks".
-- **NOT the same as `DOD-MSG-7`.** `019` predicted MSG-5 and MSG-7 shared this cause; they do not.
-  MSG-7 fails on `content_park_recover` returning `ok: false` — undiagnosed, unowned, and not this
-  line.
-- **Enforcer:** journey — `j-content` DOD-MSG-5 green across three consecutive runs, plus a named
-  reason on the response when the relay genuinely is unreachable.
+
+> ### 🔎 RE-MEASURED 2026-09-04 by `024-ORPHANTRIAGE` (*Newly discovered* #1) — it is WIDER than this line said, and one of its own claims is now unsupported
+>
+> **Three `j-content` tests fail on this error, not one:** `DOD-MSG-5`, **`DOD-MSG-7`** and
+> **`DOD-MSG-8`**, all reading *"No open connection to peer 12D3KooW… (the relay)"* — two on the raw
+> `content_park_deposit` / `content_park_recover` IPC, one on a `cello_send` returning false.
+>
+> **Controlled, not assumed:** the same file was re-run at `origin/main` with 024's change reverted
+> and produced the **IDENTICAL three failures**, so 024's relay ingress proxy is exonerated and this
+> is pre-existing. 024 left it under rule 3 and did not investigate.
+>
+> **⚠️ THIS LINE'S "NOT THE SAME AS `DOD-MSG-7`" BULLET IS WITHDRAWN.** It said MSG-7 fails on
+> `content_park_recover` returning `ok: false` and therefore has a different cause. 024 measured MSG-7
+> failing with **this** error. Either the separation `019` drew is wrong, or MSG-7 has two failure
+> modes — **nobody has established which, and the line will not assert a separation it cannot show.**
+>
+> **`DOD-MSG-8` was previously filed as a test-side fault** (it called `cello_get_transcript`, a tool
+> renamed to `cello_transcript` — see `DOD-M15-JCONTENT-DELIVERY-1`). It now fails on the connection
+> error, which is a different fault from the one recorded there. **Do not read that entry as current
+> for MSG-8.**
+>
+> **What this changes for scoping:** the first job is still "why is there no connection at deposit
+> time", and the blast radius is now deposit AND recover AND send, not deposit alone.
+
+- **Enforcer:** journey — `j-content` **DOD-MSG-5, MSG-7 and MSG-8** green across three consecutive
+  runs, plus a named reason on the response when the relay genuinely is unreachable.
 
 ### `DOD-M15-BACKUP-1` — ✅ An identity can be exported and restored
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-BACKUP-1`.
@@ -1953,6 +1974,9 @@ lied); the third was a real race, fixed with a readiness poll. Product-side caus
 >   `cello_transcript`). Test-side, not a product break — but it means **DOD-MSG-8 is currently
 >   measuring nothing**, which is worse than a red for a check whose whole job is to read the
 >   transcript back. Fix the call, then find out what it says.
+>   **⚠️ STALE as of 2026-09-04 — `024-ORPHANTRIAGE` measured MSG-8 failing on
+>   `No open connection to peer <relay>`, a product fault, not the renamed tool.** It is now part of
+>   `DOD-M15-PARKCONN-1`'s cluster. Do not read this bullet as the current cause.
 >
 > Original entry, which stands on its own terms: four separate defects, not the one cause this line
 > named — an unsigned deposit shape SEC-1 refuses, a deposit of the wrong string (`[[OVER]]` is
