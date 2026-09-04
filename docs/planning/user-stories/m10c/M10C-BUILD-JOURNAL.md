@@ -354,3 +354,19 @@ fixed — the fix belongs to the shared submit path.
 **50 passed**; `git status --porcelain` clean in `cello-client` and `trustless-cello`.
 
 `003-XSCREEN` `status: complete`.
+
+---
+
+## 003-XSCREEN — correction: the GitHub placeholder panel is by design, not a defect
+
+Corrects the *Newly discovered* entry in `003-XSCREEN` and the finding quoted in this journal.
+
+Andre, 2026-09-04: the portal shows GitHub's **real** claim text at the moment the mint finishes,
+then throws the profile away — it does not keep personal information like that. The panel shown
+afterwards is a shape, so the operator can see what it would look like; the true signal is read from
+their CELLO daemon, where it rests. Nothing is hidden and nothing has drifted.
+
+Worth keeping only for the asymmetry it explains: **X persists its snapshot** (a free re-mint
+composes from it, which is the point of paying once), so the X screen can render the real claim at
+any time. GitHub cannot. The two panels differ because their retention differs, not because one of
+them is wrong.

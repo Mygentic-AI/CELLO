@@ -242,11 +242,13 @@ git status --porcelain → clean in cello-client and trustless-cello
 
 *(One or two lines each. Do not act on them.)*
 
-- **GitHub's connected-state panel shows placeholder text, not its real claim.** `GitHubSignalRow`
-  renders the literal words "created N days ago, X public repos, Y followers" under the heading
-  "What counterparties see". It is a second, hardcoded renderer of exactly the kind this order
-  forbids, and it tells the operator nothing about what was actually notarized. Untouched: changing
-  the GitHub row is explicitly out of scope.
+- **~~GitHub's connected-state panel shows placeholder text~~ — WITHDRAWN, this is by design.**
+  Andre corrected it on 2026-09-04: the portal shows GitHub's real claim at the moment the mint
+  finishes and then discards the profile, because it does not keep personal information like that.
+  The panel afterwards is a shape, not a claim, and the operator reads the true signal from their
+  CELLO daemon where it rests. Noted only because **X is different**: the snapshot is persisted so a
+  free re-mint costs nothing, so the X screen can show the real claim at any time. The two panels
+  differ because their retention does.
 
 - **`submitAndDeliverGitHubSignals` is generic but named for GitHub.** X now calls it under an import
   alias. It belongs in `directory-submit.ts` under a type-neutral name; reimplementing the loop per
