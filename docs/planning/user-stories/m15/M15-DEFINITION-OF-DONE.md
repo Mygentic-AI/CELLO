@@ -779,7 +779,7 @@ consumes.
 
 ---
 
-### `DOD-M15-AUTHORSHIP-ABSENT-1` — ❌ A message with no proof of who wrote it is refused, not delivered
+### `DOD-M15-AUTHORSHIP-ABSENT-1` — ✅ A message with no proof of who wrote it is refused, not delivered
 **Found 2026-09-03, [[2026-09-03_1158_relay-overload-and-the-four-things-underneath-it]] — by accident, and it is the sharpest thing in that document. Ruled BLOCKS by
 Andre 2026-09-03.**
 
@@ -812,6 +812,15 @@ match, I'm blocked. But if I arrive at immigration with no passport, they let me
   comment ~8546–8559.
 - **Enforcer:** unit — a message arriving with no authorship proof is refused by name, with a test
   that reddens when the refusal is removed.
+
+> ✅ **CLOSED 2026-09-04 by `029-AUTHORSHIP`.** Split done: every content frame now carries
+> `sender_signature` beside its `structure1_cbor` (including the relay-degraded path, where the
+> daemon signs its own claim), the receiver verifies authorship from those two alone, and missing /
+> unreadable / signed-over-other-content all take one path — refused by name, not ingested, not
+> frozen. Position stays soft and a mutant making Structure 2 mandatory reddens four tests. Nine
+> mutants, nine caught; reviewer's two blocking findings fixed. **Three items produced — the §0z.2
+> trip-wire is tripped and item 3 (the claim is not bound to the session id) needs Andre's call.**
+> → order `micro/029-AUTHORSHIP-no-passport-no-entry.md` (Review + Newly discovered)
 
 ### `DOD-M15-WITHHOLD-SEAL-1` — ❌ A counterparty cannot hide their last message and seal without it
 **Found 2026-09-03, [[2026-09-03_1158_relay-overload-and-the-four-things-underneath-it]]. Ruled BLOCKS by Andre 2026-09-03.** *"The receipt is the product. A path that

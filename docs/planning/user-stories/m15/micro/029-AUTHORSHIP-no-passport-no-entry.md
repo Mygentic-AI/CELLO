@@ -2,7 +2,7 @@
 name: 029-AUTHORSHIP — No passport, no entry
 type: micro-work-order
 date: 2026-09-04
-status: open
+status: complete
 dod_line: DOD-M15-AUTHORSHIP-ABSENT-1
 dod_effect: closes
 description: >
@@ -244,12 +244,184 @@ load `/worktree-permissions` before creating one.
 ## Review
 
 ### Where this work lives
-*(worktree paths, branch, and the `COMPOSE_PROJECT_NAME` / `CELLO_PG_HOST_PORT` you used)*
 
-### The rest
-*(the refusal proof from DoD 3, the accept-without-position proof from DoD 4, the mutation proof,
-the cascade note from DoD 8, the reviewer's verdict)*
+Paired worktree, branch `m15/029-authorship` in both repos:
+`/Users/andrep/Documents/code/m15-029/cello-client` and
+`/Users/andrep/Documents/code/m15-029/trustless-cello`. **No Postgres was brought up** — this unit is
+entirely client-side, so neither `COMPOSE_PROJECT_NAME` nor `CELLO_PG_HOST_PORT` was needed.
+`/Users/andrep/Documents/code/m15-029` was added to `.claude/settings.local.json` before the
+worktrees were created.
+
+### What changed, in one paragraph
+
+**Send:** `#signOwnContentClaim` builds and signs a v1 Structure 1 for every outbound content frame,
+including the relay-degraded path where no submit happens, and the frame carries `sender_signature`
+beside `structure1_cbor`. `structure2_cbor` is DROPPED whenever we build our own — the relay's
+committed copy of the signature verifies only against the exact Structure 1 that was submitted, so
+pairing it with a locally built one would freeze an honest counterparty. **Receive:**
+`#verifyAuthorshipClaim` is the single verifier for both callers and takes the signature as an
+argument rather than digging it out of a structure, which is the whole of the fix. Missing,
+unreadable, and signed-over-other-content take one path — refused by name, not ingested. Both FATAL
+verdicts still freeze. `#recordFrameOrdering` answers only the question it is named for; its
+authorship fields had one consumer and it no longer reads them.
+
+### DoD 3 — the refusal, proved
+
+`★ NO sender_signature: refused BY NAME, not ingested, and the operator is told` drives the real
+inbound handler with a frame that is perfect except for the signature. The operator's notice:
+
+> **STOPPED ON PURPOSE. This copy was refused and the message itself was not kept. IT MAY STILL REACH
+> YOU BY THE OTHER ROUTE: refusing sends back no acknowledgement, so their agent parks a copy in the
+> relay mailbox and this side accepts that one on the strength of the mailbox envelope — delivered,
+> but with no proof of who wrote that individual message. Almost always their CELLO build is older
+> than this one… Ask which version they are running, and tell them to upgrade… If they are on the
+> SAME version as you, that explanation does not hold: confirm with them OUT OF BAND before opening
+> another session.**
+
+It reaches BOTH operator doors — `cello_check_notifications` (`takeAgentContentRefusals`) and
+`cello_receive` (`takeContentRefusals`) — as well as the `session.content.refused` ERROR. It does
+**not** freeze: `★ absence REFUSES the message; it does NOT freeze the session`.
+
+### DoD 4 — position stays soft, proved
+
+`★ a valid signature with NO structure2_cbor is ACCEPTED and ingested` — no refusal, one received
+transcript row, and `session.content.ordering.absent` still fires, now naming POSITION. The
+daemon-004 sibling proves the same thing through `LoopbackFakeNode` with a real counterparty
+keypair. **Mutant M7** (make Structure 2 mandatory) reddens four tests across both files, which is
+what makes this clause load-bearing rather than stated.
+
+### DoD 6 — the mutation loop
+
+`/tmp/claude-501/mut029-final2.log`. Refuses a dirty tree (`git status --porcelain`), prints a
+baseline (35 passed) before the first mutant, typechecks every mutant, and records WHICH assertion
+reddened. **Nine mutants, nine CAUGHT:**
+
+| Mutant | Caught by |
+|---|---|
+| M1 absent proof waved through (**the load-bearing one**) | the passport case is ingested again; refusal notice absent |
+| M2 unreadable Structure 1 → soft unmatched signer | `★ an UNREADABLE structure1_cbor is refused` |
+| M3 `sender_signature` dropped from the outbound frame | `★ the frame still carries structure1_cbor + sender_signature` |
+| M4 no local signing on the relay-degraded path | same, plus the identity-key test |
+| M5 content-hash binding dropped | `★ a signature over DIFFERENT content is refused` |
+| M6 a refuted proof refuses instead of freezing | 5 tests across both files |
+| M7 position made mandatory | 4 tests — the DoD 4 guard |
+| M8 the park reconciliation silenced (review H1) | `★ the refused message arrives via the relay mailbox` |
+| M9 the sent row loses its proof again (review M3) | `★ … the frame still carries…` (authorship assertion) |
+
+**M1 needed widening to compile**, and the first run recorded it as `DOES NOT COMPILE — proves
+nothing` (rule 4). The guard being deleted is also what NARROWS `s1Cbor` for the call below it, so
+the mutant is applied as a pair with the cast that narrowing used to supply. The reviewer flagged
+that the claim was not backed by the log; it is now — the loop applies the pair itself and the
+recorded verdict is CAUGHT.
+
+### DoD 8 — the gate, and what publishes
+
+`vitest run` 4,879 passed / 11 skipped across 427 files; `eslint core/*/src` clean;
+`pnpm run typecheck` (`tsc --build` + six test projects) clean. An earlier full run had two failures
+— `core/cli` `commands.test.ts` login and `core/daemon` `binary.test.ts` — both fixed wall-clock
+waits on spawning the daemon binary while three lanes ran suites concurrently; both passed in
+isolation and pass in the final run. Neither path is touched by this diff.
+
+**This publishes.** It is a client-side wire change: `sender_signature` is a new top-level key on
+`content_frame`, a client↔client frame the relay never sees. **No directory or relay roll is
+needed** — the directory's seal verification reads `s2.sender_signature` out of Structure 2 and is
+untouched. The cascade is `/cello-publish` for cello-client (load the skill, every publish), and
+**both of Andre's agents must take the new build** — they are on different machines (laptop and the
+Hermes EC2 box). Emit and enforce ship together, per Part 3: a skewed pair costs a NAMED REFUSAL,
+not silent loss.
+
+### DoD 9 — the reviewer's verdict, in its own words
+
+`cello-unit-reviewer`, one pass, no model override. It was killed mid-run by a session rate limit
+and resumed; the verdict below is from the completed run.
+
+> **SPEC: DEVIATIONS FOUND** — clause 3 (H1, `[blocking]`: refused on the direct path, ingested
+> through park, with an operator notice asserting the opposite) and clause 6 (the load-bearing
+> mutant's proof is not in the recorded evidence; the property holds by inspection, the record does
+> not).
+>
+> **SILENT FALLBACKS FOUND** — H1 is `[blocking]`: the direct-path refusal is announced and the
+> park-path admission is not, so the weaker guarantee is indistinguishable from the stronger one and
+> the announcement is actively false. M3 is the quieter half of the same shape.
+>
+> **ERRORS NAME THEIR CAUSE** — four distinct upstream conditions, four distinct surfaced names…
+> No error substitution anywhere in this diff.
+>
+> **HOLLOW TESTS FOUND** — T1 `[blocking]`: "★ absence REFUSES the message; it does NOT freeze the
+> session" is green on `origin/main` and **does not survive the revert test**. T2 is a
+> self-comparing tautology. Every other new test survives the revert test.
+>
+> **REMOVALS PROVEN** — deadness established by call-site enumeration on a private method plus an
+> unchanged public wrapper, cross-checked against both repos and the `exports` map, not by a grep of
+> the symbol.
+>
+> **COMPATIBILITY DEBT FOUND** — LOW only: no live branch exists for an older version, but four
+> comments (H2) and one reason-string collision now describe a shape the code left behind.
+
+**Findings and disposition — 2 blocking, 8 total. Every one fixed except M4, which is a new item:**
+
+| | Finding | Disposition |
+|---|---|---|
+| **H1** | `[blocking]` the refusal announced "nothing was stored" while the park route delivers the same message | **fixed** — guidance rewritten to say what is true of this path; content-hash-keyed memo fires `content.recover.authorship_refusal_reconciled`; park path deliberately unchanged. Mutant M8. |
+| **T1** | `[blocking]` the no-freeze test was green before the fix | **fixed** — it asserts the refusal too |
+| **H2** | four comments still named `#recordFrameOrdering` as the verifier, incl. the `sender_sig` column | **fixed** — all four rewritten, none deleted |
+| **M3** | the sent row dropped the proof this unit had just produced | **fixed** — `sentAuthorship` set from the local claim, verified before stored. Mutant M9. |
+| **M4** | the authorship claim is not bound to the SESSION id | **NOT fixed — new item, see below** |
+| **L5** | refused content discarded with nothing said about it | **fixed** — the guidance says the message was not kept |
+| **L6** | `B_PUB` held alice's own key on a session with no peer | **fixed** |
+| **L7** | two `#recordFrameOrdering` arms unreachable from the content caller, live from park | **no action, by design** — recorded so nobody deletes them |
+| **T2** | an assertion comparing a constant to itself | **fixed** |
+| **T3** | `hasStructure1` / `hasSenderSignature` unasserted | **fixed** — new test |
+
+One test outside the reviewer's list also had to be rewritten, caught by the suite after the M3 fix:
+`★ an UNWITNESSED send stores no proof` asserted the world this unit changed. Rewritten, not
+deleted — the half it was really protecting (never a placeholder that makes an unprovable row look
+provable) is now held by a verify rather than a null check.
 
 ## Newly discovered
 
-*(anything found and NOT acted on, per rule 3 — e.g. what the park path passes)*
+*Found and NOT acted on, per rule 3. **The §0z.2 spawn trip-wire is TRIPPED — three items.** The
+vein is producing PRODUCTION DEFECTS, not test hygiene: all three are live behaviours an operator or
+a counterparty can reach.*
+
+**1. The inbound encryption refusals file no inbox notice — the operator never sees them.**
+`session-node-manager.ts`'s content-stream handler refuses three ways before authorship is ever
+checked — `content_encryption_absent_or_unknown`, `no_session_key`, `decrypt_failed`. All three log
+at ERROR with a good `impact` and `guidance`, and **none of them calls `noteContentRefusal`**, so
+none reaches `cello_receive` or `cello_inbox`. From the operator's chair the conversation simply
+goes quiet and they conclude the other person stopped replying — which is precisely the defect
+`DOD-M15-NO-SILENT-REFUSAL-1` exists to close, in the same file, on the same path, three refusals
+above the one this unit added. **Classification: POST-LAUNCH** under §0z.4 — it is a missing surface
+on an existing correct refusal, not a security hole a customer reaches, and the forensic record is
+intact.
+
+**2. The send path reads the session key, then seals the body several `await`s later.**
+`#contentEncryptionState` is read once; `#openContentStream` (and now the signing) run between that
+read and `sealSessionContent`. A content key agreed with the counterparty inside that window leaves
+this side sealing under the key it captured while the far side has moved on, and **every message is
+refused as `decrypt_failed`** — a false tamper report on honest content. Measured, not reasoned
+about: it is what reddened four live-libp2p fixtures here, and both daemons logged
+`session.key.agreed` before the refusal. Signing was moved above the key read so this unit does not
+widen the window, but the window is pre-existing and still open. **Classification: POST-LAUNCH** —
+it needs a real re-key mid-send to fire, which today happens only in the first seconds of a session.
+
+**3. The authorship claim is bound to the content and the signer, and NOT to the session** (review
+M4). `decodeStructure1` yields `fields.sessionId` and nothing compares it to the session the frame
+arrived on, so a claim the counterparty signed in session X verifies unchanged in session Y for the
+same content hash — a message they really wrote, replayed into a different conversation with them.
+Inherited from `#recordFrameOrdering`, which never checked it either, but this unit is the moment
+that claim became the only thing standing between a message and the transcript, so the missing
+binding is now load-bearing. The tell is visible in the diff: `#signOwnContentClaim` encodes the
+full session id while the new test fixture encodes `subarray(0, 16)`, and nothing notices, because
+the field is unread. **Classification: needs Andre's call.** It is a transcript-integrity hole
+reachable by the counterparty, which reads BLOCKS; it is also narrow (replay of a message they did
+write, into another session with the same person) and the fix reddens fixtures in two other units'
+test files, which reads POST-LAUNCH. Not started, per the trip-wire.
+
+**4. What the park path passes** — the order asked for this explicitly. `recordOrderingRecord`
+(`source: "park"`) calls `#recordFrameOrdering` only when the envelope carries BOTH
+`structure1Cbor` and `structure2Cbor`, and consumes `.seq` alone; it never read the authorship
+fields, which is what made removing them a clean deletion. The park envelope has no
+`sender_signature` field of its own — recovered mail proves its sender by the envelope's signature
+over `(session_id, recipient_pubkey, content_hash)`, verified in `authenticateParkedEntry` before
+anything is unsealed. The mandatory-signature rule was NOT extended there, per the order.

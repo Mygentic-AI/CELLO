@@ -280,6 +280,30 @@ resource "google_cloud_run_v2_service" "portal" {
         }
       }
 
+      // X (M10C). Same shape as GitHub's pair above, and for the same reason: the OAuth callback is
+      // bound to PORTAL_HOSTNAME, so the redirect URI registered in the X developer portal must be
+      // `https://<that host>/api/auth/x/callback` or the exchange fails AFTER the operator has
+      // already approved — the worst place to discover a misconfiguration.
+      env {
+        name = "X_CLIENT_ID"
+        value_source {
+          secret_key_ref {
+            secret  = "cello-portal-x-client-id"
+            version = "latest"
+          }
+        }
+      }
+
+      env {
+        name = "X_CLIENT_SECRET"
+        value_source {
+          secret_key_ref {
+            secret  = "cello-portal-x-client-secret"
+            version = "latest"
+          }
+        }
+      }
+
       // The intake key. Carried over from AWS rather than regenerated, because the consortium manifest
       // clients already trust was signed with its public half — a fresh key here would invalidate
       // every endorsement path against manifests already in the wild.
@@ -512,8 +536,11 @@ variable "portal_hostname" {
   description = "Public hostname for the portal. The GitHub OAuth callback and every registered passkey are bound to this value."
 }
 
-// The five secrets copied from AWS need an accessor grant each; without it the revision fails to start
-// with a permission error on the secret rather than anything resembling a config problem.
+// These secrets need an accessor grant each; without it the revision fails to start with a
+// permission error on the secret rather than anything resembling a config problem.
+//
+// The first five were copied from AWS. The two X secrets were created directly in GCP on 2026-09-04
+// (M10C) — there was no AWS original to copy, since X was never wired there.
 resource "google_secret_manager_secret_iam_member" "portal_copied" {
   for_each = toset([
     "cello-portal-github-client-id",
@@ -521,6 +548,8 @@ resource "google_secret_manager_secret_iam_member" "portal_copied" {
     "cello-portal-intake-key-0",
     "cello-portal-ingress-trigger-secret",
     "cello-portal-submission-seed",
+    "cello-portal-x-client-id",
+    "cello-portal-x-client-secret",
   ])
   project   = var.project_id
   secret_id = each.value

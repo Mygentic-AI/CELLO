@@ -1688,7 +1688,7 @@ is its own migration, later.
 | Cloud SQL | `cello-portal`, us-east1, POSTGRES_17, `db-g1-small`, deletion_protection ON |
 | Signing key | Cloud KMS `cello-portal/portal-submission` v1, `EC_SIGN_ED25519`, us-east1. Pubkey `6f0203b8…80e5`, enrolled `submitter` in all 3 node DBs |
 | Directory path | `DIRECTORY_API_URLS` → the three PINNED internal IPs on **8081**, over Direct VPC egress; one key per node in `cello-portal-directory-api-keys`, positionally paired |
-| Secrets | `cello-portal-database-url`, `cello-portal-kms-master-key` (both `prevent_destroy`), `cello-portal-directory-api-keys`, **`cello-ops-agent-ses-credentials` (added 2026-08-07 — see below)**, and copied from AWS: `-github-client-id`, `-github-client-secret`, `-intake-key-0`, `-ingress-trigger-secret`, `-submission-seed` |
+| Secrets | `cello-portal-database-url`, `cello-portal-kms-master-key` (both `prevent_destroy`), `cello-portal-directory-api-keys`, **`cello-ops-agent-ses-credentials` (added 2026-08-07 — see below)**, copied from AWS: `-github-client-id`, `-github-client-secret`, `-intake-key-0`, `-ingress-trigger-secret`, `-submission-seed`, and **`cello-portal-x-client-id` + `cello-portal-x-client-secret` (created 2026-09-04, M10C — created directly in GCP, no AWS original, since X was never wired there). `portal.tf` reads both and grants the accessor, but THE APPLY HAS NOT RUN — see below.** |
 | Verified | 307 → `/sign-in` over https on the real hostname; **portal→directory proven through the app** — POST `/api/internal/ingress/drain` returns `ok:true` with `nodeErrors: []` (refuses 401 without the trigger secret); issuer enrolled on usc1/euw1/use1 |
 
 ### 🟢 2026-08-11 — the submission queue finally has something draining it
@@ -2553,3 +2553,51 @@ and the big one is not.
    provider drift (scaling fields `0 -> null`, a `client = "gcloud"` metadata field), NOT an image
    or config change. Harmless, but it is not this roll's business and every apply here was
    `-target`ed.
+
+---
+
+## 2026-09-04 — M10C: X OAuth secrets created, NOT YET APPLIED
+
+**Two secrets exist in Secret Manager and nothing reads them yet.** Created live with
+`gcloud secrets create`, version 1 each, from the values already working against the real X API
+locally:
+
+| Secret | Created | Read by |
+|---|---|---|
+| `cello-portal-x-client-id` | 2026-09-04 | `portal.tf` (env `X_CLIENT_ID`) — **not applied** |
+| `cello-portal-x-client-secret` | 2026-09-04 | `portal.tf` (env `X_CLIENT_SECRET`) — **not applied** |
+
+`infra/terraform/portal.tf` carries both env blocks (mirroring the GitHub pair) and both entries in
+`google_secret_manager_secret_iam_member.portal_copied`. **The apply was deliberately not run**: it
+was authored overnight with nobody watching, and this file already records an untargeted apply that
+would have silently reverted a security fix, plus standing cosmetic drift on four Cloud Run services.
+Run it `-target`ed, awake.
+
+**⚠️ THE APPLY ALONE IS NOT ENOUGH, AND THE MISSING STEP FAILS LATE.** The X app's registered
+redirect URI is still only `http://localhost:3000/api/auth/x/callback`. Production needs
+`https://portal.cello.mygentic.ai/api/auth/x/callback` added in the X developer console
+(console.x.com → the CELLO Protocol app → Settings → Callback URI). A missing redirect URI is
+rejected at the TOKEN EXCHANGE — that is, *after* the operator has already approved at X — so it
+looks like a portal bug rather than a registration gap. Only Andre can do this; it needs his X
+account.
+
+Also still required before the portal can mint X signals in production: the portal's KMS submission
+key must be enrolled as an authorized issuer at each directory node, exactly as it already is for
+the other types (`issuer enrolled on usc1/euw1/use1`). No directory change is needed for the TYPE
+itself — that is the zero-bump invariant, and it was proven live today: a local directory node on
+schema 64 accepted `x_anon` and `x_id`, two types it had never seen, with no code change and no
+migration.
+
+### What was proven locally on 2026-09-04
+
+First X signals ever minted, against a REAL directory node (not the stub):
+
+- `65f76ae8…` `x_anon` — active
+- `9df2da2d…` `x_id` — active
+
+Both recorded in the portal's `minted_signals` and both `active` in the directory's `signal_records`.
+The directory's column set was inspected directly and carries **no payload and no plaintext** —
+`signal_hash, accepting_node, subject_kind, issuer_kind, issuer_pubkey, type, supersedes_hash,
+status, revoked_at, scanner_version, is_tombstone, created_at, revoker_pubkey, revoker_signature`.
+That is the "nodes store only a hash" claim verified against the live schema rather than against the
+migration's own comment about itself.
