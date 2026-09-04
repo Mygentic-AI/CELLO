@@ -289,7 +289,22 @@ and `<lane>/trustless-cello` as siblings, and load `/worktree-permissions` befor
 ## Review
 
 ### Where this work lives
-*(worktree paths, branch, and the `COMPOSE_PROJECT_NAME` / `CELLO_PG_HOST_PORT` you used)*
+
+Paired worktrees, both on branch `m15/023-refusedevidence` off `origin/main`:
+
+- `/Users/andrep/Documents/code/m15-023/cello-client` (from `f724a51`) — the daemon change
+- `/Users/andrep/Documents/code/m15-023/trustless-cello` (from `540e90cc`) — the spine journey and these docs
+
+Sibling directories, so the spine harness's `../cello-client` resolves to this lane's build and not
+the main checkout's `dist`.
+
+Postgres isolation for the spine run (another lane was live on 5439 under project `m15024`):
+`COMPOSE_PROJECT_NAME=m15023`, `CELLO_PG_HOST_PORT=5443`,
+`DATABASE_URL=postgresql://postgres:dev@localhost:5443/cello_dev`.
+
+`.claude/settings.local.json` gained `/Users/andrep/Documents/code/m15-023` as a permission root
+before the worktrees were used (`/worktree-permissions`), and every command in this unit was written
+with absolute paths.
 
 ### The rest
 *(the journey output, the mutation proof from DoD 10, the reviewer's verdict)*
