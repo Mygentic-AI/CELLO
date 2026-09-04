@@ -134,8 +134,10 @@ bookkeeping — omit it and the composed claim asserts that six-month-old number
 
 ## Definition of Done
 
-1. A signed-in operator can complete the X OAuth dance and the portal ends up holding an
-   `XProfileSnapshot` for their account, matching the contract field for field.
+1. Driven end to end **against the fetch double**, the flow produces an `XProfileSnapshot` persisted
+   for the account, matching the contract field for field. **This clause is NOT a live run against
+   X** — that is `DOD-M10C-XLIVE-1`, it needs credits Andre has to buy, and clause 10 below forbids
+   you from making one. Nothing in this order is blocked by that; build and prove it on the double.
 2. **The challenge sent is provably the S256 of the verifier sent** — asserted, not assumed. This is
    the clause the whole dance rests on and it fails post-approval, so it gets its own test.
 3. **Exactly one call is made to `/2/users/me` per connect, and it requests every contract field.**
