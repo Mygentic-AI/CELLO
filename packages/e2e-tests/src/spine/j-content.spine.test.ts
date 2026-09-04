@@ -58,6 +58,56 @@ const daemons: Proc[] = [];
 const dirs: string[] = [];
 const mcpConns: McpConn[] = [];
 
+/**
+ * ─── 028-PARKCONN — DEPOSIT, WAITING OUT THE ONE REFUSAL THAT CLEARS ON ITS OWN ─────────────────
+ *
+ * **The measured cause of this file's intermittent failures**, read three times on 2026-09-04:
+ * `{"ok":false,"reason":"standing_receiver_unavailable","cause":"standing_receiver_creating"}`.
+ *
+ * The daemon builds a REPLACEMENT standing receiver behind every new session, and again after a
+ * seal. That takes seconds, `getStandingReceiverNode()` returns nothing while it runs, and this
+ * file deposits the instant `cello_initiate_session` (DOD-MSG-7) or `cello_close_session`
+ * (DOD-MSG-8) resolves — straight into the window. `session-node-manager.ts` has named that window
+ * in a comment since M12-P12: *"the deposit is refused only in the seconds-long window while the
+ * sender's standing receiver rebuilds."*
+ *
+ * **Why the retry lives HERE and not in the daemon.** The raw `content_park_deposit` IPC has no
+ * production caller (see this file's header) — production parks through `#parkContent`, which
+ * already re-drives the deposit on four separate triggers. And `ipcCall`'s own timeout is 5s, so a
+ * wait inside the handler long enough to cover the window would time the CALLER out instead of
+ * answering it. The handler's job is to refuse with a cause; consuming that cause is the caller's.
+ *
+ * **It retries ONE cause and nothing else.** Any other refusal — a relay that cannot be reached, an
+ * offline agent, a bad signature — fails immediately with the whole response in the message. A
+ * daemon that regressed to the bare `standing_receiver_unavailable` label with no `cause` would not
+ * be retried either, which is what keeps this from swallowing the defect it was written for.
+ */
+const RECEIVER_WINDOW_MS = 20_000;
+async function parkDeposit(
+  celloDir: string,
+  label: string,
+  params: Record<string, unknown>,
+): Promise<{ ok?: boolean; reason?: string; cause?: string; guidance?: string }> {
+  const deadline = Date.now() + RECEIVER_WINDOW_MS;
+  let res: { ok?: boolean; reason?: string; cause?: string; guidance?: string };
+  let attempts = 0;
+  for (;;) {
+    attempts++;
+    res = (await ipcCall(celloDir, "content_park_deposit", params)) as typeof res;
+    if (res.ok === true) return res;
+    if (res.cause !== "standing_receiver_creating" || Date.now() >= deadline) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  // `toMatchObject` prints only the keys it compared, so the response rides in the message — the
+  // first live failure said `expected {ok:false} to match {ok:true}` and hid the reason entirely.
+  expect(
+    res,
+    `deposit (${label}) must be ACCEPTED — it RESOLVED, which is not the same as ok. ` +
+      `After ${attempts} attempt(s) over ${Date.now() - (deadline - RECEIVER_WINDOW_MS)}ms the response was: ${JSON.stringify(res)}`,
+  ).toMatchObject({ ok: true });
+  return res;
+}
+
 beforeAll(async () => {
   // A THREE-node consortium, matching the pattern j-refresh/j-tofn/j-relaysig already use.
   //
@@ -441,20 +491,14 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
      * `expected +0 to be 1` — a count with no cause attached, and the misreading that had to be
      * withdrawn in writing. `dep` now reads `ok` and says which deposit failed and why.
      */
-    const dep = async (label: string, args: Record<string, unknown>) => {
-      const res = (await ipcCall(dirA, "content_park_deposit", {
+    const dep = (label: string, args: Record<string, unknown>) =>
+      parkDeposit(dirA, label, {
         relayMultiaddr: cluster.relayMultiaddr,
         recipientPubkey: pubB,
         sessionId,
         senderAgentName: "agentA",
         ...args,
-      })) as { ok?: boolean; reason?: string; guidance?: string };
-      // The whole response goes in the message: `toMatchObject` prints only the keys it compared
-      // ("2 matching properties omitted"), so a bare match hides the `reason` and `guidance` that
-      // are the entire reason this assertion exists.
-      expect(res, `deposit (${label}) must be ACCEPTED — it resolved, which is not the same as ok. Response: ${JSON.stringify(res)}`).toMatchObject({ ok: true });
-      return res;
-    };
+      });
 
     // (1) HONEST — signed, and the claimed hash MATCHES the sealed content. Must be accepted.
     const honest = Buffer.from("honest recovered message");
@@ -601,7 +645,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // `ipcCall` resolves for `{ok:false, reason}` exactly as it does for `{ok:true}` — read `ok`, or
     // a refused deposit reappears as "expected +0 to be 1" on the dedup assertion below with the
     // cause nowhere in the message (019-PARKERROR read three refusals as three successes this way).
-    const dep5 = (await ipcCall(dirA, "content_park_deposit", {
+    await parkDeposit(dirA, "the duplicate that must dedup", {
       relayMultiaddr: cluster.relayMultiaddr,
       recipientPubkey: pubB,
       contentHash: hashHex,
@@ -609,8 +653,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
       sessionId,
       senderAgentName: "agentA",
       content: Buffer.from(msgBytes).toString("hex"),
-    })) as { ok?: boolean; reason?: string; guidance?: string };
-    expect(dep5, "the duplicate must actually reach the relay — a refused deposit dedups nothing").toMatchObject({ ok: true });
+    });
     const rec = (await ipcCall(dirB, "content_park_recover", { relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB })) as { ok?: boolean; pulled?: number };
     expect(rec.ok).toBe(true);
     expect(rec.pulled).toBe(1);
@@ -1053,16 +1096,17 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // being refused for a fourth reason entirely (`unsigned_envelope`) before the sealed-session
     // guard ran. The assertion below named a guard that was never reached.
     // Read `ok`: `ipcCall` resolves identically for a refusal, and a straggler that never reached the
-    // relay proves nothing about the sealed-session guard it is supposed to be refused by.
-    const dep8 = (await ipcCall(dirA, "content_park_deposit", {
+    // relay proves nothing about the sealed-session guard it is supposed to be refused by. The seal
+    // just above is itself a standing-receiver rebuild, so this deposit lands in the window
+    // 028-PARKCONN measured — `parkDeposit` waits it out and fails loudly on anything else.
+    await parkDeposit(dirA, "the post-seal straggler", {
       relayMultiaddr: cluster.relayMultiaddr,
       recipientPubkey: pubB,
       contentHash: contentHashHex(straggler),
       sessionId,
       senderAgentName: "agentA",
       content: straggler.toString("hex"),
-    })) as { ok?: boolean; reason?: string; guidance?: string };
-    expect(dep8, "the straggler must be parked — otherwise the guard below is never reached").toMatchObject({ ok: true });
+    });
 
     const rec = (await ipcCall(dirB, "content_park_recover", {
       relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB,
