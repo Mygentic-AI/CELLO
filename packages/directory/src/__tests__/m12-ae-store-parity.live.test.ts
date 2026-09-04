@@ -169,7 +169,12 @@ describeLive("DOD-AE-STORE-1: Tier-B advertise and apply hash the SAME form", ()
     const mine = served.find((r) => r.key === AGENT_B);
     expect(mine, "the seeded suspension must be served").toBeDefined();
 
-    expect(await store.applyTierB("agent_suspensions", [mine!]), "identical body must change nothing").toBe(0);
+    // `.applied` — the store reports the change count and the divergence verdict separately since
+    // DOD-M15-FORKQUIET-1. `divergent` is 1 here and that is the pre-existing rule unchanged: for a
+    // fully-merged table, "the merge moved nothing" is the only signal a pull can give. It is
+    // unreachable in a real round (identical bodies hash identically, so no pull is ever planned).
+    const reapply = await store.applyTierB("agent_suspensions", [mine!]);
+    expect(reapply.applied, "identical body must change nothing").toBe(0);
     // And the advertised version is unmoved, so the next round plans nothing for this key.
     expect((await store.tierBVersions("agent_suspensions")).get(AGENT_B)).toBe(advertised.get(AGENT_B));
   });

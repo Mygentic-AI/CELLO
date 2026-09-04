@@ -20,7 +20,7 @@ import type { ConsortiumManifest } from "@cello-protocol/protocol-types";
 import type { Logger } from "@cello-protocol/interfaces";
 import { AeSyncService, manifestEntryMultiaddr, type AeTransport } from "../ae-sync-service.js";
 import { AE_PROTOCOL_ID, type AeNodeIdentity } from "../ae-channel.js";
-import type { AeStoreView, TierARecord, TierBRecord } from "../anti-entropy-engine.js";
+import type { AeStoreView, TierARecord, TierBRecord, TierBApplyResult } from "../anti-entropy-engine.js";
 import { computeTableDigest } from "../set-reconciliation.js";
 import { tierBTableDigest } from "../ae-round.js";
 import { encodeTierARecord, AGENT_REVOCATIONS_SPEC } from "../ae-table-encoders.js";
@@ -83,18 +83,42 @@ class MemStore implements AeStoreView {
    * it sees `tierBTables() === []` and is unaffected.
    */
   heartbeats = new Map<string, string>();
+  /**
+   * node_id → `status`, the row's NON-heartbeat content (DOD-M15-FORKQUIET-1). A node absent here
+   * reads `active`, which is the column's DB default and what both production insert paths write —
+   * so a test that only sets heartbeats models a fleet that agrees on status, as the live one does.
+   */
+  statuses = new Map<string, string>();
+  status(nodeId: string): string { return this.statuses.get(nodeId) ?? "active"; }
+  /**
+   * A second Tier-B table with NO witness — `agent_presence`'s shape: wall-clock LWW where the merge
+   * settles every column it carries. It is here because the two kinds of Tier-B table are judged at
+   * different GRANULARITIES and produce OPPOSITE alarm text, and a harness carrying only the
+   * witnessed kind cannot see either difference. key → epoch-millis.
+   */
+  presence = new Map<string, string>();
   tierATables(): string[] { return ["agent_revocations"]; }
-  tierBTables(): string[] { return this.heartbeats.size > 0 ? ["directory_nodes"] : []; }
+  tierBTables(): string[] {
+    const t: string[] = [];
+    if (this.heartbeats.size > 0) t.push("directory_nodes");
+    if (this.presence.size > 0) t.push("agent_presence");
+    return t;
+  }
   tierARecordHashes(): string[] {
     return [...this.revocations.values()].map((r) => encodeTierARecord(AGENT_REVOCATIONS_SPEC, r).hash);
   }
   // Digest-first advertisement: the O(1)-per-table divergence check (design §3 step 1).
   tierATableDigest(): string { return computeTableDigest(this.tierARecordHashes()); }
-  tierBTableDigest(): string { return tierBTableDigest(this.tierBVersions()); }
-  tierBVersions(): Map<string, string> {
+  tierBTableDigest(t: string): string { return tierBTableDigest(this.tierBVersions(t)); }
+  tierBVersions(t: string): Map<string, string> {
+    if (t === "agent_presence") {
+      return new Map([...this.presence].map(([k, v]) => [k, `pres:${v}`]));
+    }
     return new Map([...this.heartbeats].map(([node_id, last_heartbeat_at]) => [
       node_id,
-      encodeTierBVersion(DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC, { node_id, last_heartbeat_at }).versionHash,
+      encodeTierBVersion(DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC, {
+        node_id, status: this.status(node_id), last_heartbeat_at,
+      }).versionHash,
     ]));
   }
   serveTierA(_t: string, hashes: readonly string[]): TierARecord[] {
@@ -103,10 +127,17 @@ class MemStore implements AeStoreView {
       .map((r) => ({ hash: encodeTierARecord(AGENT_REVOCATIONS_SPEC, r).hash, body: r }))
       .filter((rec) => want.has(rec.hash));
   }
-  serveTierB(_t: string, keys: readonly string[]): TierBRecord[] {
+  serveTierB(t: string, keys: readonly string[]): TierBRecord[] {
+    if (t === "agent_presence") {
+      return keys.filter((k) => this.presence.has(k))
+        .map((k) => ({ key: k, body: { k_local_pubkey: k, updated_at: this.presence.get(k)! } }));
+    }
     return keys
       .filter((k) => this.heartbeats.has(k))
-      .map((k) => ({ key: k, body: { node_id: k, last_heartbeat_at: this.heartbeats.get(k)! } }));
+      .map((k) => ({
+        key: k,
+        body: { node_id: k, status: this.status(k), last_heartbeat_at: this.heartbeats.get(k)! },
+      }));
   }
   applyTierA(_t: string, records: readonly TierARecord[]): number {
     let n = 0;
@@ -116,18 +147,53 @@ class MemStore implements AeStoreView {
     }
     return n;
   }
-  /** Freshest-wins, matching `mergeDirectoryNodeHeartbeat`; counts rows whose value actually moved. */
-  applyTierB(_t: string, records: readonly TierBRecord[]): number {
-    let n = 0;
-    for (const rec of records) {
-      const incoming = rec.body as { node_id: string; last_heartbeat_at: string };
-      const local = this.heartbeats.get(incoming.node_id);
-      if (local === undefined || Number(incoming.last_heartbeat_at) > Number(local)) {
-        this.heartbeats.set(incoming.node_id, incoming.last_heartbeat_at);
-        n++;
+  /**
+   * Freshest-wins, matching `mergeDirectoryNodeHeartbeat`: counts rows whose heartbeat actually
+   * moved, and reports divergence from the `status` witness alone — never from `pulled - applied`,
+   * which for this table is the healthy steady state (DOD-M15-FORKQUIET-1). `status` is never taken
+   * from the peer, exactly as `applyTierB`'s UPDATE never writes it.
+   */
+  applyTierB(t: string, records: readonly TierBRecord[]): TierBApplyResult {
+    if (t === "agent_presence") {
+      // NO WITNESS → judged per TABLE, exactly as `PgAeStore` judges agent_suspensions and
+      // agent_presence: divergent only when the table applied NOTHING, and labelled `peer_behind`
+      // because that means our copy dominates the peer's — replication lag, never a fork.
+      let n = 0;
+      for (const rec of records) {
+        const inc = rec.body as { k_local_pubkey: string; updated_at: string };
+        const local = this.presence.get(inc.k_local_pubkey);
+        if (local === undefined || Number(inc.updated_at) > Number(local)) {
+          this.presence.set(inc.k_local_pubkey, inc.updated_at); n++;
+        }
       }
+      return n > 0
+        ? { applied: n, divergent: 0, divergentKeys: [] }
+        : { applied: 0, divergent: records.length, divergentKeys: records.map((r) => r.key).slice(0, 5),
+            verdict: "peer_behind" as const };
     }
-    return n;
+    let applied = 0;
+    let divergent = 0;
+    const divergentKeys: string[] = [];
+    for (const rec of records) {
+      const incoming = rec.body as { node_id: string; status: string; last_heartbeat_at: string };
+      const local = this.heartbeats.get(incoming.node_id);
+      if (local === undefined) {
+        this.heartbeats.set(incoming.node_id, incoming.last_heartbeat_at);
+        this.statuses.set(incoming.node_id, incoming.status);
+        applied++;
+        continue;
+      }
+      if (Number(incoming.last_heartbeat_at) > Number(local)) {
+        this.heartbeats.set(incoming.node_id, incoming.last_heartbeat_at);
+        applied++;
+      }
+      if (this.status(incoming.node_id) !== incoming.status) { divergent++; divergentKeys.push(rec.key); }
+    }
+    // directory_nodes HAS a witness, so the real store judges it per record and labels it
+    // `content_fork` — a disagreement no merge settles.
+    return divergent > 0
+      ? { applied, divergent, divergentKeys, verdict: "content_fork" as const }
+      : { applied, divergent: 0, divergentKeys: [] };
   }
 }
 const rev = (id: string): RevRow => ({ agent_id: id, epoch_id: "e1", reason: "c", signature: "ab".repeat(64), revoked_at: "1785200000000" });
@@ -280,7 +346,8 @@ describe("AeSyncService — libp2p-face wiring", () => {
     // responsible meant dumping all 17 Tier-A tables off two live nodes and diffing them. An alarm
     // that cannot say what is wrong cannot be acted on.
     expect(forks[0][1].unconverged).toEqual([
-      { tier: "A", table: "agent_revocations", planned: 1, pulled: 1, applied: 0 },
+      { tier: "A", table: "agent_revocations", planned: 1, pulled: 1, applied: 0, divergent: 1,
+        verdict: "content_fork", divergentKeys: [] },
     ]);
     // Tier-A is unambiguous — say so, because a Tier-B entry here is often benign and the operator
     // must not have to know that to read the alarm.
@@ -289,7 +356,8 @@ describe("AeSyncService — libp2p-face wiring", () => {
     // The same breakdown rides the routine round log, so the gap is visible before a streak builds.
     const completed = dialLogger.events.filter(([e]) => e === "antientropy.round.completed");
     expect(completed.at(-1)![1].unconverged).toEqual([
-      { tier: "A", table: "agent_revocations", planned: 1, pulled: 1, applied: 0 },
+      { tier: "A", table: "agent_revocations", planned: 1, pulled: 1, applied: 0, divergent: 1,
+        verdict: "content_fork", divergentKeys: [] },
     ]);
   });
 
@@ -351,6 +419,169 @@ describe("AeSyncService — libp2p-face wiring", () => {
     expect(completed.length).toBeGreaterThan(0);
     expect(completed.at(-1)![1].unconverged).toBeUndefined();
     expect(dialLogger.events.filter(([e]) => e === "antientropy.round.fork_suspected").length).toBe(0);
+  });
+
+  // ── DOD-M15-FORKQUIET-1: a table that is always moving is not a fork ────────────────────────
+  //
+  // `directory_nodes` is the one synced table a node rewrites on a TIMER, and it rewrites its OWN
+  // row. So a dialer always holds a strictly fresher heartbeat for itself than any peer does: the
+  // version hashes differ, the row is pulled, the LWW merge confirms the local copy already won,
+  // and `applied` is 0 — the fork signature, every round, forever, on a healthy fleet. Measured in
+  // production 2026-09-04: `fork_suspected` at ERROR every three minutes with `consecutive` pinned
+  // at 2. The fix judges convergence on the row EXCLUDING `last_heartbeat_at`.
+
+  it("a heartbeat-only difference the LOCAL copy already dominates is NOT a fork, ever", async () => {
+    // The exact production shape: the dialer's own row. Its local heartbeat is newer than the copy
+    // any peer holds, so the pull can never apply and the pull can never stop being planned.
+    const respStore = new MemStore();
+    const dialStore = new MemStore();
+    dialStore.heartbeats.set("aws-use1", "1785200060000"); // OUR row, freshly self-written
+    respStore.heartbeats.set("aws-use1", "1785200000000"); // the peer's staler copy of it
+    const { respService, dialService, dialLogger } = pairServices({ respStore, dialStore });
+    await respService.start();
+    respService.stop();
+
+    // Three rounds — one more than the streak threshold, so a fix that merely delays the alarm fails.
+    for (let i = 0; i < 3; i++) await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+
+    // Confirm the CONDITION was present: the row really was pulled and really did not apply.
+    // Without this the test could pass because nothing was pulled at all.
+    const rounds = dialLogger.events.filter(([e]) => e === "antientropy.round.completed");
+    expect(Number(rounds.at(-1)![1].pulled), "the row must still be pulled").toBeGreaterThan(0);
+    expect(Number(rounds.at(-1)![1].applied), "and it must still apply nothing").toBe(0);
+
+    expect(
+      dialLogger.events.filter(([e]) => e === "antientropy.round.fork_suspected").length,
+      "a heartbeat-only difference is not a disagreement",
+    ).toBe(0);
+    // And it does not ride the routine round log either — an `unconverged` entry that is always
+    // present is the noise that made the alarm unreadable in the first place.
+    expect(rounds.at(-1)![1].unconverged).toBeUndefined();
+    // THE QUIET MUST BE A HEALTHY ROUND'S QUIET. A mutation loop found this gap: revert the engine's
+    // push condition and the round throws before it can label the entry, the throw is contained as a
+    // per-table failure, and "zero fork_suspected" is satisfied by a table that stopped reconciling
+    // altogether. "It did not alarm" is a shadow; the table still working is the outcome.
+    expect(
+      dialLogger.events.filter(([e]) => e === "antientropy.round.table_failed").map(([, c]) => c.table),
+      "silence must not be the silence of a table that stopped reconciling",
+    ).toEqual([]);
+    // The local copy is untouched: quieting the verdict must not quieten the MERGE.
+    expect(dialStore.heartbeats.get("aws-use1")).toBe("1785200060000");
+  });
+
+  it("heartbeat replication is unchanged — a fresher peer heartbeat still applies", async () => {
+    // The other half of DOD-M15-FORKQUIET-1. A fix that stopped counting the heartbeat by dropping
+    // it from the version hash would silence the alarm AND stop `021-HEARTBEAT` replicating, with
+    // every assertion above still green.
+    const respStore = new MemStore();
+    const dialStore = new MemStore();
+    dialStore.heartbeats.set("gcp-usc1", "1785200000000");
+    respStore.heartbeats.set("gcp-usc1", "1785200060000"); // the peer is fresher
+    const { respService, dialService, dialLogger } = pairServices({ respStore, dialStore });
+    await respService.start();
+    respService.stop();
+
+    await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+
+    expect(dialStore.heartbeats.get("gcp-usc1"), "the fresher heartbeat must land").toBe("1785200060000");
+    const completed = dialLogger.events.filter(([e]) => e === "antientropy.round.completed").at(-1)!;
+    expect(Number(completed[1].applied), "and it must be COUNTED as applied").toBe(1);
+    expect(dialLogger.events.filter(([e]) => e === "antientropy.round.fork_suspected").length).toBe(0);
+  });
+
+  it("a real divergence in that table STILL alarms — two nodes disagreeing on `status`", async () => {
+    // The line that stops the fix from being a mute button. `directory_nodes` does not only carry a
+    // heartbeat: a disagreement about whether a node is `active` is exactly what the fork detector
+    // exists to shout about, and it must survive the change that silences the heartbeat.
+    const respStore = new MemStore();
+    const dialStore = new MemStore();
+    const hb = "1785200000000";
+    dialStore.heartbeats.set("gcp-usc1", hb);
+    respStore.heartbeats.set("gcp-usc1", hb);   // heartbeats AGREE — the difference is status alone
+    dialStore.statuses.set("gcp-usc1", "active");
+    respStore.statuses.set("gcp-usc1", "drained");
+    const { respService, dialService, dialLogger } = pairServices({ respStore, dialStore });
+    await respService.start();
+    respService.stop();
+
+    await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+    expect(
+      dialLogger.events.filter(([e]) => e === "antientropy.round.fork_suspected").length,
+      "one occurrence is not yet a streak",
+    ).toBe(0);
+    await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+
+    const forks = dialLogger.events.filter(([e]) => e === "antientropy.round.fork_suspected");
+    expect(forks.length, "a status disagreement is a real fork and must be reported").toBe(1);
+    expect(forks[0][1].table).toBe("directory_nodes");
+    expect(forks[0][1].tier).toBe("B");
+    expect(forks[0][1].consecutive).toBe(2);
+    // IT NAMES THE ROW. The alarm could name a table and nothing else, and answering the last one
+    // meant diffing whole tables off two live nodes.
+    expect(forks[0][1].divergentKeys, "the alarm must say WHICH row").toEqual(["gcp-usc1"]);
+    // And it says what KIND of disagreement, because the two need opposite things from the reader.
+    expect(String(forks[0][1].reason)).toContain("no merge reconciles");
+    // The peer does NOT get to rewrite our status by winning a heartbeat comparison — the
+    // counterbalance for putting the column on the wire at all.
+    expect(dialStore.status("gcp-usc1")).toBe("active");
+  });
+
+  it("a status fork is not masked by another node's heartbeat applying in the SAME round", async () => {
+    // The hollow-test trap for this unit. The previous round's verdict was re-derived from the
+    // TABLE's totals (`pulled > 0 && applied === 0`), so one heartbeat landing anywhere in
+    // `directory_nodes` made the whole table read as healthy — and on a live fleet a heartbeat lands
+    // almost every round. A test that forks the only row in the table passes either way.
+    const respStore = new MemStore();
+    const dialStore = new MemStore();
+    // (a) the forked row — status disagrees, heartbeats agree.
+    dialStore.heartbeats.set("gcp-usc1", "1785200000000");
+    respStore.heartbeats.set("gcp-usc1", "1785200000000");
+    dialStore.statuses.set("gcp-usc1", "active");
+    respStore.statuses.set("gcp-usc1", "drained");
+    // (b) a DIFFERENT row in the same table whose heartbeat applies on every round.
+    dialStore.heartbeats.set("azure-weu", "1785200000000");
+    respStore.heartbeats.set("azure-weu", "1785200060000");
+    const { respService, dialService, dialLogger } = pairServices({ respStore, dialStore });
+    await respService.start();
+    respService.stop();
+
+    await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+    respStore.heartbeats.set("azure-weu", "1785200120000"); // it moves again, so round 2 also applies
+    await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+
+    // Prove the masking condition was really present, per the "confirm it failed for the reason you
+    // think" rule — otherwise this passes for the trivial reason that nothing applied.
+    const rounds = dialLogger.events.filter(([e]) => e === "antientropy.round.completed");
+    expect(Number(rounds.at(-1)![1].applied), "a sibling row must have applied this round").toBeGreaterThan(0);
+
+    const forks = dialLogger.events.filter(([e]) => e === "antientropy.round.fork_suspected");
+    expect(forks.length, "the status fork must survive a sibling heartbeat applying").toBe(1);
+    expect(forks[0][1].table).toBe("directory_nodes");
+  });
+
+  it("a table with NO witness is told it is replication lag, not a fork — and where to look", async () => {
+    // The alarm text has to follow the STORE'S RULE, not the tier. A table whose merge settles every
+    // column reports divergence when NOTHING applied, which means precisely that the peer's copy is
+    // stale. Telling that reader "a real disagreement, not a stale copy" — as one draft of this fix
+    // did — sends them hunting a fork in the kill switch over ordinary one-directional lag.
+    const respStore = new MemStore();
+    const dialStore = new MemStore();
+    dialStore.presence.set("agP", "1785200060000"); // we are AHEAD
+    respStore.presence.set("agP", "1785200000000");
+    const { respService, dialService, dialLogger } = pairServices({ respStore, dialStore });
+    await respService.start();
+    respService.stop();
+
+    await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+    await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+
+    const forks = dialLogger.events.filter(([e]) => e === "antientropy.round.fork_suspected");
+    expect(forks.length, "the pre-existing per-table rule still alarms on a streak").toBe(1);
+    expect(forks[0][1].table).toBe("agent_presence");
+    const reason = String(forks[0][1].reason);
+    expect(reason, "it must not claim a real disagreement").toContain("ordinary replication lag");
+    expect(reason, "and it must name where to look next").toContain("PEER is not pulling from us");
+    expect(forks[0][1].divergentKeys, "and name the row").toEqual(["agP"]);
   });
 });
 
