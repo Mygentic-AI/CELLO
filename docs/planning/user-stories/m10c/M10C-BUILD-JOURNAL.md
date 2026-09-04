@@ -261,3 +261,44 @@ pinned. The M10C contracts pinned `XProfileSnapshot` and `composeXSignals` — t
 anticipated — and the orders met on both without a hitch. The store's function names were pinned
 nowhere, and that is exactly where the two orders disagreed. Parallel orders meet where the contract
 names things and drift everywhere else; the fix is not more care, it is pinning the whole seam.
+
+---
+
+## 003-XSCREEN — mutation record, part 2: the mint, the preview and the zero-X-calls clause
+
+`001-XPROFILE` merged, so the five clauses that needed the real snapshot store could finally run.
+`test/x-mint-route.test.ts`: 17 passed. Eight mutations, each applied alone and reverted, every one
+compiling and reddening on an assertion rather than a syntax error.
+
+| Mutation | Reddened |
+|---|---|
+| the mint composes from figures in the REQUEST BODY as well as the store | clause 5 — the inflated `followers: 99000` reached the payload |
+| a `never` tick is dropped instead of refused | clause 6 |
+| `recordMintedSignal` moved to AFTER delivery | clause 7's ordering assertion |
+| `recordMintedSignal` made conditional on having an agent | clause 7's no-agent case, and the unaddressable-agent case |
+| the preview composes with an empty selection, ignoring the ticks | clause 4 — the two previews stopped differing |
+| the component renders its own sentence instead of the preview prop | clause 4's on-screen assertion |
+| loading the compose screen fetches `api.x.com/2/users/me` | clause 9, plus both clause-4 tests |
+| the refresh route never refuses | clause 8's route test |
+
+**The `fetch` double was hardened during this pass and it matters.** It recorded calls and then
+delegated to the real `fetch`. Under the clause-9 mutation that would have genuinely contacted
+`api.x.com` — a test spending real money to prove that tests do not spend real money. It now records
+the call, so the assertion still names what happened, and then throws.
+
+**Two defects found reviewing my own diff before dispatching the reviewer,** each fixed in its own
+commit:
+
+- `formatUnlockDate` used `toLocaleDateString`, so the day the Refresh button names would change
+  silently on a Node built with small-icu. `002` already refuses that dependency for notarized text;
+  there was no reason to accept it for the line telling an operator when they may next spend money.
+- A successful mint redirected to `/trust-signals?x=minted`, a parameter nothing reads. The operator
+  was returned to a list with no confirmation — and in particular no sight of the one outcome that
+  looks like failure and is not: notarized and recorded with no agent connected yet. The screen now
+  shows the route's own wording in place. `Refresh from X` also awaited `fetch` with no `catch`, so a
+  network failure left the button looking inert, and the natural response is to click again — on the
+  one button that costs money.
+
+Gate: `pnpm run lint` 0 errors (8 pre-existing warnings, none from this unit), `pnpm run typecheck`
+clean, `npx vitest run test/x-screen.test.tsx test/x-mint-route.test.ts` → 39 passed.
+`git status --porcelain` clean in `cello-client` and `trustless-cello`.
