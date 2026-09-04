@@ -2,7 +2,7 @@
 name: Walling off an agent — tiers, evidence, and the knock ledger
 type: discussion
 date: 2026-09-04
-topics: [reachability, tiers, contacts, allowlist, abuse-bounds, evidence, quarantine, inbox, reporting, notifications]
+topics: [reachability, tiers, contacts, allowlist, abuse-bounds, evidence, quarantine, inbox, reporting, notifications, cello-reporting]
 description: Two poles — an agent that wants no callers and doesn't care who called, and one that wants no callers but does care — and why the current tier bounds can serve neither. The delivery cap is also the evidence budget, and there is no per-peer record of who keeps knocking.
 ---
 
@@ -204,6 +204,68 @@ fills, and the operator chose the number.
 Change what an unknown caller is told, so the personal agent's answering machine actually invites an
 introduction. Configuration only, and the wording is the operator's call.
 
+## Direction — the inbox becomes the surface that prompts a report
+
+Andre, 2026-09-04:
+
+> *Over time we can grow that to be more sophisticated. For example: you have received X inbound
+> connection requests from the same public key in the last one hour, or six hours. We don't need to
+> build all that now. But having that idea in mind — that the inbox is going to become more and more
+> sophisticated in its analytics around what's in there — is useful, because it's the tool that
+> prompts you to report something.*
+
+> *In fact, that's a great way to think of the inbox: everything surfaced to you that is a **warning**,
+> and not just an answering-machine-type message, can now also include guidance that you might want
+> to let `CELLO_Reporting` know about this.*
+
+### Two classes of inbox item
+
+This is a clean split and it should be explicit in the shape, not left to prose:
+
+- **Answering-machine items** — someone left you a message, a session ended unread, a contact renamed
+  themselves. Informational. Act if you want to. **No reporting guidance.**
+- **Warnings** — something was refused, screened, quarantined, or looks anomalous. These carry
+  reporting guidance: *this may be worth telling `CELLO_Reporting` about.*
+
+The knock ledger's summary is a warning by that definition, and it is the first item whose whole
+purpose is to prompt a report. But the rule generalises past this feature: every existing warning
+surface — refusal notices, quarantined messages, orphan triage — falls under it too.
+
+### ⚠️ The gate on saying it
+
+**`CELLO_Reporting` does not exist yet.** It is designed — a CELLO agent that an operator's agent
+opens a session with and sends a report to, which is the product demonstrating its own use — but
+`024-ORPHANTRIAGE` took option (b): reporting is named as **not yet available**, parked with a
+trigger for when the agent is provisioned and its pubkey published.
+
+Invariant 4 forbids naming a verb that resolves to nothing. So warning guidance **cannot** tell an
+operator to report to `CELLO_Reporting` until that agent is reachable. Until then it says the
+evidence is retained and reporting is not yet available. Anyone implementing the knock ledger will
+want to write the reporting sentence — and must not.
+
+### ⚠️ What this costs Phase 1 if ignored — counters cannot become rates
+
+**Not building the analytics now is fine. Storing a shape that cannot grow into them is not.**
+
+A per-peer record of *(first seen, last seen, count, last reason)* can answer *"this key has knocked
+612 times."* It **cannot** answer *"how many in the last hour"* — the individual timestamps are gone,
+and no amount of later work recovers them. Rate windows over a counter are not a query change; they
+are a schema change plus a period where the answer is wrong because the history does not exist.
+
+So the decision is due in Phase 1 even though the feature is not:
+
+- **Aggregate counters** — cheapest, smallest, permanently rate-blind.
+- **Bounded per-knock rows, aggregated on read** — a row per attempt with a retention bound, summed
+  into the counters the summary shows. Rate windows then fall out later as a query, with real
+  history behind them.
+
+Given that the whole point of the ledger is to feed a report, and that a report's strongest claim is
+*"612 times in six hours"* rather than *"612 times ever"*, **bounded per-knock rows are the
+recommendation.** The bound keeps it finite; the timestamps keep it useful.
+
+This is the migration trap in its usual shape: the cheap version works at launch and the expensive
+part is not the rewrite, it is that the data to backfill was never kept.
+
 ## Deliberately not recommended
 
 - **A `policy.admission` posture.** Ruled out: the operator sets numbers, we do not define a bar.
@@ -223,9 +285,10 @@ introduction. Configuration only, and the wording is the operator's call.
    kept — key, time, count, reason. Payload retention is not part of the wall; at `0/0` there is no
    payload, and that is the intended shape rather than a limitation.
 
-1. **Ledger retention.** Per-peer counters grow with the number of distinct keys that ever knocked.
-   Cap by peer count, by age, or both? A key that knocked once two years ago and a key knocking now
-   are not worth the same row.
+1. **Ledger retention, and the bound on per-knock rows.** Records grow with the number of distinct
+   keys that ever knocked, and — if per-knock rows are kept — with the number of attempts. Cap by
+   peer count, by age, by rows-per-peer, or some combination? A key that knocked once two years ago
+   and a key knocking now are not worth the same storage.
 2. **What the summary shows by default.** Top N callers plus a tail count — what is N, and is the
    tail collapsed by key or just counted?
 3. **The stranger greeting wording.** Copy, and therefore Andre's.
@@ -238,4 +301,5 @@ introduction. Configuration only, and the wording is the operator's call.
 `inbound-sessions.ts` — the inbound refusal path and cap alarm;
 `daemon.ts` — `STRANGER_TEXT`; `notification-handlers.ts` — the inbox refusal list and its
 multiple return sites (`DOD-M12B-INBOX-TRUTH-1`).
-`DOD-M15-REFUSEDEVIDENCE-1` (closed 2026-09-04) for the evidence/delivery budget collision.
+`DOD-M15-REFUSEDEVIDENCE-1` (closed 2026-09-04) for the evidence/delivery budget collision;
+`024-ORPHANTRIAGE` for `CELLO_Reporting` and why warning guidance cannot yet name it.
