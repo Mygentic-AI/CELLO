@@ -508,10 +508,18 @@ reservation, or in what the relay will accept from a peer it has just seen repla
 rule names both. It also touches `008-slots` (the relay's unproven reservation cap) and
 `SESSION-RELAY-PINNED-1`.
 
-**Where to start**, because the evidence narrows it: the reservation proof the relay logged in that
-window (`relay.auth.reservation_proof`, `remotePeerId 12D3KooWM18n…`) came from a **different peer id
-than the receiver that had just been created** (`12D3KooWDwqb…`). Establish which peer is supposed to
-be proving, and the rest follows.
+**Where to start** — and this was FOLLOWED UP on 2026-09-04 when Andre asked whether it was an easy
+fix. **The follow-up REVERSES the "different peer id" reading** this bullet used to carry. Tracing the
+receiver's peer id across both logs in one run showed the right peer DID prove, the relay DID accept
+it (`relay.auth.reservation_proof remotePeerId 12D3KooWLJou… pubkey 79ea6a7d`, and the daemon's own
+`ok:true` / `proven:true` four milliseconds later) — **and the relay's log then ENDS.** No grant, no
+denial, no disconnect, and no `Peer connected` for any later dial. The surviving receiver is the
+daemon's plain fallback node, which never proves because it holds no circuit — by design. The
+per-agent slot cap and the relay connection gater are both ruled out by measurement, and the relay
+process does not die: it keeps serving the live session while refusing the park dial.
+
+**`030-RELAYSILENT` carries the whole trace, the ruled-out suspects and a stop rule**, and it is the
+order that closes `DOD-M15-PARKCONN-1`. Andre ruled this BLOCKS LAUNCH on 2026-09-04.
 
 ### 2. `content_park_pull` still returns the bare `standing_receiver_unavailable` label
 
