@@ -199,6 +199,12 @@ LinkedIn; changing the Social section's existing GitHub row.
   the looser signal, only stopped presenting it. GitHub has the same gap; this screen makes it easy
   to hit. The order's pipeline is enumerated without supersedes, so it was not added here.
 
+- **The mint submits to the FIRST directory only.** `cfg.directoryApiUrls[0] ?? cfg.directoryApiUrl`
+  — copied verbatim from GitHub's callback as the order instructed, so it is propagated debt, not
+  new. But one node down fails the mint, while `signal-lifecycle.ts` and `submission-ingress.ts`
+  iterate every node. That is the sovereign-node redundancy invariant, and the fix belongs to the
+  shared submit path rather than to any one type.
+
 - **Every tick is a server round-trip**, because the ticks live in the URL and `composeXSignals` is
   the only renderer. If that ever needs to be instant, the fix is to make `x-compose.ts` browser-safe
   (today it pulls `node:crypto` in through protocol-types' CBOR barrel) — never a second renderer in
