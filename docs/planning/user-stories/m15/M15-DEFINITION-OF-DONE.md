@@ -169,7 +169,7 @@ yet** — tiering is Andre's call, and three of the four are behaviour changes t
 |---|---|---|
 | **1** | **A refusal that can never succeed is retried forever.** `CELLO_Coder_1` knocked on a closed conversation **232,056 times over 62 hours**, ~2/second, growing `daemon.log` to **484 MB**. **Andre approved the fix 2026-09-04: *"a message refused should stop being retried."*** | ✅ `DOD-M15-REFUSALTERMINAL-1` → Entry 72. A durable terminal-refusal row stops the leaf-fetch backstop: **5,954 fetch events → 0**, measured live with `CELLO_Support` back ONLINE over 12 minutes. The agent no longer needs to be parked. **Not yet published.** |
 | **2** | **The refusal count shown to the operator is wrong by three orders of magnitude.** `cello_inbox`'s `refusals.times` reported **58** for those 232,056 knocks. | ✅ `DOD-M15-REFUSALTERMINAL-1` → Entry 72. `times` is gone. The cause was `cello_dismiss`, which DELETES the notice row and restarts its counter — so the field was a since-you-last-dismissed figure under a lifetime name. Now `times_since_dismissed` beside `times_total` (exact) or `times_total_at_least` (a floor, where history predates the tally), from a record dismissal does not touch, and one shared guidance sentence at both doors. |
-| **3** | **`021-HEARTBEAT` introduced a permanent false alarm.** `antientropy.round.fork_suspected` fires on `directory_nodes` **every 3 minutes, forever**: every node rewrites its own `last_heartbeat_at` every ~30 s, so two nodes can never agree on a hash of a table one of them is always mutating. It pages nobody and masks nothing (the event names its own table), but it is an ERROR-level cry-wolf on a healthy fleet. **Andre's steer 2026-09-04: judge agreement ignoring the heartbeat column** — NOT by muting the table, which would also hide a real `status` divergence. Costs a build and a five-node roll. | ❌ not started |
+| **3** | **`021-HEARTBEAT` introduced a permanent false alarm.** `antientropy.round.fork_suspected` fires on `directory_nodes` **every 3 minutes, forever**: every node rewrites its own `last_heartbeat_at` every ~30 s, so two nodes can never agree on a hash of a table one of them is always mutating. It pages nobody and masks nothing (the event names its own table), but it is an ERROR-level cry-wolf on a healthy fleet. **Andre's steer 2026-09-04: judge agreement ignoring the heartbeat column** — NOT by muting the table, which would also hide a real `status` divergence. Costs a build and a five-node roll. | ✅ fixed and rolled — zero in 16 min, baseline 13/hr |
 | **4** | **The defensive half cannot be tested from a legitimate client, so it has never run live.** The sender's own `exfil:injection_artifact` guard refused two attempts to probe the receiving screener — including the forged `[[END PAYLOAD]]` framing that `023` was designed against — and it is not one of the five configurable guards, so every client refuses identically. **`024-ORPHANTRIAGE`, the screener block, and evidence-on-block have therefore never been exercised outside the in-process spine tests.** Needs a deliberately modified client. **Built 2026-09-04: patched daemon on GCP (`cello-hostile-client`), agent `CELLO_Adversary`, driven straight over the daemon socket. Two attacks run — see item 5.** | ✅ rig built; findings below |
 | **5** | **The inbound language block is silently disarmed by the confusables step that runs before it.** Found by the hostile client (item 4): a 100%-Cyrillic jailbreak was Latinized to 25% Cyrillic by `normalizeConfusables` BEFORE `screenInboundLanguage` judged it, so the one deterministic inbound block that works without the semantic classifier saw "mostly Latin" and delivered it. The gateway IS live and enforcing (it transformed the payload exactly per its confusables map) — the defect is data flow: the language screen reads the normalized text when it needs the original. **Fix decided 2026-09-04: language screen judges the post-invisible-strip, pre-confusables text; everything downstream still reads the normalized text.** | ❌ order written, not started |
 
@@ -1154,7 +1154,18 @@ the loop; the order's DoD 7 is to bring it back and prove the loop is gone.
 > installed operator still has the loop. A slower second engine (the 300s park sweep, 6 lines per
 > sweep) is recorded POST-LAUNCH in the order's *Newly discovered*.
 
-### `DOD-M15-FORKQUIET-1` — ❌ A table that is always moving is not a fork
+### `DOD-M15-FORKQUIET-1` — ✅ A table that is always moving is not a fork
+
+> **✅ 2026-09-04 (026-FORKQUIET).** The verdict now comes from the STORE per table: `directory_nodes`
+> judges on `status` and ignores the heartbeat; `agent_suspensions`/`agent_presence` keep their
+> per-table rule unchanged. `status` had to start replicating for a real divergence there to be
+> detectable at all — the merge never takes it from a peer. Fleet rolled to `12c493ff`, 3 of 3
+> directories, relays untouched: **ZERO `fork_suspected` over 16 minutes** against a baseline of 13
+> in the preceding hour, with a positive control proving the query could see. Replication unchanged
+> (59 rounds / 67 rows applied vs 60 / 73 pre-roll). Two reviewer passes, every finding fixed —
+> including a regression I had shipped that made the KILL SWITCH's alarm more sensitive. 17 mutants,
+> all killed. **Read the order's *Newly discovered* #1 before quoting this: nothing writes a status
+> other than `active`, so the table is now effectively SILENT, not watched.**
 
 `021-HEARTBEAT` made `directory_nodes` a Tier-B anti-entropy table. Every node rewrites its own
 `last_heartbeat_at` every ~30 s, so two nodes can never agree on a hash of a table one of them is

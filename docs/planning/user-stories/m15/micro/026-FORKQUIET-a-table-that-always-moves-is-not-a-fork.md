@@ -225,7 +225,38 @@ to `main` as `12c493ff`. Local Postgres was the shared `docker compose` stack on
 
 ### The roll
 
-*(filled in below at roll time)*
+Directory-only, so the relays were deliberately NOT rolled (`relay_image_tag` stays `1695c1a9`).
+Image `12c493ff`, built from the SHA on origin, never from the local tree.
+
+**Capacity probed BEFORE anything was deleted**, all three (zone, machine-type) pairs — the MIG
+deletes before it creates, and these templates pin both IPs so they cannot surge:
+`✅ us-east1-d / n2-standard-2`, `✅ us-central1-a / e2-standard-2`, `✅ europe-west1-c / e2-standard-2`.
+
+| node | before → after | health after (euw1 / usc1 / use1, 4-min window) |
+|---|---|---|
+| `gcp-usc1` | `cello-gcp-usc1-zw6x` → `cello-gcp-usc1-pzxw` | 13 / 16 / 15 |
+| `gcp-euw1` | `cello-gcp-euw1-9kd6` → `cello-gcp-euw1-8103` | 11 / 8 / 14 |
+| `gcp-use1` | `cello-gcp-use1-tr2g` → `cello-gcp-use1-7kb6` | euw1 absent at 4 min, **6 / 7 / 12 on a 5-minute re-read** |
+
+That last row is the documented short-window artefact, not a sick node — re-read before concluding
+anything. Each node was confirmed serving before the next was touched, and the running image was
+verified from **instance metadata**, not the tag.
+
+**DoD 5 — the fleet is quiet. Window `13:11:27Z` → `13:27:48Z` (16 minutes): ZERO
+`antientropy.round.fork_suspected`.** Baseline 13 in the preceding hour; last one ever seen
+`13:03:01Z`. **Positive control:** the same query at 3-hour freshness returns 43, so the zero is a
+real zero rather than a search that could not see.
+
+**DoD 3 on the live fleet — replication unchanged.** 10 minutes of `antientropy.round.completed`:
+**59 rounds / 67 rows applied**, against a pre-roll **60 rounds / 73 rows applied** measured the
+same way.
+
+**The mixed-version refusal fired exactly as the code comment predicted and cleared itself.** A new
+node pulling `directory_nodes` from an un-rolled one gets a body with no `status` and refuses it
+loudly rather than falling back: two `antientropy.round.table_failed` events, at 13:09 and 13:10,
+both inside the roll, **zero since**. The user-visible cost is nil and that was verified rather than
+assumed — both read surfaces dropped the heartbeat-freshness conjunct, so no agent reads offline
+while heartbeats are briefly not replicating.
 
 ### The rest
 

@@ -641,7 +641,116 @@ probe.
 The relay logs the redial and the seal still fails, and `relay.directory.dial.failed` has **never**
 appeared — so the dial does not throw, yet nothing is repaired. That is the gap `7838bbeb` measures.
 
-## 🟢 CURRENT — WHOLE FLEET ON `1695c1a9` (017-TBS / 020-ACKHASH / 021-HEARTBEAT), ALL 5 ROLLED (2026-09-04)
+## 🟢 CURRENT — DIRECTORIES ON `12c493ff` (026-FORKQUIET), 3 OF 3 ROLLED; RELAYS UNTOUCHED (2026-09-04)
+
+**Every node confirmed by reading the RUNNING instance's metadata, not the template or the tag.**
+
+| node | instance NOW | replaced | zone | machine type | image |
+|---|---|---|---|---|---|
+| `gcp-use1` | `cello-gcp-use1-7kb6` | `cello-gcp-use1-tr2g` | `us-east1-d` | `n2-standard-2` | `directory:12c493ff` |
+| `gcp-usc1` | `cello-gcp-usc1-pzxw` | `cello-gcp-usc1-zw6x` | `us-central1-a` | `e2-standard-2` | `directory:12c493ff` |
+| `gcp-euw1` | `cello-gcp-euw1-8103` | `cello-gcp-euw1-9kd6` | `europe-west1-c` | `e2-standard-2` | `directory:12c493ff` |
+| `gcp-relay-use1` | `cello-gcp-relay-use1-6mts` | — **NOT ROLLED** | `us-east1-d` | `n2-standard-2` | `relay:1695c1a9` |
+| `gcp-relay-euw1` | `cello-gcp-relay-euw1-5rdx` | — **NOT ROLLED** | `europe-west1-c` | `e2-small` | `relay:1695c1a9` |
+
+**Directory-only change, so `relay_image_tag` in `terraform.tfvars` deliberately STAYS at
+`1695c1a9`.** The receiver-first ordering rule that puts relays first does not apply — no wire field
+crosses the relay here.
+
+**What shipped.** **026-FORKQUIET** — `antientropy.round.fork_suspected` was firing at ERROR on
+`directory_nodes` indefinitely on a healthy fleet. A node rewrites its own `last_heartbeat_at` every
+~30 s, so it always holds a fresher copy of its OWN row than any peer does: that row is pulled every
+round and can never apply, and the verdict was exactly that shape (`pulled > 0 && applied === 0`).
+The verdict now comes from the store per table — `directory_nodes` judges on `status` and ignores
+the heartbeat, while `agent_suspensions` and `agent_presence` keep their per-table rule unchanged.
+`status` now rides the Tier-B SELECT so a real disagreement is detectable at all; the merge never
+takes it from the peer and the UPDATE never writes it.
+
+**No client cascade and nothing published** — this is `packages/directory` only.
+
+### Order, and why
+
+`usc1` → `euw1` → `use1`, primary last. Each node was confirmed serving before the next was touched.
+
+### Capacity probe — run BEFORE anything was deleted, all three (zone, machine-type) pairs
+
+```
+✅ us-east1-d / n2-standard-2
+✅ us-central1-a / e2-standard-2
+✅ europe-west1-c / e2-standard-2
+```
+All created and deleted cleanly. No `ZONE_RESOURCE_POOL_EXHAUSTED`, no `QUOTA_EXCEEDED`.
+
+### Health signals used, and the windows they were read over
+
+`antientropy.round.(started|completed)` by `resource.labels.zone`, **4-minute** window after each
+roll; all three zones required before the next node was touched.
+
+- after `usc1`: **13 / 16 / 15** (euw1 / usc1 / use1)
+- after `euw1`: **11 / 8 / 14**
+- after `use1`: euw1 was missing from the first 4-minute read and present on a **5-minute** re-read
+  at **6 / 7 / 12**. That is the documented short-window artefact, not a sick node — the node had not
+  been up long enough to fill the shorter window. Re-read before concluding anything.
+
+### Running image verified from instance metadata
+
+```
+cello-gcp-usc1-pzxw  → cello/directory:12c493ff
+cello-gcp-euw1-8103  → cello/directory:12c493ff
+cello-gcp-use1-7kb6  → cello/directory:12c493ff
+cello-gcp-relay-euw1-5rdx → cello/relay:1695c1a9   (unchanged)
+cello-gcp-relay-use1-6mts → cello/relay:1695c1a9   (unchanged)
+```
+
+### Schema
+
+**No migration in this roll**, and `ops_agent_expected_migration_version` correctly stays at `64`.
+The change is a convergence-verdict and encoding change at the anti-entropy SELECT, not a schema one.
+
+### Proof the CHANGE works — the quiet window
+
+**Window `13:11:27Z` → `13:27:48Z` (16 minutes): ZERO `antientropy.round.fork_suspected`.**
+Baseline was 13 in the hour before the roll. **Last one ever seen: `13:03:01Z`** — eight minutes
+before the window opened, and before `use1` (the last node) rolled.
+
+**Positive control, because an empty search result is only evidence if the search could see:** the
+same query over a 3-hour freshness returns **43** events. The zero is a real zero, not a query that
+was looking at nothing.
+
+**Replication is unchanged (DoD 3).** `antientropy.round.completed` over 10 minutes:
+**59 rounds, 67 rows applied**, against a pre-roll baseline of **60 rounds, 73 rows applied**
+measured the same way. Nodes are still pulling and writing each other's heartbeats.
+
+### The mixed-version refusal happened exactly as predicted, and cleared itself
+
+A node on the new build pulling `directory_nodes` from one still on `1695c1a9` gets a Tier-B body
+with no `status` and refuses it — loudly, by design, rather than falling back:
+
+```
+13:09:15  antientropy.round.table_failed  directory_nodes
+          "pg-ae-store: directory_nodes record 'gcp-euw1' body status must be a string, got undefined"
+13:10:15  antientropy.round.table_failed  directory_nodes
+          "…record 'gcp-use1'…"
+```
+
+**Two events, both inside the roll, ZERO since the last node came up.** The user-visible cost is nil
+and that was checked rather than assumed: both read surfaces dropped the heartbeat-freshness
+conjunct (`resolveDiscoveryState` returns online on `rawOnline` alone; `listAccountAgentsWithPresence`
+has no `dn.` conjunct in its SQL), so no agent reads offline while heartbeats are not replicating.
+
+**Recorded because the next mixed-version roll will produce it again:** this is what a wire-shape
+change to a Tier-B body looks like in the log, and it is a rolling-deploy artefact, not a defect.
+
+### ⚠️ THE STANDING NOISE FROM THE `1695c1a9` ROLL IS THE THING THIS ROLL REMOVES
+
+The previous entry recorded `antientropy.round.fork_suspected` on `directory_nodes` as expected,
+permanent, error-level noise and said silencing it was a design question. That question is answered
+and the noise is gone; the measured pre-roll baseline was **13 events in 60 minutes**, all
+`directory_nodes` / tier B with `consecutive` pinned at 2.
+
+---
+
+## SUPERSEDED — WHOLE FLEET ON `1695c1a9` (017-TBS / 020-ACKHASH / 021-HEARTBEAT), ALL 5 ROLLED (2026-09-04)
 
 **Every node confirmed by reading the RUNNING instance's metadata, not the template or the tag.**
 
