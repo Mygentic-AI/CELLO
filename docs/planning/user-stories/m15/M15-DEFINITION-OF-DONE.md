@@ -59,6 +59,24 @@ run output quoted. Vitest green is necessary, never sufficient.
 > **What an open line keeps here:** what it is, why it blocks, the load-bearing clauses, the
 > enforcer, and any live decision or flag. **What it does not keep:** how we found out.
 
+> ### 📁 SECOND SPLIT 2026-09-04 — it had grown back, and the same rule was applied again
+> **3,759 lines, and the growth was the same shape:** every line closed since 2026-08-24 wrote its
+> full record straight into the scoreboard, and several lines already archived had a second body
+> written on top of them when their production verification landed. **1,275 lines moved**, byte-for-
+> byte, to [[M15-DEFINITION-OF-DONE-ARCHIVE]] under *"SECOND SPLIT — moved 2026-09-04"*.
+>
+> - **CLOSED lines** whose body was still inline — pointer left in place, tag unchanged.
+> - **CONTINUATIONS** — a line archived in the first split whose later live/production verification
+>   was written here. Filed beside the original as `… (continued)`.
+> - **⬇️ OUT OF GATE lines** — launch does not wait for them, so their bodies are record, not
+>   scoreboard. The line and its ⬇️ tag stay in the tier.
+>
+> **Nothing changed status, and no tag was flipped.** Every `DOD-M15-*` heading is still in its tier
+> with the tag it had. **The one judgement call, flagged rather than buried:** `DOD-M15-SPINERED-1`
+> is still 🟡 OPEN and the rule above sends an open line's trail to [[M15-BUILD-JOURNAL]], not the
+> archive — its trail went to the archive because what moved is closed triage, not an investigation
+> still running. Say the word and it moves to the journal instead.
+
 ---
 
 # 🔎 PRIORITY OVERRIDE — THE DISCOVERABILITY FILTER (Andre, 2026-08-24)
@@ -358,19 +376,7 @@ different repos, different disciplines, neither blocks the other.
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-DIVERGE-1`.
 
 ### `DOD-M15-DEAD-WIRE-FIELD-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was 🟡 (client half done; the wire removal is bilateral and carried)
-> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
- `participant_a/b.multiaddrs` is always empty and read by nobody
-Found by the `DOD-M15-SURFACE-1` review. Not a break — it is the reverse of one.
-- Since the directory-facing node stopped listening, this wire field is **permanently `[]`** on
-  every session assignment. The directory stores it, **signs nothing over it** (neither the session
-  nor the relay TBS includes it — verified), and the client parses it and drops it: the only read of
-  a parsed assignment's participants takes `.pubkey`.
-- **It is also a checked-then-ignored:** the client's parser will reject an entire session assignment
-  if this array is malformed — for a value nothing ever reads.
-- **Why it is its own line:** removing a wire field is a bilateral change across both repos, and
-  under Decision 2's reasoning a schema change is cheapest now. Leaving it costs nothing at runtime
-  and costs a reader the assumption that something acts on it.
-- Sequence with any other wire change so the two repos move once, not twice.
+> **Out of the gate — launch does not wait for it.** Full entry is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-DEAD-WIRE-FIELD-1`.
 
 ### `DOD-M15-IDLE-CONNS-1` — ✅ A connection that authenticates to nothing does not live forever
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-IDLE-CONNS-1`.
@@ -394,272 +400,25 @@ Found by the `DOD-M15-SURFACE-1` review. Not a break — it is the reverse of on
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-CHAINROUNDTRIP-1`.
 
 ### `DOD-M15-SPINERED-1` — 🟡 The multi-process evidence lane is HALF RED, and nobody knew
-> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
+> **📦 Moved to [[M15-DEFINITION-OF-DONE-ARCHIVE]] 2026-09-04, under `DOD-M15-SPINERED-1`:** the
+> triage unit's review verdict, the 49-failure cause table, the out-of-gate document blocks, and the
+> closed journey entries. Nothing was edited on the way over.
 
-> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
+**Where the lane stands.** The triage this line asked for is DONE and reviewed — every one of the 36
+spine files has been run, and the 49 failures resolve to six causes. The CLI-banner, stale-assertion,
+unsalted-hash and portal-database causes are all green: `j-spine` **7/7**, `j-content` **10/10**,
+`j-end` **10/10**.
 
-#### ✅ 2 OF 5 FIXED, AND THE OTHER THREE HAVE A DIFFERENT CAUSE — measured, not assumed
-> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
+**What is left is ONE row.** After Decision #16 took documents out of the gate, this lane's only
+remaining in-gate failure is **`j-suspend-tofn` — the kill switch**. Ruling C then took the kill
+switch out of the gate too (`DOD-M15-SUSPEND-UNTESTED-1`, POST-LAUNCH BACKLOG). **Whether that
+leaves this line with anything still inside the gate is Andre's to say — it is not flipped here.**
 
-#### 🔎 RUN IN ISOLATION 2026-08-24: 5 failed / 5 passed — and it is NOT a short timeout
-> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
-## ✅ TRIAGE UNIT DONE — reviewed, findings fixed, verdict quoted
-
-> **Review pass 1, on the code changes.** Verdict on the thing this unit was most at risk of, quoted:
-> > *"Directly on the thing you were most worried about: **no assertion in `j-spine` was weakened**.
-> > Four were corrected to values the product actually emits, one (`current` → `online` + `selected`)
-> > is measurably stronger, and the deleted one was provably content-free with its replacement guard
-> > living in cello-client."*
->
-> And it did not take the numbers on trust: *"**j-spine is 7/7 — VERIFIED INDEPENDENTLY.** I ran it:
-> 7 passed / 0 failed, 91s, exit 0."*
->
-> Lens lines: **SPEC: DEVIATIONS FOUND** (the causes table) · **NO SILENT FALLBACKS** in the diff ·
-> **ERRORS NAME THEIR CAUSE** · **HOLLOW TESTS FOUND** — `j-suspend-tofn` [blocking] ·
-> **REMOVALS PROVEN**.
->
-> **All findings fixed and re-run** (`HIGH-1` fourth case + participation control, `HIGH-2` assertion
-> ordering, `MEDIUM-3` scoping/windowing, `LOW-5` symbol name, `SPEC` table arithmetic). The reviewer's
-> own summary of where the weakness actually was: *"The weakening, such as it is, is in
-> `j-suspend-tofn` — not in the assertions, but in the diagnostic that now stands in front of them."*
-> That diagnostic no longer stands in front of them.
->
-> **🅿️ ONE PRODUCT FINDING FILED FROM THIS REVIEW — `DOD-M15-START-AGENT-UNAWAITED-1`.**
-> `daemon.ts:2703` does `void sessionNodeManager.ensureStandingReceiverForAgent(name)` and returns
-> `ok: true` **before the receiver exists**; a permanent failure only produces a `warn`. **The operator
-> is told the agent started, and the agent is deaf.** That is the product-side cause of the race the
-> `DOD-SPINE-5` readiness poll works around on the test side, and the surface already carries
-> `standing_receiver_ready` to hang a truthful answer on.
->
-> **🔵 THE LINE IS NOT DONE — the triage UNIT is.** Remaining, updated 2026-08-24:
-> - 🔴 the salt-announce defect (`j-documents` 7 + `j-stale-session` 1) — **blocked on Andre's design
->   decision**: salt agreement is a DIRECT-path protocol and documents are relay-only, so a document
->   session never agrees a salt. Three options are filed for him; this is not a coding choice.
-> - 🟡 the four `j-multiplayer` timeouts — cause named (`DOD-M15-DOCACCEPT-UNBOUNDED-1`), bound awaiting
->   Andre.
-> - ~~the four `j-content` deposit-side hash sites~~ **✅ CLOSED — `j-content` is 10/10.** And the
->   framing was wrong: they were not four instances of one hash defect, they were four separate ones.
-> - ~~`j-end`'s trust-signal misclassification~~ **✅ CLOSED — `j-end` is 10/10.**
-
-## ✅ TRIAGE COMPLETE 2026-08-24 — every journey file measured, 49 failures resolve to SIX causes
-
-**This is the unit the line asked for** (*"First unit is a triage: cluster the 49 by cause… do NOT open
-21 lines from this"*). Every one of the 36 spine files has now been run. **The lane is not half-red.**
-
-| cause | failures | status |
-|---|---|---|
-| **CLI banner glued into JSON** (`j-refresh`, `j-sign`, `j-tofn-dkg`×2, `j-tofn`, `j-relaysig`) | 6 | ✅ **all green** |
-| **Stale assertions in `j-spine`** — state vocabulary the product removed, plus one local race | 5 | ✅ **all green, fixed here** |
-| ~~**Salt-split / no agreement** (`j-documents` 7, `j-stale-session` 1)~~ | 8 | ⬇️ **OUT OF GATE** (documents ruling, Decision #16). Real and unfixed; the salt design decision filed for Andre is retired with it. **Not passing — out of scope.** |
-| ~~**Tests compute the UNSALTED hash** (`j-content` 5)~~ **✅ `j-content` 10/10 — and this cause label was wrong** | 5 | ✅ **all green.** Not one cause with five instances: **four separate defects** — an unsigned deposit shape SEC-1 refuses, a deposit of the wrong STRING (`[[OVER]]` is in-band), a retired event name (`ingest_failed` → `annexed`), and a wait latching onto the first of several recover sweeps |
-| **Portal database** (`ECONNREFUSED`) | 2 | ✅ container up |
-| **Named lines already owned** (`j-unilateral`×2, `j-upgrade-bilateral` → `UNILATERAL-NOTARIZE-1`) | 3 | 🅿️ owned elsewhere |
-| **Individually-caused** (~~`j-end` 1~~ **✅ 10/10**, `j-remove` 1 → post-launch, ~~`j-multiplayer` 4~~ ⬇️ **out of gate**) | 6 | `j-multiplayer`'s four are all document operations (`DOCACCEPT-UNBOUNDED-1`), so they leave with Decision #16 |
-
-> **⚠️ AFTER DECISION #16, THIS LANE'S REMAINING IN-GATE FAILURE IS `j-suspend-tofn` — THE KILL SWITCH — ALONE.**
-> Every other red row above is now green, out of gate, or already post-launch. **Do not read that as the
-> document journeys passing:** they are unfixed and out of scope, which is a different statement.
-
-> ### ⬇️ OUT OF GATE (Andre 2026-08-24, documents ruling) · was 🟡 `DOD-M15-DOCACCEPT-UNBOUNDED-1` — ACCEPTING A DOCUMENT HANGS IF ONE HOLDER IS UNREACHABLE
->
-> **🟡 = the hang is now VISIBLE and covered by a test; the hang itself is still there.** Bounding the
-> per-holder send changes behaviour and needs Andre's call (below). Naming the stall does not, and is
-> shipped, reviewed, and tested.
->
-> **↩️ AND THE MEASUREMENT TAKEN FOR THE LOG LINE ALSO UNBLOCKS THE DECISION IT WAS FILED BEHIND.**
-> This entry said picking a bound was *"a genuine product judgement"* because the cost ran both ways —
-> too short falsely marks holders un-notified, too long leaves the hang — **and nobody had a number for
-> what a healthy open costs.** There is one now, from 74 real cold opens in a 150 MB daemon log:
-> **p50 12.9 s, p90 25.1 s, min 3.6 s.** That converts the open question from a guess into an
-> arithmetic one, and it kills the obvious candidate outright: any bound at or below ~25 s would mark a
-> **normal** holder un-notified one time in ten. The 60 s `RECONCILE_INFLIGHT_BOUND_MS` is still wrong
-> for the opposite reason already recorded — 60 s per holder, sequentially, outlives the client's own
-> 60 s timeout, so the hang survives the fix. **Still Andre's call, but now a call between numbers.**
->
-> **Found by instrumenting the harness to name the hanging call — it answered on the first run.** The
-> MCP SDK's timeout says only `MCP error -32001: Request timed out`: no tool, no arguments, no elapsed
-> time. With the name attached, every timeout in `j-multiplayer` is the **same call**, while the
-> failing TEST SET keeps reshuffling (5/2, then 4/3, then 3/4):
->
-> ```
-> MCP tool "cello_doc_accept" failed after 60000ms
-> MCP tool "cello_doc_accept" failed after 60001ms
-> MCP tool "cello_doc_accept" failed after 60002ms
-> ```
->
-> **The chain, every link read:**
-> `cello_doc_accept` (`document-handlers.ts:589`) → `authorConsent` (`:814`) → `fanOutAmendment`
-> (`:759`) → **`for (const holder of args.holders)` with `await deps.transportFor(...).sendBytes(...)`
-> inside the loop** (`:769-771`) → `acquireSession` (`document-delivery-transport.ts:255`) →
-> `deps.openSession(...)` — *"the same path `cello_initiate_session` takes"*.
->
-> **There is no timeout anywhere in that chain.** The fan-out is **sequential** and each hop opens a
-> session to that holder. **One holder who cannot be reached blocks the entire accept**, and the
-> operator's client gives up at 60 s having been told nothing.
->
-> **⚠️ AND THE PRODUCT'S OWN TEST NAMES THE INVARIANT THIS BREAKS.** One of the failing tests is
-> literally *"NUDGE + SURFACE: **an absent holder blocks nobody**"*. An absent holder blocks everybody.
->
-> **THE FIX IS SMALL, BECAUSE THE "NOT NOTIFIED" PATH ALREADY EXISTS.** `fanOutAmendment` already
-> handles a holder it could not reach — `told[holder] = false` plus a named
-> `document.amendment.holder_unnotified` warn, added precisely so *"a lost membership change"* is not
-> just a boolean inside an `ok: true`. **A timeout on the per-holder send would feed that existing
-> path** rather than needing a new one. Bounding it is the minimum change that makes the code do what
-> its own log line already claims.
->
-> **🅿️ THE BOUND IS FILED, NOT BUILT — and I checked that this is not decision theatre.**
-> The document layer's only existing bound is `RECONCILE_INFLIGHT_BOUND_MS = 60_000`, and its own doc
-> says what it is for: *"how long one attempt may hold the in-flight mark before the sweep stops
-> honoring it"* — a **background sweep**. Reusing it here does not work: 60 s per holder, with two
-> holders, is longer than the client's own 60 s timeout, so the hang survives the "fix". **An
-> interactive accept needs a bound the background path has no opinion about**, and picking one has a
-> real cost in both directions — too short falsely marks holders un-notified, which is a
-> membership-change correctness problem, and too long leaves the hang. **That is a genuine product
-> judgement, so filing it is correct rather than deferral.**
->
-> **✅ WHAT IS *NOT* A JUDGEMENT, AND IS BUILT: THE SILENCE.** Right now the daemon logs **nothing**
-> while it blocks — invariant 2 says a failure is loud in the log *and* the agent response, and this
-> is loud in neither. A warn emitted **while the send is still outstanding** names the holder being
-> waited on, changes no behaviour, and turns an invisible hang into a diagnosable one. Shipped under
-> the freeze on that basis: observability, not behaviour.
->
-> **✅ AC — COVERED. And the reason I twice said it could not be is a correction, not a footnote.**
->
-> I recorded here that the warn was untestable without `JOIN-1`'s three-party setup, on the strength of
-> a measurement: my instrumented run printed **`sends attempted: []`**, so I concluded a plain
-> proposal-accept *"fans out to nobody"* and only the admin-invites-a-third-party path reaches
-> `fanOutAmendment`. **That measurement was wrong, and review disproved it by running the path**: a
-> bilateral accept DOES fan out, with `verb: "consent"`. My instrument was reading the wrong thing;
-> I then reasoned from it as if it were ground truth and wrote a blocking dependency into this DoD on
-> that basis. The lesson worth keeping is not "I mis-measured" — it is that **a null result from my own
-> instrument got promoted to a fact about the product without anyone running the path.**
->
-> The test exists now, on the two-party fixture, with no `JOIN-1` dependency: bilateral proposal →
-> `holderStopsAnswering()` → `cello_doc_accept` → wait for `holder_opening` → assert `holder_unanswered`
-> has **not** fired yet → release → assert `holder_settled` carries a real elapsed time. **75/75 in
-> `document-handlers.test.ts`.** Mutation-checked rather than assumed green: pushing
-> `HOLDER_OPENING_INFO_MS` out to `999_000` reddens it with
-> `expected [ Array(4) ] to include 'document.amendment.holder_opening'`.
->
-> The harness knob shipped as designed — a `sendHangs` beside the existing `sendFails`, defaulting to
-> `undefined` so nothing existing changes.
->
-> **User-visible today:** you accept an invitation to a shared document and it hangs for a minute,
-> because someone else in the document happens to be offline.
->
-> #### 🔎 AND THE FAILING SET **CHANGES BETWEEN RUNS** — so no product cause can be attributed yet
-> Run in isolation 2026-08-24: **5 failed / 2 passed**, against **4 failed / 3 passed** in the batch.
-> **`GOVERN + JOIN` failed in the batch and PASSES alone; `END: closes are ENTRIES` passed in the batch
-> and FAILS alone.** Same file, same build, different victims.
->
-> Every failure in both runs is the same signature — `MCP error -32001: Request timed out` at
-> **70003–70287 ms**, the MCP SDK's own request timeout (`protocol.ts` `Timeout.timeoutHandler`). **A
-> tool call is never answered at all**: not refused, not errored — no reply.
->
-> **⚠️ WHAT THIS RULES OUT, AND IT IS THE USEFUL HALF.** A defect that hangs a specific operation would
-> hang the SAME test every time. **A failing set that reshuffles is shared state or resource
-> contention**, not a deterministic product fault in any one of those operations. So the tempting
-> write-up — *"the removed-holder path never replies"* — is not supportable, and would have sent the
-> next reader into the document gate for a fault that is not there.
->
-> **What is established:** an MCP tool call goes unanswered for 70 s, in a three-daemon journey, on a
-> rotating subset of tests. **Not diagnosed further** (§0z.2): the next step is which call, captured
-> per-run rather than inferred — and the instrument must survive a run where the victim moves.
->
-> #### 🔎 `j-multiplayer`'s FOUR TIMEOUTS ARE **NOT** THE SALT CAUSE — checked before assuming
-> All four are `MCP error -32001: Request timed out` at ~70s, on document operations: *GOVERN + JOIN*,
-> *REMOVE while OFFLINE*, *NUDGE + SURFACE*, *REMOVE surfaces to the removed holder*. The obvious move
-> is to fold them into the document salt outage, since `j-multiplayer` is also a document journey.
-> **The same run refutes it:** `session.salt.agreed` × **10** and `content_hash_salt_unavailable` × **0**.
-> Salts agreed and nothing was refused. **Whatever stalls those four, it is not the salt.**
->
-> Recorded because folding them in would have been free, plausible, and wrong — the third time on this
-> line that a confirmed cause invited an unchecked extension. Uninvestigated beyond this.
-| **Green all along** (`j-upgrade`, `j-loopback`, `j-persist`, `j-canary`, `j-legibility`, `j-trust`, `j-tofn`…) | — | ✅ |
-| **`j-suspend-tofn` — the kill switch** | 1 | 🔴 **highest-stakes in the lane** (below) |
-
-> ### ⚠️ THE ARITHMETIC ABOVE DOES NOT RECONSTRUCT 49, AND SAYING SO IS THE POINT — review SPEC finding
-> The rows sum to **36 of the receipt's 49**. The remainder are failures inside files whose headline
-> cause is listed but whose per-test count I did not itemise (`j-multiplayer`'s 7-of-7, `j-content`'s
-> full set at the time of the receipt, `j-documents` before it was measured).
->
-> **My first version of this table omitted `j-suspend-tofn` entirely** — the kill-switch failure, the
-> highest-stakes item in the lane — and summed to 35 while claiming to account for 49. A summary that
-> silently drops the most important row is the same defect this milestone keeps finding, in the
-> bookkeeping instead of the code. **The count is now stated as partial rather than implied complete.**
-
-**Files now measured green that the receipt lists red:** `j-spine` 7/7, `j-tofn` 4/4, `j-relaysig` 1/1,
-`j-upgrade`, `j-loopback`, `j-trust` 1/1, **`j-end` 10/10**, **`j-content` 10/10**, and `j-remove` 2/3.
-*(`j-end` was 9/10 when this line was written; the tenth is fixed — see the corrected entry below.)*
-
-### 🔎 TWO INDIVIDUALLY-CAUSED FINDINGS, filed not fixed (freeze: nothing new enters the gate)
-
-**`DOD-M15-REVOKED-READS-OFFLINE-1` — a REVOKED agent is reported as merely offline.**
-> **⚠️ SECOND COPY — classified POST-LAUNCH; the owning entry is in the POST-LAUNCH BACKLOG below.**
-> Only that copy carries a classification, so this one reads as in-gate. It is not.
-`j-remove`: *"the directory must refuse a revoked target with `agent_revoked`: expected
-`counterparty_offline` to be `agent_revoked`"*. The directory's revoked gate is correct and correctly
-ordered — but **the client never reaches it.** It runs a discovery lookup first, and
-`classifyOnlineResult` accepts only `"online" | "offline" | "unknown_agent"` — **there is no revoked
-state on that path**, so a revoked agent classifies as offline and the session request is never sent.
-**The operator is told:** *"The counterparty exists but is not currently online. Have its operator
-bring it online, then retry."* — and goes to chase a counterparty who can never come back. That is
-error substitution of the exact shape `DOD-M15-ERRSTRING-1` fixed twelve lines below it in the same
-file. **Fix is a wire question** (discovery must be able to say revoked), which is why it is filed.
-
-**~~`j-end`~~ ✅ FIXED — and "a trust signal misclassified" was the wrong reading.**
-The test was *"Bob's genuine third-party endorsement must NOT be flagged as same-operator"*, and it
-was filed here as an uninvestigated product misclassification. **The product was right; the fixture
-was incomplete.** The same-operator check (D-29) is a **disjunction** — it fires on an account match
-**OR** a phone-stub match — and the fixture seeded neither linkage table for Bob, so the endorsement
-could not be evaluated against the thing that distinguishes a third party from the same operator.
-The fixture now upserts `agent_account_links` (V59, keyed on the stable `agent_id`), and both
-assertions check the linkage across **account and phone stub** rather than one of the two.
-**`j-end` is 10/10.**
-
-**Worth keeping:** "not investigated" was accurate when written, but the note framed it as a
-suspected product defect. A single failing assertion about a security classification is exactly the
-kind of thing that should not sit in a DoD wearing a product-defect label until someone has looked —
-a reader deciding what to work on would have picked it up as a trust bug.
-
-### 🔎 `j-stale-session` — FRAMES ARRIVE AND NONE ARE INGESTED, after the peer's daemon restarts
-
-Its single failure reads *"B never converged at all within five minutes"*, and **the test's own
-diagnostic already contains the answer** — it prints it and nobody read it:
-
-```
-STALE-SESSION A: sent=4 parked=2 reconcileInitiated=3 sweepFailed=1
-           || B(after restart): framesReceived=3 inbound=0
-```
-
-**B received three document frames and ingested none.** That is a clean producer/consumer split, and
-it is not the salt cause: a refused frame never reaches `session.document.received` at all, and these
-did. Across the run the session layer classifies frames by kind perfectly well —
-`reconcile` × 10, `proposal` × 6, `proposal_ack` × 4, `amendment` × 2 — so **routing works; the
-handoff into the document layer's inbound path is what produces nothing.**
-
-**Established:** frames arrive at B, are classified, and yield zero `document.inbound.*`. **Not
-established:** why.
-
-> **⛔ THE "NEXT THREAD TO PULL" NAMED HERE WAS A DEAD END — fixed at the source 2026-08-24.**
-> `routeSync` structurally cannot set `ok`/`reason` (it dispatches via `void this.#enqueue`), so their
-> absence was never evidence of a routing fault. Both declarations are narrowed — reading either is now
-> a compile error — and the line names `document.frame.refused` as the event carrying the verdict.
-> **The real question is unchanged:** three frames queued, none ingested. Check for
-> `document.frame.refused` on the same `correlationId`; absent means the dispatch never ran, which is a
-> different fault. Trail → [[M15-BUILD-JOURNAL]].
-
-**Not diagnosed further** (§0z.2). The user-visible shape, if it holds: your counterparty restarts,
-and from then on your document changes reach their machine and are silently discarded.
-
-### ✅ `DOD-M15-SALTANNOUNCE-LATE-1` — DONE. Reviewed, one HIGH regression of mine found and fixed.
-> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-SALTANNOUNCE-LATE-1`.
-
-### ✅ `j-end` IS GREEN — 10/10. A closed line already held the answer, and review found its twin.
-> **Closed.** Full entry is in [[M15-DEFINITION-OF-DONE-ARCHIVE]].
-
-### ✅ `j-spine` IS GREEN — 7/7, from 4/7. Five failures fixed; four were stale vocabulary.
-> **Closed.** Full entry is in [[M15-DEFINITION-OF-DONE-ARCHIVE]].
+- **Out of gate, unfixed, and NOT to be read as passing:** the document journeys (`j-documents` 7,
+  `j-stale-session` 1, `j-multiplayer` 4).
+- **Owned elsewhere:** `j-unilateral` ×2 and `j-upgrade-bilateral` → `DOD-M15-UNILATERAL-NOTARIZE-1`;
+  `j-remove` → `DOD-M15-REVOKED-READS-OFFLINE-1` (POST-LAUNCH).
+- **One product finding filed from this line's review:** `DOD-M15-START-AGENT-UNAWAITED-1`.
 
 ### `DOD-M15-NORMHASH-1` — ✅ Sanitisation cannot split the two sides' trees
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-NORMHASH-1`.
@@ -677,31 +436,7 @@ and from then on your document changes reach their machine and are silently disc
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-SIGNUP-DURABLE-1`.
 
 ### `DOD-M15-UNWITNESSED-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was ❌ The two SUSPECTED partings are judged, not ignored
-Split from `DOD-M15-DIVERGE-1` on review — that clause covered three producers and only the proven
-one could ship safely. **Neither of these is visible to `sealReadiness` today.**
-- **(a) An unwitnessed RECEIVED append.** `ingestReceivedContent`: a relay is attached, no witness
-  bound the hash, the content is logged at WARN (`session.content.unwitnessed`) and **ingested
-  anyway.** This is the direction an injected leaf appears in, so it is where `DOD-M15-FRAME-1`'s
-  attack lands. **Gating on it today would be a false positive** — both peers hold the leaf, so leaf
-  counts still agree. The useful work is separating "the relay has not witnessed it *yet*" from "it
-  never will", which needs a fixture that can attach a relay client.
-- **(b) An unwitnessed OWN send** — `assignedSeq === undefined`, the relay-degraded append. **Found
-  by the review; not in the original record.** It sets no flag, emits no ERROR, and reads ready —
-  while `placeOwnLeaf`'s own comment says *"the seal was already lost at the unwitnessed append, not
-  here."* **So the gate fires one send later than the code says the damage happens.**
-- **Do not gate either on suspicion alone.** The bar is a signal separating a relay catching up from
-  a leaf it will never carry.
-- **⚠️ `8c58cc0` — (b)'s commit — does not typecheck on its own.** Found by `CELLO_Coder_1`'s
-  reviewer, not by me. `submitLeaf` takes four parameters at that commit and
-  `session-node-manager.ts:6349` passes five; the two halves landed in different commits because we
-  were both editing that file. **Nothing to revert and the end state is right** — but `git bisect`
-  across that range will not build, so anyone bisecting a later seal defect hits a compile error and
-  will read it as the bug. Recorded rather than rewritten: rewriting published history to fix a
-  bisect point costs more than the note.
-- **The collision is why `session-node-manager.ts` now has ONE owner.** Both lanes commit by explicit
-  path, which is correct and did nothing here — explicit paths do not separate two agents editing the
-  same file. Settled with `CELLO_Coder_1` over CELLO: that file is theirs outright,
-  `close-session-handler.ts` is mine, and neither of us announces.
+> **Out of the gate — launch does not wait for it.** Full entry is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-UNWITNESSED-1`.
 
 ### `DOD-M15-MIGRATION-GUARD-1` — ✅ The upgrade guard checks all seven rebuilt tables, not one
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-MIGRATION-GUARD-1`.
@@ -725,19 +460,7 @@ one could ship safely. **Neither of these is visible to `sealReadiness` today.**
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RESPONDER-VERIFY-1`.
 
 ### `DOD-M15-RELAYAUTH-1` — ✅ No relay service without a directory-issued assignment
-> **Closed 2026-09-01** (`002-RELAY`, with its third work item completed by `008-RELAY`). Two review
-> passes; pass 2 refused the merge on a gate that denied the LEGITIMATE first dial.
->
-> ✅ **PROVEN ADVERSARIALLY AGAINST PRODUCTION, 2026-09-02.** A stranger with a fresh keypair, holding
-> a REAL circuit address of a real reservation holder, tried to dial through it. It **reached the
-> relay** (so the refusal is not a network failure) and the dial returned
-> `failed to connect via relay with status PERMISSION_DENIED`. The relay's own record:
-> `relay.circuit.dial_denied`, `reason: no_session_assignment_names_both_peers`,
-> `destinationBindingCount: 0`. Both ends agree, and the reason is the specific one the gater emits —
-> this line's claim that "a circuit address is not dialable by whoever learns it" is now measured.
-> → Entry C10. Full entry —
-> verdicts, findings and what the fixes cost — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under
-> `DOD-M15-RELAYAUTH-1`. → Entry S15.
+> **Closed.** Full entry, plus the live/production verification written here after it closed, is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYAUTH-1`.
 
 > ### 📐 `DOD-M15-SWEEP-1` WAS SPLIT 2026-09-01 (Andre) — the relay third is done, the rest is not
 > `005-RELAY` swept the relay package and deliberately excluded the daemon and directory. **No tag in
@@ -821,17 +544,7 @@ status marker there.** Items are cross-referenced by their triage designation.
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-SIGNUP-1`.
 
 ### `DOD-M15-ALERTING-1` — ✅ Something tells us when a node is unwell
-> **Closed 2026-09-02** (`011-ALERT`). Both policies are in Terraform and applied — sustained CPU
-> and memory — routed to the Telegram channel that already carries infra alerts. **Every metric was
-> confirmed ARRIVING before its policy was written**, which was the order's loudest instruction: CPU
-> returned 58 live directory series; `cello.node.memory` turned out to be **a log line, not a
-> metric**, so it is a log-based metric over the stream that already exists, and its filter was run
-> verbatim against Cloud Logging first.
->
-> **The review's best finding is why this line is worth its tag:** a dead directory process silenced
-> BOTH alerts — the failure the line exists to catch was the one case it could not report. Fixed
-> with `evaluation_missing_data = ACTIVE` on the memory condition, applied and verified live.
-> → journal.
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-ALERTING-1`.
 
 ### `DOD-M15-STALEROSTER-1` — ✅ A stale reading refuses to present itself as current
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-STALEROSTER-1`.
@@ -855,106 +568,13 @@ status marker there.** Items are cross-referenced by their triage designation.
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-SAMEOP-1`.
 
 ### `DOD-M15-ENDORSE-RETRY-1` — ✅ A trust signal reaches the directory when one node is down
-`DOD-END-SUBMIT-1`'s handed-forward AC. Previously triaged ship-without; **in scope under the basic-
-value criterion** — "mint a trust signal and have it received" is advertised value.
-- Submission fails over to another node rather than failing and requiring the operator to re-run the
-  command. The consortium has three.
-- **Verify at the same time** whether the refuse-op drain gap closed when `cello-portal-ingress-drain`
-  shipped; nobody has checked since.
-- **Enforcer:** journey.
-
-> **Closed 2026-09-02** by micro work order `010-SIGNAL`. A send that reached no node is held and
-> re-sent on the SignalingManager's reconnect — the ruled failover — with the operator told it is
-> held rather than shown a bare failure; a refusal on the merits is never retried. Drain gap:
-> **closed**, verified at `submission-ingress.ts`'s `op === "refuse"` dispatch ahead of the mint
-> path. Reviewer found 9, all fixed; 7 mutations caught, 2 survived first and were fixed.
-> Full record → `micro/010-SIGNAL-trust-signal-retry.md`.
-> **Journey enforcer with a node down is NOT run** — this unit is unit- and live-daemon-tested only.
-
-> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-ENDORSE-RETRY-1`.
 
 ### `DOD-M15-PARKCOLLECT-1` — ✅ A parked message can actually be collected
-
-> **Live check 2026-09-02: parked and collected.** Harness artifact — the test fabricated a session
-> the directory never brokered, which the vouching gate correctly refuses. Test rewritten to a real
-> send; `packages/relay/` untouched. → `micro/018-PARKCOLLECT-a-parked-message-can-be-collected.md`
-> (Review section carries the run, the three-layer mutation chain, and the reviewer's verdict).
-**Found by the full-lane run 2026-09-02 (`j-content` DOD-MSG-3). NEW — this test PASSED in the
-2026-08-23 baseline**, so something between then and now broke it. **BLOCKS LAUNCH**: this is the
-offline path, and the offline path is most of what "two agents connect and communicate" means when
-you control only one of them.
-
-**What the operator lives through, in order:**
-1. They message someone whose agent is offline.
-2. The relay accepts it. Their side reports it **parked — a success.**
-3. The recipient comes online and goes to collect it.
-4. **The relay refuses to hand it over** — `relay_refused_pull:not_a_participant`.
-5. The message sits on the relay. Nobody can get it. **The sender was told it worked.**
-
-- **A silent one-way drop, and the sender is the one who cannot tell.** That is the shape this
-  milestone exists to remove — worse than a failure, because nothing prompts anyone to look.
-- **The relay's own guidance is a dead end here.** It tells the recipient to establish a session and
-  retry — but the message they are missing is the thing that would have told them to.
-- **Established, not guessed:** the refusal is the vouching gate — the relay only serves agents named
-  by a session assignment it has recorded. **What is NOT established is why the recipient is not
-  vouched at collection time**, and that is the unit's first job. Do not assume it is the restart
-  case: the durable store added under `RELAYAUTH-1` review H2 is real and wired in production.
-- **⚠️ Spine red is not proof of a live break.** Live behaviour has diverged from this lane before.
-  **First step is one real send to an offline agent and one collection** — minutes, and it decides
-  whether this is a product defect or a harness artifact. Record which.
-- **Enforcer:** journey — `j-content` DOD-MSG-3 green, plus the live check above.
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-PARKCOLLECT-1`.
 
 ### `DOD-M15-PARKERROR-1` — ✅ A failed park deposit says what went wrong
-> **CLOSED 2026-09-03 (`019-PARKERROR`). The enforcer is met: "a failing deposit names its cause in
-> the response and in the log."** It does — the response carries the extracted cause, and a new
-> `daemon.ipc.request.failed` log line carries it with the structured `reason` beside it.
-> Reviewer: `cello-unit-reviewer` on `9a1408a`, one blocking finding (MEDIUM-3, the log dropped
-> `reason`) fixed in `f69a47d` and pinned by a mutation-proven assertion.
->
-> **This line was briefly left ❌ after the work shipped, which was a bookkeeping error, not a
-> judgement.** What the fixed reporting REVEALED is a different defect with its own line below
-> (`DOD-M15-PARKCONN-1`) — a new finding does not keep its discoverer's line open.
->
-> **The text below describes the state BEFORE the unit** and is kept for the trail. The daemon's
-> IPC error path
-> no longer flattens a thrown object: `extractErrorMessage` moved to its own module and all three
-> `String(err)` sites in `ipc-server.ts` now use it, so a failing call names its cause in the
-> response **and** in the log. That was daemon-wide, not park-specific — every IPC method inherited
-> the bug.
->
-> **What the error turned out to be, read for the first time:** `content_park_deposit` throws
-> `No open connection to peer <relay>` — a plain object, not an `Error`, thrown by the transport's
-> `openStream`, which is why it flattened. **Two things remain, and they are not the same thing:**
-> (a) the deposit path *throws* where its siblings *return* `{ ok: false, reason }`, so an ordinary
-> "the relay is not connected right now" reaches the operator as *"An unexpected error occurred"*;
-> (b) **why there is no open connection at deposit time is UNREAD** — an investigation was opened by
-> Andre on 2026-09-03, including why it reproduces about 1 run in 3.
->
-> **The classification question below is still open and still Andre's**, now with a measured rate to
-> weigh: intermittent, ~1 in 3, in a harness — not measured against the live fleet.
-> **`DOD-MSG-7` is NOT this line.** `019` predicted MSG-5 and MSG-7 shared this cause; they do not.
-> MSG-7 fails on `content_park_recover` returning `ok: false`, undiagnosed and unowned.
-
-**Found by the same run (`j-content` DOD-MSG-5 / MSG-7). Red in the 2026-08-23 baseline too**, so
-this is long-standing rather than new — it was simply never inside `JCONTENT-DELIVERY-1`'s four.
-
-`content_park_deposit` returns `internal_error` with the message **`"[object Object]"`**. An object
-was stringified where a reason belonged, so the cause is destroyed at the point of reporting.
-
-- **What the operator gets:** *"An unexpected error occurred. Check daemon logs for details."* The
-  detail is not in the logs either — it went into the same `[object Object]`. **There is no path
-  from the error to the cause**, which is this milestone's own named defect class arriving through
-  a formatting bug rather than a missing check.
-- **The consequence is not just diagnostics:** a send to an offline counterparty fails, and neither
-  the operator nor the person debugging it can find out why.
-- **Fix the reporting first, then find out what it was hiding.** The underlying failure has never
-  been read by anyone; it may be small or may be another finding.
-- **⚠️ CLASSIFICATION IS ANDRE'S and this is the one to look at.** It sits in the gate under
-  §0z.1's "unclear ⇒ blocks", not because a case has been made that it is unforgivable. The argument
-  for moving it: the send FAILS, so nobody is misled about delivery — unlike `PARKCOLLECT-1`. The
-  argument for keeping it: it is on the same offline path, and while it stands, any other defect
-  there is undiagnosable.
-- **Enforcer:** unit — a failing deposit names its cause in the response and in the log.
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-PARKERROR-1`.
 
 ### `DOD-M15-PARKCONN-1` — ❌ A message to an offline counterparty does not intermittently fail
 **Found 2026-09-03 by `019-PARKERROR`, the moment the reporting was fixed — this is what
@@ -1005,123 +625,10 @@ an attacker walks around.
   block of peer-authored text an operator ever receives — gets only the character denylist.
 
 ### `DOD-M15-HEARTBEAT-1` — ✅ Directory nodes can see each other's heartbeats
-> **✅ 2026-09-03 (Order 021).** `directory_nodes` joins Tier B carrying `node_id` +
-> `last_heartbeat_at`; a node at epoch 0 learns a peer's heartbeat through a real
-> `runAntiEntropyRound` against live Postgres and the next round pulls zero. No migration — the
-> encoding is coalesced at the AE SELECT, as `origin_node` is. **The `availableNodes` clause below is
-> struck as false**; the federated countersignature is parked (M12-P5), not closed here.
-> **BUILD IT — ruled by Andre 2026-09-03, on the migration argument.** *"Anything that's going to
-> change the tables in the directories I'd rather build now, because we don't want to invalidate or
-> do a whole lot of backward-compatibility work once we have users."* Same reasoning Tier 4 was
-> ruled in on: a schema change is cheapest against an empty database and never gets cheaper.
->
-> **⚙️ SIZED 2026-09-03, and it is SMALLER than the cost note below implies — ONE micro order.**
-> The note is right that this needs a Tier-B mutable merge with a version column, and wrong to leave
-> the impression that the mechanism must be built. **Tier-B already exists and already carries a
-> table of exactly this shape.** `pg-ae-store.ts` has `const TIER_B = [SUSPENSIONS, PRESENCE]`, and
-> `PRESENCE` (`agent_presence`) is a mutable, per-key, merged-across-nodes record with
-> `last_seen_at` / `updated_at` — structurally what a heartbeat is. The wire protocol, the digest
-> and version-map exchange, and the merge plumbing are all live. **The work is a third entry in a
-> two-entry list**, following the `PRESENCE` template (`spec`, `keyColumn`, `select`, `merge`,
-> `rowToBody`, `toVersionRow`, `validateBody`), plus its migration and its merge function.
->
-> **What it buys the operator:** a sealed receipt today is confirmed by ONE node's own say-so — the
-> local checkpoint path writes it unilaterally, which is why receipts do finish. The federated
-> 2-of-3 countersignature has never once succeeded. This is what makes "you do not have to trust a
-> single directory" true rather than aspirational.
-
-`DOD-HEARTBEAT-REPLICATION-1`. Every node read the other two as never-heartbeated.
-- **Established by measurement, do not re-derive:** this did NOT cause the sealing outage — the
-  degraded count was already true *during* seals that worked.
-- **Cost, stated before anyone starts:** `last_heartbeat_at` is mutable, so it cannot join the Tier-A
-  immutable set. This means a Tier-B mutable merge with a version column — a new merge table, not a
-  one-line spec edit.
-- **A code comment blaming a "BIGSERIAL `id` collision" is wrong** and would send the repairer at the
-  wrong fix; rewrite it (Invariant / `DOD-M15-CLAIM-COMMENTS-1`).
-
-> ### ⚠️ THIS LINE CARRIED A SECOND, FALSE CLAUSE. Struck 2026-09-03, on measurement (→ Order 021).
->
-> It read: *"…and counts `availableNodes: 1` against `requiredThreshold: 2`; federation checkpoints
-> have never once succeeded."* The second half is TRUE. **The causal link is FALSE** — and it is the
-> same defect class this very line exists to correct: a plausible wrong explanation that sends the
-> next repairer at the wrong subsystem, exactly like the BIGSERIAL comment above it.
->
-> `last_heartbeat_at` is read nowhere in `checkpoint-coordinator.ts`. `availableNodes` is
-> `signaturesCollected.length`; peers come from `getPeerNodeIds()` → `Libp2pCheckpointTransport`'s
-> `#peers` → `process.env.CHECKPOINT_PEER_ADDRS`, which is **set nowhere in IaC** (verified against
-> `infra/terraform/templates/directory-cloud-init.yaml` with a positive control). Replicating
-> heartbeats cannot move that number, and does not.
->
-> **Cross-signing is already PARKED in writing, twice — and wiring it would have been the WRONG fix.**
-> `M12-P5` and `M12-ANTI-ENTROPY-DESIGN §5` retire `/cello/checkpoint/1.0.0` as *"unauthenticated in
-> both directions and trusting responder-supplied pubkeys"*, and record a THIRD independent blocker:
-> the MMR tables do not replicate, so every node's peaks differ and `verifyAndSign` refuses by
-> construction. Setting `CHECKPOINT_PEER_ADDRS` would re-enable a deliberately retired channel and
-> still collect no signatures.
->
-> So this line closes on heartbeat replication — a real defect, really fixed. The federated
-> countersignature is **not** this line's to claim: it is `DOD-M15-CHECKPOINT-COUNTERSIGN-1` in the
-> POST-LAUNCH BACKLOG, **still OPEN**, ruled ship-it-fix-after-launch by Andre 2026-09-03 on the
-> verified answer that building it later forces no client migration.
->
-> **And read that entry before repeating the mistake this one made:** the SEAL CERTIFICATE is FROST
-> threshold-signed and sound. The CHECKPOINT — the periodic published summary of the whole log that
-> an inclusion proof resolves against — is the unsigned thing. Two different artifacts; conflating
-> them produced a false "receipts are signed by one node" claim that stood for several hours.
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-HEARTBEAT-1`.
 
 ### `DOD-M15-ORPHANTRIAGE-1` — ✅ A message for a conversation we never had gets triaged, not a nudge to make contact
-
-> **✅ 2026-09-04 (024-ORPHANTRIAGE).** The daemon was already proving the sender holds the private
-> key on the frame and then discarding that proof at the session lookup, so the notice advised making
-> contact — which is what a peer-id probe is sent to achieve. The orphan branch now names ONE action:
-> report, unless the signature verifies against a key the operator has VOUCHED for (tier KNOWN+, not
-> a mere row — a row is written from the wire) in a conversation this machine still holds part of.
-> Reporting is named as not-yet-reachable rather than as a verb that resolves to nothing; the
-> reach-out admits a CELLO answer comes from whoever holds the key. Journey green as two OS processes
-> (three real messages, three notices); fourteen mutants, one of which caught a review fix that had
-> no teeth. Reviewed, every finding fixed, verdict quoted. → Entries 024a, 024b, 024c
-
-**`022-REFUSALVISIBLE` made `session_orphaned` visible and shipped the wrong advice** — *"ask the
-counterparty to start a NEW session"*. When this is a stranger probing a harvested peer ID, telling
-the operator to make contact **is the probe succeeding**: they learn somebody is home and that the
-agent responds, from a message that was refused.
-
-**THE RULE, Andre 2026-09-03 — exactly TWO actions, never a third:**
-> *"Report to CELLO, or reach out using the public key to the other entity. And those are the only
-> two actions you should take. And whether to reach out depends on whether we can verify they are a
-> known contact in their address book. And if they are a known contact and this was an ongoing
-> conversation until this point, then a separate session with them — and it must be a separate
-> session — is warranted."*
->
-> *"The message should say: when in doubt, report it."*
-
-**The gate is the SIGNATURE, and it is the thing that makes a contact list worth anything:**
-> *"If this is a public key with an unsigned message, it does not prove that person sent it. So even
-> if it's in their contact list, it proves nothing. It means nothing to send a message unless it
-> includes a public key and the message is signed and you can prove it was signed by that public
-> key."*
-
-A verified signature proves **possession of the private key** — not identity, and not legitimacy.
-The value of reaching out to a known key is partly the denial: *"Bob says 'no, I didn't — somebody
-has my private key', which is a good thing to uncover, because then they can pause or burn the agent
-identity."*
-
-**The daemon already holds the evidence and ignores it.** `ingestReceivedContent` takes
-`verifiedAuthorship`; the orphan branch is the first check in that method and returns before looking
-at it. **Falsify first:** the caller matches the signer to *this session's counterparty*, and there
-is no session here — so the value may be absent for a reason unrelated to the sender.
-
-**Reporting must name something reachable.** The mechanism is CELLO itself: an agent,
-**`CELLO_Reporting`**, that an operator's agent opens a session with — the product demonstrating its
-own use. **It does not exist yet**, so the unit either provisions it or says plainly that reporting
-is unavailable; naming a verb nobody can perform is Invariant 4's failure.
-
-- **Order:** `micro/024-ORPHANTRIAGE-a-message-for-a-conversation-we-never-had.md`
-- **Found by:** Andre, reviewing 022's operator-facing wording.
-- **Depends on nothing.** `last_seen_hash` (`DOD-M15-ACKHASH-1`) would add a fourth, stronger signal
-  when it lands — **do not wait for it.**
-- **Enforcer:** journey — unsigned, signed-but-unknown, and signed-by-a-known-contact each produce a
-  notice offering exactly ONE action, with no contact verb present in the first two.
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-ORPHANTRIAGE-1`.
 
 ### `DOD-M15-REFUSALTERMINAL-1` — ✅ A refusal that can never succeed stops, and the count is true
 
@@ -1155,36 +662,7 @@ the loop; the order's DoD 7 is to bring it back and prove the loop is gone.
 > sweep) is recorded POST-LAUNCH in the order's *Newly discovered*.
 
 ### `DOD-M15-FORKQUIET-1` — ✅ A table that is always moving is not a fork
-
-> **✅ 2026-09-04 (026-FORKQUIET).** The verdict now comes from the STORE per table: `directory_nodes`
-> judges on `status` and ignores the heartbeat; `agent_suspensions`/`agent_presence` keep their
-> per-table rule unchanged. `status` had to start replicating for a real divergence there to be
-> detectable at all — the merge never takes it from a peer. Fleet rolled to `12c493ff`, 3 of 3
-> directories, relays untouched: **ZERO `fork_suspected` over 16 minutes** against a baseline of 13
-> in the preceding hour, with a positive control proving the query could see. Replication unchanged
-> (59 rounds / 67 rows applied vs 60 / 73 pre-roll). Two reviewer passes, every finding fixed —
-> including a regression I had shipped that made the KILL SWITCH's alarm more sensitive. 17 mutants,
-> all killed. **Read the order's *Newly discovered* #1 before quoting this: nothing writes a status
-> other than `active`, so the table is now effectively SILENT, not watched.**
-
-`021-HEARTBEAT` made `directory_nodes` a Tier-B anti-entropy table. Every node rewrites its own
-`last_heartbeat_at` every ~30 s, so two nodes can never agree on a hash of a table one of them is
-continuously mutating — and `antientropy.round.fork_suspected` fires at **ERROR every three minutes,
-indefinitely, on a healthy fleet**. Measured on `1695c1a9`: 09:21, 09:24, 09:27, 09:30, flat, with
-`consecutive` pinned at 2. The event's own `reason` field already says it *"may be a benign merge
-that confirmed the local copy, NOT necessarily divergence"*.
-
-It pages nobody (`fork_suspected` is in no policy in `alerting.tf`) and masks nothing (the event
-names its own table, which is `021`'s per-table streak working as designed). It is cry-wolf, and the
-cost of leaving it is that a real fork in that table reads as more of the same.
-
-**Andre's steer 2026-09-04: judge agreement ignoring the heartbeat column** — *"if the difference is
-only a heartbeat logging then it's ignored"* — and NOT by muting the table, which would also hide a
-genuine `status` divergence. He rejected the alternative (slowing the heartbeat) himself: it only
-makes the false alarm rarer and degrades online/offline accuracy.
-
-- **Order:** `micro/026-FORKQUIET-a-table-that-always-moves-is-not-a-fork.md`
-- Costs a build and a five-node roll, so it is worth batching with the next directory change.
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-FORKQUIET-1`.
 
 ### `DOD-M15-SCREENORDER-1` — ❌ The language check must read the original text, not the normalized one
 
@@ -1211,128 +689,10 @@ swap — see the order for the three wrong fixes ruled out.
 - **Separate from `DOD-M15-SCREENINSTALL-1`** (the semantic classifier), which is a different layer.
 
 ### `DOD-M15-REFUSEDEVIDENCE-1` — ✅ Nothing is refused without keeping what was refused
-
-> **✅ 2026-09-04 (023-REFUSEDEVIDENCE).** Seven of the ten non-delivering exits retain the message
-> — plaintext, sender key, sender signature, reason — flagged `direction = 'quarantined'`, which is
-> in the transcript PK and so excludes it from delivery and unread BY CONSTRUCTION. Three keep
-> nothing, each accounted for in writing. Live journey green as separate OS processes: the stored
-> signature VERIFIES against the sender's key, recomputed. Reviewer: 11 findings, all fixed; 13
-> mutants all caught. Found and fixed on the way: one blocked message made a session permanently
-> unsealable. → Entries 69, 70, 71.
-
-**THE RULE, Andre 2026-09-03:**
-> *"Every case where there's something that potentially needs to be reported needs to be stored. It
-> just doesn't make it to the LLM. We need something. Some evidence."*
-
-**RETENTION IS UNIVERSAL. DELIVERY IS WHAT IS WITHHELD.**
-
-**Measured 2026-09-03.** Every refusal in `ingestReceivedContent` is `return { ok: false, reason }`
-and the bytes are dropped. The screener's terminal block is the only one that keeps anything, and it
-keeps the **content hash alone** — it takes `appendSessionLeaf` instead of `#appendVerifiedContent`,
-which is the branch that calls `recordTranscriptMessage` and writes plaintext, `sender_pubkey` and
-`sender_sig`. `GatewayRecordStore` stores a hash and a disposition too. **A `grep` for a refused-
-content store in `core/daemon/src` returns only the DOCUMENT layer.**
-
-**So a hash with no original proves nothing.** You cannot show what they sent or that they signed it,
-and there is nothing to hand `CELLO_Reporting`. The categories an operator would most want to produce
-— an injection aimed at their agent, a stranger probing a peer ID, a tampered frame — are the ones
-with no evidence behind them.
-
-**The fix is a flag, not a second store** (Andre): *"Normally conversations are stored in the
-database. But these aren't — or if they are, and I don't think it's so bad if they are, they need to
-be flagged as quarantined."* The row goes where every message goes; the FLAG is what excludes it from
-delivery and from unread counts. **Without exclusion-by-construction this recreates `DOD-UNREAD-1
-D4a`'s phantom-session residue**, which is the whole reason those rows were refused in the first
-place.
-
-**No truncation.** A message is capped at `MAX_CONTENT_BYTES` and a conversation at the sender's tier
-bound, so what can be stored is already bounded — and a truncated message cannot be verified against
-its signature, which turns provable evidence into an unprovable sample.
-
-**⚠️ THE ACCESS DESIGN IS RULED AND ITS OPPOSITE IS THE OBVIOUS ANSWER — see the order.** Framing,
-not friction: hiding the payload does not remove the LLM from the path, it removes the WARNING,
-because a human who cannot find the file tells their agent to go find it. Base64, CLI-only access and
-a separate unsealed store were each proposed and rejected in writing. The framing carries **no
-closing delimiter** — a payload can forge its own "end of message" marker and make everything after
-it read as trusted. **Storing hostile content is safe (bound parameters, blob columns); interpolating
-it on the way out is the actual risk.**
-
-- **Order:** `micro/023-REFUSEDEVIDENCE-nothing-is-refused-without-keeping-it.md`
-- **Found by:** Andre, reviewing 022's operator wording — *"what happens to this message? Where is
-  it? For all reporting purposes we need the daemon to be able to send over what it got."*
-- **Pairs with `DOD-M15-ORPHANTRIAGE-1`,** which owns `CELLO_Reporting` and the decision of what to
-  do. This line owns there being something to send. **Neither is useful alone.**
-- **Enforcer:** journey — a screener-blocked message is in the receiver's transcript with a signature
-  that VERIFIES, `cello_receive` still never returns it and it is not counted unread, and the session
-  still seals with matching roots.
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-REFUSEDEVIDENCE-1`.
 
 ### `DOD-M15-NO-SILENT-REFUSAL-1` — ✅ Nothing is refused silently. If we refuse it, the operator is told
-
-> **✅ 2026-09-03 (022-REFUSALVISIBLE).** Twelve reasons now file a durable notice keyed on
-> `agent_id`, surfaced as their own `refusals` category in `cello_inbox` — the door for an agent
-> nobody is attending — and surviving a daemon restart, which the in-memory map did not.
-> `counterparty_gone` no longer asserts a crash nor leads with the seal. Journey (both enforcer
-> legs, screener block + byte cap) green as separate OS processes; each made to fail on purpose.
-> **RENAMED from `DOD-M15-SCREENBLOCK-SILENT-1` on the day it was written.** It was scoped to the
-> screener; Andre widened it to the principle within the hour, and an ID naming one door would have
-> mis-sold the line to whoever pulled it.
-
-**THE RULE, Andre 2026-09-03 — this is a standing principle, not one line's scope:**
-> *"Things shouldn't be silently refused. If you're refusing someone for something, your human
-> operator should know about it."*
-
-**It settles three questions that were open separately.** The screener block (finding 4 of
-[[2026-09-03_1158_relay-overload-and-the-four-things-underneath-it]]), the session byte cap that had been sitting unanswered since 2026-08-24, and whether
-`DOD-M15-SEALREJECT-MUTE-1` follows into the gate. **All three are the same defect, and the answer
-to all three is the same.**
-
-## The count — bounded, so this is a normal unit and not a sweep
-
-**THREE refusal reasons reach the operator today. NINE do not.** Measured 2026-09-03, on the inbound
-path in `session-node-manager.ts` plus the pass-2 list.
-
-**Wired (`noteContentRefusal`, 3 call sites):** `content_hash_alg_unknown`,
-`content_hash_salt_unavailable`, `content_hash_mismatch`. `DOD-M15-REFUSED-INBOUND-SILENT-1` wired
-these on 2026-08-24 and it was the right first cut — a version skew silences a conversation
-permanently and that was the urgent case.
-
-**NOT wired — the deliverable is these:**
-
-| Reason | What it costs the operator |
-|---|---|
-| `inbound_screen_blocked` | **We catch a prompt injection aimed at your agent and tell you nothing.** The one the product is *about*. |
-| `governance_timeout` / `gateway_unavailable` | A transient block. Nothing is recorded and nothing is acked, so it silently redelivers — or does not. |
-| `session_size_limit_exceeded` | **Every later message from that person is refused for the rest of the session.** From your chair they simply stop replying and nothing brings it back. |
-| `session_committed` | The session is sealed; their message can never land. They are not told either. |
-| `session_orphaned` | Same shape. |
-| `sender_unresolved` | We could not establish who sent it — and we say nothing about that. |
-| `transcript_write_failed` | Our own storage failed and the message is gone. |
-| `counterparty_gone` | **The dangerous one — see below.** |
-| `delivery_impaired` / `content_undeliverable` | Carried on the same pass-2 list, never surfaced. |
-
-- **The cap SIZE is not the question.** 25 MB is the lowest tier (a stranger); known contacts get
-  more, and Andre's point is the **silence**, not the number. Do not "fix" this by raising the cap.
-- **`counterparty_gone` is actively misleading, not merely absent.** It tells the operator their peer
-  *"may have crashed or gone offline — call `cello_close_session` to seal"* while the daemon holds
-  the real reason in memory. **It hands them a network story for a verification fault and steers them
-  toward sealing** — which, read against `DOD-M15-WITHHOLD-SEAL-1`, is a nudge into exactly the
-  truncated close. Fixing the silence without fixing this string leaves the worse half.
-- **`DOD-M15-SEALREJECT-MUTE-1` COMES INTO THE GATE with this** (Andre 2026-09-03) — *"the one moment
-  the system catches the attack it was built for is the moment it tells nobody"*, the same principle
-  at the seal door. It keeps its own line; this one does not absorb it. Nobody had connected the two.
-- **Good model to copy, already in the tree:** the park path fails closed, refuses by name, never
-  confirm-deletes so a forgery cannot evict itself, and remembers refusals so a re-pull is not an
-  amplification vector (`recoverParkedEntry`). The direct path does none of that.
-- **One crack to record, not necessarily to fix here:** a direct-path refusal sends no delivery ack,
-  so the sender's backstop parks the message and it can be **accepted** on the park path seconds
-  later. A frame refused by name on one path is accepted on the other, and the two events are not
-  tied together. The code knows and logs it.
-- **Where:** `cello-client/core/daemon/src/session-node-manager.ts` — `noteContentRefusal` 8435, the
-  three wired sites 8650 / 8706 / 8730, the screener's terminal block ~8919–8967 (it leafs, it acks,
-  it never notes), and the refusal exits between 8528 and 9200.
-- **Enforcer:** journey — a screened message and a cap-exceeded message each produce an
-  operator-visible refusal naming the cause, with a test that reddens when the notification is
-  removed.
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-NO-SILENT-REFUSAL-1`.
 
 # Tier 4 — Own the encryption, then bind the receipt
 
@@ -1342,125 +702,13 @@ argument: a wire and schema change is cheapest against an empty database and nev
 consumes.
 
 ### `DOD-M15-KEYAGREE-1` — ✅ CELLO owns its own confidentiality guarantee
-> **BOTH halves are now written and reviewed.** `006-CRYPTO` (local: mint per session, memory only,
-> destroyed at teardown and shutdown — one Opus pass, six findings, three blocking, all fixed, 17
-> mutants) and `007-CRYPTO` (wire: exchange, sign, verify, encrypt the body — one Opus pass, fourteen
-> findings, five blocking a publish, all addressed, 13 mutants). **Merged and published 2026-09-01,
-> so operators are running it.**
->
-> ✅ **CLOSED 2026-09-02.** The one thing it was waiting on — the multi-process proof — is measured
-> against the production relay: see `DOD-M15-EPHEMERAL-AUTH-1`. → Entry S15, Entry C11.
->
-> **2026-09-02 — the LOCAL half (this line's own scope) is now proven against the running system, by
-> conservation rather than by a single event firing.** On the deployed build: `ephemeral.minted` 5,
-> `ephemeral.destroyed` 4, outstanding 1 — and the daemon reported **exactly 1 open session**. The
-> books balance, so no throwaway key outlives the session that minted it. Destruction was also
-> observed in sequence at close: `certificate.frontier.verified → session.seed.destroyed →
-> seal.completed → session.ephemeral.destroyed → session.node.destroyed`. → Entry C10.
->
-> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-KEYAGREE-1`.
 
 ### `DOD-M15-EPHEMERAL-AUTH-1` — ✅ The session ephemeral is bound to the agent's identity
-> **Written and reviewed** (`007-CRYPTO`, 2026-09-01 — one Opus pass, fourteen findings, five
-> blocking a publish, all addressed). The throwaway key is signed with the agent's Ed25519 identity,
-> the peer's is verified **before** anything derives, missing/malformed/mismatched all take one
-> hard-fail path, and the message body is encrypted with the agreed secret. **The active-relay MITM
-> this line exists for is closed in code.**
->
-> ✅ **MERGED AND PUBLISHED 2026-09-01.** Clause 14 is done — Andre ran the promotion, verified
-> against the registry rather than the log (`crypto` 0.0.60, `transport` 0.0.66, `protocol-types`
-> 0.0.64, `client` 0.0.50, `connect` 0.0.158, each one ahead of the working tree). **Daemons on
-> `latest` are now running the encryption.**
->
-> **THE HISTORY, kept because it is why this clause existed at all:** `007` called the
-> process-boundary version *"the clause that makes the feature real"*, and it had been proven with
-> two session managers in ONE process — real libp2p, real identities, real signatures, nothing
-> seeded, but one process, and this file's rule is that Vitest green is necessary and never
-> sufficient. That is what the measurement below replaced. → Entry S15.
->
-> **2026-09-02 — THE WIRE BYTES ARE NOW MEASURED IN PRODUCTION, and this line is still 🟡. Read
-> which half moved.** Against the deployed fleet on `7befcc95`, a message was forced to park at the
-> us-east1 relay and the relay's OWN file was read off its disk: 777 ciphertext bytes in
-> `/mnt/disks/cello-wal/content/f8d518ca…/713ab930…__1788295441346__777.entry`. The plaintext
-> canary is absent from the raw file AND from the base64-decoded `ct` field (five needles, all
-> `False`); 36.4% of the decoded bytes are printable, against ~99% for English. The sender's
-> transcript holds the sentence in full at `createdAt 1788295441326` — **20 ms before** the relay
-> file's own timestamp, which is what ties the two observations to one message. **Readable at the
-> endpoint, opaque at the relay, measured rather than inferred.**
->
-> ✅ **CLOSED 2026-09-02 on Andre's ruling, and the ruling is right.** This clause exists to make one
-> claim demonstrable: **we run the relays, so "we cannot read your traffic" cannot be asserted.** That
-> is now measured against the relay, in its own process, on another machine — encryption happened on
-> a laptop, and a host in us-east1 holds 777 bytes that contain none of it.
->
-> The wording said "two daemons in separate processes" as a way of ruling out a shared heap faking
-> the result. **The production measurement rules that out more strongly than the wording asked**: the
-> observer is a different process on a different continent-scale network path, with no memory shared
-> with the sender at all. What differed from the letter is that the two AGENTS sat in one daemon —
-> and the agents are not the adversary this clause is about. The relay is.
->
-> **What was attempted and abandoned, so nobody re-runs it:** a spine journey with two daemons whose
-> parked ciphertext is read off the relay. Its ciphertext assertion PASSED on every run. What did not
-> work was scaffolding — a positive control nobody asked for (bring the recipient back and decrypt)
-> that drags in the whole offline-recovery subsystem, and a relay change that made the mailbox
-> durable for EVERY spine cluster and broke eight J-CONTENT journeys in one run. All reverted; the
-> tree is clean. If it is ever wanted, the observation point is the relay's content store and the
-> control to use is the content-hash linkage, not recovery. → Entry C10.
->
-> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
-Split from `DOD-M15-KEYAGREE-1` (review F6). The key agreement defeats a PASSIVE recorder — the
-harvest-now threat the line names — and NOT an active on-path relay.
-- Nothing in the key-agreement API takes an identity key, so there is nowhere to bind the ephemeral
-  to a peer. An active relay substitutes both ephemerals and reads everything.
-- `SEALWIRE-1` must sign the ephemeral public with the agent's Ed25519 identity and verify the peer's
-  BEFORE deriving. It also removes `KEYAGREE`'s bit-255 refusal as the sole tamper detector — a
-  signature catches the flip instead.
-- ✅ **THE DOCSTRING BULLET IS DONE — verified 2026-08-24, and it is exact.**
-  `session-key-agreement.ts` carries a headed section *"WHAT THIS DOES NOT DEFEND AGAINST, stated
-  plainly"*: defeats a **PASSIVE** recorder (*"which is what a relay storing traffic is"*), and *"NOT
-  sufficient against an ACTIVE on-path relay, which can substitute both ephemerals"*, closing with
-  *"a reader could otherwise conclude MITM is covered. It is not, yet."* **No claim to withdraw.**
-  So what remains on this line is the BINDING itself, not the disclosure.
-- The module docstring states the limit in the meantime, so a reader cannot conclude MITM is covered.
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-EPHEMERAL-AUTH-1`.
 
 ### `DOD-M15-EPHEMERAL-REVIVAL-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was ❌ A revived session RE-KEYS
-Split from `DOD-M15-KEYAGREE-1` (review F5, ruled in Decisions Carried #5).
-- CELLO sessions survive daemon restarts; the ephemeral secret is deliberately NOT persisted, so a
-  revived session has no key material and its content is unreadable until it RE-KEYS.
-- Needs a fresh ephemeral exchange on revival, on the same path that rebuilds the session node.
-- **Terminology (Andre, 2026-08-23): say "re-key the session", never "re-handshake".** The latter
-  reads as reconnecting to the directory or revalidating a session, and it is neither.
-- **Do not "fix" this by persisting the ephemeral.** That is the option Decisions Carried #5 rules
-  out, and the reason is that key material in a backup is unrecoverable once written.
-
-Relay-audit Decision 5(b), with the PQ hook built in from the start.
-- Live content today is plaintext inside libp2p's Noise session. Confidentiality is real, but it is
-  **libp2p's** key agreement over **libp2p's** ephemeral transport keys, so **CELLO cannot upgrade
-  its own confidentiality guarantee** — PQ migration would happen on libp2p's timeline with libp2p's
-  algorithm choices.
-- **Urgent rather than later:** the threat is harvest-now-decrypt-later. Every cross-NAT
-  conversation is relayed today, therefore recordable at fixed endpoints today, and adding the layer
-  later does not protect traffic already sent.
-- **Per-session ephemeral handshake**, not static-static. Each side mints a fresh keypair per
-  session, agrees a session key, destroys the ephemerals at close. **Static-static would void forward
-  secrecy** — a key derived only from long-term identity keys is the same key forever, so anyone who
-  ever obtains an identity key decrypts every conversation that agent ever had. That is strictly
-  worse than today, and [[design-problems]] already claims forward secrecy as structural.
-- **The derivation accepts an additional shared secret from day one**, before there is a PQ
-  contribution to put in it. Hybrid PQ then becomes mixing a second agreed secret into the same
-  derivation — an addition, not a rewrite. Omitting the hook defeats the entire reason for the work.
-- **⚠️ "One agreement, two outputs" WAS WRONG — corrected by Andre 2026-08-23, before SEALWIRE
-  encoded anything.** The envelope key and the content-hash salt are TWO INDEPENDENT VALUES agreed in
-  the SAME exchange — not two outputs of one derivation.
-  **Why the original was wrong, recorded so nobody rebuilds the coupling:** they are unrelated goals
-  that merely both need a shared secret. The envelope key stops the relay reading messages in flight
-  and MUST be destroyed at close. The salt stops anyone holding stored hashes from confirming a
-  guessed message and MUST survive for the life of the session. **Deriving both from one secret ties
-  "must be forgotten" to "must be kept forever"** — and every consequence previously flagged (salt
-  epochs, per-leaf epoch attribution, lockstep switching) was a symptom of that single coupling, not
-  a real requirement.
-  Keep the MOMENT, drop the DERIVATION: one round trip, two independent values.
-- The parked-content seal (X25519 + HKDF + AES-256-GCM) is the working in-tree pattern to extend.
+> **Out of the gate — launch does not wait for it.** Full entry is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-EPHEMERAL-REVIVAL-1`.
 
 ### `DOD-M15-HASHCORRELATE-1` — ✅ A message hash does not identify the message across sessions
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-HASHCORRELATE-1`.
@@ -1469,88 +717,16 @@ Relay-audit Decision 5(b), with the PQ hook built in from the start.
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-SEALWIRE-1`.
 
 ### `DOD-M15-SEALPARTIES-1` — ✅ Both real participants approve before any signature exists
-> **Closed 2026-09-02.** The counterparty's approval already existed on the wire — each party's SEAL
-> ctrl leaf carries a signed `final_root` — and was OPTIONAL: `not_carried` and `coverage:"one"` both
-> certified, and the field is supplied by the party assembling the leaves. A bilateral seal now
-> requires both, co-signing directories re-derive the root AND both approvals from the raw leaves
-> instead of signing what they are handed, and `session_seal_rejected` — which had no consumer
-> anywhere in the client — now answers both operators and still falls through to the solo seal.
-> Closes `DOD-M15-NOTCARRIED-REFUSE-1` with it. Enforcer: `j-spine` **7/7** as separate OS processes
-> (was 5/7 — see the Part 0 fix below). → Entry C12.
->
-> ⚠️ **Ships client-first.** A directory with the co-sign gate plus a client that does not forward
-> the leaves refuses every seal for that agent, and clients cannot be rolled. See the order's
-> DEPLOYMENT ORDER section: publish, confirm every running agent, re-pin, then roll.
-The T-of-N log's Part 3 fix direction. Moves the trust anchor from *"the verifying directory node is
-honest"* to *"at least one of the two real participants is honest"* — a far more natural assumption
-for a communication protocol, and one that does not depend on directory behaviour at all.
-- **Affirmative pre-signature approval from every real participant**, not just the initiator. Today
-  the initiator re-derives the root and refuses to co-sign if inflated — a hard gate before any
-  signature exists — while the counterparty runs the same comparison only **after** receiving
-  `session_sealed`, by which point the result is a durable artifact with no mechanism to invalidate
-  it.
-- **Raw signed leaf data is forwarded to co-signing directories**, not a claimed root. Today the
-  other `T−1` directories verify only that they hold a share and there is no conflicting ceremony,
-  then sign whatever bytes they are handed — cryptographic weight without judgment.
-- **This is the counterbalance line of the milestone** (Invariant 1): name it explicitly in the
-  journal before building.
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-SEALPARTIES-1`.
 
 ### `DOD-M15-UNILATERAL-1` — ✅ Absence is evidenced and tiered, and the artifact says what is weak
-> **Closed 2026-09-02 (`013-ABSENCE`).** The solo seal asks the relay — the party the sealer holds no
-> switch over — whether the counterparty is actually there; a reachable one is refused in BOTH tiers
-> however old the session is. Standard keeps 600s and proceeds on gone-or-unknown so an honest party
-> is never stranded; high-stakes is opt-in only, starts at 3600s, and refuses without a positive
-> observation rather than falling back to the clock. `j-unilateral` 3/3 live as separate OS
-> processes: it was red on the counterparty-absent gate, and the cause was the SEALING party
-> refusing to co-sign its own solo seal. Review found the receipt's new boundary was itself
-> directory-attested — fixed by deriving it from the daemon's own signed carry. → Entries 013b, 013c
-
-T-of-N log Decisions 1 and 2, plus its Part 4.
-- **Hybrid trigger:** a time floor as a backstop, paired with an actual delivery-attempt/timeout
-  record — **elapsed time alone is never sufficient on its own.** Today `#processSealUnilateral`
-  compares elapsed time against `deliveryGraceSeconds` (600s) with **no presence check whatsoever**;
-  a fully-reachable counterparty who takes longer than ten minutes can be sealed out from under them.
-- **Two tiers.** Standard (default, unchanged): today's flat 600s, no evidence required, no
-  dependency on the relay fan-out. High-stakes (**explicit opt-in** — nothing in the infrastructure
-  can safely infer consequence, the relay is deliberately blind and the directory never sees it):
-  **3600s starting point**, and the hybrid check is **mandatory**, not optional.
-- **The artifact is split** into a full-strength mutually-signed prefix and an explicitly
-  lower-weight unconfirmed tail. Everything up to the absent party's last signed message is exactly
-  as strong as a bilateral seal; only the uncountersigned tail is weaker, and a downstream consumer
-  must never mistake one for the other.
-- **Escape-hatch risk, and why this ships near `DOD-M15-SEALPARTIES-1`:** strengthening bilateral
-  sealing while unilateral keeps a self-declared clock-only trigger hands a malicious initiator an
-  obvious way around the whole fix — wait out the timer, or engineer the appearance of
-  unreachability. **Do not ship these far apart.**
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-UNILATERAL-1`.
 
 ### `DOD-M15-LEAFPARTIES-1` — ✅ Every content leaf is constrained to the session's two participants
-> **Closed 2026-09-02** (`014-LEAVES`). **The answer to the open question was NO — it was not
-> constrained**, and what stood in for the constraint was *incidental*: an injected leaf changed the
-> root, so the roots stopped matching. Nobody wrote that as a protection. **And the injector held its
-> off-switch** — omit `content_bytes` and the verdict is `NOT_CARRIED`, which is deliberately
-> tolerated. The adversary was not only a rogue relay: `seal_submission` is accepted from any dialer
-> who knows a session id.
->
-> **Cross-session grafting was unconstrained at BOTH layers** — Structure 1 already signs the
-> `session_id`, and neither the relay nor the directory compared it. The check was free and never made.
->
-> Fixed by widening the existing check rather than adding a second: `verifyLeafProvenance` verifies,
-> for every leaf, that the sender is one of the two participants and that the leaf's own signed bytes
-> name the session being sealed — on the bilateral path *before* the carried-payload walk, so the
-> assembler cannot disable it by sending less.
->
-> **The review found a live hole this unit had walked past: a stranger could unilaterally seal a
-> session they were not in.** Proven by reverting — the directory signs a receipt over two people's
-> conversation naming a third. A test seam had been making that case unconstructible. → journal.
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-LEAFPARTIES-1`.
 
 ### `DOD-M15-INCLUSION-1` — ✅ An operator can prove a message sits under a sealed root
-> **Closed.** `cello_get_inclusion_proof` takes the MESSAGE and returns a proof against the root the
-> directory FROST-signed; `cello_verify_inclusion_proof` checks one from proof + message +
-> certificate with no database. **The certified root is NOT the local tree's root** — it covers the
-> seal's ctrl leaves and `SessionTree` does not — so the leaf set the seal frame carries is now kept,
-> and only if its Merkle root reproduces the signed one. 24 mutants, 24 caught. Reviewed by
-> `cello-unit-reviewer` (10 findings) + `cello-fallback-finder` (6), all fixed → work order
-> [[009-PROOF-inclusion-proof]].
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-INCLUSION-1`.
 
 ---
 
@@ -1668,41 +844,13 @@ Parallel with Tier 4 — different disciplines, no shared files.
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYPUBKEYS-1`.
 
 ### `DOD-M15-RELAYADMIN-1` — ✅ The directory-admin push handler is KEPT, and the keeping is justified
-> **Closed 2026-08-24 (CELLO_Support). Deleting the handler would break `discard_session`, which has a
-> live production caller — so it is KEPT, and the bar's "or justify keeping it" is met in writing.**
-> ⚠️ **CORRECTED an hour later, by me:** my first correction said the handler carries all four frames
-> of the session lifecycle. **It does not — three of the four have no sender.** I verified the ADAPTER
-> was constructed and connected and generalised that to its methods without checking them one by one,
-> which is the same defect class the original bullet had. Measured per frame:
-> `discard_session` ✅ live (`directory-node.ts:2766`); `record_assignment` ❌ the directory dial was
-> REMOVED under Option B (the client presents its own); `confirm_seal` / `reject_seal` ❌ no caller
-> (*"no directory→relay confirmSeal dial — the relay idle-sweep reclaims the post-seal session"*).
-> **So there IS dead surface here after all, just not the whole handler** → `DOD-M15-RELAYADMIN-DEAD-FRAMES-1`.
-> Replay window → `DOD-M15-RELAYADMIN-REPLAY-1`. Full entry → [[M15-DEFINITION-OF-DONE-ARCHIVE]].
+> **Closed.** Full entry, plus the live/production verification written here after it closed, is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYADMIN-1`.
 
 ### `DOD-M15-RELAYADMIN-DEAD-FRAMES-1` — ✅ Three of the admin stream's four frame types have no sender
-> **Closed 2026-09-01** (`004-RELAY`). Deletion sound and independently re-derived on Opus, but it
-> **left three problems behind** — including a rewritten header that would have led the next deletion
-> unit to break the ABSENT attestation. Full entry in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under
-> `DOD-M15-RELAYADMIN-DEAD-FRAMES-1`. → Entry S15.
->
-> ✅ **VERIFIED IN THE RUNNING CONTAINER, 2026-09-02** — counting live dispatch sites
-> (`=== "x"` / `case "x"`) in `/app/packages/relay/dist` on the deployed relay, not textual mentions:
-> `confirm_seal` **0**, `reject_seal` **0**, `record_assignment` **0**; positive controls
-> `discard_session` **3**, `get_seal_leaves` **1**, `client_record_assignment` **2**. Counting raw
-> string hits instead would have reported `record_assignment: 34` and looked like a failure —
-> `client_record_assignment` contains it, and the rest are comments recording the removal. → Entry C10.
+> **Closed.** Full entry, plus the live/production verification written here after it closed, is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYADMIN-DEAD-FRAMES-1`.
 
 ### `DOD-M15-RELAYADMIN-REPLAY-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was ❌ A directory admin frame cannot be replayed
-Split from `DOD-M15-RELAYADMIN-1` once its deletion premise was disproved and the handler was kept.
-- `discard_session`, `confirm_seal` and `reject_seal` sign only `{ type, session_id }`, and the relay
-  verifies the signature without checking the dialer. A captured frame replays forever, from any peer.
-- **Bilateral and receiver-first:** the relay must tolerate the new field before any directory emits
-  it, or an admin frame from an un-upgraded directory is refused and sessions stop being recorded.
-- **Do not solve it by pinning the dialer's peer id instead.** That authenticates the connection and
-  not the instruction, and it breaks the moment the directory's transport identity rotates.
-- **Sequence with `DOD-M15-RELAYADMIN-KEYSET-1`** — both change what this stream accepts, and shipping
-  them apart means two fleet rolls.
+> **Out of the gate — launch does not wait for it.** Full entry is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYADMIN-REPLAY-1`.
 
 ### ✅ park rate limiting — CLIENT HALF DONE 2026-08-24 (CELLO_Support), REVIEWED, blocking findings fixed
 > **Closed.** Full entry is in [[M15-DEFINITION-OF-DONE-ARCHIVE]].
@@ -1714,60 +862,10 @@ Split from `DOD-M15-RELAYADMIN-1` once its deletion premise was disproved and th
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
 ### `DOD-M15-RELAYABUSE-1` — ✅ The relay has rate limiting, and its idle timer is on in production
-> **Closed 2026-09-01** (`003-RELAY`), all seven clauses. The Sonnet pass returned "SPEC: FAITHFUL"
-> and **the Opus re-review did not** — the two new refusals were never heard, and `cello_send` told
-> the operator a message was *"sealed, witnessed and on its way"* when the relay had just refused to
-> witness it. Idle timer ruled to **24 hours** by Andre: a reclaimer, not a conversation timeout.
->
-> ✅ **THE TIMER IS ON IN PRODUCTION, read off the running fleet's own boot log, 2026-09-02.** This
-> line exists because the timer was implemented and *the production binary never passed it*. Both
-> relays on `7befcc95` log: `relay.config.session_idle_timeout sessionIdleTimeoutMs = 86400000`,
-> `relay.config.idle_sweep maxIdleMs = 86400000 sweepIntervalMs = 3600000`,
-> `relay.config.circuit_limits` present, `relay.config.content_ttl contentTtlDays = 30`. The value
-> the binary used to drop is now in the config the relay reports for itself. → Entry C10.
-> Reservation-slot limiting is **not** unfinished business here — it outgrew a relay-only order and
-> is `DOD-M15-RELAYSLOTS-1` ✅. Full entry in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under
-> `DOD-M15-RELAYABUSE-1`. → Entry S15.
+> **Closed.** Full entry, plus the live/production verification written here after it closed, is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYABUSE-1`.
 
 ### `DOD-M15-RELAYSLOTS-1` — ✅ An agent cannot flood a relay's reservation slots
-> **Opened and closed 2026-09-01** (`008-RELAY`). **This line did not exist while the work was done**
-> — it was extracted from `DOD-M15-RELAYABUSE-1` (the slot accounting) and `DOD-M15-RELAYAUTH-1` (work
-> item 2, the registered-agent check), and given its own line on Andre's ruling rather than folded
-> back, because 002 had already recorded what folding costs: *"a work item with no DoD clause is
-> invisible to the gate that is supposed to catch exactly this."*
->
-> ⚠️ **CLOSED TWICE. The first close was wrong and the ✅ rests on the second.** The order was
-> reopened the same day — *"met to the letter and its title stayed false"* — because **the token was
-> checked one step too late, so the flood still worked.** A second round added the gate that refuses
-> a stranger, deleted what had been standing in for one, and made the client prove itself before it
-> asks. Re-merged and closed by its owner.
->
-> 🚨 **THE DEPLOY ORDER IS NOW LOAD-BEARING, not a compatibility nicety.** With the gate live, **a
-> relay deployed in front of clients that do not prove before they ask refuses EVERY reservation**,
-> and every agent behind it is unreachable until it upgrades. **Client first, then relays.** The
-> client shipped 2026-09-01; the relay roll follows it.
->
-> ✅ **DEPLOYED AND PROVEN ADVERSARIALLY AGAINST PRODUCTION, 2026-09-01/02.** The whole fleet is on
-> `7befcc95` (three directories, both relays), rolled in that order. The headline claim was then
-> attacked rather than asserted: **a freshly minted keypair connected to each production relay and
-> was refused a slot by both** — `relay-use1` with a live connection confirmed (`dialed_ok`, 1
-> connection), `relay-euw1` likewise. **Positive control taken in the same minutes:** five registered
-> agents (`CELLO_Coder_1`, `CELLO_Support`, `Miss_Chelly`, `CELLO_Coder_H`, `Miss_Chelly_H`) all read
-> `reachability: reserved` on those same relays — so the refusal is not "reservations are broken
-> tonight".
->
-> Both ends of the handshake observed independently: client `prove.result proven: true`; relay
-> `relay.auth.reservation_proof` for `ce0fa3d0`/`f8d518ca`, and `relay.reservation.denied /
-> not_authenticated` at **debug** carrying the corrected impact text (review finding 3 — the happy
-> path must not be logged as an attack — running in production).
->
-> **The failover was tested by a real outage, not a fixture.** At 20:31:16 `Miss_Chelly_H`'s proof to
-> the europe-west1 relay died mid-handshake (`Unexpected EOF`) **because that relay was being rolled
-> at that minute**. Its client classified it `no_relay_verdict / tryAnotherRelay: true`, moved to the
-> other relay instead of retrying the dead one, and held a reservation again at 20:35:03 — unattended.
-> That is the clause-9 path the review had found untested. → Entry C10.
->
-> Full entry in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYSLOTS-1`. → Entry S15.
+> **Closed.** Full entry, plus the live/production verification written here after it closed, is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYSLOTS-1`.
 
 ### `DOD-M15-SESSION-RELAY-PINNED-1` — ❌ A live conversation survives its relay going away
 > **⚙️ MEASURED, AND UNIT 1 OF 4 IS DONE — do not re-open either.** The first clause below demanded a
@@ -1832,254 +930,22 @@ an improvement, not a mitigation we are counting on; the fleet is two relays reg
   Whoever pulls this line starts by explaining those numbers, not by adding relays under them.
 
 ### `DOD-M15-RELAYFANOUT-1` — ⬇️ OUT OF GATE (Andre 2026-09-03) · was ❌ A single relay's account of a conversation can be cross-checked
-> **Ruled post-launch by Andre, 2026-09-03.** It only bites if a relay is DISHONEST, and we run the
-> relays. It is not findable by reading the repo (the §Priority Override filter demotes exactly
-> this), and building it is one of the largest remaining pieces in the milestone. **Not dropped** —
-> the reasoning below still stands and it is still the right thing to build; launch does not wait
-> for it. Note it serves `DOD-M15-UNILATERAL-1`'s evidenced-absence too, which is already ✅ without
-> it.
->
-> **⚠️ THE RULING RESTED ON AN INCOMPLETE THREAT MODEL, CORRECTED 2026-09-03 — the conclusion still
-> holds, but ONLY because of what replaced it.** It was ruled out on "this only bites if a RELAY is
-> dishonest, and we run the relays." **That is wrong.** `DOD-M15-WITHHOLD-SEAL-1` establishes that a
-> **COUNTERPARTY can truncate with no relay dishonesty at all** — only the sender submits a hash, so
-> on a direct connection a malicious peer delivers a message, never witnesses it, and the relay's
-> account honestly ends one short. **Truncation cover is therefore load-bearing, and is now carried
-> by `WITHHOLD-SEAL-1` (in the gate), whose receiver-side hash submission is cheaper and more
-> targeted than fanning out to more relays.** If `WITHHOLD-SEAL-1` is ever descoped, THIS LINE COMES
-> BACK INTO THE GATE WITH IT — the gate must never be left with no truncation cover at all.
-Serves **three** separate problems, which is a good sign it is the right thing to build: truncation
-resistance at seal, evidenced absence for `DOD-M15-UNILATERAL-1`, and the corroboration layer below.
-- **Truncation** is not caught by more verifiers: a primary directory that has honestly relayed the
-  real conversation can submit a genuine but *truncated* prefix — every leaf validly signed, nothing
-  false, only something missing. Forwarding raw leaves to more directories does not help, because
-  all of them are handed the same feed by the same source.
-- Fan the live hash sequence to **two or three relays** instead of one, fire-and-forget, so a single
-  relay's account at seal time is cross-checkable against an independent live witness.
-- **Fits the cost model:** relays are meant to be cheap, stateless and numerous specifically so this
-  redundancy is affordable; directories are the few, database-backed, anti-entropy-meshed tier.
+> **Out of the gate — launch does not wait for it.** Full entry is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYFANOUT-1`.
 
 ### `DOD-M15-CORROBORATE-1` — ✅ The relay verifies every hash proactively, not on request
-> **Closed 2026-09-02** (`015-WITNESS`). The relay now verifies each submitted hash against the two
-> expected participant keys **as it arrives**, not at seal time — the same check the directory
-> already ran, triggered early, with no new cryptography and no content read. That closes the gap
-> `FRAME-1` opened: the party best placed to notice a forged message is the receiving client, which
-> is also the party best placed to fabricate the accusation. **The clause the unit existed for is
-> asserted: the relay flags it even when the receiving client reports nothing at all.**
->
-> **Ruled and written down, because the order asked for the choice rather than the code implying it:
-> a flagged session KEEPS BEING RELAYED.** The submission is refused before a sequence is allocated,
-> so nothing entered the tree and there is nothing left to protect — while a teardown would let
-> anyone who can name a session id end any conversation with one frame. A false teardown is worse
-> than a false accusation, and needs no accusation at all.
->
-> **One relay is one witness, and the wording says only that.** It becomes a detection layer with
-> `DOD-M15-RELAYFANOUT-1`, not before. → journal.
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-CORROBORATE-1`.
 
 ### `DOD-M15-DIRAUTH-1` — ✅ Directory authentication cannot be silently skipped
-> ### ✅ CLOSED 2026-08-24 — its own stated condition is met.
-> This line held 🟡 deliberately, with *"it closes when `BOOTSTRAP-AUTH-1` does."* That line is now ✅,
-> so this closes with it. **Nothing was ever outstanding here** — everything inside it was done and
-> reviewed (the surfacing half plus two quick wins); the tag was held on another line's state.
-> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-DIRAUTH-1`.
 
 ### `DOD-M15-RELAYADMIN-KEYSET-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was 🟡 ANSWERED: the gap is real but small, and bounded by the idle sweep
-> ### ✅ THE QUESTION IS ANSWERED IN FULL, 2026-08-24 (CELLO_Support), read-only. **The alarming
-> ### reading — "one directory is load-bearing for every session the other two broker" — is FALSE.**
-> Traced per frame rather than per stream, which is what both earlier readings skipped:
-> - **Recording is FEDERATED.** A session brokered by directory 1 or 2 records fine, because the
->   CLIENT presents the assignment (`client_record_assignment`) and its inner signature is verified
->   against the **any-directory set**. The directory's own push was removed under Option B.
-> - **Sealing does not use this stream at all.** `confirm_seal` and `reject_seal` have **no sender** —
->   *"no directory→relay confirmSeal dial; the relay idle-sweep reclaims the post-seal session."* No
->   node can be blocked from a call nobody makes.
-> - **`discard_session` IS the real gap, and it is the only one.** It has a live caller — the
->   directory holding the pending session, on a stream close before establishment — and it is signed
->   with THAT node's key while the relay verifies against the **primary's**. So a non-primary broker's
->   discard is refused.
->
-> **What that costs, precisely:** an abandoned-before-establishment session brokered by directory 1
-> or 2 is not discarded at the relay, and lingers until the **24-hour idle sweep** reclaims it — the
-> same sweep that is the designed reclamation path for sealed sessions. So the consequence is a
-> stale relay-side record for up to a day, not a broken session and not a lost seal.
-> **🟡 rather than ✅** because the fix is real and unshipped, and it is the same wire surface as
-> `DOD-M15-RELAYADMIN-REPLAY-1` and `DOD-M15-RELAYADMIN-DEAD-FRAMES-1`. **Take all three together**
-> — each changes what this stream accepts, and shipping them apart is three fleet rolls.
-
-### (original finding, kept for the trail) The relay's admin stream trusts ONE directory, not the consortium
-**Found 2026-08-24 (CELLO_Support) while verifying `DISCLOSE-1` bullet 3. Recorded, NOT chased —
-outside that unit, and I am not opening it on a guess.**
-- The relay verifies a **session assignment** against the any-directory set:
-  `this.#directoryPubkeys.find((pk) => verify(pk, tbs, assignment.directory_signature))`. Any
-  sovereign directory can broker a session. That is `FED-OPTIONB-SETUP-001` working as designed.
-- But the **directory→relay admin stream** (`/cello/directory-relay/1.0.0`, which carries
-  `record_assignment`, `discard_session`, `confirm_seal`, `reject_seal`) verifies against
-  `this.#directoryPubkey` — **the single primary key only.**
-- **The question, which needs someone who owns the relay's federation story:** if a session is
-  brokered by directory node 1 or 2, can that node drive the relay's session lifecycle at all, or is
-  node 0 a precondition for it? If the latter, one directory is load-bearing for every session the
-  other two broker — the redundancy invariant inverted, in the same shape `RELAYPUBKEYS-1` just made
-  fatal at startup for the assignment path.
-- **What I did NOT establish:** whether the admin stream is only ever dialled by the primary by
-  design (in which case this is correct and should say so), or whether a non-primary broker silently
-  cannot complete. Answering that is the unit; guessing is how a working design gets "fixed".
-
-> ### 🔎 HALF-ANSWERED 2026-08-24 (CELLO_Support), read-only, while `BOOTSTRAP-AUTH-1` was under review.
-> **The alarming half is DISPROVED: node 0 is NOT a precondition for a session being recorded.**
-> There are **two** routes to `recordAssignment`, and only one goes through the admin stream:
-> - **`client_record_assignment`** — the CLIENT presents its own assignment. The inner assignment
->   signature is verified against the **any-directory set** (`#directoryPubkeys.find(...)`,
->   `relay-node.ts:694`), so a session brokered by directory 1 or 2 records normally.
-> - **the directory admin push** — carries an OUTER `directory_signature` over the frame body,
->   verified against the single `#directoryPubkey`. A non-primary directory's push is refused here.
->
-> So the assignment path is federated and the admin path is not. **That is why nothing is visibly
-> broken today**, and it is also why this was easy to miss.
->
-> **WHAT IS STILL OPEN, and it is now a sharp question rather than a vague one:** `confirm_seal`,
-> `reject_seal` and `discard_session` have **no client-presented equivalent** — they exist only on
-> the admin stream. So if the directory that BROKERED a session is also the one that confirms or
-> refuses its seal, a non-primary broker's confirmation is refused by the relay and the session's
-> relay-side lifecycle never terminates. **The next step is one trace: which node sends
-> `confirmSeal`, the broker or the primary?** I did not follow it, and this line should not be
-> closed on the half above — the recording being fine says nothing about the sealing.
-- **NOT a guess about the fix, deliberately:** if the answer is "the broker sends it", widening the
-  admin path to the consortium set is the obvious move and it is the SAME wire surface as
-  `DOD-M15-RELAYADMIN-REPLAY-1`. **Sequence them** — both change what this stream accepts, and
-  shipping them apart is two fleet rolls.
+> **Out of the gate — launch does not wait for it.** Full entry is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYADMIN-KEYSET-1`.
 
 ### `DOD-M15-BOOTSTRAP-AUTH-1` — ✅ A poisoned bootstrap coordinate cannot impersonate a directory
-> ### ✅ CLOSED 2026-08-24 ON ANDRE'S RULING ("close it"). **RETITLED to what it protects.**
-> It previously demanded TLS on port 9090. Measurement says that buys almost nothing: the node roster
-> and every node's key are **signed and shipped in the client**, `/bootstrap` supplies only a dial
-> coordinate, and a coordinate whose peer id is not a declared member is **discarded before any dial**.
-> TLS would encrypt a channel whose contents are already authenticated by something the attacker
-> cannot forge. Descoping is Andre's call; he made it, and the retitle records what actually shipped.
-> **⚠️ This supersedes the `⬇️ OUT OF GATE` tag the other lane's Decision-16 sweep applied here.**
-> That ruling was about DOCUMENTS; this line was swept in with it. Andre ruled on this line
-> specifically, and "closed, retitled" is the narrower and correct disposition.
-> **CARRIED, so the tick covers nothing it did not earn:** `DOD-M15-BOOTSTRAP-ADDR-1` (a rogue
-> ADDRESS under a real peer id stalls this daemon's directory connection), plus the four review ACs.
-> ### ✅ THE UNPROVEN LINK IS NOW MEASURED, AND THE ANSWER IS STRONGER THAN THE SCOPING ASSUMED.
-> **2026-08-24 (CELLO_Support).** The scoping below called this line not-blocking on four points and
-> named the one it could not prove: *"that a client meeting a poisoned coordinate actually FAILS OVER
-> rather than stalling."*
->
-> **The client never dials the rogue at all.** `createRosterAwareEndpointResolver` compares the
-> primary's peer id against **DECLARED manifest membership** before returning it, so an
-> attacker-chosen coordinate is discarded at RESOLUTION — one step earlier than step-6 identity auth,
-> which is where the scoping assumed the defence lived. Membership is local and signed: it costs no
-> probe, and the attacker cannot answer it.
-> **The guard is not hypothetical** — its own comment records the incident that produced it: a
-> compiled-in default URL after a consortium move that *"resolved forever while every connection died
-> at step-6 identity auth with `key_not_in_manifest`. Reachability was never the right test."*
->
-> **⚠️ I WROTE "AND IT HAD NO TEST." THAT WAS FALSE — review F1, and it is the finding of the pass.**
-> `directory-bootstrap.test.ts:313` has carried **four** tests on this guard since M12, including one
-> that is my test 1 minus the log assertion and one that is my test 3. **I grepped the EVENT NAME,
-> found nothing, and concluded the guard was uncovered** — the deadness-by-grep shape, applied to
-> tests instead of to code. My revert proof did not catch it because it was scoped to the new file;
-> reverting the guard would also have reddened the M12 file. **Corrected here, in the test header and
-> in the commit, because the false version said the guard "was held up by nothing" and a later reader
-> would go re-derive its history.**
-> **What this unit genuinely adds:** the all-poisoned → `null` case (no analogue anywhere), the
-> address residual asserted as a bound, and one assertion each on the operator-visible event and its
-> absence on the healthy path. **4 tests, revert proof RUN** — disabling the membership check reddens
-> exactly the two that assert it.
->
-> **⚠️ AND THE PRE-REGISTERED "FAILOVER DOES NOT HOLD" BRANCH WAS TAKEN — for the ADDRESS variant.**
-> Review F2. Branch 2 of the resolver returns the primary on every call, never sets `stuckToFallback`
-> and never probes the roster; `maxReconnectAttempts` is `MAX_SAFE_INTEGER`, so the daemon
-> reconnect-loops **forever** rather than reporting `lost`. That is a STALL, and the cost is not
-> "denial of one node" as I first wrote it — it is **denial of this daemon's directory connection with
-> no failover path**, and a restart re-picks a bundled endpoint the same attacker answers again. The
-> title now carries the qualifier rather than reading as blanket survivability.
->
-> ### ✅ THE UNIT IS COMPLETE. What holds the tag is a SCOPE call, not unfinished work.
-> **Built, reviewed (pass 1), every finding applied, committed.** Gate: this file **4/4**; the whole
-> `core/daemon` package **2952 passed / 285 files**; typecheck clean.
-> **⚠️ ONE FILE FAILED IN THAT PACKAGE RUN AND IT IS NOT THIS UNIT'S** —
-> `mcp-001-agent-lifecycle.test.ts:119` asserts `toEqual({ ok: true })` on `cello_start_agent`, and
-> commit `9a41a39` (`DOD-M15-START-AGENT-UNAWAITED-1`, the OTHER lane) added `standing_receiver`,
-> `standing_receiver_cause` and `guidance` to that response. A strict-equality assertion against a
-> deliberately-widened response. **Not fixed here on purpose:** deciding whether that response shape
-> is now correct belongs to the unit that changed it, and loosening another lane's assertion to green
-> my own gate is the move this milestone exists to prevent. **Handed over, not swept.**
->
-> **The line stays 🟡 for one reason and it is Andre's:** its literal title asks for an authenticated
-> channel (TLS on 9090), which this work does not build and — on the measurement — buys little.
-> Retitling a gate line is scope. **`DOD-M15-DIRAUTH-1` is waiting behind it.**
->
-> **CARRIED as ACs (two-pass cap not yet spent, but Andre called the wrap):**
-> - **The suite-level hollow gap review proved:** delete `getManifestPeerIds,` from
->   `consortium-bootstrap.ts:446` and **all four of my tests stay green**, as do the four M12 ones.
->   Nothing asserts the WIRING from the composition root. The fifth test review specified — drive
->   `createConsortiumRouting` with the real `EmbeddedManifestProvider(BUNDLED_CONSORTIUM_MANIFEST)` and
->   a rogue primary — is the one that would make this launch call self-defending.
-> - **F5 (silent fallback):** `peerId` is OPTIONAL on `ConsortiumNode`, so a verified in-window
->   manifest with no peer ids disarms this guard **with no log at all**. The bundled manifest is
->   covered by an existing assertion; the `CELLO_CONSORTIUM_MANIFEST` file path is not.
-> - **F6:** `directory.bootstrap.primary.not_in_consortium` is the one signal that says *"you are
->   being MITM'd"* and it carries no `impact`, no `guidance`, and reaches no `cello_status` surface —
->   while the line the operator watches loops at INFO forever.
-> - **F7:** a dial rejected for peer-id mismatch — the exact fingerprint of the ADDR-1 attack — is
->   logged at `debug`.
->
-> **THE RESIDUAL, TESTED AS A LIMIT rather than left to be discovered → `DOD-M15-BOOTSTRAP-ADDR-1`.**
-> Membership is checked on the PEER ID, never on the ADDRESS, so a rogue address under a real node's
-> peer id is returned and dialled. Noise refuses the connection (the attacker holds no such key), so
-> the cost is **denial of that node, not impersonation** — but the resolver keeps choosing it, and its
-> own doc says it is *"not told whether a dial/auth against the returned endpoint actually
-> succeeded."*
->
-> **⚠️ WHY THIS IS 🟡 AND NOT ✅, and it is a scope question rather than a work question.** The
-> security property this line exists for is met and now tested. **Its literal title — a bootstrap
-> coordinate arriving over an AUTHENTICATED CHANNEL — is not built, and will not be by this work.**
-> **ANDRE:** the measurement says TLS on 9090 buys little (the roster is signed, the coordinate is
-> membership-checked, and the residual is an address the peer id already fails to authenticate).
-> Retitling this line to what it actually protects, and closing it, is a scope call and therefore
-> yours. Say the word and it closes; until then it holds its tag rather than flipping on my reading.
-> **`DOD-M15-DIRAUTH-1` is waiting on this** — its 🟡 is held deliberately with *"it closes when
-> `BOOTSTRAP-AUTH-1` does."*
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-BOOTSTRAP-AUTH-1`.
 
 ### `DOD-M15-BOOTSTRAP-ADDR-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was ❌ A rogue ADDRESS under a real peer id does not pin the client
-Split from `DOD-M15-BOOTSTRAP-AUTH-1` once the membership guard was measured and tested.
-- The resolver checks the primary's **peer id** against manifest membership. It does **not** check
-  the multiaddr, so an on-path attacker answering the plaintext `/bootstrap` with a REAL node's peer
-  id and their OWN address gets past the guard and is returned as the node to dial.
-- **Bounded, and the bound is why this is not the same finding as the poisoned peer id:** libp2p's
-  Noise handshake authenticates the remote peer id and the attacker holds no such key, so the
-  connection is never established. The cost is **denial of that node**, not impersonation.
-- **What makes it stick is the missing feedback loop:** the resolver is *"not told whether a dial/auth
-  against the returned endpoint actually succeeded"* (its own doc), so it keeps returning the same
-  unreachable coordinate on every reconnect instead of failing over.
-- **Fix shape:** feed connect outcomes back into selection — a dial that fails against a resolved
-  primary should demote it the way an unreachable one already is. **Do not fix it by validating the
-  address against the manifest**: the manifest carries `/bootstrap` HTTP bases, not libp2p
-  multiaddrs, and a node legitimately changes address.
-- **Enforcer:** the existing poisoned-coordinate test file, extended — the limit is already asserted
-  there, so the day it is fixed that assertion inverts rather than being written from scratch.
-> # 🔒 CLAIMED BY **CELLO_Support**, 2026-08-24, BEFORE code. `RELAYADMIN-1` closed, so this is my one WIP.
-> **The unit is the TEST, not TLS.** My own scoping below says the authenticity half is already
-> structural and the residual is denial of one node, bounded by the signed roster — and then names
-> exactly one thing I could not prove: **that a client meeting a poisoned coordinate FAILS OVER to
-> another roster node rather than stalling on the refusal.** Everything in the "not blocking" call
-> rests on that, and it is currently an argument.
-> **I hold:** `core/daemon/src/__tests__/` for the new test, and read-only tracing of
-> `consortium-bootstrap.ts` / `directory-bootstrap.ts` / `signaling-connect.ts`. **No production file
-> is claimed** — if the test shows failover does NOT hold, the fix is a separate unit and I will
-> claim the file then rather than widening this one.
-> **The two outcomes, both useful, written before the run so neither can be fitted afterwards:**
-> failover holds ⇒ point 4 is bounded to a single node, this line is hardening, and it closes along
-> with `DIRAUTH-1`'s deliberately-held 🟡. Failover does NOT hold ⇒ the availability bullet is real,
-> and it belongs to the failover path, not to port 9090.
-Extracted from `DOD-M15-DIRAUTH-1`'s second bullet so it is a line rather than a footnote.
-- The directory's `/bootstrap` coordinate comes from a **plaintext HTTP endpoint on port 9090**.
-- Step 6 converts a poisoned redirect into a refused connection — it does not prevent the redirect,
-  so the attacker retains denial-of-service, and step 6 is itself skippable (that is `DIRAUTH-1`).
-- This is the fix the byte/normalised string match was standing in for.
-
-> _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
+> **Out of the gate — launch does not wait for it.** Full entry is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-BOOTSTRAP-ADDR-1`.
 
 ### `DOD-M15-STEP6-REPLAY-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was 🟡 A directory identity proof cannot be replayed (replay bullet ✅; byte-match fail-open OPEN)
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-STEP6-REPLAY-1`.
@@ -3274,44 +2140,7 @@ newly broken.
 ### `DOD-M15-SEALROOT-EMPTY-1` — 🅿️ **NOT A PRODUCT DEFECT. A STALE TEST CONTRACT.** Five spine journeys assert a `close_session` shape the product deliberately retired
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
-<details><summary>Superseded: the original ❌ BLOCKS LAUNCH write-up, kept because the exoneration evidence in it still stands</summary>
-
-### ~~`DOD-M15-SEALROOT-EMPTY-1` — ❌ BLOCKS LAUNCH. A close reports success and hands back no receipt~~
-**Found by the other lane's first-ever spine-lane run (2026-08-23), five journeys deep. Diagnosis is
-open; what is established is below, and the exoneration evidence is the durable part.**
-
-`cello_close_session` returns **`ok: true` with `sealed_root` undefined**. The operator is told their
-conversation closed successfully and receives nothing to keep — and a notarized receipt is the entire
-product. Five journeys fail on it: both `J-UNILATERAL` cases, `J-UPGRADE`, `J-SPINE` DOD-SPINE-7
-(bilateral, byte-identical root) and `J-LOOPBACK`. A sixth, `J-MULTIPLAYER`'s *"agentA has no sealed
-root"*, is the same shape.
-
-**Classified BLOCKS LAUNCH** on the DoD's own test: a prospective customer cannot get the core value.
-Not because the session breaks — it closes — but because the artifact the close exists to produce
-does not arrive, while the response says it did. A silent success is worse here than a failure: an
-operator with `ok: true` has no reason to look.
-
-**WHAT WAS ESTABLISHED, by running rather than reasoning:**
-
-- **Not version skew.** The daemon `dist` the spine spawned was built at 18:57 and *contains* the B2b
-  symbols — verified by grepping the built artifact for them, not by comparing timestamps.
-- **Reproduces at HEAD.** `j-loopback` fails identically now, at ~4.6 s.
-- **`SEALWIRE-1` B2b is EXONERATED, by two probes each rebuilt and re-run:**
-  - `SALT_AGREEMENT_WAIT_MS` 5 000 → 50. Still fails, ~4.4 s. So the bounded first-send hold is not
-    delaying the seal past a deadline.
-  - The salted branch bypassed entirely, every hash plain `sha256` — pre-B2b behaviour. **Still
-    fails, ~4.5 s.**
-- **Therefore: pre-existing.** Consistent with the lane having never been run — there is no baseline
-  saying these ever passed.
-
-**WHAT IS NOT ESTABLISHED, and is not guessed at:** which branch returns `ok: true` without a root.
-The only `ok: true` lacking `sealed_root` in `close-session-handler.ts` is the `force: true` abandon
-path, which the spine does not take. The ~4.5 s is consistent across all three runs, which reads more
-like a fixed timeout being hit than a race — but that is an observation, not a diagnosis.
-
-- **Enforcer:** journey — the five spine journeys above are the receipt, and they must go green.
-
-</details>
+> _(the superseded ❌ BLOCKS LAUNCH write-up, and the exoneration evidence in it that still stands, moved 2026-09-04 to [[M15-DEFINITION-OF-DONE-ARCHIVE]].)_
 
 ---
 
@@ -3384,42 +2213,7 @@ on punctuation rather than as an ordering regression.
 ---
 
 ### `DOD-M15-NOTCARRIED-REFUSE-1` — ✅ CLOSED by `DOD-M15-SEALPARTIES-1`, 2026-09-02
-> **The tolerance is deleted, not trimmed.** A bilateral seal that arrives with `not_carried` — or
-> with only one participant's payload, which this line did not cover and which was the same hole one
-> leaf narrower — is refused as `seal_approval_missing`. There is no roll to protect: nothing is
-> registered against a client that predates the carry, so the older shape was deleted rather than
-> supported alongside the new one. The comment that argued for the tolerance is rewritten in place
-> rather than removed; it was right at the time and it names the price that ended it. → Entry C12.
->
-> *Original entry, kept because its reasoning is what made the tolerance correct while it lasted:*
-**Raised by review pass 1 on `DOD-M15-SEALWIRE-1` bullets 3+4 (finding F4), filed rather than fixed
-because the gate is frozen and this is not a hole a customer reaches today.**
-
-The final-root check is the one thing in `processSeal` that is not circular: it compares the leaves a
-relay presents against a root the participants themselves signed. It runs only when the SEAL payload
-is present — and **`content_bytes` is supplied by the relay.**
-
-So a relay that deletes a message leaf also strips both payloads, the check returns `not_carried`,
-and the seal is certified exactly as it was before the check existed. **The guard is optional for
-precisely the party it guards against.**
-
-**Tolerating absence is correct right now and only right now.** Every client and relay is
-un-upgraded until it upgrades; refusing an absent payload the moment this shipped would have broken
-every seal in the federation. That is the ABSENT-versus-NAMED distinction Decision #15 spends a wire
-discriminator on, applied one layer up, and it is why the code proceeds and logs rather than refuses.
-
-**What changes it:** once the sender leg (shipped 2026-08-24, `cello-client`) and the relay carry are
-deployed everywhere, a BILATERAL seal arriving with no payload is no longer explainable as skew. At
-that point the tolerance is the whole defect.
-
-- **The work:** flip `NOT_CARRIED` from an info-and-proceed to a refusal on the bilateral path, once
-  deployment is confirmed. Keep the unilateral path's own handling separate — its leaves are
-  client-carried and receipt-witnessed, a different threat model.
-- **The prerequisite is a deployment fact, not a code change** — which is exactly why this is a
-  tracked line and not a "tighten this later" sentence in a comment. The two-milestone deferral that
-  `DOD-M15-SEALWIRE-1` bullet 3 just deleted is what a comment-only intention becomes.
-- **Enforcer:** unit — a bilateral `processSeal` with no carried payload must be refused, with the
-  un-upgraded case covered by the rollout flag rather than by the absence itself.
+> **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-NOTCARRIED-REFUSE-1`.
 
 ---
 
