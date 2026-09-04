@@ -349,11 +349,13 @@ actual property and a stronger one: it catches a hookup three hops away that the
   and NOTHING goes red. A reader checking that the build is green learns nothing. Whoever integrates
   must collapse it to one declaration rather than trusting the gate to notice.
 - **A live instance of that already exists: `display_name`.** The catalogue offers the tick, neither
-  declaration has anywhere to read it from, and 002's composer refuses it by name. Worth stating
-  from 001's side because only this order knows the cost: X returns the display name as `name` on
-  the same user object, and adding a field to `user.fields` costs NOTHING — X bills per resource
-  returned, not per field. So the fix is one entry in `X_USER_FIELDS` and one in the contract, at no
-  extra spend. Not done here: it is a change to the pinned contract, and this order may not make one.
+  declaration has anywhere to read it from, and 002's composer refuses it by name. It is CHEAPER than
+  a new field request: `id`, `name` and `username` are X's DEFAULT user fields — proven in our own
+  code, which reads `u.username` while `username` is not in `X_USER_FIELDS` — so `name` already
+  comes back on every read we pay for and the normalizer discards it. The fix is a contract field
+  and one normalizer line. Not another read, and not another field request either. (X also bills per
+  resource returned, not per field, so even the insurance entry in `X_USER_FIELDS` would be free.
+  Sharpened by the 002 session; verified here.) Not done here: it is a change to the pinned contract, and this order may not make one.
 - **The contract looks right and was not changed.** `readAt` in epoch seconds is the field that does
   the most work: it is what a free re-mint uses to state when the figures were measured, and it is
   now also the spend clock.
