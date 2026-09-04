@@ -110,6 +110,63 @@ precisely what the personal agent needs from them.
 This one is configuration, not code: the per-tier away text for `unknown` is settable. It is simply
 aimed wrong by default.
 
+### 5. Measured live the same day — 232,056 knocks, the operator was shown 58
+
+The sections above reason from the code. This is the same shape running in production, found by
+accident while checking something else on 2026-09-04, and it moves two of them from argued to
+measured.
+
+**One peer knocking one closed conversation, for 62 hours.** `CELLO_Coder_1` — Andre's own agent, on
+Andre's own laptop — had a canary message aimed at a session `CELLO_Support` had already closed.
+Every copy is refused `session_committed`, which can never succeed: a committed session is signed and
+cannot be added to. It began `2026-09-01T20:43` and was still running at `2026-09-04T10:33`.
+
+| | |
+|---|---|
+| refusal events for that one session | **232,056** |
+| rate, measured over three 30-second windows | **~2 per second**, steady |
+| what the operator's inbox said | `times: 58` |
+| daemon log size | **484 MB** |
+| evidence rows retained | **1** |
+
+**What §3 gets right, and understates.** There *was* a count here, and it was off by more than three
+orders of magnitude — 58 against 232,056. The 58 is the number of distinct refused *messages* the
+notice tracks; the knocking underneath it is invisible at every surface an operator looks at. A
+ledger keyed per peer per hour would have shown a flat line at ~7,000/hour for two and a half days,
+which is not a thing anyone would have had to notice by accident.
+
+**What §2 gets RIGHT, and it is good news for Phase 2.** All 232,056 arrivals produced exactly **one**
+retained row. `023-REFUSEDEVIDENCE`'s dedup — keyed on (session, reason, bytes) — held under real
+repeat pressure. The evidence/delivery budget collision is therefore *not* exploitable by simple
+repetition: a peer who sends the same refused bytes forever spends the budget once. It is still
+exploitable by a peer who varies the bytes, which is the case Phase 2 has to price.
+
+**The finding that is not in any section above: there is no lever.** `cello_dismiss` on the session
+cleared the refusal *notice* and changed the knocking not at all — measured, 60 events per 30 seconds
+before and after. Nothing in the tool surface says "stop accepting this", and nothing says "this
+refusal is terminal, stop fetching". The only thing that stopped it was
+`cello_set_agent_offline CELLO_Support` — taking the agent off the network entirely, which is the
+sledgehammer the whole document exists to avoid needing.
+
+> **The loop is on the RECEIVER, not the sender.** The cycle is
+> `session.content.leaf_unresolved.fetch` → `content.recover.verified` →
+> `session.content.cross_check.failed (session_committed)` → `quarantine.duplicate`, every ~3s. The
+> receiver holds a leaf it cannot resolve, because resolving it requires ingesting content that will
+> be refused every time. Nothing marks the refusal terminal, so the backstop re-fetches forever.
+> **Andre, 2026-09-04, on being shown this: *"a message refused should stop being retried."*** That is
+> a refusal-disposition question — which refusal reasons are permanent — and it belongs beside the
+> knock ledger rather than inside it, because a terminal refusal should stop the work AND still count
+> as a knock.
+
+**A second thing this session established, relevant to how any of this gets tested.** An attempt to
+send injection-shaped content from an attended agent, to exercise the receiving screener live, was
+refused by the *sender's* own guard — `exfil:injection_artifact`, twice, including once for exactly
+the forged `[[END PAYLOAD]]` framing that `023` designed against. A well-behaved client cannot emit
+hostile content, so the receiving screener and `024-ORPHANTRIAGE`'s unknown-session path are not
+reachable from one. **Live-testing the defensive half needs a deliberately modified client**, and
+until one exists the multi-process spine journeys are the only place those paths run at all. Worth
+stating plainly so nobody records "could not reproduce live" as evidence the defence works.
+
 ## Recommendation
 
 **Split the one number into three things that are currently entangled, and do the ledger first.**
