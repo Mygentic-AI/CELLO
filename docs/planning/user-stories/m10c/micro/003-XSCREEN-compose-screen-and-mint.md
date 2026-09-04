@@ -175,3 +175,24 @@ LinkedIn; changing the Social section's existing GitHub row.
 ## Newly discovered
 
 *(One or two lines each. Do not act on them.)*
+
+- **GitHub's connected-state panel shows placeholder text, not its real claim.** `GitHubSignalRow`
+  renders the literal words "created N days ago, X public repos, Y followers" under the heading
+  "What counterparties see". It is a second, hardcoded renderer of exactly the kind this order
+  forbids, and it tells the operator nothing about what was actually notarized. Untouched: changing
+  the GitHub row is explicitly out of scope.
+
+- **`submitAndDeliverGitHubSignals` is generic but named for GitHub.** X now calls it under an import
+  alias. It belongs in `directory-submit.ts` under a type-neutral name; reimplementing the loop per
+  type is how the missing `recordMintedSignal` shipped in the first place, so the fix is a move, not
+  a copy.
+
+- **The catalogue can refuse a field the operator's snapshot cannot state, and `display_name` always
+  does** — the pinned `XProfileSnapshot` carries no display name. The screen therefore shows a row
+  the operator can never tick, with the reason. Either the profile read should capture a display name
+  or the catalogue entry should go; both are outside this order.
+
+- **Every tick is a server round-trip**, because the ticks live in the URL and `composeXSignals` is
+  the only renderer. If that ever needs to be instant, the fix is to make `x-compose.ts` browser-safe
+  (today it pulls `node:crypto` in through protocol-types' CBOR barrel) — never a second renderer in
+  the component.
