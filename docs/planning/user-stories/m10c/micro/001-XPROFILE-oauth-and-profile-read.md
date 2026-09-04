@@ -341,9 +341,19 @@ actual property and a stronger one: it catches a hookup three hops away that the
   contract pinned the snapshot shape and said nothing about the store API, so two orders invented
   different names for the same function and `main` was briefly red. A future parallel order should
   pin the module's exported signatures, not only its data shape.
-- **`XProfileSnapshot` is now declared TWICE** — in `server/trust/x.ts` and in 003's catalogue,
-  re-exported by the composer. Structurally identical, so nothing is red today; two declarations of
-  a pinned contract can drift silently. Not acted on: the contract is pinned and this is a note.
+- **`XProfileSnapshot` is declared TWICE, and the drift is SILENT IN ONE DIRECTION — this is an
+  integration line item, not a note.** It lives in `server/trust/x.ts` and in 002's
+  `x-catalogue.ts` (002 declared it because 001 had not landed yet; the composer re-exports it).
+  Structural typing means the two agree today — and 002's point, which is the sharp one: when a
+  field is ADDED to the `x.ts` declaration, their copy still compiles, still cannot see the field,
+  and NOTHING goes red. A reader checking that the build is green learns nothing. Whoever integrates
+  must collapse it to one declaration rather than trusting the gate to notice.
+- **A live instance of that already exists: `display_name`.** The catalogue offers the tick, neither
+  declaration has anywhere to read it from, and 002's composer refuses it by name. Worth stating
+  from 001's side because only this order knows the cost: X returns the display name as `name` on
+  the same user object, and adding a field to `user.fields` costs NOTHING — X bills per resource
+  returned, not per field. So the fix is one entry in `X_USER_FIELDS` and one in the contract, at no
+  extra spend. Not done here: it is a change to the pinned contract, and this order may not make one.
 - **The contract looks right and was not changed.** `readAt` in epoch seconds is the field that does
   the most work: it is what a free re-mint uses to state when the figures were measured, and it is
   now also the spend clock.
