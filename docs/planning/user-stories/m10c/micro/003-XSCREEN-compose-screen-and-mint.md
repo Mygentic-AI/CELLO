@@ -260,12 +260,10 @@ git status --porcelain → clean in cello-client and trustless-cello
   the operator can never tick, with the reason. Either the profile read should capture a display name
   or the catalogue entry should go; both are outside this order.
 
-- **A re-mint supersedes nothing, and this screen invites re-minting.** The mint sets no
-  `supersedesHash`, so each press notarizes a fresh pair and the old ones stay live at the directory.
-  The agent's wallet is fine (delivery supersedes per agent and kind) and the portal picks the newest
-  of a type, so nothing looks wrong — but an operator who tightens their disclosure has not retracted
-  the looser signal, only stopped presenting it. GitHub has the same gap; this screen makes it easy
-  to hit. The order's pipeline is enumerated without supersedes, so it was not added here.
+- **~~A re-mint supersedes nothing~~ — WITHDRAWN, this is the design.** Andre corrected it on
+  2026-09-04: a re-mint adds the new signal to the operator's wallet, the older one stays there, and
+  presentation sends only the most recent. Superseding at the notary was never the mechanism, for X
+  or for GitHub. Nothing to fix and nothing owed.
 
 - **The mint submits to the FIRST directory only.** `cfg.directoryApiUrls[0] ?? cfg.directoryApiUrl`
   — copied verbatim from GitHub's callback as the order instructed, so it is propagated debt, not

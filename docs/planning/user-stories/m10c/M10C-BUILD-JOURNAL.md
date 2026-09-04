@@ -370,3 +370,18 @@ Worth keeping only for the asymmetry it explains: **X persists its snapshot** (a
 composes from it, which is the point of paying once), so the X screen can render the real claim at
 any time. GitHub cannot. The two panels differ because their retention differs, not because one of
 them is wrong.
+
+---
+
+## 003-XSCREEN — correction: a re-mint is not supposed to retract anything
+
+Corrects the *Newly discovered* entry in `003-XSCREEN`.
+
+I recorded the absence of `supersedesHash` on the X mint as a gap — "an operator who tightens their
+disclosure has stopped presenting the looser claim, not withdrawn it". Andre, 2026-09-04: that is the
+design, not a gap. A re-mint puts the new signal in the operator's trust-signal wallet, the older one
+stays in the wallet, and **presentation sends only the most recent**. Retraction at the notary was
+never the mechanism, for X or for GitHub.
+
+Nothing to fix, nothing owed, and no follow-up work implied. Recorded so the entry is not re-raised
+by a later reader who finds only the original claim.
