@@ -2,15 +2,22 @@
 name: 028-PARKCONN — A message to an offline counterparty does not coin-flip
 type: micro-work-order
 date: 2026-09-04
-status: open
+status: complete
 dod_line: DOD-M15-PARKCONN-1
-dod_effect: closes
+dod_effect: unit-of
+dod_effect_note: >
+  Part 1 of the line — the failure is now legible and named, on the deposit, pull and recover paths.
+  Part 2 handed back under this order's own stop rule, so the line stays ❌. STILL OWED: the sender's
+  rebuilt standing receiver cannot hold a relay reservation, and every dial to that relay is then
+  refused. Evidence in Newly discovered #1.
 description: >
   Messaging someone whose agent is offline sometimes parks and sometimes fails with
   `No open connection to peer <relay>`. The deposit path DOES dial the relay first — and throws away
   every dial failure with an empty catch, so the one fact that explains the outcome is deliberately
   discarded. Make the dial failure legible, make the deposit refuse like its siblings instead of
-  throwing, then fix what the legible failure names. CLOSES DOD-M15-PARKCONN-1.
+  throwing, then fix what the legible failure names. PART 1 SHIPPED; Part 2's stop rule FIRED — the
+  cause is a rebuilt standing receiver that cannot hold a relay reservation, so DOD-M15-PARKCONN-1
+  stays ❌ and the evidence is handed back under Newly discovered.
 ---
 
 # **<ins>MICRO</ins>** WORK ORDER 028-PARKCONN — The offline path stops being a coin flip
@@ -357,6 +364,7 @@ consecutive.
 | 5 | DOD-MSG-7 | ❌ | `relay_unreachable:no_connection` — `Unexpected EOF … 0/1 bytes` |
 | 6 | DOD-MSG-7 | ❌ | same, with the full sender + relay tails quoted above |
 | 7 | DOD-MSG-5 | ❌ | `relay_unreachable:no_connection` — `ECONNRESET`, then `Encryption failed` |
+| 8 | DOD-MSG-7 | ❌ | re-run after the review fixes — same cause, and the transport's `no_connection` is still labelled as reachability, correctly |
 
 **One control run is recorded because it nearly produced a false conclusion, and the correction is
 the useful part.** With the relay ingress proxy taken out of the path (`relayIngressProxy: false`,
@@ -396,6 +404,16 @@ clean before and after. All compile — none was caught by lint or typecheck ins
 | M5 | deposit handler logs nothing (the shape before this unit) | B1, B2, B3 | no `content.park.deposit.ipc.result` on any path |
 | M6 | return the bare `standing_receiver_unavailable` with no `cause` | C1, C2, C3 | the four causes collapse back into one label |
 | M7 | guess `agents[0]` instead of refusing when several agents exist | C3 | a confident cause about the wrong agent |
+| M8 | label every transport reason `relay_unreachable` (the pre-review shape) | D×5 | a payload / local / version fault wearing a network fault's name |
+| M9 | drop the `/p2p/` shape check | D8 | a truncated address is dialled instead of refused |
+| M10 | log only the `ok` path (the pre-review coverage) | B1, B3, B4, B5, C1 | every refusal returns in silence again |
+| M11 | rethrow the transport wrap from `content_park_pull` | E1, E2 | **SURVIVED the first time — the MEDIUM-2 fix was real and unguarded.** E1–E3 were written for it. |
+| M12 | rethrow it from `recoverParkedFromRelay` | E3 | `internal_error` on the handler this order was written from |
+
+**M11 is the one worth reading.** It SURVIVED on its first run, which is the whole argument for the
+loop: the MEDIUM-2 fix was real, correct, and had no test — exactly the shape *"a checker whose
+negative path has never been exercised"* takes when it is a fix rather than a checker. Three tests
+were written for it before it would redden.
 
 **M3 needed the second half of the rule.** It reddened TWO tests, and A1 is the one it was not aimed
 at — so the red could have come from a path already covered. Re-run alone, A3's own message is quoted
@@ -408,7 +426,63 @@ have been asked to establish.
 
 ### Reviewer verdict (DoD 10)
 
-@@VERDICT@@
+`cello-unit-reviewer`, one pass, on the two-repo diff. **Three blocking verdicts, every finding
+fixed, each fix committed on its own.** In its own words:
+
+> **SPEC: DEVIATIONS FOUND** — clause P1.3/DoD 3 ("the handler logs its result") is implemented for
+> 2 of 13 exits (MEDIUM-3). Un-journaled, therefore [blocking].
+>
+> **ERROR SUBSTITUTION FOUND** — [blocking]. `relay_unreachable:invalid_peer_id` /
+> `:node_stopped` / `:protocol_not_supported` with retry-the-relay guidance sends the operator to
+> the network for a payload, local-transport, or version fault (HIGH-1). MEDIUM-2 is the same class
+> by omission: two sibling handlers still surface it as `internal_error` / "An unexpected error
+> occurred".
+>
+> **HOLLOW TESTS FOUND** — [blocking], one item. **A3 fails THE REVERT TEST**: every one of its
+> assertions passes on unmodified `main`.
+>
+> **NO SILENT FALLBACKS** · **REMOVALS PROVEN** · **NO COMPATIBILITY DEBT.**
+>
+> I am not rubber-stamping this: the diff touches the park/persistence path and I found a
+> substitution defect in the very mapping site the unit added, plus a partial log implementation and
+> a half-applied refusal.
+
+**The finding that matters most, and it is the milestone's own defect turned on this unit.** `#open`
+wraps every `newStream` rejection, and the handler was labelling all six of them "the relay could not
+be reached — retry once it is up". Three of the six are not reachability at all: `invalid_peer_id` is
+a **malformed argument**, `node_stopped` is **this daemon's own transport**, and
+`protocol_not_supported` means the connection **worked** and the relay does not speak content-park.
+An operator with a truncated multiaddr was told to wait for a healthy relay and then broker a new
+session — neither of which fixes a typo. That is `counterparty_offline` all over again, minted at the
+mapping site this unit had just added, in a unit whose entire subject is errors that name their exit
+point instead of their cause.
+
+**Also fixed:** the pull and recover handlers, which inherited the shared `#open` and rethrew (so an
+unreachable relay still reached the operator as *"An unexpected error occurred"* one handler over —
+on `content_park_recover`, one of the three failures this order was written from); the result log,
+which now WRAPS the handler instead of sitting beside two of its thirteen exits; the sole-agent guess,
+which counted `load_failed` agents its own neighbour filters out; a zero-agent daemon being told it
+had "more than one"; a `senderAgentName` typo being reported as an offline agent; a prescriptive
+`impact` string generalised from one sample; the relay's `retryAfterMs` missing from the log; and the
+pull handler still constructing its client outside the test seam.
+
+**And a standing guard caught one of my fixes.** The new guidance named `cello_list_agents` — a tool
+that does not exist. `DOD-ONBOARD-HELP-1`'s source audit refused the build: *"An error message handing
+the operator a dead command is worse than no message."* It is `cello_agents`.
+
+### The reviewer's caveat, recorded because the next unit needs it
+
+> The retry blunts the enforcer on face 1. When face 2 is eventually fixed, MSG-5/7/8 will go green
+> partly because the test waits out `standing_receiver_creating`, not because that window closed. The
+> test cannot distinguish "the rebuild is instant" from "the rebuild takes 19 seconds". Given
+> production re-drives park on four triggers, that is defensible — but DoD 6's future green is now
+> weaker than it reads, and someone should know that before quoting it.
+
+**And two claims in the cause above are correlation, not proof**, which the reviewer was right to
+make me mark: that "reservation denied" *causes* the subsequent resets is a temporal correlation; and
+`relay.auth.reservation_proof` naming a different peer id is as consistent with the new receiver
+never sending a proof at all as with the relay dropping it. **Cause not yet established** — that
+distinction is where the next unit starts.
 
 ## Newly discovered
 
