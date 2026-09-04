@@ -287,10 +287,39 @@ still redden.
 ### Gate
 
 - `pnpm run lint` — 0 errors, 6 warnings, none in these files.
-- `pnpm run typecheck` — clean on a tree containing this unit alone (verified at `d90404b`). On
-  current `main` it reports 5 errors, all `Cannot find module '@/server/x/store'`, all in `003`'s
-  files, all waiting on `001` to land. **None in this unit's files.** This is the expected parallel
-  compile dependency the procedure describes, not a defect.
+- `pnpm run typecheck` — clean on a tree containing this unit alone (verified at `d90404b`), and
+  clean on the fully integrated tree once three names are aligned (verified, see below). **Zero
+  errors in this unit's files in every configuration.**
+
+  **Correcting what this section first said.** I wrote the 5 `Cannot find module '@/server/x/store'`
+  errors off as the expected parallel compile dependency and moved on. That was wrong, and it was
+  wrong in the way that matters: a missing-module error is indistinguishable from a *mismatched*
+  one, so writing it off is how a real integration break hides. I went and looked. `001` is finished
+  and merged in its own checkout but **not pushed** — 12 commits, and its tree does not typecheck
+  either. The module exists; two export names disagree:
+
+  | 001 exports | 003 imports | files |
+  |---|---|---|
+  | `getXConnection` | `getXProfileSnapshot` | 4 in 003's lane |
+  | `X_REFRESH_INTERVAL_SECONDS` | `X_REFRESH_WINDOW_SECONDS` | 1 in 003's lane |
+
+  The other three exports (`upsertXConnection`, `recordXProfileRead`, `checkXRefreshAllowed`) match
+  exactly. Verified on a throwaway branch, then discarded: three renames across three files and
+  `pnpm run typecheck` is **CLEAN** across the whole integrated tree, with no logic change anywhere.
+  The store getter should take 003's name (it returns an `XProfileSnapshot`, and three of 003's files
+  independently reached for it); the constant should keep 001's (`INTERVAL` is what "one pull per 7
+  days" means). Two of the three edits are 001's files and one is 003's, so none of them are mine to
+  make while those sessions are live in them — both sessions have been told, with the exact diff.
+
+  **Resolved and re-verified on integrated `main` (`5fede8e`).** 001 hit the same collision on
+  merging and fixed it inside its own files, keeping `X_REFRESH_WINDOW_SECONDS` rather than adopting
+  `INTERVAL` — the opposite of my suggestion and the better call, because it keeps every edit in one
+  lane instead of touching a live one. Pulled and re-run here: typecheck **CLEAN**, lint 0 errors,
+  `x-compose` + `x-oauth` + `github` + `mint` **124 passed**. Nothing in this unit changed.
+
+  **The seam that drifted was never pinned.** The contracts covered `XProfileSnapshot` and
+  `composeXSignals`; nothing pinned the store's function names, and that is precisely where the two
+  orders disagreed.
 - `pnpm exec vitest run test/x-compose.test.ts test/github.test.ts test/mint.test.ts` — 69 passed
   (46 of them this unit's).
 - `git status --porcelain` clean in `trustless-cello`; there is no `cello-client` checkout in this

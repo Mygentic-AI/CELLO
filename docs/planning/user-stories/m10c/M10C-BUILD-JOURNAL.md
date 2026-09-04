@@ -218,3 +218,46 @@ field to render it from; the duplicate `XProfileSnapshot` will not retire itself
 free improvements for 003 (pre-check a row before the operator ticks it, and pre-check both arms so
 one mint surfaces both errors); and the observation that the anonymous signal's exact figures are
 themselves identifying while nothing on the screen says so — a disclosure-wording decision, Andre's.
+
+---
+
+## Entry — correction to the DOD-M10C-XCOMPOSE-1 closing entry
+
+**What this corrects.** The closing entry above reported the 5 `Cannot find module '@/server/x/store'`
+typecheck errors as "the expected parallel compile dependency, none in this unit." The first half was
+wrong and the second half was true but beside the point.
+
+**Why it was wrong.** A missing-module error and a mismatched-export error look identical from the
+outside, so "waiting on 001" is exactly the story a real integration break tells about itself. I went
+and looked instead. `001-XPROFILE` is finished and merged in its own checkout and **not pushed** — 12
+commits ahead of origin/main — and its tree does not typecheck either. The store module exists. Two
+of its five exports are named differently from what `003` imports:
+
+| 001 exports | 003 imports |
+|---|---|
+| `getXConnection` | `getXProfileSnapshot` (4 call sites) |
+| `X_REFRESH_INTERVAL_SECONDS` | `X_REFRESH_WINDOW_SECONDS` (1 call site) |
+
+The other three exports match exactly. Verified on a throwaway branch and discarded: three renames
+across three files makes `pnpm run typecheck` **CLEAN** on the fully integrated tree, with no logic
+change anywhere.
+
+**Why this unit did not make the fix.** Two of the three edits are in 001's files and one is in 003's,
+and both sessions are live in those files right now. Editing another lane's tree mid-flight conflicts,
+and 001's work is unpushed, so a fix layered on top of it could not be pushed without publishing their
+12 commits under my gate. Both sessions were sent the exact diff instead, including the direction each
+rename should go and why.
+
+**Resolved, and verified rather than taken on trust.** `001` hit the same collision on merging, fixed
+it inside its own files and pushed (`5fede8e`). It kept the constant as `X_REFRESH_WINDOW_SECONDS`
+rather than adopting `INTERVAL` — deliberately the opposite of what I suggested, and for the better
+reason: it keeps every edit inside one lane instead of touching a session that is mid-flight. Pulled
+and re-run here on integrated `main`: `pnpm run typecheck` **CLEAN**, `pnpm run lint` 0 errors,
+`x-compose` + `x-oauth` + `github` + `mint` **124 passed**. So the window where `main` was red is
+closed, and no part of this unit needed to change.
+
+**The real lesson, for the milestone rather than for this unit.** The seam that drifted was never
+pinned. The M10C contracts pinned `XProfileSnapshot` and `composeXSignals` — the two seams that were
+anticipated — and the orders met on both without a hitch. The store's function names were pinned
+nowhere, and that is exactly where the two orders disagreed. Parallel orders meet where the contract
+names things and drift everywhere else; the fix is not more care, it is pinning the whole seam.
