@@ -490,7 +490,9 @@ distinction is where the next unit starts.
 
 ### 1. 🛑 THE STOP-RULE ITEM — a rebuilt standing receiver cannot get a relay reservation, and every dial to that relay is then refused
 
-**BLOCKS — but it is Andre's to grant (§0z.4), so it is written here rather than added to the gate.**
+**BLOCKS LAUNCH — RULED BY ANDRE, 2026-09-04.** Asked under §0z.4 and granted, so it is now carried
+on `DOD-M15-PARKCONN-1` in the gate rather than sitting here as a question. This entry stays as the
+evidence; the DoD line is the status.
 
 **What the operator lives through.** Their agent finishes a conversation, or starts a new one. Behind
 that, the daemon quietly rebuilds the standing receiver — the node that holds the agent's slot on the

@@ -623,9 +623,10 @@ occurred."* Same action, two outcomes, no way to tell which they will get.
 - **Rate: NOT ESTABLISHED, and the "~1 in 3" this line used to state is withdrawn.** It came from
   three runs, and `019` said so itself: three runs supports *"not always red"* and does not support a
   rate. Never measured against the live fleet. **Investigation opened by Andre 2026-09-03.**
-- **⚠️ CLASSIFICATION IS ANDRE'S** (§0z.4). It is on the advertised journey — a message to an
-  offline counterparty is precisely what park exists for — but the real-world rate is unmeasured,
-  which is what the investigation is for. It sits in the gate meanwhile under "unclear ⇒ blocks".
+- **⚠️ CLASSIFIED BY ANDRE, 2026-09-04: BLOCKS LAUNCH.** No longer "unclear ⇒ blocks" — it is a
+  ruling. It is on the advertised journey, `028-PARKCONN` established what actually fails (below),
+  and an agent that silently stops sending and receiving mail after every conversation is not a
+  papercut a prospective customer forgives.
 
 > ### 🔎 RE-MEASURED 2026-09-04 by `024-ORPHANTRIAGE` (*Newly discovered* #1) — it is WIDER than this line said, and one of its own claims is now unsupported
 >
@@ -650,8 +651,66 @@ occurred."* Same action, two outcomes, no way to tell which they will get.
 > **What this changes for scoping:** the first job is still "why is there no connection at deposit
 > time", and the blast radius is now deposit AND recover AND send, not deposit alone.
 
+
+> ### 🛑 MEASURED 2026-09-04 by `028-PARKCONN` — HALF THIS LINE IS SHIPPED, AND THE REMAINING HALF IS A RESERVATION FAILURE. **BLOCKS LAUNCH — ruled by Andre, 2026-09-04.**
+>
+> **Defect (a) is CLOSED.** The deposit path no longer throws where its siblings return. Deposit,
+> pull and recover all answer `{ok:false, reason, guidance}`; the empty `catch` that was eating every
+> dial failure is gone; and one stream failure is now six named faults rather than one, because only
+> two of them are about reaching the relay (`invalid_peer_id` is a malformed argument,
+> `node_stopped` is this daemon's own transport, `protocol_not_supported` is a version skew on a
+> connection that WORKED). Merged in both repos; see `028-PARKCONN` for the verdict.
+>
+> **Defect (b) is READ, and it is not a connection problem — it is a RESERVATION problem.** From the
+> sender daemon and the relay, same millisecond, every failing run:
+>
+> ```
+> session.node.created                       (a NEW standing receiver for the sender's agent)
+> session.standing_receiver.reachability     circuitAddrs: 0
+> session.standing_receiver.reservation.none
+> content.park.open.failed                   dialOutcome: all_addresses_failed
+> [RELAY] Peer connected → relay.reservation.denied (not_authenticated)
+>         → relay.auth.reservation_proof (from a DIFFERENT peer id than the receiver just created)
+>         → Peer disconnected
+> ```
+>
+> Every dial to that relay afterwards is `connect ECONNRESET`, then `Encryption failed`, then
+> `Unexpected EOF - stream closed while reading 0/1 bytes` — **the last of which is the
+> `No open connection to peer …` this line was opened for.** It is the consequence, one frame after
+> the cause.
+>
+> **What the operator lives through:** a conversation starts or seals; the daemon rebuilds the
+> standing receiver behind it; the new one asks the relay for its slot and does not get it; from that
+> moment the agent cannot reach that relay at all — parked mail cannot be deposited and waiting mail
+> cannot be drained — and nothing announces it. **Not test-only:** the production
+> `content.recover.auto.*` drain fails in the same instant for the same reason.
+>
+> **Cause NOT yet established, and the distinction matters for whoever picks this up.** That the
+> denied reservation *causes* the later resets is a temporal correlation. And the proof arriving from
+> a different peer id is as consistent with the new receiver never sending one as with the relay
+> dropping it. **Start there:** establish which peer is supposed to be proving.
+>
+> **Two corrections to what is written above this box:**
+> - **024's control is not contradicted, but it is narrower than it reads.** Re-running with
+>   `relayIngressProxy: false` produced a GREEN `DOD-MSG-7` on one run — and `DOD-MSG-5` still failed
+>   under the same condition, with `ECONNRESET` / `Encryption failed` instead of `Unexpected EOF`.
+>   **The proxy changes the error TEXT, not the outcome.** One green run of one test is exactly the
+>   evidence this milestone says proves nothing, and it nearly produced a false conclusion here.
+> - **`DOD-MSG-8` had BOTH faults.** The `cello_get_transcript` call really was wrong (fixed by
+>   `028`; the MCP tool is `cello_transcript`) **and** the test fails on the deposit before ever
+>   reaching it. Neither entry was wrong; each saw one of two.
+>
+> **The rate is still unmeasured against the live fleet.** Locally the three tests have not gone green
+> once in eight runs.
+
 - **Enforcer:** journey — `j-content` **DOD-MSG-5, MSG-7 and MSG-8** green across three consecutive
-  runs, plus a named reason on the response when the relay genuinely is unreachable.
+  runs, plus a named reason on the response when the relay genuinely is unreachable. **The named
+  reason is DONE** (`028-PARKCONN`); the three runs are what is left.
+  > ⚠️ **AND THE GREEN WILL BE WEAKER THAN IT READS.** `028` gave `parkDeposit` a bounded retry on
+  > `cause: standing_receiver_creating`, so when the reservation failure is fixed these tests go
+  > green partly because the test waits the rebuild out — it cannot tell "the rebuild is instant"
+  > from "the rebuild takes 19 seconds". Defensible (production re-drives park on four triggers),
+  > but do not quote the green as proof the window closed.
 
 ### `DOD-M15-BACKUP-1` — ✅ An identity can be exported and restored
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-BACKUP-1`.
