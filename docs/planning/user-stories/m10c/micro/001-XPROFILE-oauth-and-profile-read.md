@@ -290,10 +290,30 @@ Everything after that was committed before mutating.
 
 ### Gate
 
-`npx vitest run` → **323 passed, 3 skipped, 31 files, exit 0**. `eslint` → 0 errors (7 pre-existing
-warnings). `tsc --noEmit` → clean. `next build` → clean, with `/api/auth/x` and `/api/auth/x/callback`
-in the route table. `git status --porcelain` empty in `cello-client` and `trustless-cello`.
-Portal HEAD `c29f87c` on `m10c/001-xprofile`.
+On the unit branch: `npx vitest run` → **323 passed, 3 skipped, exit 0**; eslint 0 errors; `tsc
+--noEmit` clean; `next build` clean with both X routes in the route table.
+
+**After merging to `main`, which had order 003 on it already: 408 passed, 3 skipped, exit 0**, eslint
+0 errors, typecheck clean, build clean. Portal `main` at `5fede8e`, pushed. `git status --porcelain`
+empty in `cello-client` and `trustless-cello`.
+
+### The merge was RED, and that is worth recording
+
+Merging 001 into `main` broke `main` for as long as it took to fix. 003 had landed first, written
+against store names 001 never pinned: the pinned contract covered the snapshot SHAPE, not what the
+store functions are called, and the two orders chose differently — `getXConnection` here (mirroring
+`github/store.ts`, as this order instructs) against `getXProfileSnapshot` in five files already on
+main. The 002 session independently found the same break and messaged about it.
+
+003's names were adopted (`getXProfileSnapshot`, `X_REFRESH_WINDOW_SECONDS`), changing only 001's
+own files: the function returns an `XProfileSnapshot`, three 003 files reached for that name
+independently, and 001 had no production consumer to weigh against five.
+
+The clause-7 guard had to change SHAPE, not just names. It asserted that only the two X routes may
+import the store — true while 001 was alone, wrong the moment 002 and 003 added legitimate
+consumers, and an allowlist would have broken on each while proving nothing. It now walks the import
+closure of `login-mint.ts` and asserts neither X module is reachable at any depth, which is both the
+actual property and a stronger one: it catches a hookup three hops away that the list could not see.
 
 ---
 
@@ -317,8 +337,13 @@ Portal HEAD `c29f87c` on `m10c/001-xprofile`.
 - **A live run before order 003 lands pays and then 404s.** The happy path redirects to
   `/trust-signals/x`, the compose screen 003 builds, and the read is billed and the 7-day gate armed
   before the operator sees the missing page.
-- **`getXConnection` has no production consumer in this unit** — only tests. It is the read side of
-  the table 002 and 003 are written against, so it ships without one deliberately.
+- **The store's function NAMES were an unpinned seam, and the three orders collided on them.** The
+  contract pinned the snapshot shape and said nothing about the store API, so two orders invented
+  different names for the same function and `main` was briefly red. A future parallel order should
+  pin the module's exported signatures, not only its data shape.
+- **`XProfileSnapshot` is now declared TWICE** — in `server/trust/x.ts` and in 003's catalogue,
+  re-exported by the composer. Structurally identical, so nothing is red today; two declarations of
+  a pinned contract can drift silently. Not acted on: the contract is pinned and this is a note.
 - **The contract looks right and was not changed.** `readAt` in epoch seconds is the field that does
   the most work: it is what a free re-mint uses to state when the figures were measured, and it is
   now also the spend clock.
