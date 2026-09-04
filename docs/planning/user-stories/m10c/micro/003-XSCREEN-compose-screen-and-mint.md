@@ -192,6 +192,13 @@ LinkedIn; changing the Social section's existing GitHub row.
   the operator can never tick, with the reason. Either the profile read should capture a display name
   or the catalogue entry should go; both are outside this order.
 
+- **A re-mint supersedes nothing, and this screen invites re-minting.** The mint sets no
+  `supersedesHash`, so each press notarizes a fresh pair and the old ones stay live at the directory.
+  The agent's wallet is fine (delivery supersedes per agent and kind) and the portal picks the newest
+  of a type, so nothing looks wrong — but an operator who tightens their disclosure has not retracted
+  the looser signal, only stopped presenting it. GitHub has the same gap; this screen makes it easy
+  to hit. The order's pipeline is enumerated without supersedes, so it was not added here.
+
 - **Every tick is a server round-trip**, because the ticks live in the URL and `composeXSignals` is
   the only renderer. If that ever needs to be instant, the fix is to make `x-compose.ts` browser-safe
   (today it pulls `node:crypto` in through protocol-types' CBOR barrel) — never a second renderer in
