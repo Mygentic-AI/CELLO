@@ -10187,3 +10187,97 @@ after all three tests report passed; that is the reporter, not a test. One run i
 condition immediately after Docker was restarted, where registration had not reached the directory
 the daemon asked and the relay was unreachable. Named rather than called flaky: it is a startup
 ordering in the harness against a fresh database, and it cleared on a warm stack.
+
+---
+
+## Entry 024a — 024-ORPHANTRIAGE: falsifying the premise before writing a branch on it
+
+**Unit:** `DOD-M15-ORPHANTRIAGE-1` (micro work order 024). **Lane worktrees:**
+`/Users/andrep/Documents/code/m15-024/trustless-cello` and `/Users/andrep/Documents/code/m15-024/cello-client`,
+both on `m15/024-orphantriage`, pushed on creation.
+
+### What `verifiedAuthorship` actually contains on an orphaned session: NOTHING. Always.
+
+The work order required this be measured before a single branch was written on it, and the answer is
+the contingency it named, not the assumption it started from.
+
+Produce/consume, in order:
+
+1. `#handleContentStream` decrypts the body, then calls `#recordFrameOrdering(agentName, sessionId, s1, s2, hash)`.
+2. `#recordFrameOrdering` decodes Structure 1 (sender pubkey at index 2, content hash at index 1),
+   decodes Structure 2 (sequence at 0, signature at 3), and runs
+   `verify(s1Pubkey, structure1Cbor, s2Sig)`. **That verification is session-independent — it checks
+   the signature against the key carried inside the sender's own signed bytes, and nothing else.**
+   It passes or it does not, with no session lookup involved.
+3. **Then** it cross-checks the signer against `getSessionRecord(agentName, sessionId)?.counterparty_pubkey`.
+   On an orphaned session there is no record, so `counterparty` is `undefined`,
+   `pubkeyMatchesHex(s1Pubkey, undefined)` is false, and the branch returns
+   `{ seq: null }` under `reason: "counterparty_unknown"` — **discarding the pubkey and signature it
+   just verified.**
+4. The caller only sets `verifiedAuthorship` when `senderPubkey` AND `senderSig` come back, so it is
+   `undefined` on every orphaned message, unconditionally.
+
+So the daemon *does* establish, cryptographically, that the sender holds the private key for the key
+on the frame — and then throws that away one line before the place that needs it. **This unit's first
+job is therefore the one the order named: make the verified signer survive the session lookup.**
+
+### And the fix must not widen `verifiedAuthorship`'s meaning
+
+`senderPubkey`/`senderSig` mean *verified AND matched to this session's counterparty*; the transcript
+row's `sender_sig` column is documented as exactly that ("verified, never claimed"), and seal-time
+attribution rests on it. Returning the unmatched signer under the same names would silently downgrade
+a proof the rest of the system reads as stronger. So the unmatched signer comes back under its own
+name and is consumed in exactly one place — the orphan branch.
+
+### What the orphan branch can ever see, enumerated rather than assumed
+
+`#recordFrameOrdering` has exactly two outcomes that reach ingest: a signature that **verified**, or
+**no readable signed record at all** (record absent, malformed, hash-mismatched, or a decode throw).
+A signature that is present and **fails** to verify never reaches ingest — it is FATAL
+(`bad_signature` → `#freezeOnIdentityFailure` → return). So the triage has two input states, not
+three, and the guidance is written for two.
+
+### How an orphaned message actually arrives — measured, because it changes the journey
+
+Both production callers of `ingestReceivedContent` were traced:
+
+- **Park recovery (`recoverParkedContent`)** cannot reach the orphan branch at all:
+  `authenticateParkedEntry` refuses `counterparty_unknown` first, because it is handed
+  `getSessionRecord(...)?.counterparty_pubkey` — the same absent value.
+- **The content stream** can. Its peer gate reads `#activeNodes` (in memory) and its decryption reads
+  `#sessionContentKeys` (in memory); neither consults the `sessions` table. So the reachable
+  production state is **a session node live in this process whose `sessions` row is gone** — the row
+  deleted underneath a running daemon, or a lookup that no longer resolves it.
+
+That is what the journey has to reproduce, and it reproduces it with a real message from a real
+second daemon rather than a hand-built frame.
+
+### Decisions taken under §3a (pick the choice least likely to need reversing)
+
+1. **No new column on `content_refusal_notices`.** The order asks for the signals "as fields the agent
+   can branch on"; a structured field there is a client-side schema migration, which this project
+   treats as its highest-risk change class, for a field nothing in the shipped tool surface reads —
+   §5 *"NO CONSUMER, NO SHIP"*. The four signals are recorded **structurally in the log event**
+   (`session.content.orphaned`, the durable forensic record Invariant 2 requires) and **verbatim in
+   the notice prose** the agent actually reads, full pubkey included. Recorded here so the next reader
+   can disagree with the judgement rather than re-derive it.
+2. **Part 2 takes option (b): reporting is named as NOT YET AVAILABLE.** Provisioning `CELLO_Reporting`
+   needs a registered identity, somewhere to host it, and a pubkey published in shipped guidance —
+   outward-facing wording, which is Andre's under §2f, and a pre-auth token, which §3a lists as a
+   human-only blocker. Invariant 4 forbids naming a verb that resolves to nothing, so the guidance says
+   plainly that there is no CELLO destination yet and tells the operator to keep the evidence.
+   **Parked with a trigger: when `CELLO_Reporting` exists and its pubkey is published, this sentence is
+   replaced by the session-open verb.**
+3. **023-REFUSEDEVIDENCE has not landed** (`status: open` as of this entry), so nothing retains the
+   refused message. The guidance says so rather than implying there is something to attach.
+
+### The counterbalance (§2 step 4), before the code
+
+There is none on the sender's side, and that is the point: **this unit deliberately makes the
+receiver do less.** The adversary's goal here is a reply — any reply — that confirms someone is home.
+Every signal the triage uses is anchored on something the sender does not control: their signature is
+checked against the key inside their own signed bytes (self-attesting, so it proves possession and
+nothing more, and the guidance says exactly that); "known contact" is read from **our** address book;
+"ongoing conversation" is read from **our** transcript rows, never from the sequence number the sender
+chose. A sender who wants the reach-out branch has to already be in the receiver's address book and
+already have a conversation on the receiver's disk — neither of which they can cause from the wire.
