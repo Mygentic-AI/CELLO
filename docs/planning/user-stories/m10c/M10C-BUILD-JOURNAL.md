@@ -108,3 +108,35 @@ Creating those modules locally is forbidden — it produces the duplicate catalo
 prevent. Pure model, selection parsing and the refresh window are therefore written against an
 injected catalogue so they can be proven today; the clauses that need the real composer are proven
 after the merge.
+
+---
+
+## 003-XSCREEN — mutation record, part 1: the screen, the table and the window
+
+Nine mutations, each applied alone, `test/x-screen.test.tsx` run, the failing test names recorded,
+the mutation reverted. `compile_error` was checked on every run: a non-zero exit also means the
+mutant did not compile, and a syntax error recorded as a clean catch is the failure this check
+exists to prevent. **All nine compiled and reddened on assertions.**
+
+| Mutation | Reddened |
+|---|---|
+| `never` renders a **disabled** checkbox instead of nothing | clause 2's structural test, the checkbox count, and the real-catalogue test |
+| every checkbox pre-ticked | clause 1 (nothing ticked) and the real-catalogue test |
+| `locked` renders a checkbox | clause 3 and the checkbox count |
+| a `never` tick is silently dropped instead of refused | both counterbalance refusal tests, anon and id columns |
+| the unlock boundary uses `>` instead of `>=` | clause 8's one-second-either-side test |
+| the table drops a catalogue row | clause 1, clause 3, the row-count test and the real-catalogue test |
+| the Refresh button is always armed | clause 8's "unlock date instead of an armed button" |
+| the X row prints the handle in full | clause 10 |
+| a field the snapshot cannot state is still offered as a tick | three tests, including the URL-selection drop |
+
+The last one is the mutation that mattered most, and it was not in the original plan. `002` shipped a
+catalogue where a field renders *either* a bullet *or* a refusal — display name has no source in the
+pinned profile shape at all. A screen that read only `optional` would have shown a checkbox, taken
+the tick, and failed at the mint. That is the screen-versus-composer drift this order exists to
+prevent, so an unstateable field is now treated exactly like a `never` one: no checkbox, and the
+catalogue's own reason printed in the row.
+
+Clauses 4, 5, 6, 7 and 9 are proven in `test/x-mint-route.test.ts`, which cannot run until
+`001-XPROFILE`'s snapshot store lands — it is the only unresolved import left. Their mutation record
+follows in part 2.
