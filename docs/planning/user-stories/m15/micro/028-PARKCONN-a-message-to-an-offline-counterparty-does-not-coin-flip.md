@@ -463,3 +463,17 @@ while reading 0/1 bytes`; with it removed the identical failure reads `connect E
 precisely what cost a run here. **POST-LAUNCH / test hygiene.** Left in place and not rewritten
 because rewriting it means first establishing what the proxy actually does to a libp2p connection,
 which is the investigation the stop rule declines.
+
+### 5. This order's own correction about `content.park.deposit.result` is half wrong
+
+The order says *"There is no such event."* There is: `ContentParkClient.deposit` emits
+`content.park.deposit.result` at `content-park-client.ts:167`. The useful half of the correction
+stands and is the reason it looked absent — that line runs only **after** the stream opened and an
+ack came back, so it can never fire on the path that was failing. `019` was right that the event was
+missing from the log and right that chasing it was a dead end; the reason is that it is on the
+success path, not that it does not exist.
+
+Recorded rather than edited into the order body, because the instruction to a later reader is the
+same either way: **do not go looking for it on a failed deposit.** The new
+`content.park.deposit.ipc.result` is deliberately named differently so the two layers never collide
+in one aggregated log.
