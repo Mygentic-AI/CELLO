@@ -152,7 +152,7 @@ They are the quick wins and were to be taken first, in a batch, rather than one 
 
 ---
 
-## 🔭 FOUND LIVE 2026-09-04 — four items, NOT YET GATED, none of them finished
+## 🔭 FOUND LIVE 2026-09-04 — four items, NOT YET GATED (items 1 and 2 are now ✅)
 
 Found while publishing 020–024 and rolling the fleet, not by review. Recorded here because they came
 out of a working conversation and would otherwise live only in a transcript. **None is in a tier
@@ -167,8 +167,8 @@ yet** — tiering is Andre's call, and three of the four are behaviour changes t
 
 | # | What a reader would find | Status |
 |---|---|---|
-| **1** | **A refusal that can never succeed is retried forever.** `CELLO_Coder_1` knocked on a closed conversation **232,056 times over 62 hours**, ~2/second, growing `daemon.log` to **484 MB**. The loop is on the RECEIVER: it holds a leaf it cannot resolve, because resolving it means ingesting content that is refused every time, and nothing marks the refusal terminal. **Andre approved the fix 2026-09-04: *"a message refused should stop being retried."*** ⚠️ **`CELLO_Support` is OFFLINE right now as the only available mitigation** — `cello_dismiss` was measured and does NOT stop it. Bringing that agent back online restarts the loop. | ❌ approved, not started |
-| **2** | **The refusal count shown to the operator is wrong by three orders of magnitude.** `cello_inbox`'s `refusals.times` reported **58** for those 232,056 knocks. `022-REFUSALVISIBLE` made the refusal visible; it did not make its scale true, and 58 reads as a papercut rather than as something burning half a gigabyte. Same area as #1 and plausibly one work order with it. | ❌ not started |
+| **1** | **A refusal that can never succeed is retried forever.** `CELLO_Coder_1` knocked on a closed conversation **232,056 times over 62 hours**, ~2/second, growing `daemon.log` to **484 MB**. **Andre approved the fix 2026-09-04: *"a message refused should stop being retried."*** | ✅ `DOD-M15-REFUSALTERMINAL-1` → Entry 72. A durable terminal-refusal row stops the leaf-fetch backstop: **5,954 fetch events → 0**, measured live with `CELLO_Support` back ONLINE over 12 minutes. The agent no longer needs to be parked. **Not yet published.** |
+| **2** | **The refusal count shown to the operator is wrong by three orders of magnitude.** `cello_inbox`'s `refusals.times` reported **58** for those 232,056 knocks. | ✅ `DOD-M15-REFUSALTERMINAL-1` → Entry 72. `times` is gone. The cause was `cello_dismiss`, which DELETES the notice row and restarts its counter — so the field was a since-you-last-dismissed figure under a lifetime name. Now `times_since_dismissed` beside `times_total` (exact) or `times_total_at_least` (a floor, where history predates the tally), from a record dismissal does not touch, and one shared guidance sentence at both doors. |
 | **3** | **`021-HEARTBEAT` introduced a permanent false alarm.** `antientropy.round.fork_suspected` fires on `directory_nodes` **every 3 minutes, forever**: every node rewrites its own `last_heartbeat_at` every ~30 s, so two nodes can never agree on a hash of a table one of them is always mutating. It pages nobody and masks nothing (the event names its own table), but it is an ERROR-level cry-wolf on a healthy fleet. **Andre's steer 2026-09-04: judge agreement ignoring the heartbeat column** — NOT by muting the table, which would also hide a real `status` divergence. Costs a build and a five-node roll. | ❌ not started |
 | **4** | **The defensive half cannot be tested from a legitimate client, so it has never run live.** The sender's own `exfil:injection_artifact` guard refused two attempts to probe the receiving screener — including the forged `[[END PAYLOAD]]` framing that `023` was designed against — and it is not one of the five configurable guards, so every client refuses identically. **`024-ORPHANTRIAGE`, the screener block, and evidence-on-block have therefore never been exercised outside the in-process spine tests.** Needs a deliberately modified client. **Built 2026-09-04: patched daemon on GCP (`cello-hostile-client`), agent `CELLO_Adversary`, driven straight over the daemon socket. Two attacks run — see item 5.** | ✅ rig built; findings below |
 | **5** | **The inbound language block is silently disarmed by the confusables step that runs before it.** Found by the hostile client (item 4): a 100%-Cyrillic jailbreak was Latinized to 25% Cyrillic by `normalizeConfusables` BEFORE `screenInboundLanguage` judged it, so the one deterministic inbound block that works without the semantic classifier saw "mostly Latin" and delivered it. The gateway IS live and enforcing (it transformed the payload exactly per its confusables map) — the defect is data flow: the language screen reads the normalized text when it needs the original. **Fix decided 2026-09-04: language screen judges the post-invisible-strip, pre-confusables text; everything downstream still reads the normalized text.** | ❌ order written, not started |
@@ -1123,7 +1123,7 @@ is unavailable; naming a verb nobody can perform is Invariant 4's failure.
 - **Enforcer:** journey — unsigned, signed-but-unknown, and signed-by-a-known-contact each produce a
   notice offering exactly ONE action, with no contact verb present in the first two.
 
-### `DOD-M15-REFUSALTERMINAL-1` — ❌ A refusal that can never succeed stops, and the count is true
+### `DOD-M15-REFUSALTERMINAL-1` — ✅ A refusal that can never succeed stops, and the count is true
 
 Found live 2026-09-04, not by review. A message refused `session_committed` — a conversation that is
 signed and closed, so no retry can ever succeed — was retried **232,056 times over 62 hours**, ~2 per
@@ -1139,10 +1139,20 @@ accurate for what it measured; the sentence describing it was false.
 ⚠️ **`CELLO_Support` is offline as the only mitigation.** Bringing it back before this ships restarts
 the loop; the order's DoD 7 is to bring it back and prove the loop is gone.
 
-- **Order:** `micro/025-REFUSALTERMINAL-a-refusal-that-can-never-succeed-stops.md`
+- **Order:** `micro/025-REFUSALTERMINAL-a-refusal-that-can-never-succeed-stops.md` (complete)
 - **Approved by Andre 2026-09-04:** *"Yes, a message refused should stop being retried."*
 - **Pairs with `DOD-M15-REFUSEDEVIDENCE-1`**, whose dedup held perfectly under this load — 232,056
   arrivals produced exactly one retained row.
+
+> ✅ **Closed 2026-09-04 → Entry 72.** A `session_committed` refusal is recorded in a durable
+> `terminal_content_refusals` row, so the leaf-fetch backstop stops arming: **5,954 fetch events in
+> the last 20 MB of the pre-fix log → 0**, measured live on `CELLO_Support` over 12 minutes. The
+> count is two fields now — `times_since_dismissed` and `times_total` / `times_total_at_least` —
+> because `cello_dismiss` deletes the notice row, so the old `times` was never a lifetime figure.
+> Two reviews, twelve findings, all fixed; a thirteenth was found by the live daemon itself.
+> **⚠️ NOT YET PUBLISHED** — the daemon → connect/cli cascade is owed, and until it runs every
+> installed operator still has the loop. A slower second engine (the 300s park sweep, 6 lines per
+> sweep) is recorded POST-LAUNCH in the order's *Newly discovered*.
 
 ### `DOD-M15-FORKQUIET-1` — ❌ A table that is always moving is not a fork
 
