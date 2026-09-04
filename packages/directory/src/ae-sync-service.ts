@@ -362,7 +362,12 @@ export class AeSyncService {
           const prev = m.get(k);
           m.set(k, prev
             ? { ...prev, planned: prev.planned + u.planned, pulled: prev.pulled + u.pulled,
-                applied: prev.applied + u.applied, divergent: prev.divergent + u.divergent }
+                applied: prev.applied + u.applied, divergent: prev.divergent + u.divergent,
+                // A content fork anywhere in the table outranks lag: the two verdicts ask for
+                // different things and the more serious one must not be averaged away.
+                verdict: prev.verdict === "content_fork" || u.verdict === "content_fork"
+                  ? "content_fork" : "peer_behind",
+                divergentKeys: [...prev.divergentKeys, ...u.divergentKeys].slice(0, 5) }
             : { ...u });
           return m;
         }, new Map<string, RoundResult["unconverged"][number]>())
@@ -446,6 +451,7 @@ export class AeSyncService {
           perTable.set(tableKey, streak);
           if (streak >= 2) {
             const [tier, table] = tableKey.split(":");
+            const entry = unconverged.find((u) => `${u.tier}:${u.table}` === tableKey);
             logger.error("antientropy.round.fork_suspected", {
               peerNodeId, tier, table, consecutive: streak, correlationId, unconverged,
               // READ THE TIER before treating this as divergence. Tier-A: a record whose hash we do
@@ -454,13 +460,21 @@ export class AeSyncService {
               // rows whose VERSION MOVED, so a merge confirming the local copy already won is healthy
               // and lands here anyway. This alarm ran for a day on totals alone with no way to tell
               // the two apart, and answering it took diffing every table off two live nodes.
-              // Both reasons now name a real disagreement. The Tier-B text used to say the alarm
-              // "may be a benign merge that confirmed the local copy" — true of the old verdict, and
-              // an alarm that admits it might mean nothing is one nobody reads. The verdict is now
-              // the store's per-record `divergent`, which excludes exactly that benign case.
-              reason: tier === "A"
-                ? "a Tier-A table fetched records that did not insert — same natural key, different content"
-                : "a Tier-B merge could not reconcile this table's rows with the peer's — a real disagreement, not a stale copy",
+              // THE REASON FOLLOWS THE STORE'S VERDICT, not the tier. The old text said the alarm
+              // "may be a benign merge that confirmed the local copy" — an alarm that admits it might
+              // mean nothing is one nobody reads. Replacing it with a single confident sentence was
+              // worse: `agent_suspensions` and `agent_presence` report divergence when NOTHING
+              // applied, which means precisely that the peer's copy is stale — so the confident text
+              // sent the reader hunting a fork in the kill switch over ordinary replication lag.
+              reason: entry?.verdict === "peer_behind"
+                ? "nothing applied — our copy already dominates the peer's, which is ordinary replication lag, "
+                  + "NOT a fork. If it persists, the PEER is not pulling from us: check its own rounds."
+                : tier === "A"
+                  ? "a Tier-A table fetched records that did not insert — same natural key, different content"
+                  : "a Tier-B column no merge reconciles disagrees — a real fork that will not resolve on its own",
+              ...(entry !== undefined && entry.divergentKeys.length > 0
+                ? { divergentKeys: entry.divergentKeys }
+                : {}),
             });
           }
         }

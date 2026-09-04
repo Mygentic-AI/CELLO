@@ -34,7 +34,7 @@ const emptyStore: AeStoreView = {
   serveTierA: (): TierARecord[] => [],
   serveTierB: (): TierBRecord[] => [],
   applyTierA: () => 0,
-  applyTierB: () => ({ applied: 0, divergent: 0 }),
+  applyTierB: () => ({ applied: 0, divergent: 0, divergentKeys: [] }),
 };
 
 const manifest = {

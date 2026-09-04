@@ -139,7 +139,12 @@ class MemStore implements AeStoreView {
       if (moved) n++; else divergent++;
       this.suspensions.set(inc.agent_id, merged);
     }
-    return { applied: n, divergent };
+    // agent_suspensions has no witness, so the real store judges it PER TABLE: divergent only when
+    // NOTHING applied. Mirrored here, or the engine's verdict is proven against a stub that behaves
+    // differently from the thing it stands in for.
+    return n > 0
+      ? { applied: n, divergent: 0, divergentKeys: [] }
+      : { applied: 0, divergent, divergentKeys: [], verdict: "peer_behind" as const };
   }
 }
 

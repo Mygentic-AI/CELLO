@@ -70,16 +70,23 @@ describe("DOD-M15-HEARTBEAT-1: directory_nodes heartbeat merge", () => {
     }
   });
 
-  it("two INVALID values still converge deterministically (commutative, not arg-order dependent)", () => {
-    const a = rec("n", "garbage-a");
-    const b = rec("n", "garbage-b");
-    expect(mergeDirectoryNodeHeartbeat(a, b)).toEqual(mergeDirectoryNodeHeartbeat(b, a));
+  // These two assert the REPLICATED column only. Comparing whole records would read as a claim that
+  // the merge is commutative, and it deliberately is not: `status` always comes from the receiving
+  // node (see the tests further down). Both passed vacuously before, because both records carried the
+  // same default status — a name that promises more than the assertion checks is how the next reader
+  // builds on a property that was never held.
+  it("two INVALID values still converge deterministically — the REPLICATED half is arg-order-independent", () => {
+    const a = rec("n", "garbage-a", "drained");
+    const b = rec("n", "garbage-b", "active");
+    expect(mergeDirectoryNodeHeartbeat(a, b).last_heartbeat_at)
+      .toBe(mergeDirectoryNodeHeartbeat(b, a).last_heartbeat_at);
   });
 
-  it("an exact TIE converges to the same record regardless of argument order", () => {
-    const a = rec("n", "1785200000000");
-    const b = rec("n", "1785200000000");
-    expect(mergeDirectoryNodeHeartbeat(a, b)).toEqual(mergeDirectoryNodeHeartbeat(b, a));
+  it("an exact TIE converges to the same HEARTBEAT regardless of argument order", () => {
+    const a = rec("n", "1785200000000", "drained");
+    const b = rec("n", "1785200000000", "active");
+    expect(mergeDirectoryNodeHeartbeat(a, b).last_heartbeat_at)
+      .toBe(mergeDirectoryNodeHeartbeat(b, a).last_heartbeat_at);
   });
 
   it("declares exactly the columns it reads — node_id, status and last_heartbeat_at, nothing else", () => {

@@ -90,15 +90,30 @@ class MemStore implements AeStoreView {
    */
   statuses = new Map<string, string>();
   status(nodeId: string): string { return this.statuses.get(nodeId) ?? "active"; }
+  /**
+   * A second Tier-B table with NO witness — `agent_presence`'s shape: wall-clock LWW where the merge
+   * settles every column it carries. It is here because the two kinds of Tier-B table are judged at
+   * different GRANULARITIES and produce OPPOSITE alarm text, and a harness carrying only the
+   * witnessed kind cannot see either difference. key → epoch-millis.
+   */
+  presence = new Map<string, string>();
   tierATables(): string[] { return ["agent_revocations"]; }
-  tierBTables(): string[] { return this.heartbeats.size > 0 ? ["directory_nodes"] : []; }
+  tierBTables(): string[] {
+    const t: string[] = [];
+    if (this.heartbeats.size > 0) t.push("directory_nodes");
+    if (this.presence.size > 0) t.push("agent_presence");
+    return t;
+  }
   tierARecordHashes(): string[] {
     return [...this.revocations.values()].map((r) => encodeTierARecord(AGENT_REVOCATIONS_SPEC, r).hash);
   }
   // Digest-first advertisement: the O(1)-per-table divergence check (design §3 step 1).
   tierATableDigest(): string { return computeTableDigest(this.tierARecordHashes()); }
-  tierBTableDigest(): string { return tierBTableDigest(this.tierBVersions()); }
-  tierBVersions(): Map<string, string> {
+  tierBTableDigest(t: string): string { return tierBTableDigest(this.tierBVersions(t)); }
+  tierBVersions(t: string): Map<string, string> {
+    if (t === "agent_presence") {
+      return new Map([...this.presence].map(([k, v]) => [k, `pres:${v}`]));
+    }
     return new Map([...this.heartbeats].map(([node_id, last_heartbeat_at]) => [
       node_id,
       encodeTierBVersion(DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC, {
@@ -112,7 +127,11 @@ class MemStore implements AeStoreView {
       .map((r) => ({ hash: encodeTierARecord(AGENT_REVOCATIONS_SPEC, r).hash, body: r }))
       .filter((rec) => want.has(rec.hash));
   }
-  serveTierB(_t: string, keys: readonly string[]): TierBRecord[] {
+  serveTierB(t: string, keys: readonly string[]): TierBRecord[] {
+    if (t === "agent_presence") {
+      return keys.filter((k) => this.presence.has(k))
+        .map((k) => ({ key: k, body: { k_local_pubkey: k, updated_at: this.presence.get(k)! } }));
+    }
     return keys
       .filter((k) => this.heartbeats.has(k))
       .map((k) => ({
@@ -134,9 +153,27 @@ class MemStore implements AeStoreView {
    * which for this table is the healthy steady state (DOD-M15-FORKQUIET-1). `status` is never taken
    * from the peer, exactly as `applyTierB`'s UPDATE never writes it.
    */
-  applyTierB(_t: string, records: readonly TierBRecord[]): TierBApplyResult {
+  applyTierB(t: string, records: readonly TierBRecord[]): TierBApplyResult {
+    if (t === "agent_presence") {
+      // NO WITNESS → judged per TABLE, exactly as `PgAeStore` judges agent_suspensions and
+      // agent_presence: divergent only when the table applied NOTHING, and labelled `peer_behind`
+      // because that means our copy dominates the peer's — replication lag, never a fork.
+      let n = 0;
+      for (const rec of records) {
+        const inc = rec.body as { k_local_pubkey: string; updated_at: string };
+        const local = this.presence.get(inc.k_local_pubkey);
+        if (local === undefined || Number(inc.updated_at) > Number(local)) {
+          this.presence.set(inc.k_local_pubkey, inc.updated_at); n++;
+        }
+      }
+      return n > 0
+        ? { applied: n, divergent: 0, divergentKeys: [] }
+        : { applied: 0, divergent: records.length, divergentKeys: records.map((r) => r.key).slice(0, 5),
+            verdict: "peer_behind" as const };
+    }
     let applied = 0;
     let divergent = 0;
+    const divergentKeys: string[] = [];
     for (const rec of records) {
       const incoming = rec.body as { node_id: string; status: string; last_heartbeat_at: string };
       const local = this.heartbeats.get(incoming.node_id);
@@ -150,9 +187,13 @@ class MemStore implements AeStoreView {
         this.heartbeats.set(incoming.node_id, incoming.last_heartbeat_at);
         applied++;
       }
-      if (this.status(incoming.node_id) !== incoming.status) divergent++;
+      if (this.status(incoming.node_id) !== incoming.status) { divergent++; divergentKeys.push(rec.key); }
     }
-    return { applied, divergent };
+    // directory_nodes HAS a witness, so the real store judges it per record and labels it
+    // `content_fork` — a disagreement no merge settles.
+    return divergent > 0
+      ? { applied, divergent, divergentKeys, verdict: "content_fork" as const }
+      : { applied, divergent: 0, divergentKeys: [] };
   }
 }
 const rev = (id: string): RevRow => ({ agent_id: id, epoch_id: "e1", reason: "c", signature: "ab".repeat(64), revoked_at: "1785200000000" });
@@ -305,7 +346,8 @@ describe("AeSyncService — libp2p-face wiring", () => {
     // responsible meant dumping all 17 Tier-A tables off two live nodes and diffing them. An alarm
     // that cannot say what is wrong cannot be acted on.
     expect(forks[0][1].unconverged).toEqual([
-      { tier: "A", table: "agent_revocations", planned: 1, pulled: 1, applied: 0, divergent: 1 },
+      { tier: "A", table: "agent_revocations", planned: 1, pulled: 1, applied: 0, divergent: 1,
+        verdict: "content_fork", divergentKeys: [] },
     ]);
     // Tier-A is unambiguous — say so, because a Tier-B entry here is often benign and the operator
     // must not have to know that to read the alarm.
@@ -314,7 +356,8 @@ describe("AeSyncService — libp2p-face wiring", () => {
     // The same breakdown rides the routine round log, so the gap is visible before a streak builds.
     const completed = dialLogger.events.filter(([e]) => e === "antientropy.round.completed");
     expect(completed.at(-1)![1].unconverged).toEqual([
-      { tier: "A", table: "agent_revocations", planned: 1, pulled: 1, applied: 0, divergent: 1 },
+      { tier: "A", table: "agent_revocations", planned: 1, pulled: 1, applied: 0, divergent: 1,
+        verdict: "content_fork", divergentKeys: [] },
     ]);
   });
 
@@ -465,6 +508,11 @@ describe("AeSyncService — libp2p-face wiring", () => {
     expect(forks[0][1].table).toBe("directory_nodes");
     expect(forks[0][1].tier).toBe("B");
     expect(forks[0][1].consecutive).toBe(2);
+    // IT NAMES THE ROW. The alarm could name a table and nothing else, and answering the last one
+    // meant diffing whole tables off two live nodes.
+    expect(forks[0][1].divergentKeys, "the alarm must say WHICH row").toEqual(["gcp-usc1"]);
+    // And it says what KIND of disagreement, because the two need opposite things from the reader.
+    expect(String(forks[0][1].reason)).toContain("no merge reconciles");
     // The peer does NOT get to rewrite our status by winning a heartbeat comparison — the
     // counterbalance for putting the column on the wire at all.
     expect(dialStore.status("gcp-usc1")).toBe("active");
@@ -501,6 +549,31 @@ describe("AeSyncService — libp2p-face wiring", () => {
     const forks = dialLogger.events.filter(([e]) => e === "antientropy.round.fork_suspected");
     expect(forks.length, "the status fork must survive a sibling heartbeat applying").toBe(1);
     expect(forks[0][1].table).toBe("directory_nodes");
+  });
+
+  it("a table with NO witness is told it is replication lag, not a fork — and where to look", async () => {
+    // The alarm text has to follow the STORE'S RULE, not the tier. A table whose merge settles every
+    // column reports divergence when NOTHING applied, which means precisely that the peer's copy is
+    // stale. Telling that reader "a real disagreement, not a stale copy" — as one draft of this fix
+    // did — sends them hunting a fork in the kill switch over ordinary one-directional lag.
+    const respStore = new MemStore();
+    const dialStore = new MemStore();
+    dialStore.presence.set("agP", "1785200060000"); // we are AHEAD
+    respStore.presence.set("agP", "1785200000000");
+    const { respService, dialService, dialLogger } = pairServices({ respStore, dialStore });
+    await respService.start();
+    respService.stop();
+
+    await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+    await dialService.syncPeer(B.nodeId, "https://b.example", B.peerId);
+
+    const forks = dialLogger.events.filter(([e]) => e === "antientropy.round.fork_suspected");
+    expect(forks.length, "the pre-existing per-table rule still alarms on a streak").toBe(1);
+    expect(forks[0][1].table).toBe("agent_presence");
+    const reason = String(forks[0][1].reason);
+    expect(reason, "it must not claim a real disagreement").toContain("ordinary replication lag");
+    expect(reason, "and it must name where to look next").toContain("PEER is not pulling from us");
+    expect(forks[0][1].divergentKeys, "and name the row").toEqual(["agP"]);
   });
 });
 

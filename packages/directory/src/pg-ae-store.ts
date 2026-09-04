@@ -357,28 +357,22 @@ interface TierBPg {
    */
   validateBody(body: unknown): string | null;
   /**
-   * Does this key stay DIVERGENT after the apply — the verdict `RoundResult.unconverged` and the
-   * `fork_suspected` alarm are computed from (DOD-M15-FORKQUIET-1)?
+   * The WITNESS check, or `null` for a table that has none — REQUIRED on every entry, never
+   * defaulted, because the two kinds of table answer "is this still divergent?" from different
+   * evidence and at different GRANULARITIES, and a shared default would silently give a new table
+   * the wrong one (DOD-M15-FORKQUIET-1).
    *
-   * Per table, and REQUIRED on every entry, because the two tables answer it from different
-   * evidence and a shared default would silently give a new table the wrong one:
-   *  - a table whose merge reconciles EVERY column can only report "the peer had nothing to give
-   *    us" — `moved === false`, which is the pre-existing rule and stays exactly as it was;
-   *  - `directory_nodes` also carries a column the merge deliberately never reconciles, and that
-   *    disagreement is the real signal. Its heartbeat is excluded, because a node rewrites its own
-   *    every ~30s and no two nodes can ever agree on it.
+   * A witness is a column the merge deliberately never reconciles, so a disagreement on it is real,
+   * permanent and PER RECORD. Only `directory_nodes` has one (`status`); its heartbeat is excluded,
+   * because a node rewrites its own every ~30s and no two nodes can ever agree on it.
    *
-   * `moved` is whether the merge changed the local version — i.e. whether `update` ran.
+   * `null` means the merge reconciles every column this table carries. Then the only thing a pull
+   * can fail to settle is that our copy already dominated the peer's — and that is judged PER TABLE
+   * in `applyTierB`, not per record. See the note there; getting this wrong changed the kill
+   * switch's alarm.
    */
-  stillDivergent(args: { local: unknown; incoming: unknown; merged: unknown; moved: boolean }): boolean;
+  readonly witnessDisagrees: ((local: unknown, incoming: unknown) => boolean) | null;
 }
-
-/**
- * The verdict for a table whose merge reconciles every column it carries: the only thing a pull can
- * fail to settle is that our copy already dominated the peer's, which is what `moved === false`
- * says. Byte-for-byte the rule these tables have always used.
- */
-const DIVERGENT_IF_NOTHING_MOVED = (args: { moved: boolean }): boolean => !args.moved;
 
 const SUSPENSIONS: TierBPg = {
   spec: SUSPENSION_VERSION_SPEC,
@@ -389,7 +383,8 @@ const SUSPENSIONS: TierBPg = {
     `SELECT agent_id, paused, burned, reason, authorized_by_account::text AS authorized_by_account,
             suspension_seq, COALESCE(origin_node,'') AS origin_node FROM agent_suspensions`,
   merge: (a, b) => mergeSuspension(a as SuspensionRecord, b as SuspensionRecord),
-  stillDivergent: DIVERGENT_IF_NOTHING_MOVED,
+  witnessDisagrees: null, // the §4 merge reconciles every column this table carries
+
   rowToBody: (r): SuspensionRecord => ({
     agent_id: r.agent_id as string,
     paused: r.paused as boolean,
@@ -457,7 +452,8 @@ const PRESENCE: TierBPg = {
             (EXTRACT(EPOCH FROM updated_at )*1000)::bigint AS updated_at
        FROM agent_presence`,
   merge: (a, b) => mergePresence(a as PresenceRecord, b as PresenceRecord),
-  stillDivergent: DIVERGENT_IF_NOTHING_MOVED,
+  witnessDisagrees: null, // wall-clock LWW settles every column this table carries
+
   rowToBody: (r): PresenceRecord => ({
     k_local_pubkey: r.k_local_pubkey as string,
     online: r.online as boolean,
@@ -536,10 +532,11 @@ const DIRECTORY_NODE_HEARTBEATS: TierBPg = {
             (EXTRACT(EPOCH FROM COALESCE(last_heartbeat_at, to_timestamp(0)))*1000)::bigint AS last_heartbeat_at
        FROM directory_nodes`,
   merge: (a, b) => mergeDirectoryNodeHeartbeat(a as DirectoryNodeHeartbeatRecord, b as DirectoryNodeHeartbeatRecord),
-  // The heartbeat is EXCLUDED from the verdict and `status` is what is left. `moved` is ignored on
-  // purpose: the row most likely to carry a status fork is a peer's OWN row, whose heartbeat the
-  // peer is always fresher on — so gating the verdict on `moved` would hide precisely that case.
-  stillDivergent: ({ local, incoming }) => directoryNodeHeartbeatStillDivergent(
+  // The heartbeat is EXCLUDED from the verdict and `status` is what is left. Whether the merge MOVED
+  // is ignored on purpose: the row most likely to carry a status fork is a peer's OWN row, whose
+  // heartbeat the peer is always fresher on — so gating the verdict on that would hide exactly that
+  // case.
+  witnessDisagrees: (local, incoming) => directoryNodeHeartbeatStillDivergent(
     local as DirectoryNodeHeartbeatRecord, incoming as DirectoryNodeHeartbeatRecord,
   ),
   rowToBody: (r): DirectoryNodeHeartbeatRecord => ({
@@ -880,20 +877,41 @@ export class PgAeStore implements AeStoreView {
    *
    * `applied` is the number that actually CHANGED local state (by version hash) — a converged
    * re-apply returns 0, the termination signal. `divergent` is the number this round did NOT bring
-   * into agreement, per the table's `stillDivergent`; it is the alarm's input and it is deliberately
-   * NOT `records.length - applied` (DOD-M15-FORKQUIET-1 — that arithmetic reads a healthy LWW merge
-   * confirming the local copy already won as a permanent fork).
+   * into agreement; it is the alarm's input and it is deliberately NOT `records.length - applied`
+   * (DOD-M15-FORKQUIET-1 — that arithmetic reads a healthy LWW merge confirming the local copy
+   * already won as a permanent fork).
+   *
+   * ⚠️ THE TWO KINDS OF TABLE ARE JUDGED AT DIFFERENT GRANULARITIES, and the difference is what a
+   * review caught on 2026-09-04 before it shipped:
+   *  - **A table with a WITNESS** (`directory_nodes`) is judged PER RECORD, because a witness
+   *    disagreement is a property of one row and no other row can vouch for it.
+   *  - **A table with none** (`agent_suspensions` — the KILL SWITCH — and `agent_presence`) is
+   *    judged PER TABLE: divergent only when the table applied NOTHING. That reproduces
+   *    `pulled > 0 && applied === 0`, the rule these tables have had since M12, exactly.
+   *    Judging them per record instead is STRICTLY MORE SENSITIVE: a round that pulled 10 and
+   *    applied 9 would become a fork key, on the reading "our copy of one row already dominates
+   *    the peer's" — which is ordinary one-directional replication lag and is the same false-alarm
+   *    class this unit exists to remove, relocated onto the kill switch.
+   *
+   * Bound worth stating: `runAeDialer` runs ONE round per dial (`rounds ?? 1`, no caller overrides),
+   * so per-round and per-dial are the same thing today. Raise `rounds` and the per-table rule
+   * becomes per-round rather than per-dial — a round that applied nothing would then count even if
+   * a sibling round applied something.
    */
   async applyTierB(table: string, records: readonly TierBRecord[]): Promise<TierBApplyResult> {
-    if (records.length === 0) return { applied: 0, divergent: 0 };
+    if (records.length === 0) return { applied: 0, divergent: 0, divergentKeys: [] };
+
     const t = tierB(table);
     let changed = 0;
-    let divergent = 0;
+    let witnessDisagreements = 0;
+    const divergentKeys: string[] = [];
+    const unmovedKeys: string[] = [];
     for (const rec of records) {
       try {
         const one = await this.#applyOneTierB(t, rec);
         changed += one.applied;
-        divergent += one.divergent;
+        if (one.witnessDisagrees) { witnessDisagreements += 1; divergentKeys.push(rec.key); }
+        if (one.applied === 0) unmovedKeys.push(rec.key);
       } catch (err) {
         // ONLY the unknown-key case is contained. Everything else — a key/body mismatch, a type
         // violation, a pg error — still propagates and aborts the table's batch, because those are
@@ -907,10 +925,29 @@ export class PgAeStore implements AeStoreView {
         });
       }
     }
-    return { applied: changed, divergent };
+    if (t.witnessDisagrees !== null) {
+      return {
+        applied: changed,
+        divergent: witnessDisagreements,
+        divergentKeys: divergentKeys.slice(0, 5),
+        ...(witnessDisagreements > 0 ? { verdict: "content_fork" as const } : {}),
+      };
+    }
+    // No witness → the per-TABLE rule above. Every pulled record is named when it fires, because the
+    // whole table failed to apply; naming them is what the last alarm could not do (answering it
+    // took diffing every table off two live nodes).
+    const divergent = changed === 0 ? records.length : 0;
+    return {
+      applied: changed,
+      divergent,
+      divergentKeys: divergent > 0 ? unmovedKeys.slice(0, 5) : [],
+      // Nothing applied on a table whose merge settles every column: our copy dominates the peer's.
+      // That is not a fork — if it persists, the PEER is not pulling from us.
+      ...(divergent > 0 ? { verdict: "peer_behind" as const } : {}),
+    };
   }
 
-  async #applyOneTierB(t: TierBPg, rec: TierBRecord): Promise<TierBApplyResult> {
+  async #applyOneTierB(t: TierBPg, rec: TierBRecord): Promise<{ applied: number; witnessDisagrees: boolean }> {
     // WIRE-INPUT DISCIPLINE (kill-switch critical): the row is LOCKED by rec.key but the merge
     // output would be WRITTEN by the body's key column. If those disagree — a malicious
     // authenticated peer sending {key: victimA, body: {agent_id: victimB, …}} — the write lands on
@@ -947,7 +984,7 @@ export class PgAeStore implements AeStoreView {
           await client.query("COMMIT");
           return {
             applied: moved ? 1 : 0,
-            divergent: t.stillDivergent({ local, incoming, merged, moved }) ? 1 : 0,
+            witnessDisagrees: t.witnessDisagrees !== null && t.witnessDisagrees(local, incoming),
           };
         }
         // Absent locally: FOR UPDATE locked nothing, so a concurrent insert (peer round OR the
@@ -959,7 +996,7 @@ export class PgAeStore implements AeStoreView {
           // disagree about and this is convergence, not divergence.
           await t.insert(client, incoming);
           await client.query("COMMIT");
-          return { applied: 1, divergent: 0 };
+          return { applied: 1, witnessDisagrees: false };
         } catch (err) {
           if (isUniqueViolation(err)) {
             await client.query("ROLLBACK");

@@ -69,10 +69,20 @@ function canonical(r: DirectoryNodeHeartbeatRecord): string {
  * not muted — a same-key/different-content fork on the identity columns (`node_id`, `region`) is
  * caught by the same table's Tier-A spec, which is unchanged.
  *
- * **Bound on the claim:** this detects ACCIDENTAL divergence between honest nodes. A peer that
- * wanted the alarm silent could simply serve our own status back, exactly as it could withhold a
- * divergent Tier-A row — no fork detector in this design constrains a lying peer, and this one does
- * not either.
+ * **TWO BOUNDS ON THE CLAIM, and the first is the one that decides how to read a quiet fleet.**
+ *
+ * 1. **Nothing in CELLO writes a status other than `'active'` today.** The only production writer is
+ *    `refreshNodeHeartbeat`, whose upsert writes `'active'` and whose conflict branch touches only
+ *    the heartbeat; `insertDirectoryNode` is test-only; and a Tier-A apply inserts `node_id`/`region`
+ *    and takes the column's DB default, which is also `'active'`. So this predicate is false for
+ *    every state the system can currently reach, and `directory_nodes` is EFFECTIVELY SILENT rather
+ *    than actively watched. The mechanism is kept, not because it fires now, but because it is what
+ *    a drain/decommission path or an operator's `UPDATE` would trip the moment either exists — and
+ *    because without it the table would have no divergence signal at all, which is the mute button
+ *    this unit was told not to build. Say "silent", never "watched", when reporting on it.
+ * 2. **It detects ACCIDENTAL divergence between honest nodes.** A peer that wanted the alarm silent
+ *    could simply serve our own status back, exactly as it could withhold a divergent Tier-A row —
+ *    no fork detector in this design constrains a lying peer, and this one does not either.
  */
 export function directoryNodeHeartbeatStillDivergent(
   local: DirectoryNodeHeartbeatRecord,

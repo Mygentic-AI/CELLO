@@ -100,7 +100,7 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
       serveTierA: () => [],
       serveTierB: (_t, keys) => keys.filter((k) => k === nodeId).map((k) => ({ key: k, body })),
       applyTierA: () => 0,
-      applyTierB: () => ({ applied: 0, divergent: 0 }),
+      applyTierB: () => ({ applied: 0, divergent: 0, divergentKeys: [] }),
     };
   };
 
@@ -690,7 +690,7 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
       serveTierA: () => [],
       serveTierB: (_t, keys) => keys.filter((k) => k === id).map((k) => ({ key: k, body: newer })),
       applyTierA: () => 0,
-      applyTierB: () => ({ applied: 0, divergent: 0 }),
+      applyTierB: () => ({ applied: 0, divergent: 0, divergentKeys: [] }),
     };
 
     const first = await runAntiEntropyRound(store, peer);
