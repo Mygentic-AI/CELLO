@@ -239,15 +239,227 @@ load `/worktree-permissions` before creating one.
 
 ## Review
 
+### Outcome — Part 1 SHIPPED, Part 2's STOP RULE FIRED
+
+**Part 1 is done and is worth having on its own:** an unexplained coin flip is now a named refusal
+that says why, and the reason each relay address failed is in both the response and the log.
+
+**Part 2 stopped.** What the legible failure names is the sender's standing receiver failing to hold
+a relay reservation after a rebuild — *"a reservation/reconnect lifecycle change … anything touching
+how the standing receiver holds its relay connection"*, which the stop rule names verbatim. It is
+written up under *Newly discovered* and handed back.
+
+**Therefore `DOD-M15-PARKCONN-1` stays ❌.** DoD 6 (three consecutive green runs) is NOT met — the
+three tests are still red, for the cause below. This order's `dod_effect` is changed from `closes`
+to `unit-of` to say so honestly.
+
 ### Where this work lives
-*(worktree paths, branch, and the `COMPOSE_PROJECT_NAME` / `CELLO_PG_HOST_PORT` you used)*
 
-### The cause, verbatim
-*(DoD 4 — the actual dial failures, quoted. Required whether or not Part 2's stop rule fired.)*
+| | |
+|---|---|
+| branch (both repos) | `m15/028-parkconn` |
+| daemon | `/Users/andrep/Documents/code/m15-028/cello-client` |
+| spine | `/Users/andrep/Documents/code/m15-028/trustless-cello` |
+| Postgres isolation | `COMPOSE_PROJECT_NAME=m15028`, `CELLO_PG_HOST_PORT=5436`, `DATABASE_URL=postgresql://postgres:dev@localhost:5436/cello_dev` |
 
-### The rest
-*(the three consecutive runs from DoD 6, the mutation proof, the reviewer's verdict)*
+Nothing publishes. The change is daemon-internal plus one spine test; no wire behaviour, no crypto
+type, no schema, so no `/cello-publish` cascade and no `trustless-cello` re-pin.
+
+### The cause, verbatim (DoD 4)
+
+**The empty `catch` was hiding TWO different failures, and both are now readable.**
+
+**Face 1 — the deposit lands in the standing-receiver rebuild window.** Read on three separate runs:
+
+```
+{"ok":false,"reason":"standing_receiver_unavailable","cause":"standing_receiver_creating",
+ "guidance":"The standing receiver is still being built; retry this deposit in a few seconds."}
+```
+
+This branch already refused before this order; the spine test was **discarding the result**, so it
+surfaced four steps downstream as `expected +0 to be 1`. It returned the bare exit-point label — the
+one `standingReceiverAbsenceReason()` exists to replace — so nothing said which of its four causes it
+was. Fixed: the handler now carries `cause`, and the spine helper waits this one cause out.
+
+**Face 2 — the dial itself is reset, and this is the one that stops the unit.** Verbatim, three
+different error strings for the same event depending on how far the handshake got:
+
+```
+"dialFailures":[{"addr":"/ip4/127.0.0.1/tcp/62913/p2p/12D3KooWRpMthPmFX8LVFvjpgH6sgaSeHYXKjPh9f8bSoTJMrXxQ",
+                 "error":"connect ECONNRESET 127.0.0.1:62913"}]
+"dialFailures":[{... same address ..., "error":"Encryption failed"}]
+"dialFailures":[{... same address ..., "error":"Unexpected EOF - stream closed while reading 0/1 bytes"}]
+```
+
+`Encryption failed` is a Noise handshake that the far end closed part-way; `Unexpected EOF … 0/1
+bytes` is the same event one layer out. **The last of the three is what `019-PARKERROR` measured as
+`No open connection to peer 12D3Koo…`** — the transport's report of the consequence, one frame after
+the cause was thrown away.
+
+**The sender daemon's own account, same millisecond, on every failing run:**
+
+```
+{"event":"transport.autonat.unavailable","nodeType":"standing_receiver","directorySignalingStatus":"reconnecting"}
+{"event":"session.node.created","agentName":"__standing_receiver__:agentA","sessionPeerId":"12D3KooWDwqbw1cjXAT7LpGqEBvGNSB4R7mjLHCjEv4AoMF1VZTv"}
+{"event":"session.standing_receiver.reachability","agentName":"agentA","circuitAddrs":0,"reservationsRequested":1}
+{"event":"session.standing_receiver.reservation.none","agentName":"agentA","relayPeerIds":["12D3KooWRpMthPmFX8LVFvjpgH6sgaSeHYXKjPh9f8bSoTJMrXxQ"]}
+{"event":"content.park.open.failed","reason":"no_connection","dialOutcome":"all_addresses_failed","addrsTried":1, ...}
+```
+
+**The relay's account of the same millisecond:**
+
+```
+[RELAY] Peer connected: 12D3KooW
+{"event":"relay.reservation.denied","peerId":"12D3KooW","reason":"not_authenticated","asksWithoutProving":1}
+{"event":"relay.auth.reservation_proof","remotePeerId":"12D3KooWM18neUFmTBNqHjy9oubLKA6r8FvuLDhtR9CwMcP8s3Jn","pubkey":"ecdd7c89"}
+[RELAY] Peer disconnected: 12D3KooW
+```
+
+**Read as a flow, which is what makes it a stop-rule case:**
+
+1. Something rebuilds agentA's standing receiver — a new session, or a seal. A **new peer identity**
+   is minted (`session.node.created`, `12D3KooWDwqb…`).
+2. The new receiver asks the relay for a circuit reservation and gets none:
+   `reservation.none`, `circuitAddrs: 0`.
+3. The relay saw a reservation proof in that window — but from `12D3KooWM18n…`, a **different peer id
+   from the receiver that was just created** — and then disconnected the peer.
+4. From that point every dial from this daemon to that relay is reset (`ECONNRESET`), fails the
+   Noise handshake (`Encryption failed`), or dies mid-multistream (`Unexpected EOF`).
+5. `newStream` then reports `no_connection`, which is where `019` picked the story up.
+
+**What I cannot prove from code alone:** whether the relay is refusing the new peer (a reservation
+cap or an authentication binding) or the receiver is presenting the wrong identity for its
+reservation. Either answer is a change to how the standing receiver holds its relay connection, so
+either answer is over the stop rule.
+
+**And it is NOT test-only.** The daemon's PRODUCTION auto-recover drain fires in the same instant and
+fails for the same reason — this is not confined to the raw IPC surface:
+
+```
+{"event":"content.recover.auto.failed","agentName":"agentA","trigger":"standing_receiver_ready","stage":"relay",
+ "error":"content park relay 12D3KooWRpM… is unreachable (no_connection): No open connection to peer 12D3KooWRpM…
+          Dials tried: /ip4/127.0.0.1/tcp/62913/p2p/12D3KooWRpM… → connect ECONNRESET 127.0.0.1:62913"}
+{"event":"content.recover.auto.completed","recovered":0,"relayCount":1,"failedRelays":1}
+```
+
+### The runs
+
+Seven live runs, all as separate OS processes against the real three-node consortium and the real
+relay binary. **The enforcer is NOT met** — no green run of the three tests, let alone three
+consecutive.
+
+| # | test | result | what the deposit said |
+|---|---|---|---|
+| 1 | DOD-MSG-7 | ❌ | `ok:false` (reason not yet printed — fixed after this run) |
+| 2 | DOD-MSG-7 | ❌ | `standing_receiver_unavailable` |
+| 3 | DOD-MSG-7 | ❌ | `standing_receiver_unavailable` / `standing_receiver_creating` |
+| 4 | DOD-MSG-8 | ❌ | `ok:false` at the straggler deposit |
+| 5 | DOD-MSG-7 | ❌ | `relay_unreachable:no_connection` — `Unexpected EOF … 0/1 bytes` |
+| 6 | DOD-MSG-7 | ❌ | same, with the full sender + relay tails quoted above |
+| 7 | DOD-MSG-5 | ❌ | `relay_unreachable:no_connection` — `ECONNRESET`, then `Encryption failed` |
+
+**One control run is recorded because it nearly produced a false conclusion, and the correction is
+the useful part.** With the relay ingress proxy taken out of the path (`relayIngressProxy: false`,
+diagnostic only, never committed), DOD-MSG-7 went green — and I was one step from reporting that
+024-ORPHANTRIAGE's proxy was the cause. Running DOD-MSG-5 under the same condition refused that:
+it still failed, with `ECONNRESET` and `Encryption failed` instead of `Unexpected EOF`. **The proxy
+changes the error TEXT, not the outcome.** A single green run of one test is exactly the evidence
+this order says proves nothing, and it was about to.
+
+### DoD, line by line
+
+| # | | |
+|---|---|---|
+| 1 | ✅ | dial failures are in the response (`dialFailures`) and the log (`content.park.open.failed`) |
+| 2 | ✅ | `content_park_deposit` returns `{ok:false, reason, guidance}`; no throw, no "unexpected error" |
+| 3 | ✅ | one `content.park.deposit.ipc.result` per call, carrying `ok` and `reason` |
+| 4 | ✅ | the cause is quoted verbatim above |
+| 5 | ❌ | **handed back under the stop rule**, with the evidence |
+| 6 | ❌ | **not met** — no green run; the line stays ❌ |
+| 7 | ✅ | all five discarded deposits now assert `ok`, through `parkDeposit` |
+| 8 | ✅ | see the mutation proof below |
+| 9 | ✅ | `pnpm run test` (4872 passed), `lint`, `typecheck` all green in cello-client; `typecheck` + `lint` green in trustless-cello. Nothing publishes. |
+| 10 | see below | |
+| 11 | ❌ left in place; `dod_effect` changed to `unit-of` | |
+
+### Mutation proof (DoD 8)
+
+Seven mutants, baseline printed first (9 passed), each re-run ALONE and seen red, tree confirmed
+clean before and after. All compile — none was caught by lint or typecheck instead of a test.
+
+| | mutation | red | for the right reason |
+|---|---|---|---|
+| M1 | `#open` discards the dial error again (the original empty `catch`) | A1 | `dialFailures` is empty; the message no longer names the address |
+| M2 | `dialOutcome` collapsed to a constant `all_addresses_failed` | A2 | the dialed-then-lost case is misreported as a dial failure |
+| M3 | report the dial failures even when `newStream` SUCCEEDS | A1, A3 | A3: *"a dial that did not matter must stay quiet: expected { level: 'warn', …(2) } to be undefined"* |
+| M4 | deposit handler drops its `catch` and lets the throw escape | B1 | the refusal never happens |
+| M5 | deposit handler logs nothing (the shape before this unit) | B1, B2, B3 | no `content.park.deposit.ipc.result` on any path |
+| M6 | return the bare `standing_receiver_unavailable` with no `cause` | C1, C2, C3 | the four causes collapse back into one label |
+| M7 | guess `agents[0]` instead of refusing when several agents exist | C3 | a confident cause about the wrong agent |
+
+**M3 needed the second half of the rule.** It reddened TWO tests, and A1 is the one it was not aimed
+at — so the red could have come from a path already covered. Re-run alone, A3's own message is quoted
+above and names exactly the property the mutation removed.
+
+**The spine-side assertion is not mutated, and does not need to be.** `parkDeposit`'s `ok` check has
+been observed FAILING seven times with the response quoted verbatim, and observed PASSING on the
+proxy-off control run — so it is neither stuck green nor stuck red, which is what a mutation would
+have been asked to establish.
+
+### Reviewer verdict (DoD 10)
+
+@@VERDICT@@
 
 ## Newly discovered
 
-*(anything found and NOT acted on, per rule 3)*
+*(found and NOT acted on, per rule 3)*
+
+### 1. 🛑 THE STOP-RULE ITEM — a rebuilt standing receiver cannot get a relay reservation, and every dial to that relay is then refused
+
+**BLOCKS — but it is Andre's to grant (§0z.4), so it is written here rather than added to the gate.**
+
+**What the operator lives through.** Their agent finishes a conversation, or starts a new one. Behind
+that, the daemon quietly rebuilds the standing receiver — the node that holds the agent's slot on the
+relay. The new one asks the relay for its slot and does not get it. From that moment the agent cannot
+reach that relay at all: parked mail it is holding for the counterparty cannot be deposited, and mail
+waiting for it cannot be drained. Nothing announces this; the conversation simply stops moving.
+
+**The evidence is quoted verbatim in "The cause" above** — the four sender events and the four relay
+events, from the same millisecond, reproduced on every failing run.
+
+**Why it is not this order's:** the fix is in how the standing receiver obtains and holds its
+reservation, or in what the relay will accept from a peer it has just seen replaced. The order's stop
+rule names both. It also touches `008-slots` (the relay's unproven reservation cap) and
+`SESSION-RELAY-PINNED-1`.
+
+**Where to start**, because the evidence narrows it: the reservation proof the relay logged in that
+window (`relay.auth.reservation_proof`, `remotePeerId 12D3KooWM18n…`) came from a **different peer id
+than the receiver that had just been created** (`12D3KooWDwqb…`). Establish which peer is supposed to
+be proving, and the rest follows.
+
+### 2. `content_park_pull` still returns the bare `standing_receiver_unavailable` label
+
+`core/daemon/src/content-park.ts` — the pull handler has the identical exit the deposit handler had
+before this unit: the label with no `cause`, and a guidance string that assumes "retry after startup"
+is the answer for all four causes. Same one-expression fix. **POST-LAUNCH** — it is a diagnostic
+surface with no production caller (`recoverParkedFromRelay`, which production uses, already names its
+cause), so an operator does not reach it.
+
+### 3. The deposit hook on the PRODUCTION send path still throws on an unreachable relay
+
+`daemon.ts` ~2387 and ~2517 `await client.deposit(node, …)` with no `try`. Both now receive a typed
+`ContentParkUnreachableError` instead of a bare transport literal, so the message is readable rather
+than `[object Object]` — but the throw still escapes rather than becoming the typed failure those
+call sites already shape for `standing_receiver_unavailable`. **POST-LAUNCH**, and it is `daemon.ts`,
+outside this order's files. Not urgent because the caller's four re-drive triggers still fire; it is
+the reporting that is asymmetric, not the delivery.
+
+### 4. The comment on `relayIngressProxy: true` in `j-content.spine.test.ts` is measurably false
+
+It reads *"Inert while nothing black-holes it, so every other test in this file sees the relay exactly
+as before."* Measured: with the proxy in path the dial failure reads `Unexpected EOF - stream closed
+while reading 0/1 bytes`; with it removed the identical failure reads `connect ECONNRESET` and
+`Encryption failed`. The proxy is not transparent — it rewrites how a failure presents, which is
+precisely what cost a run here. **POST-LAUNCH / test hygiene.** Left in place and not rewritten
+because rewriting it means first establishing what the proxy actually does to a libp2p connection,
+which is the investigation the stop rule declines.
