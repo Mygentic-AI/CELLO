@@ -10398,3 +10398,131 @@ field no shipped tool surface reads, which is §5's *"NO CONSUMER, NO SHIP"*. Th
 structurally onto the `session.content.orphaned` log event (the durable forensic record Invariant 2
 requires) and verbatim into the notice prose the agent reads. Put to the reviewer explicitly rather
 than settled unilaterally.
+
+---
+
+## Entry 024c — 024-ORPHANTRIAGE: the review found the predicate, and the mutation loop found the fix that had no teeth
+
+**Unit:** `DOD-M15-ORPHANTRIAGE-1`. Closes it. Continues Entries 024a (falsification) and 024b (what
+shipped). One review pass, every finding fixed, verdict quoted below.
+
+### The one that mattered: "known contact" was reading the wrong thing, and it inverted the unit
+
+`knownContact` was `does a contacts row exist`. It cannot be, and this project had already decided
+that in writing:
+
+- **A row is written FROM THE WIRE.** `inbound-sessions.ts` calls
+  `addContact(..., "signal_presentation")` at `TIER.UNKNOWN` for any inbound offer inside the
+  acceptance bound, because the trust-signal foreign key needs a row to point at. No operator action
+  at any point.
+- **Blocking a contact leaves the row.** It is an `UPDATE` to `TIER.BLOCKED`; removing is a separate
+  verb.
+
+So a stranger who merely dialled, **and a key the operator had deliberately blocked**, both got:
+*"open a NEW conversation with `<key>` and ask whether they sent it."* That is the population this
+unit exists to refuse, handed the exact action it exists to withhold — the unit inverted, by one
+predicate. `DOD-TIER-4` had already retired `isContact` for precisely this and says so in the source:
+*"An UNKNOWN-tier contact (a mere row) is NOT known."* I re-implemented the retired semantics in raw
+SQL and hung the unit's most consequential branch on it.
+
+It also **falsifies the counterbalance sentence in Entry 024a and in the module**: *"a sender who
+wants the reach-out branch would have to already be in the receiver's address book — they cannot
+cause that from the wire."* They can. Both sentences are rewritten rather than deleted, per
+`DOD-M15-CLAIM-COMMENTS-1`: the wrong sentence is why the gap would survive the next reading.
+
+### And the reach-out dropped a conjunct from Andre's own rule
+
+*"if they are a known contact **and this was an ongoing conversation until this point**"* — a
+conjunction, and the code branched on the vouch alone. The notice then argued with itself: an impact
+saying *"there is nothing here that makes a technical fault more likely than a probe"* directly above
+a guidance saying *"ONE thing to do, and it is worth doing: open a NEW conversation."* Now gated on
+both, and the notice names WHICH half failed instead of leaving the operator to wonder why the advice
+is what it is.
+
+### The remedy could not answer its own question
+
+A CELLO conversation is authenticated by the key itself. So in the **stolen-key case — the exact case
+the reach-out exists to detect** — the thief receives the question and answers *"yes, that was me"*,
+and the operator is reassured while the probe is confirmed. The guidance now says so and names
+out-of-band as the channel that actually settles it. Same idiom the `decrypt_failed` notice already
+uses a few thousand lines up.
+
+### 🧪 THE MUTATION LOOP CAUGHT A FIX THAT HAD NO TEETH, AND THAT IS THE ENTRY'S REAL LESSON
+
+Review finding F6 said the orphan log published `knownContact: false` and `ongoingConversation:
+false` on paths that never looked — a default wearing the shape of a measurement, read by the one
+person who ever comes asking. I added a `"not_checked"` state, went green, and ran the loop.
+
+**The mutant that turns `"not_checked"` straight back into `false` SURVIVED.** Sixteen tests, whole
+suite green. Nothing exercised the manager's failure path, so the fix was prose with no consumer —
+the exact shape this milestone keeps finding, produced *by the fix for a finding about that shape*.
+
+The test that kills it injects the fault the only way it happens for real: the address-book read
+throws (its table is dropped), the real catch runs, and the assertions are the three things the
+mutant breaks — the operator is told it *could not be checked* rather than told the answer was no,
+the log carries `not_checked` for both signals, and `session.content.orphaned.evidence.failed` is on
+the record. Mutant re-run alone afterwards: **red, for that reason.**
+
+**Recorded because the sequence is the point: neither review nor the author found this. The loop
+did**, on a fix that had just been written in response to a review finding, by someone who had read
+the rule that morning.
+
+### The second round of mutants
+
+| | Mutation | Result |
+|---|---|---|
+| MA | a mere contact ROW counts as vouched (revert F1) | caught — the UNKNOWN-tier and BLOCKED tests |
+| MB | drop the `AND ongoing conversation` conjunct (revert F3) | caught — both no-trace tests |
+| MC | `not_checked` → a plain `false` (revert F6) | **SURVIVED**, then caught after the test above |
+| ME | drop the out-of-band clause (revert F5) | caught — two tests |
+| MF | the unsigned notice asks for the public key again (revert F4) | caught — three, via the word-for-word pin |
+
+The word-for-word guidance pin is what makes MF fail in three places. The hand-maintained verb
+blocklist is now a belt rather than the gate — review T1's point, and it was right: the first version
+of that list had been calibrated to the prose instead of to the rule, so *"Answer nothing"* sailed
+through a check whose entire job was to catch it.
+
+### Everything else the review raised, and what it became
+
+**F4** the unsigned notice no longer asks the operator to write down a public key it has just called
+a string somebody typed · **F7** the `!this.#db` early return is GONE rather than tested — it threw
+nothing and logged nothing while the operator still got a notice (`noteContentRefusal` keeps its own
+in-memory fallback), so removing the branch is stronger than asserting on it · **F8** *"the private
+key you know as Bob"* is now the **public** key they know · **F9** *"the time"* is the time they are
+reading, because the inbox projection carries no timestamp · **F10** *"report it"* followed by
+*"there is no command that would send one"* now reads *"record it as a report"* · **F11** a
+deduplicated notice no longer implies every earlier arrival looked like the newest · **F12/T1** both
+offending verbs gone, both in the list, list demoted to a belt · **T2** three tier tests, which is the
+gap that let F1 ship · **T4** the spine asserts `removed`, not `ok` — `cello_contact_remove` returns
+`ok: true` for a key that was never stored, so the old line left unproven the very row that separates
+case 2 from case 3 · **T5** a second in-process guard on the central mechanism, with a real Ed25519
+signature over real `encodeStructure1` bytes.
+
+### The reviewer's verdict, in its own words
+
+> *"The unit does the hard part right. The falsification is correct and I re-verified it
+> independently … Carrying it under its own name rather than widening `senderPubkey`/`senderSig` is
+> the right call and the comment explaining why is load-bearing. The prose is careful, the spine
+> journey is real, and the mutation loop is the most convincing part of the submission.*
+>
+> ***But the single decision the whole unit turns on — "is this key a known contact?" — is wrong, and
+> it is wrong in the direction that hands the prober exactly what the unit was written to deny."***
+
+Lens lines: **SPEC: DEVIATIONS FOUND** (F3 blocking; F1 leaves clause 3 unmet in practice) · **SILENT
+FALLBACKS FOUND** (F7, F6 blocking) · **ERRORS NAME THEIR CAUSE** — *"no exit-point label substitution
+anywhere in the diff"* · **HOLLOW TESTS FOUND** (T1, T2 blocking; every new test survives the revert
+test) · **REMOVALS PROVEN** — not applicable · **NO COMPATIBILITY DEBT**.
+
+On the two things I put to it explicitly: the no-schema-column decision — *"your call was right … I
+would not add the column"* — and the counterbalance claim — *"**false as written**"*, which is F2.
+
+And on itself: *"I do not think I am rubber-stamping this one. The unit touches registration-adjacent
+trust state and I found the defect where this reviewer's brief says to expect it: in the predicate
+that reads the contacts table."*
+
+### Gates after the fixes
+
+- cello-client **4827 passed | 11 skipped**, lint 0, typecheck 0.
+- trustless-cello **1982 passed | 624 skipped | 4 todo**, lint 0, typecheck 0.
+- Spine journey re-run after every prose change: **1 passed | 12 skipped, 70.5s, exit 0.**
+- **Nothing publishes.** No version bump; this is not in an operator's hands yet.

@@ -2,7 +2,7 @@
 name: 024-ORPHANTRIAGE — A message for a conversation we never had
 type: micro-work-order
 date: 2026-09-03
-status: open
+status: complete
 description: >
   A message arrives for a session this daemon holds no record of. Today the operator is told to ask
   the counterparty to start a new one — which, when this is a stranger probing a peer ID, is the
@@ -329,9 +329,37 @@ the report. **Parked with a trigger written beside the sentence it replaces**, i
 **023-REFUSEDEVIDENCE had not landed** when this ran, so the guidance says the message itself was
 not kept.
 
-**Gates.** cello-client 4820 passed / 11 skipped, lint 0, typecheck 0. trustless-cello 1982 passed /
+**Gates.** cello-client 4827 passed / 11 skipped, lint 0, typecheck 0. trustless-cello 1982 passed /
 624 skipped / 4 todo, lint 0, typecheck 0. **Nothing publishes** — no version bump, so this is not
 yet in an operator's hands.
+
+### The review, and the finding that inverted the unit
+
+One pass by `cello-unit-reviewer`; every finding fixed; full detail in **Entry 024c**.
+
+> *"The unit does the hard part right … **But the single decision the whole unit turns on — 'is this
+> key a known contact?' — is wrong, and it is wrong in the direction that hands the prober exactly
+> what the unit was written to deny."***
+
+`knownContact` read *does a contacts row exist*. A row is written FROM THE WIRE — an inbound offer
+inside the acceptance bound writes one at `TIER.UNKNOWN` because the trust-signal foreign key needs
+something to point at — and blocking a contact leaves its row behind at `TIER.BLOCKED`. So a stranger
+who merely dialled, and a key the operator had deliberately blocked, were both offered *"open a NEW
+conversation with them and ask whether they sent it."* Now reads the TIER, which `DOD-TIER-4` had
+already settled and which retired `isContact` for exactly this reason. The reach-out also dropped a
+conjunct from Andre's own rule (`known AND ongoing`) and is now gated on both; and it now admits that
+a CELLO answer comes from whoever holds the key, so in the stolen-key case the thief is the one who
+answers.
+
+**The mutation loop then caught a fix that had no teeth** — the `not_checked` state added for the
+review's F6 could be turned straight back into a plain `false` with the whole suite green, because
+nothing exercised the failure path. Found by the loop, not by review and not by me. The test that
+kills it drops the `contacts` table so the real read throws.
+
+Lens lines: **SPEC: DEVIATIONS FOUND** · **SILENT FALLBACKS FOUND** · **ERRORS NAME THEIR CAUSE** ·
+**HOLLOW TESTS FOUND** · **REMOVALS PROVEN** (n/a) · **NO COMPATIBILITY DEBT**. The reviewer on its
+own pass: *"I do not think I am rubber-stamping this one … I found the defect where this reviewer's
+brief says to expect it: in the predicate that reads the contacts table."*
 
 ## Newly discovered
 
@@ -345,6 +373,16 @@ yet in an operator's hands.
   proxy added here is exonerated. Not investigated, per rule 3. From the operator's chair this would
   read as a message that never arrives with no error anywhere they can see, so it is worth a look —
   but it belongs to whoever owns the park path, not to this unit.
+
+- **`getTier()` compares the pubkey CASE-SENSITIVELY, and `contacts.pubkey` is stored verbatim.**
+  Found by the reviewer while ruling on F1. `getTier` is the live tier read — `isKnown`,
+  `isAutoAccept` and the inbound reachability bounds all go through it — and it does
+  `WHERE agent_id = ? AND pubkey = ?`. A contact added through an interface that upper-cases the hex
+  reads back as tier UNKNOWN, so the operator sees the contact in `cello_contacts` while the system
+  treats them as a stranger: tighter inbound bounds, no auto-accept, a different away message. This
+  unit works around it with its own `lower(pubkey)` lookup rather than calling `getTier`, and does
+  not fix the shared read — that is a change to a security predicate with several callers, which is
+  not a micro order's to make. Not investigated further, per rule 3.
 
   **It already has a home: `DOD-M15-SPINERED-1`** ("The multi-process evidence lane is HALF RED, and
   nobody knew"), which is the milestone's open 🟡 and which records `j-content` as **10/10 green**
