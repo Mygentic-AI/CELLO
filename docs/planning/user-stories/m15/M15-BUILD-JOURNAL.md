@@ -10281,3 +10281,120 @@ nothing more, and the guidance says exactly that); "known contact" is read from 
 "ongoing conversation" is read from **our** transcript rows, never from the sequence number the sender
 chose. A sender who wants the reach-out branch has to already be in the receiver's address book and
 already have a conversation on the receiver's disk — neither of which they can cause from the wire.
+
+---
+
+## Entry 024b — 024-ORPHANTRIAGE: what shipped, and the proof it holds
+
+**Unit:** `DOD-M15-ORPHANTRIAGE-1`. Continues Entry 024a (the falsification). Status at this entry:
+implemented, gates green in both repos, `cello-unit-reviewer` dispatched — **not yet DONE.**
+
+### What an operator gets now
+
+A message arrives naming a conversation their machine has never held. It is refused, as before —
+nothing delivered, nothing shown, nothing acknowledged. What changed is what they are told next, and
+there are exactly three shapes:
+
+- **Nothing checkable on the message.** *"It carried NO signature that could be checked, so nothing
+  at all is known about who sent it — that is a finding, not a gap."* One action: report. **Not one
+  contact verb appears in the notice**, including in a prohibition — "do not contact them" puts the
+  verb on the page just as surely as an invitation does, and the page is read by an agent skimming
+  for something to do.
+- **A signature that verified, against a key their address book does not hold.** The key is printed
+  in full, because they may need to paste it, compare it or report it. Same one action.
+- **A signature that verified, against a key they DO hold.** Reaching out is offered — *"open a NEW
+  conversation with …"*, never the one the message names — worded as key possession rather than
+  identity, and naming the outcome that makes it worth doing: the counterparty says they sent
+  nothing, and both sides have just learned the key is being used by someone else.
+
+Every one of the three ends with *"When in doubt, report it."*
+
+### Where the evidence comes from, and why none of it is the sender's to choose
+
+The signature is checked against the key inside the sender's own signed bytes, so it proves
+possession of a private key and nothing more — every sentence in the notice survives *"and what if
+the key was stolen?"*. "Known" is read from the operator's own address book. "Ongoing" is read from
+the operator's own transcript rows, **never from the sequence number on the frame** — that number is
+written by the sender, so anyone wanting the reach-out branch would simply write a large one.
+
+**The counterbalance is that the receiver does LESS.** The adversary here wants a reply; the unit's
+whole effect is to stop offering one unless the receiver already knows the key.
+
+### Part 2 — reporting names nothing reachable, and says so
+
+Option (b), as anticipated. `CELLO_Reporting` needs a registered identity, somewhere to run, and a
+pubkey published in shipped guidance — a pre-auth token and outward-facing wording, both of which
+§3a and §2f put outside a lane's authority. So the guidance says plainly that CELLO has no agent to
+receive reports yet and names the one thing the operator CAN do: keep the key, the conversation id
+and the time, because that IS the report. **Parked with a trigger in `orphan-triage.ts` beside the
+sentence it replaces.** `023-REFUSEDEVIDENCE` has not landed, so the notice also says the message
+itself was not kept.
+
+### The journey — two daemons, separate OS processes
+
+`J-CONTENT` › *024-ORPHANTRIAGE — a message for a conversation B never had names ONE action, and the
+signature decides which*:
+
+```
+ ✓ src/spine/j-content.spine.test.ts (13 tests | 12 skipped) 73538ms
+   ✓ 024-ORPHANTRIAGE — a message for a conversation B never had names ONE action, and the
+     signature decides which  12933ms
+ Test Files  1 passed (1)
+      Tests  1 passed | 12 skipped (13)
+   Duration  74.71s
+exit=0
+```
+
+B's `sessions` row is deleted underneath the live daemon. That is not a shortcut around the
+transport — it is the only state the orphan branch is reachable from, because the peer gate reads
+`#activeNodes` and the content key reads `#sessionContentKeys`, both in memory, while the park path
+cannot reach the branch at all. **Nothing separates case 2 from case 3 except a row in B's own
+address book**, and case 1 is produced by black-holing the relay so the sender emits a frame with no
+signed ordering record — the way production produces it. No frame is hand-built and nothing is
+tampered.
+
+### The mutation loop — nine mutants, all caught, each for the reason claimed
+
+Loop refused a dirty tree (`git status --porcelain`, which covers staged and untracked work that
+`git diff --quiet` is silent on), printed a baseline before the first mutant, and typechecked every
+mutant before trusting its run.
+
+| | Mutation | Caught by |
+|---|---|---|
+| **M1** | revert `verifiedSignerUnmatched` — the verified signer stops surviving the session lookup | **the SPINE journey**, red with *"It carried NO signature that could be checked"* against A's real key |
+| M2 | `knownContact` always false | the branch-flip test, and the mixed-case test |
+| M3 | case-SENSITIVE contact lookup | the mixed-case test alone |
+| M4 | `ongoingConversation` always false | *"still holds part of a conversation under that id"* |
+| M5 | the unsigned case takes the reach-out branch | *"nothing at all is known about who sent it"* |
+| M6 | drop when-in-doubt from the reach-out guidance | three tests, including the every-case one |
+| M7 | truncate the key to 8 chars + ellipsis | three tests |
+| M8 | claim identity instead of possession | *"does NOT prove they are"* and the from-anyone grep |
+| M9 | insert *"Do not contact them, and do not reply"* into the report-only guidance | the contact-verb grep, three tests |
+
+**M1 is the one that matters** and it is why the spine journey exists: the unit's whole subject is a
+proof that was being computed and thrown away, and only a real message from a real second daemon can
+show that the proof is what the branch turns on.
+
+### Gates
+
+- cello-client: **4820 passed | 11 skipped**, lint 0, typecheck 0.
+- trustless-cello: **1982 passed | 624 skipped | 4 todo**, lint 0, typecheck 0.
+- **Nothing publishes.** No version bump; this change is not in an operator's hands yet.
+
+### Size, measured rather than claimed
+
+The order caps a micro unit at 500 lines. The diff adds ~760: ~450 of tests (284 unit + ~215 spine),
+~184 of new module, and ~141 in `session-node-manager.ts` — of which the majority in every file is
+comment, at this codebase's usual density. **Said plainly rather than trimmed to fit:** the mission
+did not grow — three journey cases and a mutation proof are DoD clauses — and cutting the comments to
+hit a number would remove the part that keeps the next reader from re-deriving why the sequence
+number on the frame is not a signal.
+
+### Decision recorded under §3a: no new column on `content_refusal_notices`
+
+The order's body asks for the signals "as fields the agent can branch on". A structured field there
+is a client-side schema migration — the change class this project treats as highest-risk — for a
+field no shipped tool surface reads, which is §5's *"NO CONSUMER, NO SHIP"*. The four signals go
+structurally onto the `session.content.orphaned` log event (the durable forensic record Invariant 2
+requires) and verbatim into the notice prose the agent reads. Put to the reviewer explicitly rather
+than settled unilaterally.
