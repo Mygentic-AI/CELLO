@@ -336,8 +336,28 @@ tier boundary.
 | Cloud Build repo link `CELLO` | → https://github.com/Mygentic-AI/CELLO.git | 2026-07-28 | Terraform |
 | Triggers `cello-directory-image` / `cello-relay-image` | branch `^main$`, path-filtered per package (+ shared root files), run as `cello-cloud-build` SA | 2026-07-28 | Terraform |
 
-**Nothing else exists in this project.** No VMs, no Cloud SQL, no firewall rules; compute
-default SA present but attached to nothing and granted nothing.
+**One ad-hoc VM and one firewall rule exist OUTSIDE Terraform** — the adversarial test client, see
+below. Everything else: no other VMs, no Cloud SQL beyond the node databases; compute default SA
+present but attached to nothing and granted nothing.
+
+### Adversarial test client `cello-hostile-client` — ad-hoc, NOT Terraform-managed, STOPPED (2026-09-04)
+
+**A deliberately weakened CELLO client, for adversarial testing of the security gateway. Created by
+hand, not in IaC, because it is a throwaway probe rig — do NOT `terraform apply` expecting to see it,
+and do NOT add it to Terraform (a permanently-provisioned attacker is not something to keep in the
+committed topology).**
+
+| | |
+|---|---|
+| Instance | `cello-hostile-client`, zone `us-east1-d`, `e2-small`, subnet `cello-us-east1` (internal 10.10.0.44) | 
+| State | **STOPPED (TERMINATED)** — kept ready, not torn down. `gcloud compute instances start cello-hostile-client --zone us-east1-d` to resume. Its external IP is ephemeral and will change on start. |
+| Firewall | `hostile-client-ssh` (global, on `cello-vpc`) — allows tcp:22 to tag `hostile-client` from **one /32, Andre's current laptop IP**. That IP rotates; refresh with `gcloud compute firewall-rules update hostile-client-ssh --source-ranges "$(curl -s https://checkip.amazonaws.com)/32"` before an SSH that times out. |
+| What makes it "hostile" | The published daemon (`cli@0.0.195` / `daemon@0.0.188`) with **one line patched** in the installed gateway: `core/.../@cello-protocol/gateway/dist/detect/exfil.js`, the injection-artifact branch changed from `disposition: "block"` to `"allow"` (marked `HOSTILE-CLIENT`). That is the ONLY modification — it lets the client SEND injection payloads a normal client refuses to emit, so the RECEIVER's screening can be tested. |
+| Identity | agent **`CELLO_Adversary`**, registered, pubkey `9e6fe7c0d2e6189eeef8a49f3047a3e74064f7c203df2bb1707d95471c5472a1` (registration primary key `9fa579541a644f42a84f68303990370c34690b7a245e462fc1cb71ba3f8c8e68`). A real directory registration — it counts as an agent. |
+| How it is driven | No Claude/MCP session on the box. Two small node scripts in `~` (`drive.mjs`, `battery.mjs`) speak the daemon IPC directly over `~/.cello/daemon.sock` — newline-delimited `{id,method,params}` JSON, handshake `ipc.connect {clientType:"mcp"}` → `cello_use_agent` → `cello_send` (note: raw IPC uses `session_id`, not the MCP alias `cello_session_id`). |
+| Why it exists | The defensive half of the gateway cannot be exercised from a legitimate client — a well-behaved client's own outbound guard refuses to send the attack. Built 2026-09-04; findings recorded against M15 items 4/5 and orders 025–027. Kept for re-testing once the semantic injection classifier is chosen and installed. |
+
+**To fully retire it** (if ever): `gcloud compute instances delete cello-hostile-client --zone us-east1-d`, `gcloud compute firewall-rules delete hostile-client-ssh`, and retire the `CELLO_Adversary` registration.
 
 ## Directory node `gcp-use1` (us-east1) — DOD-NODE-DIR-GCP-1, applied 2026-07-28
 
