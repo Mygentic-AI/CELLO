@@ -260,9 +260,81 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
     expect(store.tierBTables()).toContain("directory_nodes");
     const nodeId = `${P}bothtiers`;
     await seedNode(nodeId, 1785200000000);
-    // The Tier-B body carries the heartbeat and NOT the identity columns.
+    // The Tier-B body carries the heartbeat + the `status` witness, and NOT the identity columns.
+    // `region` in particular must stay on the Tier-A side: it is what a peer must never be able to
+    // move, and the split is the reason it cannot.
     const served = (await store.serveTierB("directory_nodes", [nodeId]))[0].body as Record<string, unknown>;
-    expect(Object.keys(served).sort()).toEqual(["last_heartbeat_at", "node_id"]);
+    expect(Object.keys(served).sort()).toEqual(["last_heartbeat_at", "node_id", "status"]);
+    expect(served["status"], "the witness is read from the ROW, not defaulted in code").toBe("active");
+  });
+
+  // ── DOD-M15-FORKQUIET-1: the convergence verdict at the SELECT chokepoint ───────────────────
+  //
+  // Against the real schema, because the whole point is that ONE SELECT feeds both the version hash
+  // (advertise) and the served body (serve/apply). A stub cannot show those two agreeing.
+
+  it("a status change MOVES the advertised version — otherwise no pull is ever planned for it", async () => {
+    // `status` in `versionColumns` is what makes a disagreement discoverable at all. Without it the
+    // digests match, `planRound` skips the table, and two nodes disagreeing about whether a node is
+    // active never exchange a single frame about it.
+    const nodeId = `${P}statusver`;
+    await seedNode(nodeId, 1785200000000);
+    const before = (await store.tierBVersions("directory_nodes")).get(nodeId);
+    await pool.query(`UPDATE directory_nodes SET status='drained' WHERE node_id=$1`, [nodeId]);
+    const after = (await store.tierBVersions("directory_nodes")).get(nodeId);
+    expect(before).toBeDefined();
+    expect(after, "a status change must move the version hash").not.toBe(before);
+    // And the two encode paths agree on the changed row — the reason `status` rides the same SELECT.
+    const served = (await store.serveTierB("directory_nodes", [nodeId]))[0].body as DirectoryNodeHeartbeatRecord;
+    expect(encodeTierBVersion(DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC, served as unknown as Record<string, string>).versionHash)
+      .toBe(after);
+  });
+
+  it("a STALER peer heartbeat applies nothing and is NOT divergent — the false alarm, at the store", async () => {
+    // The production shape, against pg: our own row, which we rewrite every ~30s, pulled back from a
+    // peer holding a staler copy. `applied` is 0 and always will be; the verdict must not be.
+    const nodeId = `${P}quiet`;
+    await seedNode(nodeId, 1785200060000);
+    const res = await store.applyTierB("directory_nodes", [
+      { key: nodeId, body: { node_id: nodeId, status: "active", last_heartbeat_at: "1785200000000" } },
+    ]);
+    expect(res.applied, "the stale heartbeat must not be written").toBe(0);
+    expect(res.divergent, "and pulled-without-applied must NOT read as a fork").toBe(0);
+    const ms = (await pool.query(
+      `SELECT (EXTRACT(EPOCH FROM last_heartbeat_at)*1000)::bigint AS ms FROM directory_nodes WHERE node_id=$1`,
+      [nodeId],
+    )).rows[0].ms;
+    expect(String(ms), "the fresher local value stands").toBe("1785200060000");
+  });
+
+  it("a status disagreement IS divergent, and the peer's status is never written", async () => {
+    // The line that stops the fix from being a mute button, plus its counterbalance: the peer sends
+    // a FRESHER heartbeat (so the row is updated) and a different status (which must not be).
+    const nodeId = `${P}forked`;
+    await seedNode(nodeId, 1785200000000); // seeded 'active'
+    const res = await store.applyTierB("directory_nodes", [
+      { key: nodeId, body: { node_id: nodeId, status: "drained", last_heartbeat_at: "1785200060000" } },
+    ]);
+    expect(res.applied, "the fresher heartbeat still lands — replication is unchanged").toBe(1);
+    expect(res.divergent, "and the status disagreement is reported").toBe(1);
+    const row = (await pool.query(
+      `SELECT status, (EXTRACT(EPOCH FROM last_heartbeat_at)*1000)::bigint AS ms FROM directory_nodes WHERE node_id=$1`,
+      [nodeId],
+    )).rows[0];
+    expect(row.status, "a peer may never move our status").toBe("active");
+    expect(String(row.ms)).toBe("1785200060000");
+  });
+
+  it("REFUSES a body with no `status` — missing takes the same path as malformed", async () => {
+    // ABSENT IS NOT FINE. `undefined !== 'active'` would read as a fork, and a peer that simply
+    // omits the column would look identical to one that disagrees. Both are refused instead.
+    const nodeId = `${P}nostatus`;
+    await seedNode(nodeId, 1785200000000);
+    await expect(
+      store.applyTierB("directory_nodes", [
+        { key: nodeId, body: { node_id: nodeId, last_heartbeat_at: "1785200060000" } as unknown as DirectoryNodeHeartbeatRecord },
+      ]),
+    ).rejects.toThrow(/status must be a string, got undefined/);
   });
 
   // ── DOD-SIGNAL-REPLICATION-1: signal_records must actually apply ────────────────────────────
@@ -470,14 +542,19 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
       agent_id: id, paused: true, burned: false, reason: "pause", authorized_by_account: ACC, suspension_seq: 5, origin_node: "peer",
     };
     const applied = await store.applyTierB("agent_suspensions", [{ key: id, body: incoming }]);
-    expect(applied).toBe(1);
+    expect(applied.applied).toBe(1);
+    expect(applied.divergent, "a pull that moved the row settled it").toBe(0);
     const r = (await pool.query(`SELECT paused, suspension_seq, origin_node FROM agent_suspensions WHERE agent_id=$1`, [id])).rows[0];
     expect(r.paused).toBe(true);
     expect(Number(r.suspension_seq)).toBe(5);
     expect(r.origin_node).toBe("peer");
     // Re-applying the SAME record now converges to identical state → 0 changes (termination).
     const again = await store.applyTierB("agent_suspensions", [{ key: id, body: incoming }]);
-    expect(again).toBe(0);
+    expect(again.applied).toBe(0);
+    // The kill switch's verdict is UNCHANGED by DOD-M15-FORKQUIET-1: a fully-merged table still
+    // reports "nothing moved" as divergence, so a genuine `agent_suspensions` fork alarms exactly as
+    // it did before. Only `directory_nodes` judges on different evidence.
+    expect(again.divergent, "agent_suspensions keeps the pre-existing rule").toBe(1);
   });
 
   it("applyTierB inserts a suspension that is absent locally", async () => {
@@ -486,7 +563,8 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
       agent_id: id, paused: true, burned: false, reason: null, authorized_by_account: ACC, suspension_seq: 1, origin_node: "peer",
     };
     const applied = await store.applyTierB("agent_suspensions", [{ key: id, body: incoming }]);
-    expect(applied).toBe(1);
+    expect(applied.applied).toBe(1);
+    expect(applied.divergent, "a key we did not hold is convergence, not divergence").toBe(0);
     const r = (await pool.query(`SELECT paused, suspension_seq FROM agent_suspensions WHERE agent_id=$1`, [id])).rows[0];
     expect(r.paused).toBe(true);
     expect(Number(r.suspension_seq)).toBe(1);
