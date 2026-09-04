@@ -1412,7 +1412,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
       return notice!;
     };
     /** Clear the notice so the NEXT case is read on its own text, not on the previous case's row. */
-    const clear = async (): Promise<void> => { await connB.call("cello_dismiss", { session_id: sessionId }); };
+    const clear = async (): Promise<void> => { await connB.call("cello_dismiss", { cello_session_id: sessionId }); };
     const countLines = (event: string): number => daemonB.output.split("\n").filter((l) => l.includes(`"event":"${event}"`)).length;
     /**
      * ⚠️ `waitForLine` RESOLVES ON A LINE ALREADY IN THE BUFFER, which is correct for it and useless
