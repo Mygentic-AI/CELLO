@@ -457,6 +457,14 @@ describe("AeSyncService — libp2p-face wiring", () => {
     // And it does not ride the routine round log either — an `unconverged` entry that is always
     // present is the noise that made the alarm unreadable in the first place.
     expect(rounds.at(-1)![1].unconverged).toBeUndefined();
+    // THE QUIET MUST BE A HEALTHY ROUND'S QUIET. A mutation loop found this gap: revert the engine's
+    // push condition and the round throws before it can label the entry, the throw is contained as a
+    // per-table failure, and "zero fork_suspected" is satisfied by a table that stopped reconciling
+    // altogether. "It did not alarm" is a shadow; the table still working is the outcome.
+    expect(
+      dialLogger.events.filter(([e]) => e === "antientropy.round.table_failed").map(([, c]) => c.table),
+      "silence must not be the silence of a table that stopped reconciling",
+    ).toEqual([]);
     // The local copy is untouched: quieting the verdict must not quieten the MERGE.
     expect(dialStore.heartbeats.get("aws-use1")).toBe("1785200060000");
   });
