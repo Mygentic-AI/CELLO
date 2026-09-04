@@ -25,9 +25,10 @@ discovered that was deliberately not acted on.
 
 ## Entry 0 — milestone opened
 
-**2026-09-04.** M10C opened to carry new trust signal types, starting with X. Container chosen
-lightweight (Andre): a DoD, this journal, three parallel micro work orders, and a one-page procedure
-that defers to [[M15-PROCEDURE]] rather than copying it.
+**2026-09-04.** M10C opened to carry new trust signal types, starting with X: a DoD, this journal,
+three parallel micro work orders, and [[M10C-PROCEDURE]] — the review discipline refined on earlier
+milestones, ported in and rewritten for this one, so that everything an M10C session needs points at
+M10C and nothing else.
 
 **Design settled with Andre the same day, before any code**, and recorded in the DoD's pinned
 contracts rather than a discussion log, because these are the seams three parallel orders build

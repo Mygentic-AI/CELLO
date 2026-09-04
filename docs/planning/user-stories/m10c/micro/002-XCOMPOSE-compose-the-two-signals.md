@@ -14,8 +14,9 @@ description: >
 
 > ## THE RULES OF A MICRO WORK ORDER
 >
-> 1. **Read [[M10C-PROCEDURE]] and [[M15-PROCEDURE]] IN FULL before you start.** M15-PROCEDURE is
->    the working discipline and it binds you; M10C-PROCEDURE is the short list of deltas.
+> 1. **Read [[M10C-PROCEDURE]] IN FULL before you start.** It is the complete working discipline for
+>    this milestone and it binds you — the gate, the stop rules, the core loop, reviewer dispatch,
+>    the blocking invariants, cost discipline, and the made-to-fail requirement.
 >    **Do not read `M10C-DEFINITION-OF-DONE.md` or `M10C-BUILD-JOURNAL.md`** — this order carries
 >    everything you need from them, including the contracts you must not change.
 > 2. **MICRO means small.** One mission. Follow it to its end. **Never grow the mission.**

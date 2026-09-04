@@ -22,7 +22,7 @@ reviewer's verdict quoted in the journal) · 🅿️ parked with a trigger.
 
 ## Position relative to launch
 
-**M10C is OUTSIDE the M15 launch gate. Nothing here blocks launch.** By the standing test — a
+**M10C is OUTSIDE the launch gate. Nothing here blocks launch.** By the standing test — a
 prospective customer cannot get the core value, or loses trust — the launch intent is two agents
 connecting and communicating safely. A second social signal type is new capability. If Andre rules
 otherwise for a specific line, that ruling is recorded here at the top.
@@ -209,10 +209,11 @@ entire run. If either is dirty, the machinery was not generic and that is a find
 
 ## Tier 3 — the procedure debt this milestone pays
 
-### `DOD-M10C-PLAYBOOK-1` ❌ The Type Playbook is brought up to M15 standards
+### `DOD-M10C-PLAYBOOK-1` ❌ The Type Playbook is brought up to this milestone's standards
 
-[[M10-TYPE-PLAYBOOK]] is the runbook for adding a type and it predates everything M15 learned: no
-severity triage, no fail-loudly invariants, no reviewer dispatch, no made-to-fail requirement, and
+[[M10-TYPE-PLAYBOOK]] is the runbook for adding a type and it predates the review discipline now in
+[[M10C-PROCEDURE]]: no severity triage, no fail-loudly invariants, no reviewer dispatch, no
+made-to-fail requirement, and
 it still assumes browser extraction for external providers — which X disproves, since the profile
 comes from an authenticated API read in the portal process.
 
@@ -247,4 +248,3 @@ change to the envelope, the hash preimage, the directory, or the daemon.
 - [[M10-TYPE-PLAYBOOK]] — the runbook `DOD-M10C-PLAYBOOK-1` repays
 - [[M10-TRUST-SIGNAL-TAXONOMY]] — the type catalogue and class definitions
 - [[M10-TRUST-SIGNAL-STORAGE-AND-CREATION]] — spec-of-record for the envelope and the mint
-- [[M15-PROCEDURE]] — the working discipline M10C adopts wholesale
