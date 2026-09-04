@@ -302,3 +302,55 @@ commit:
 Gate: `pnpm run lint` 0 errors (8 pre-existing warnings, none from this unit), `pnpm run typecheck`
 clean, `npx vitest run test/x-screen.test.tsx test/x-mint-route.test.ts` → 39 passed.
 `git status --porcelain` clean in `cello-client` and `trustless-cello`.
+
+---
+
+## 003-XSCREEN — review verdict, findings fixed, unit CLOSED
+
+`cello-unit-reviewer`, one pass on Opus. Verdict quoted in full in the order's Review section.
+Headline: **SPEC: DEVIATIONS FOUND** (clause 8 against the wrong clock; clause 10's test proving the
+component rather than the page), **ERROR SUBSTITUTION FOUND [blocking]**, **HOLLOW TESTS FOUND
+[blocking]**, one LOW silent fallback, **REMOVALS PROVEN**, **NO COMPATIBILITY DEBT**.
+
+Twelve findings, all fixed, one commit each, pushed after each.
+
+**HIGH-1 is the one that justified the review, and it was invisible from inside this unit.** Order
+001 built two clocks on purpose: `x_read_log` records when X CHARGED us, `x_connections` records
+when a snapshot was STORED, and `checkXRefreshAllowed` gates on the later of the two — because X
+bills the moment `GET /2/users/me` returns, before the body is parsed. This screen and its refresh
+route each did their own arithmetic on the stored snapshot alone, which is strictly more permissive.
+
+The operator-visible shape: a read billed on day 8 that came back malformed leaves the snapshot at
+day 0. On day 9 the screen renders an armed **Refresh from X** button. The operator presses the one
+button whose entire purpose is that they never spend money without knowing — and is navigated out of
+the portal onto a raw JSON 429 for a week they already paid for. The route also told an operator
+with no stored snapshot that *"that read is not rate-limited"*, which can be false and is a claim
+about money. Fixed by deleting my arithmetic entirely: `x-refresh-window.ts` and `x-refresh.ts` are
+gone, both callers use `checkXRefreshAllowed`, and the window is now checked BEFORE the snapshot so
+that branch cannot make a claim the read log contradicts. Deleting my boundary tests with them is
+safe — 001's `x-oauth.test.ts` proves the same boundary against the real gate, across both clocks.
+
+**HIGH-2 and MED-5 were the same lesson twice: a test that renders a component is not a test of the
+page that uses it.** Clause 10 passed with the X row deleted from the Trust Signals page. `x/page.tsx`
+had no test at all, so the branch that re-expands a repeated query key — the only thing carrying a
+second tick through the round trip — could be removed with the suite green, and the operator's second
+choice would vanish from the preview and the mint together, consistently enough that nothing else
+would notice. Both now render the real page; both mutations redden.
+
+**MED-3 and MED-4 were error substitution in opposite directions.** The mint route asserted
+*"Nothing was notarized"* on a path where `x_anon` was already notarized AND recorded — a false claim
+about the notary, and "try again" mints a second copy rather than replacing it. The compose screen
+did the reverse: it destroyed all five of the composer's named causes into Next.js's generic crash
+page, on the one page carrying the Refresh button those messages tell the operator to press.
+
+The remaining LOWs: a catalogue bug rendering as a lead field; Mint clickable while a tick was still
+navigating; no correlation id on any response; an unasserted `signal_hashes`; a test escaper missing
+the apostrophe. LOW-11 (the mint submits to the first directory only) is pre-existing, copied from
+GitHub's callback as this order instructed, and is recorded under *Newly discovered* rather than
+fixed — the fix belongs to the shared submit path.
+
+**Gate at close:** `pnpm run lint` → 0 errors (8 pre-existing warnings, none from this unit);
+`pnpm run typecheck` → clean; `npx vitest run test/x-screen.test.tsx test/x-mint-route.test.ts` →
+**50 passed**; `git status --porcelain` clean in `cello-client` and `trustless-cello`.
+
+`003-XSCREEN` `status: complete`.

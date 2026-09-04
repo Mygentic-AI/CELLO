@@ -2,7 +2,7 @@
 name: 003-XSCREEN — The operator sees what they are about to say, and changes it
 type: micro-work-order
 date: 2026-09-04
-status: open
+status: complete
 description: >
   The compose screen: a four-column table of everything we hold, nothing ticked by default, the two
   claim texts rendering live below as ticks change, and two buttons — Mint (free) and Refresh from
@@ -168,7 +168,73 @@ LinkedIn; changing the Social section's existing GitHub row.
 
 ## Review
 
-*(Reviewer verdict, mutation record and gate output go here before `status:` flips to `complete`.)*
+Reviewed by `cello-unit-reviewer` on Opus, one pass, 2026-09-04. **Every finding is fixed, one
+commit each, pushed.** Verdict quoted verbatim:
+
+> - **SPEC: DEVIATIONS FOUND** — clause 8 is implemented against the wrong clock (HIGH-1,
+>   un-journaled, [blocking]); clause 10 is implemented but its test proves the component rather than
+>   the page (HIGH-2); clause 11 consequently over-reports for clause 10.
+> - **SILENT FALLBACKS FOUND** — one, LOW and unreachable today: `x-table-model.ts:69` substitutes
+>   "Named in the opening sentence" and an offered checkbox for a bullet entry with no renderer, where
+>   the composer throws loudly on the same shape. No HIGH, so nothing blocking on this line.
+> - **ERROR SUBSTITUTION FOUND** — [blocking]. Two named instances: the compose screen destroys all
+>   five of the composer's distinguished causes into Next.js's generic crash page, on the one page
+>   carrying the remedy those causes name (MED-4); and the mint route's 502/500 assert *"Nothing was
+>   notarized"* on a path where the anonymous signal is already notarized and recorded (MED-3). The
+>   routes' own error handling is otherwise exemplary — the directory's words survive, the parse error
+>   survives, and the five compose codes are each mapped to a distinct status.
+> - **HOLLOW TESTS FOUND** — [blocking]. Clause 10's test does **not** survive the revert test;
+>   `x/page.tsx` has no test at all, leaving the URL-flattening that carries a second tick unasserted
+>   and un-mutated. Every other new test **does** survive the revert test, and clauses 2, 5, 6, 7 and 9
+>   are unusually well armoured — I could not construct a passing wrong implementation for any of them.
+> - **REMOVALS PROVEN** — the two renames and the one deleted redirect parameter each verified by an
+>   exhaustive reference search across `src/` and `test/`, not by a single grep of the symbol name.
+> - **NO COMPATIBILITY DEBT** — none introduced. The one pre-existing item is named above.
+
+**HIGH-1 was the finding worth the review.** The screen and the refresh route each did their own
+arithmetic on `snapshot.readAt`, while the gate that actually decides — `checkXRefreshAllowed` —
+takes the LATER of two clocks, because X charges the moment `GET /2/users/me` returns and a read can
+be billed and then fail to become a snapshot. So a billed-then-failed read left an armed
+"Refresh from X" button on a week the operator had already paid for: click it and they are navigated
+out of the portal onto a raw JSON 429. The route also told an operator with no snapshot that
+"that read is not rate-limited", which can be false, and is about money. Three implementations of one
+rule collapsed to one; `x-refresh-window.ts` and `x-refresh.ts` are deleted.
+
+**Findings and disposition** — every one fixed:
+
+| Finding | Fix |
+|---|---|
+| HIGH-1 · Refresh armed against money already spent | both callers now use `checkXRefreshAllowed`; window checked before the snapshot so the no-snapshot branch cannot make a false billing claim |
+| HIGH-2 · clause 10 passed with the row deleted | the Trust Signals page is rendered, connected and not, with its position in Social asserted |
+| MED-3 · half-completed mint said "nothing was notarized" | mint runs one arm at a time; a partial failure names the arm that landed, its hash and the directory's words |
+| MED-4 · corrupt profile crashed the page carrying the remedy | `XComposeError` caught in the view; the composer's reason renders, Refresh stays reachable, Mint disarmed |
+| MED-5 · the repeated-key branch had no test | three tests on the compose page; dropping the branch reddens the first |
+| LOW-6 · a catalogue bug rendered as a lead field | the two cases separated; a bullet entry with no renderer is named as a bug and offers no tick |
+| LOW-7 · Mint clickable mid-tick | disabled during the navigation, when the props still hold the previous selection |
+| LOW-8 · preview/mint age drift | no code change; documented — the notarized claim is always true, only the preview is briefly stale |
+| LOW-9 · `signal_hashes` unasserted | kept as the liveness affordance, now asserted against what was submitted |
+| LOW-10 · no correlation id in responses | threaded into every mint and refresh response, success and refusal |
+| LOW-11 · mint submits to the first directory only | pre-existing, copied from GitHub as instructed — recorded under *Newly discovered*, not fixed here |
+| LOW-12 · test escaper omitted `'` | added, before a catalogue fragment carrying one makes the assertion vacuous |
+
+**Mutation record: 18 mutations, all reddening on assertions, none on a compile error.** Nine on the
+screen and table, eight on the mint, preview and routes, plus a revert test per HIGH/MED fix. Full
+detail in [[M10C-BUILD-JOURNAL]].
+
+The mutation pass found a defect in the test harness itself: the `fetch` double recorded calls and
+then delegated to the real `fetch`, so the mutation proving *"nothing here reaches X"* would itself
+have contacted `api.x.com` — a test spending real money to prove that tests do not spend real money.
+It now records the call, then throws.
+
+**Gate:**
+
+```
+pnpm run lint       → ✖ 8 problems (0 errors, 8 warnings)   [all pre-existing, none in this unit]
+pnpm run typecheck  → clean
+npx vitest run test/x-screen.test.tsx test/x-mint-route.test.ts
+                    → Test Files 2 passed (2) · Tests 50 passed (50)
+git status --porcelain → clean in cello-client and trustless-cello
+```
 
 ---
 
