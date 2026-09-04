@@ -55,3 +55,27 @@ everything costs the same penny as asking for a handle. About 1¢ per operator c
 balance, both of which are Andre's to create. No unit is blocked by it.
 
 ---
+
+---
+
+## Entry — DOD-M10C-XCOMPOSE-1 · clause checklist (written BEFORE implementation)
+
+Order: `micro/002-XCOMPOSE-compose-the-two-signals.md`. Session worked in `m10c-002/`, portal only.
+(The DoD and the rest of this journal were not read, per the order's rule 1 — this entry is appended
+blind at EOF and nothing above it was consulted.)
+
+| # | Clause | How it is proven |
+|---|---|---|
+| 1 | Both signals returned for any valid selection; types `x_anon` / `x_id`, `subject_kind: account` | direct assertion on both outputs |
+| 2 | Floor cannot be removed by ANY input | empty selection; selection that names every non-floor key; selection that names the floor keys themselves — age in both, handle + numeric id in `x_id` in all three |
+| 3 | A `never` field in the wrong list throws a NAMED error | `display_name` in `anon`; `handle` in `anon`; `x_user_id` in `anon` — error carries code + field + signal, never a silent drop |
+| 4 | `x_anon` carries no handle, display name, numeric id or profile URL | exhaustive: all 2^N subsets of the anon-eligible optional keys, forbidden substrings searched in the RAW payload bytes, not only in decoded keys |
+| 5 | Age computed live from `createdAt` vs `issuedAt` | same snapshot composed at two issue times a year apart → ages a year apart, in prose and in structured fields |
+| 6 | "read from X on" is `readAt`, absent when nothing optional is ticked | both directions; `read_at` also absent from the structured fields, so no date is attached to nothing |
+| 7 | Creation date at month granularity; exact timestamp nowhere | day/time substrings of `createdAt` searched in raw payload bytes of both signals |
+| 8 | One bullet per ticked field, catalogue order, formatted numbers; unticked contributes nothing | per-field bullet assertions + ordering assertion + absence assertions |
+| 9 | Both outputs pass `buildSubmission` and re-hash | mirrors `test/github.test.ts`'s envelope reconstruction and `hashTrustSignalEnvelope` re-derivation |
+| 10 | Each of 1–9 made to fail on purpose | mutation record appended in the closing entry |
+| 11 | lint + typecheck + smallest-scope tests | gate output in the closing entry |
+| 12 | `git status --porcelain` clean in `cello-client` and `trustless-cello` | asserted at close |
+| 13 | `cello-unit-reviewer`, every finding fixed, verdict quoted | verdict in the order's Review section and here |
