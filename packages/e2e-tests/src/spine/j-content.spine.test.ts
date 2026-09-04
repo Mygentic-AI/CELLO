@@ -1490,14 +1490,24 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     ).toBeUndefined();
 
     // ─── 3. cello_transcript SHOWS THE ENTRY, REDACTED ─────────────────────────────────────────
-    type Tx = { ok?: boolean; messages?: Array<{ sequence: number; direction: string; text: string; refusalReason?: string }>; quarantined_count?: number; quarantined_guidance?: string };
+    type Tx = { ok?: boolean; messages?: Array<{ sequence: number; direction: string; text: string; refusalReason?: string; withheld_guidance?: string }>; quarantined_count?: number; quarantined_guidance?: string };
     const tx = (await connB.call("cello_transcript", { cello_session_id: sessionId })) as Tx;
     expect(tx.ok, `B reads its transcript: ${JSON.stringify(tx).slice(0, 400)}`).toBe(true);
     const entry = (tx.messages ?? []).find((m) => m.direction === "quarantined");
     expect(entry, "the transcript must SAY a message was refused here — a hole is the evidence gap again").toBeDefined();
     expect(entry!.text, "the payload never travels on the transcript read").not.toContain(HAN);
     expectMatches(entry!.text, "it names the reason", /inbound_language_blocked/);
-    expectMatches(entry!.text, "and where the original is — Invariant 4: name the verb", /cello_quarantined/);
+    /**
+     * THE VERB IS IN A `*_guidance` KEY, NOT IN `text` — review F8, proven here over the wire.
+     *
+     * `vocabulary.ts` rewrites keys ending in `guidance` for the surface that asked, and nothing
+     * else. With the command in `text`, `cello transcript` printed an MCP tool name a terminal
+     * operator cannot type, while the sibling guidance on the same response was correctly rewritten
+     * — one response, two spellings, one of them unrunnable. This connection is MCP, so the MCP
+     * spelling is the correct one to see here.
+     */
+    expect(entry!.text, "text states the fact and names NO command").not.toContain("cello_quarantined");
+    expectMatches(entry!.withheld_guidance, "and the command lives where the rewrite can reach it", /cello_quarantined/);
     expect(tx.quarantined_count).toBe(1);
     expect(JSON.stringify(tx), "and no route through the transcript leaks the payload").not.toContain(FORGED_END);
 
