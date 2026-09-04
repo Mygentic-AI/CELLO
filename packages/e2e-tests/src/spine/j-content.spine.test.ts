@@ -58,6 +58,76 @@ const daemons: Proc[] = [];
 const dirs: string[] = [];
 const mcpConns: McpConn[] = [];
 
+/**
+ * ─── 028-PARKCONN — DEPOSIT, WAITING OUT THE ONE REFUSAL THAT CLEARS ON ITS OWN ─────────────────
+ *
+ * **The measured cause of this file's intermittent failures**, read three times on 2026-09-04:
+ * `{"ok":false,"reason":"standing_receiver_unavailable","cause":"standing_receiver_creating"}`.
+ *
+ * The daemon builds a REPLACEMENT standing receiver behind every new session, and again after a
+ * seal. That takes seconds, `getStandingReceiverNode()` returns nothing while it runs, and this
+ * file deposits the instant `cello_initiate_session` (DOD-MSG-7) or `cello_close_session`
+ * (DOD-MSG-8) resolves — straight into the window. `session-node-manager.ts` has named that window
+ * in a comment since M12-P12: *"the deposit is refused only in the seconds-long window while the
+ * sender's standing receiver rebuilds."*
+ *
+ * **Why the retry lives HERE and not in the daemon.** The raw `content_park_deposit` IPC has no
+ * production caller (see this file's header) — production parks through `#parkContent`, which
+ * already re-drives the deposit on four separate triggers. And `ipcCall`'s own timeout is 5s, so a
+ * wait inside the handler long enough to cover the window would time the CALLER out instead of
+ * answering it. The handler's job is to refuse with a cause; consuming that cause is the caller's.
+ *
+ * **It retries ONE cause and nothing else.** Any other refusal — a relay that cannot be reached, an
+ * offline agent, a bad signature — fails immediately with the whole response in the message. A
+ * daemon that regressed to the bare `standing_receiver_unavailable` label with no `cause` would not
+ * be retried either, which is what keeps this from swallowing the defect it was written for.
+ */
+const RECEIVER_WINDOW_MS = 20_000;
+/**
+ * The sender daemon's and the relay's own account of a failed deposit.
+ *
+ * The response alone says the dial failed and quotes the transport's message; it cannot say who
+ * closed the socket. `content.park.open.failed` carries the per-address reasons and the
+ * `dialOutcome` split (`all_addresses_failed` vs `dialed_then_lost`), and the relay's tail says
+ * whether it ever saw the connection — which is the difference between a relay that refused and
+ * something in front of it that never delivered the bytes.
+ */
+function depositDiag(sender?: Proc): string {
+  const lines = (p: Proc | undefined, re: RegExp, n: number) =>
+    (p?.output ?? "").split("\n").filter((l) => re.test(l)).slice(-n).join("\n") || "    (none)";
+  return (
+    `\n  sender daemon (content.park / dial):\n${lines(sender, /content\.park|dial|no_connection|standing_receiver/, 10)}` +
+    `\n  relay tail:\n${lines(cluster?.relay, /./, 10)}`
+  );
+}
+
+async function parkDeposit(
+  celloDir: string,
+  label: string,
+  params: Record<string, unknown>,
+  sender?: Proc,
+): Promise<{ ok?: boolean; reason?: string; cause?: string; guidance?: string }> {
+  const deadline = Date.now() + RECEIVER_WINDOW_MS;
+  let res: { ok?: boolean; reason?: string; cause?: string; guidance?: string };
+  let attempts = 0;
+  for (;;) {
+    attempts++;
+    res = (await ipcCall(celloDir, "content_park_deposit", params)) as typeof res;
+    if (res.ok === true) return res;
+    if (res.cause !== "standing_receiver_creating" || Date.now() >= deadline) break;
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  // `toMatchObject` prints only the keys it compared, so the response rides in the message — the
+  // first live failure said `expected {ok:false} to match {ok:true}` and hid the reason entirely.
+  expect(
+    res,
+    `deposit (${label}) must be ACCEPTED — it RESOLVED, which is not the same as ok. ` +
+      `After ${attempts} attempt(s) over ${Date.now() - (deadline - RECEIVER_WINDOW_MS)}ms the response was: ${JSON.stringify(res)}` +
+      depositDiag(sender),
+  ).toMatchObject({ ok: true });
+  return res;
+}
+
 beforeAll(async () => {
   // A THREE-node consortium, matching the pattern j-refresh/j-tofn/j-relaysig already use.
   //
@@ -433,29 +503,37 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
      * signed entry whose claimed hash does not describe what is sealed inside. That is a malicious
      * SENDER, not a malicious relay, and it is the case the recover path's cross-check is for.
      */
-    const dep = (args: Record<string, unknown>) =>
-      ipcCall(dirA, "content_park_deposit", {
+    /**
+     * ⚠️ **`ipcCall` RESOLVING IS NOT `ok`, AND THIS IS THE HOLE 019-PARKERROR FELL IN.** It rejects
+     * only when the IPC response carries an `error` field, so a handler answering
+     * `{ok:false, reason}` resolves EXACTLY like `{ok:true}`. All three deposits below used to
+     * discard the result, so a refused deposit went unnoticed here and surfaced four steps later as
+     * `expected +0 to be 1` — a count with no cause attached, and the misreading that had to be
+     * withdrawn in writing. `dep` now reads `ok` and says which deposit failed and why.
+     */
+    const dep = (label: string, args: Record<string, unknown>) =>
+      parkDeposit(dirA, label, {
         relayMultiaddr: cluster.relayMultiaddr,
         recipientPubkey: pubB,
         sessionId,
         senderAgentName: "agentA",
         ...args,
-      });
+      }, daemonA);
 
     // (1) HONEST — signed, and the claimed hash MATCHES the sealed content. Must be accepted.
     const honest = Buffer.from("honest recovered message");
-    await dep({ content: honest.toString("hex"), contentHash: contentHashHex(honest) });
+    await dep("1 honest", { content: honest.toString("hex"), contentHash: contentHashHex(honest) });
     // (2) TAMPER — a properly SIGNED entry carrying real content, claiming the hash of DIFFERENT
     //     content. Unseals fine, authenticates fine, and then the cross-check fails →
     //     content_hash_mismatch (the ONE desync). Reachable only because the signature does not
     //     bind the content.
     const realContent = Buffer.from("the actual sealed bytes");
-    await dep({ content: realContent.toString("hex"), contentHash: contentHashHex(Buffer.from("a different message entirely")) });
+    await dep("2 tamper", { content: realContent.toString("hex"), contentHash: contentHashHex(Buffer.from("a different message entirely")) });
     // (3) RECOVERY-FAILURE — not a valid seal at all, so it stays a RAW `ciphertext:` deposit. This
     //     one must NOT be signed: the point is that `openContentSeal` fails on the outer layer,
     //     before there is any envelope to decode or authenticate, which is why it is a skip and not
     //     a desync. Signing it would move the failure to a different check and prove nothing.
-    await dep({ ciphertext: Buffer.from(randomBytes(160)).toString("hex"), contentHash: contentHashHex(Buffer.from("whatever")) });
+    await dep("3 unsealable", { ciphertext: Buffer.from(randomBytes(160)).toString("hex"), contentHash: contentHashHex(Buffer.from("whatever")) });
 
     const rec = (await ipcCall(dirB, "content_park_recover", { relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB })) as { ok?: boolean; recovered?: number; pulled?: number };
     expect(rec.ok).toBe(true);
@@ -584,7 +662,10 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
       new RegExp(`"event":"session\\.salt\\.agreed"[^\\n]*"sessionId":"${sessionId}"`),
       15_000,
     );
-    await ipcCall(dirA, "content_park_deposit", {
+    // `ipcCall` resolves for `{ok:false, reason}` exactly as it does for `{ok:true}` — read `ok`, or
+    // a refused deposit reappears as "expected +0 to be 1" on the dedup assertion below with the
+    // cause nowhere in the message (019-PARKERROR read three refusals as three successes this way).
+    await parkDeposit(dirA, "the duplicate that must dedup", {
       relayMultiaddr: cluster.relayMultiaddr,
       recipientPubkey: pubB,
       contentHash: hashHex,
@@ -592,7 +673,7 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
       sessionId,
       senderAgentName: "agentA",
       content: Buffer.from(msgBytes).toString("hex"),
-    });
+    }, daemonA);
     const rec = (await ipcCall(dirB, "content_park_recover", { relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB })) as { ok?: boolean; pulled?: number };
     expect(rec.ok).toBe(true);
     expect(rec.pulled).toBe(1);
@@ -1034,14 +1115,18 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // `session_committed` rather than a desync or an unseal failure — and an unsigned deposit was
     // being refused for a fourth reason entirely (`unsigned_envelope`) before the sealed-session
     // guard ran. The assertion below named a guard that was never reached.
-    await ipcCall(dirA, "content_park_deposit", {
+    // Read `ok`: `ipcCall` resolves identically for a refusal, and a straggler that never reached the
+    // relay proves nothing about the sealed-session guard it is supposed to be refused by. The seal
+    // just above is itself a standing-receiver rebuild, so this deposit lands in the window
+    // 028-PARKCONN measured — `parkDeposit` waits it out and fails loudly on anything else.
+    await parkDeposit(dirA, "the post-seal straggler", {
       relayMultiaddr: cluster.relayMultiaddr,
       recipientPubkey: pubB,
       contentHash: contentHashHex(straggler),
       sessionId,
       senderAgentName: "agentA",
       content: straggler.toString("hex"),
-    });
+    }, daemonA);
 
     const rec = (await ipcCall(dirB, "content_park_recover", {
       relayMultiaddr: cluster.relayMultiaddr, recipientPubkey: pubB,
@@ -1085,7 +1170,10 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
      * line cannot: it was kept, it is readable, and the annex holds the decrypted content rather
      * than the raw CBOR envelope.
      */
-    const tx = (await connB.call("cello_get_transcript", { cello_session_id: sessionId })) as {
+    // ⚠️ `cello_get_transcript` is the DAEMON IPC name; the MCP tool is `cello_transcript` (the shim
+    // maps one to the other). Calling the IPC name over an MCP connection is not a missing feature,
+    // it is a tool that does not exist — which reads as a product regression in the failure.
+    const tx = (await connB.call("cello_transcript", { cello_session_id: sessionId })) as {
       ok?: boolean;
       messages?: Array<{ content?: string }>;
       post_seal_annex?: Array<{ content?: string }>;
