@@ -2,7 +2,7 @@
 name: 002-XCOMPOSE — The portal composes both claim texts from the operator's ticks
 type: micro-work-order
 date: 2026-09-04
-status: open
+status: complete
 description: >
   A pure function turning a stored X profile snapshot plus a set of ticked fields into the two
   ComposedSignals, x_anon and x_id. The mandatory floor is structural — it is not a checkbox, so no
@@ -213,10 +213,114 @@ functions; the wording itself, which is fixed above and is Andre's to change, no
 
 ## Review
 
-*(Reviewer verdict, mutation record and gate output go here before `status:` flips to `complete`.)*
+**Reviewer:** `cello-unit-reviewer`, one pass, on Opus. Verdict verbatim:
+
+> **SPEC: DEVIATIONS FOUND** — the `display_name` fragment is pinned as renderable and is not
+> implemented; the deviation is real, forced by the pinned snapshot, correctly handled as a refusal,
+> but declared only in a code comment. Write it into the order's *Newly discovered* and the journal
+> before `status:` flips. [blocking on paperwork, not on code]
+>
+> **SILENT FALLBACKS FOUND** — HIGH-2 (non-finite counts notarized as `NaN followers`) is blocking.
+> MEDIUM-1 and MEDIUM-2 are the same shape at lower danger.
+>
+> **ERRORS NAME THEIR CAUSE** — five distinct codes, `field` and `signal` carried, nothing collapsed.
+> HIGH-3 is an affordance defect (a false remedy), not error substitution.
+>
+> **HOLLOW TESTS FOUND** — HOLLOW-1 (a numeric-id deanonymizer passes the exhaustive anonymity test)
+> and HOLLOW-2 (the anon guard's call site fails the revert test) are both blocking. Every other new
+> test survives the revert test.
+>
+> **REMOVALS PROVEN** — n/a, nothing deleted.
+>
+> **NO COMPATIBILITY DEBT.**
+>
+> Not a rubber stamp: the two blocking findings and the two hollow tests are all one theme — the
+> anonymity guarantee is asserted more strongly in comments than the code enforces — which is the
+> failure class this milestone's claim-truth lens names, sitting in the one payload that gets hashed
+> and shown to strangers.
+
+**Every finding fixed, one commit each, pushed after each.**
+
+| Finding | What it would have done to an operator | Fixed in |
+|---|---|---|
+| HIGH-1 + HOLLOW-1 + HOLLOW-2 | The anonymous signal could carry the operator's X user id as a CBOR *number* — invisible to the byte search the exhaustive test used, so a complete deanonymizer passed green. Nested, array and bare-handle leaks likewise. And deleting the guard's call site broke nothing, so nothing proved it was installed. | `09c3100` |
+| HIGH-2 | A profile missing a count would have minted the bullet "NaN followers" and the field `followers: null`, signed and hashed, with nothing reporting a problem. | `94884e8` |
+| HIGH-3 | The display-name refusal told the operator to reconnect X — advice that can never work, and the first thing they would try. | `6c35d2d` |
+| MEDIUM-1 | Milliseconds stored where seconds were meant would have claimed the figures were read from X in the year 58,000. | `e9fa769` |
+| MEDIUM-2 | A creation date in the future was clamped and rendered "less than a month old"; a zone-less timestamp could shift the anchoring month. | `e56abf1` |
+| LOW-1 | A future `lead` + `optional` catalogue entry would have shown a checkbox that discloses nothing when ticked. | `255a373` |
+| LOW-2 | The duplicate `XProfileSnapshot` will not retire itself — recorded below rather than fixed here. | *Newly discovered* |
+
+**The anonymity fix, specifically.** The guard now has two nets. The exact one is differential: the
+anonymous arm is recomposed from a snapshot whose handle and user id are replaced by sentinels, and
+any difference between the two field maps means a fragment read the operator's identity — whatever
+its type, however deep, whether or not it survives as searchable text. The second is a recursive
+name-and-value scan for shapes that do not vary with identity. The bare handle is still never matched
+as a substring of prose, and now for a reason that holds: `posts` and `profile` are real X handles,
+and a guard that refuses an honest mint while blaming a catalogue bug gets deleted. A test mints
+successfully for four operators whose handles are ordinary English words.
+
+### Mutation record — made to fail, and confirmed to fail for the right reason
+
+Each applied to the real tree, vitest run, then reverted.
+
+| Mutation | Result |
+|---|---|
+| both arms typed `x_anon` | 4 clause-1 tests red |
+| floor made conditional on a tick | clause-2 probes 1 and 2 red (probe 3 ticks the floor keys, so it cannot detect a checkbox floor on its own — stated rather than glossed) |
+| `never` throw removed | all 3 clause-3 refusal tests red |
+| unknown-key throw removed | clause-3 unknown-field test red |
+| boolean rendered as true when the snapshot says false | clause-3 lie test red |
+| `handle.anon` flipped `never` → `locked` | 12 tests red; failure message read `x_anon_identity_leak: … it carried the field "handle"` — the *reason* checked, not just the redness |
+| age derived from `snapshot.readAt` | clause-5 "ages a year" test red |
+| `read_at` and the read line switched to the mint time | clause-6 tests red |
+| read line emitted with no bullets | clause-6 absence tests red |
+| creation date rendered as the full ISO timestamp | clause-7 test red |
+| bullets iterated in reverse catalogue order | clause-8 order test red |
+| thousands separators dropped | 5 clause-8 tests red |
+| `issuedAt` made non-integer | clause-9 `buildSubmission` test red |
+| **guard call site deleted** (post-fix) | 6 anonymity tests red — the revert test HOLLOW-2 named |
+
+The floor, age and anonymity mutations were re-run against the refactored tree after every fix, and
+still redden.
+
+### Gate
+
+- `pnpm run lint` — 0 errors, 6 warnings, none in these files.
+- `pnpm run typecheck` — clean on a tree containing this unit alone (verified at `d90404b`). On
+  current `main` it reports 5 errors, all `Cannot find module '@/server/x/store'`, all in `003`'s
+  files, all waiting on `001` to land. **None in this unit's files.** This is the expected parallel
+  compile dependency the procedure describes, not a defect.
+- `pnpm exec vitest run test/x-compose.test.ts test/github.test.ts test/mint.test.ts` — 69 passed
+  (46 of them this unit's).
+- `git status --porcelain` clean in `trustless-cello`; there is no `cello-client` checkout in this
+  working directory and nothing in this unit touches one.
 
 ---
 
 ## Newly discovered
 
-*(One or two lines each. Do not act on them.)*
+*(Recorded, not acted on.)*
+
+- **`display_name` is pinned in the catalogue but has no source in the pinned snapshot.** The table
+  gives it a fragment (`display name "Acme Agent"`) and marks it `optional` for `x_id`, but
+  `XProfileSnapshot` carries no display name and order 001 does not capture X's `name` field. The
+  contract was not changed: ticking it is refused with a named error saying the portal stores no
+  display name and that reconnecting will not supply one. Andre's call whether 001 should capture
+  `name` or the row should leave the catalogue.
+- **The duplicate `XProfileSnapshot` will not retire itself.** 002 declares it because 001 had not
+  landed. Structural typing means that when 001 lands and adds a field, this copy still compiles and
+  still cannot see it — so the `display_name` refusal above would become permanent by accident with
+  nothing going red. Whichever order integrates 001 needs an explicit line item to make one file
+  re-export the other.
+- **Two notes for `003`, both free.** Its screen can call `entry.render(snapshot)` before the operator
+  ticks anything, and grey out a row the snapshot cannot back — so the refusal arrives before a failed
+  mint rather than after. And the two arms compose sequentially, so a selection with problems in both
+  surfaces only the `x_anon` error; pre-checking both arms would show the operator everything at once.
+- **The anonymous signal's figures are themselves identifying, and it is called anonymous.**
+  `4,210 followers · 312 verified · follows 180 · 9,877 posts · 64 lists` pins down an X account far
+  more precisely than a creation timestamp does — which is the very sharpness the month-granularity
+  rule exists to blunt. Default-off and the operator's own tick are the right design; the gap is that
+  nothing tells them. Either the compose screen says plainly that exact figures may identify the
+  account, or the anon column bands them ("more than 1,000 followers"). Andre's call — it is a
+  wording and disclosure decision, not a coding one.

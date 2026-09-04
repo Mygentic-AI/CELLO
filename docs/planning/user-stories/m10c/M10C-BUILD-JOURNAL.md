@@ -140,3 +140,81 @@ catalogue's own reason printed in the row.
 Clauses 4, 5, 6, 7 and 9 are proven in `test/x-mint-route.test.ts`, which cannot run until
 `001-XPROFILE`'s snapshot store lands — it is the only unresolved import left. Their mutation record
 follows in part 2.
+
+---
+
+## Entry — DOD-M10C-XCOMPOSE-1 · closed
+
+**What was built.** Two files in `cello-portal`, nothing anywhere else (the zero-bump contract held —
+no edit was needed in `cello-client` or `trustless-cello` to land a new signal type).
+
+- `src/server/trust/x-catalogue.ts` — the pinned field table as exported DATA: key, label, per-signal
+  eligibility, and one renderer per field producing the bullet AND its structured payload fields
+  together, so the prose and the machine-readable payload cannot disagree about the same fact. Order
+  003 renders its tick table from this same structure, which is the point.
+- `src/server/trust/x-compose.ts` — `composeXSignals`, pure, on the pinned signature.
+
+**The three properties held structurally rather than by validation.** The floor is added because the
+catalogue says `locked`, so no input expresses its absence and there is no rule to bypass. The age is
+derived at every mint from `issuedAt` while the figures carry `readAt`, so a free re-mint ages
+honestly without asserting that old numbers were counted today. And the anonymous payload is checked
+before encoding by a differential: the arm is recomposed from an identity-redacted snapshot and any
+difference means a fragment read the operator's handle or user id.
+
+**Reviewer verdict** (`cello-unit-reviewer`, one pass, Opus), verbatim:
+
+> **SPEC: DEVIATIONS FOUND** — the `display_name` fragment is pinned as renderable and is not
+> implemented; the deviation is real, forced by the pinned snapshot, correctly handled as a refusal,
+> but declared only in a code comment. Write it into the order's *Newly discovered* and the journal
+> before `status:` flips. [blocking on paperwork, not on code]
+>
+> **SILENT FALLBACKS FOUND** — HIGH-2 (non-finite counts notarized as `NaN followers`) is blocking.
+> MEDIUM-1 and MEDIUM-2 are the same shape at lower danger.
+>
+> **ERRORS NAME THEIR CAUSE** — five distinct codes, `field` and `signal` carried, nothing collapsed.
+> HIGH-3 is an affordance defect (a false remedy), not error substitution.
+>
+> **HOLLOW TESTS FOUND** — HOLLOW-1 (a numeric-id deanonymizer passes the exhaustive anonymity test)
+> and HOLLOW-2 (the anon guard's call site fails the revert test) are both blocking. Every other new
+> test survives the revert test.
+>
+> **REMOVALS PROVEN** — n/a, nothing deleted.
+>
+> **NO COMPATIBILITY DEBT.**
+>
+> Not a rubber stamp: the two blocking findings and the two hollow tests are all one theme — the
+> anonymity guarantee is asserted more strongly in comments than the code enforces — which is the
+> failure class this milestone's claim-truth lens names, sitting in the one payload that gets hashed
+> and shown to strangers.
+
+**Every finding fixed, one commit each, pushed after each:** `09c3100` (HIGH-1 + both hollow tests),
+`94884e8` (HIGH-2), `6c35d2d` (HIGH-3), `e9fa769` (MEDIUM-1), `e56abf1` (MEDIUM-2), `255a373`
+(LOW-1). LOW-2 is an integration line item, recorded in the order rather than fixed here.
+
+**The one that mattered.** The guard meant to keep identity out of `x_anon` examined only STRING
+values at the top level. The X user id is numeric, so a fragment emitting it as a number walked
+straight past — and as a CBOR integer the digits never appear in the payload bytes, so the exhaustive
+anonymity test's byte search did not see it either. A complete deanonymizer passed the whole suite
+green. Worse, deleting the guard's call site broke nothing, so nothing proved it was even installed.
+Fixed with the differential above plus a recursive name-and-value scan, and the tests now attack the
+guard at the mint by patching a catalogue renderer — delete the guard's line and six tests go red.
+
+**Mutation record.** 14 mutations, each applied to the real tree, vitest run, then reverted; each
+reddened its intended clause. The `handle.anon` flip was checked for its failure REASON
+(`x_anon_identity_leak: … it carried the field "handle"`), not merely for going red. The floor, age
+and anonymity mutations were re-run against the refactored tree after every fix and still redden.
+Full table in the order's Review section.
+
+**Gate.** `pnpm run lint` 0 errors (6 warnings, none in these files). `pnpm run typecheck` clean on a
+tree containing this unit alone (`d90404b`); on current `main` it reports 5 errors, all
+`Cannot find module '@/server/x/store'`, all in 003's files, all waiting on 001 — the expected
+parallel compile dependency, none in this unit. Tests: 69 passed across
+`x-compose` + `github` + `mint`, 46 of them this unit's. `git status --porcelain` clean in
+`trustless-cello`.
+
+**Discovered and deliberately not acted on** — four items, recorded in the order's *Newly discovered*
+and reported to Andre: the pinned catalogue offers `display_name` but the pinned snapshot has no
+field to render it from; the duplicate `XProfileSnapshot` will not retire itself when 001 lands; two
+free improvements for 003 (pre-check a row before the operator ticks it, and pre-check both arms so
+one mint surfaces both errors); and the observation that the anonymous signal's exact figures are
+themselves identifying while nothing on the screen says so — a disclosure-wording decision, Andre's.
