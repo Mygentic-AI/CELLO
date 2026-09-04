@@ -2,7 +2,7 @@
 name: Walling off an agent — tiers, evidence, and the knock ledger
 type: discussion
 date: 2026-09-04
-topics: [reachability, tiers, contacts, allowlist, abuse-bounds, evidence, quarantine, inbox, reporting, notifications, cello-reporting]
+topics: [reachability, tiers, contacts, allowlist, abuse-bounds, evidence, quarantine, inbox, reporting, notifications, cello-reporting, persistence]
 description: Two poles — an agent that wants no callers and doesn't care who called, and one that wants no callers but does care — and why the current tier bounds can serve neither. The delivery cap is also the evidence budget, and there is no per-peer record of who keeps knocking.
 ---
 
@@ -243,28 +243,70 @@ operator to report to `CELLO_Reporting` until that agent is reachable. Until the
 evidence is retained and reporting is not yet available. Anyone implementing the knock ledger will
 want to write the reporting sentence — and must not.
 
-### ⚠️ What this costs Phase 1 if ignored — counters cannot become rates
+### The persistence policy — settled 2026-09-04
 
-**Not building the analytics now is fine. Storing a shape that cannot grow into them is not.**
+Andre, 2026-09-04:
 
-A per-peer record of *(first seen, last seen, count, last reason)* can answer *"this key has knocked
-612 times."* It **cannot** answer *"how many in the last hour"* — the individual timestamps are gone,
-and no amount of later work recovers them. Rate windows over a counter are not a query change; they
-are a schema change plus a period where the answer is wrong because the history does not exist.
+> *Kind of thorny, because on one hand we don't want the database to grow huge — but most of this
+> stuff is so small that huge would have to be a humongous amount of communication. So right now in
+> that document, what's the persistence policy? Dies on `cello logout`, or persists in the database?*
 
-So the decision is due in Phase 1 even though the feature is not:
+**It persists in the database.** There is no middle tier to choose: `cello logout` sends a shutdown
+to the daemon — it stops the process and touches the lock and socket, and deletes no data. So the
+only two options are in-memory, which dies whenever the daemon stops (and logout stops it), or the
+SQLCipher file, which survives logout, login and reboot.
 
-- **Aggregate counters** — cheapest, smallest, permanently rate-blind.
-- **Bounded per-knock rows, aggregated on read** — a row per attempt with a retention bound, summed
-  into the counters the summary shows. Rate windows then fall out later as a query, with real
-  history behind them.
+In-memory is what the current 20-entry refusal list does, and it is why that list cannot support a
+report. A deploy agent that gets restarted would lose the exact pattern the ledger exists to prove.
 
-Given that the whole point of the ledger is to feed a report, and that a report's strongest claim is
-*"612 times in six hours"* rather than *"612 times ever"*, **bounded per-knock rows are the
-recommendation.** The bound keeps it finite; the timestamps keep it useful.
+#### Size is not the constraint. Attacker-controlled write volume is.
 
-This is the migration trap in its usual shape: the cheap version works at launch and the expensive
-part is not the rewrite, it is that the data to backfill was never kept.
+A per-knock row is roughly 150–200 bytes, call it ~300 with index and page overhead:
+
+| Knocks | Storage |
+|---|---|
+| 1,000 | ~300 KB |
+| 100,000 | ~30 MB |
+| 1,000,000 | ~300 MB |
+
+Ordinary use never approaches this, and the instinct that "huge would take a humongous amount of
+communication" is correct **for ordinary use**.
+
+**But this is not a table that grows with the operator's usage — it is a table a hostile peer writes
+to by knocking.** One peer at one knock per second is 86,400 rows a day, about 26 MB/day,
+indefinitely, entirely under their control. This is the same hazard the existing cap alarm already
+names: *"the peer controls the retry rate, so an unbounded alarm hands them the daemon's ERROR log."*
+A per-knock ledger hands them the disk.
+
+#### The shape: per-peer time buckets
+
+**One row per (agent, peer, hour) carrying a count — not one row per knock.**
+
+- **Attacker effort buys no storage.** Knocking harder increments a counter; it does not add rows.
+- **Bounded by time, which the operator controls,** rather than by the peer's behaviour.
+- **Worst case is small and knowable.** One peer knocking without pause for a year is 8,760 rows,
+  about 2.6 MB. That is the ceiling, not the typical case.
+- **It answers the stated question exactly.** *"How many from this key in the last hour, or six
+  hours"* is a sum over buckets. Hour granularity is the granularity the question was asked in, so
+  nothing is lost.
+
+#### Why the shape had to be decided now, even though the analytics are not being built now
+
+**Not building rate windows now is fine. Storing a shape that cannot grow into them is not.**
+
+A record of *(first seen, last seen, count)* answers *"this key has knocked 612 times."* It **cannot**
+answer *"how many in the last hour"* — the individual timestamps are gone and no later work recovers
+them. Rate windows over a flat counter are not a query change; they are a schema change plus a period
+where the answer is wrong because the history does not exist.
+
+This is the migration trap in its usual shape: the cheap version works at launch, and the expensive
+part is not the rewrite — it is that the data to backfill was never kept.
+
+Buckets avoid both failure modes at once: bounded like a counter, queryable like an event log.
+
+**Superseded:** an earlier draft of this document recommended bounded per-knock rows aggregated on
+read. That is rate-capable but leaves write volume under the peer's control, which is the wrong
+party to hand it to. Buckets are strictly better and cost nothing the per-knock version bought.
 
 ## Deliberately not recommended
 
@@ -285,10 +327,11 @@ part is not the rewrite, it is that the data to backfill was never kept.
    kept — key, time, count, reason. Payload retention is not part of the wall; at `0/0` there is no
    payload, and that is the intended shape rather than a limitation.
 
-1. **Ledger retention, and the bound on per-knock rows.** Records grow with the number of distinct
-   keys that ever knocked, and — if per-knock rows are kept — with the number of attempts. Cap by
-   peer count, by age, by rows-per-peer, or some combination? A key that knocked once two years ago
-   and a key knocking now are not worth the same storage.
+1. **How far back the buckets go.** Storage is bounded per peer per hour, so the remaining question
+   is retention depth and whether old buckets roll up (hourly → daily beyond some age) or are simply
+   dropped. A key that knocked once two years ago and a key knocking now are not worth the same
+   storage. Also: how many distinct keys are kept at all, since the peer count is the one dimension
+   a hostile party can still grow — by rotating identities.
 2. **What the summary shows by default.** Top N callers plus a tail count — what is N, and is the
    tail collapsed by key or just counted?
 3. **The stranger greeting wording.** Copy, and therefore Andre's.
