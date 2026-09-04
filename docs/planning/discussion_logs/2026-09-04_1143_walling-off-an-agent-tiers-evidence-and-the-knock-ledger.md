@@ -378,20 +378,82 @@ party to hand it to. Buckets are strictly better and cost nothing the per-knock 
   daemon has no handler for an inbound connection request. It is a type and a fixture, not a
   feature, and it will read to the next person as a half-built allowlist.
 
-## Open — the operator's call
+## Open — each with a recommendation
 
-~~1. The deployer's evidence budget.~~ **Settled 2026-09-04:** metadata is the floor and is always
-   kept — key, time, count, reason. Payload retention is not part of the wall; at `0/0` there is no
-   payload, and that is the intended shape rather than a limitation.
+**Every open item below carries a proposed answer.** An open item stated without one is not a
+decision request, it is unfinished work handed over.
 
-1. **How far back the buckets go.** Storage is bounded per peer per hour, so the remaining question
-   is retention depth and whether old buckets roll up (hourly → daily beyond some age) or are simply
-   dropped. A key that knocked once two years ago and a key knocking now are not worth the same
-   storage. Also: how many distinct keys are kept at all, since the peer count is the one dimension
-   a hostile party can still grow — by rotating identities.
-2. **What the summary shows by default.** Top N callers plus a tail count — what is N, and is the
-   tail collapsed by key or just counted?
-3. **The stranger greeting wording.** Copy, and therefore Andre's.
+~~The deployer's evidence budget.~~ **Settled 2026-09-04:** metadata is the floor and is always kept
+— key, time, count, reason. Payload retention is not part of the wall; at `0/0` there is no payload,
+and that is the intended shape rather than a limitation.
+
+### 1. How deep the buckets go, and what happens to old ones
+
+**Recommend: hourly buckets for 7 days, rolled up to daily beyond that, daily kept for 90 days, then
+dropped.**
+
+The reporting question changes shape with age. In the last few days you want *"how many in the last
+six hours"* — hour granularity, because that is what shows a burst. Past a week nobody asks that; the
+only useful fact is *"this key has been at it for months,"* which a daily row carries just as well.
+
+Ceiling per peer: 168 hourly rows + 90 daily rows ≈ 258 rows ≈ **80 KB for a peer knocking without
+pause for three months.** Bounded, knowable, and it never needs a judgement call at write time.
+
+### 2. How many distinct keys are kept — and the rotation case
+
+**Recommend: cap distinct peers by evicting least-recently-seen, protect any peer above a knock
+threshold from eviction, and add ONE agent-level counter for the rotation case.**
+
+Identity rotation is the real attack on this table, and it is worth being plain that **per-peer
+tracking cannot solve it by design.** A key that knocks once and never returns is indistinguishable
+from a legitimate one-off; ten thousand fresh keys knocking once each are indistinguishable from ten
+thousand strangers. Worse, plain LRU eviction lets an attacker *flush* the ledger — rotate enough
+keys and the peer you actually care about ages out.
+
+Two parts, therefore:
+
+- **Protect what matters from eviction.** Evict least-recently-seen, but never evict a peer whose
+  count is above a threshold. Rotation then costs the attacker the persistence they rotated to hide,
+  and cannot be used to erase a peer already flagged.
+- **Catch rotation in aggregate, not per peer.** A single agent-level counter — *refusals from
+  never-before-seen keys, per hour* — is `O(1)` storage and is the only thing that actually detects a
+  rotating swarm. Ten thousand keys knocking once each is invisible per-peer and obvious here.
+
+Suggested numbers to start: cap 10,000 distinct peers; protect any peer with 10 or more knocks.
+Both are settings, not constants, so a wrong first guess is cheap.
+
+### 3. What the summary shows by default
+
+**Recommend: top 5 callers by count in the last 24 hours, each with its key, then "and N other keys"
+as a bare number — with the lifetime total shown alongside the window total.**
+
+Five is enough for the case that motivated this — *"615, and 612 are from the same address"* is
+legible in one row, and five leaves room for a handful of repeat callers without becoming a list. The
+tail stays a **count, not a collapsed key list**, because enumerating tail keys is exactly what makes
+the summary long again and trains the operator to stop reading it.
+
+Show both totals, because *"612 today"* and *"612 ever"* are very different facts and either one
+alone misleads: the first reads as an active attack when it may be three years of background noise,
+the second reads as background noise when it may be an attack that started an hour ago.
+
+### 4. The stranger greeting wording
+
+Copy, and therefore Andre's — but here are three to pick from or edit rather than a blank page. All
+three replace the current one-word reply, **"Dispatched."**, which tells a caller nothing and invites
+nothing.
+
+- **(a) Plain and neutral.** *"This agent only accepts conversations from approved contacts. If you
+  think you should be one, say who you are in a single message and close the session — the operator
+  will read it."*
+- **(b) Shorter, warmer.** *"Not accepting new conversations right now. Leave one message saying who
+  you are and why, and I'll pass it on."*
+- **(c) Minimal, for the walled deployer** — where the honest answer is that no message will be read
+  at all. *"This agent does not accept conversations from unapproved contacts."*
+
+**Recommend (a) for the personal agent and (c) for the deployer.** They are different agents with
+different truths: (a) invites the introduction the personal agent needs, and (c) does not promise a
+read that will never happen. Using (a) on the walled deployer would be the worse error — inviting a
+message the operator has configured the agent never to accept.
 
 ## References
 
