@@ -2,7 +2,7 @@
 name: Walling off an agent — tiers, evidence, and the knock ledger
 type: discussion
 date: 2026-09-04
-topics: [reachability, tiers, contacts, allowlist, abuse-bounds, evidence, quarantine, inbox, reporting]
+topics: [reachability, tiers, contacts, allowlist, abuse-bounds, evidence, quarantine, inbox, reporting, notifications]
 description: Two poles — an agent that wants no callers and doesn't care who called, and one that wants no callers but does care — and why the current tier bounds can serve neither. The delivery cap is also the evidence budget, and there is no per-peer record of who keeps knocking.
 ---
 
@@ -114,21 +114,66 @@ aimed wrong by default.
 
 **Split the one number into three things that are currently entangled, and do the ledger first.**
 
-### Phase 1 — The knock ledger
+### Phase 1 — The knock ledger, and a notification class that never disturbs
 
-A durable per-(agent, counterparty) record: first seen, last seen, count, last reason. Surfaced in
-the inbox. Content-free by construction.
+**A refused caller never leaves nothing behind.** Andre, 2026-09-04:
+
+> *I don't think it should maintain nothing. If the walled deployer is being contacted but it's
+> always refusing because it's zero sessions, zero bytes, then we should at least maintain the
+> metadata records — the public key, time, etc.*
+
+So metadata retention is the **floor**, not a tier of service. At `0 sessions / 0 bytes` the caller
+never speaks, and there is no payload to argue about — but the fact of the call, the key that made
+it, and when, are always kept.
+
+A durable per-(agent, counterparty) record: first seen, last seen, count, last reason. Content-free.
 
 This is the piece that serves **both poles with one mechanism**, which is why it goes first:
 
 - The deployer, walled to zero, gets *"this key has knocked 47 times"* and nothing else. That is the
-  "minimal record" — evidence of contact, not contact.
+  minimal record — evidence of contact, not contact.
 - The personal agent gets the same line, plus whatever the caller left.
-- It is the durable home for the pubkey, which today survives only in a 20-entry in-memory list.
+- It is the durable home for the caller's key, which today survives only in a 20-entry in-memory
+  list.
 - It is safe by construction: no payload, so no screening surface and no injection path.
+- It unblocks reporting. A report needs *"this key, this many times, over this window"* — which
+  nothing can currently produce.
 
-It also unblocks reporting. A report needs *"this key, this many times, over this window"* — which
-nothing can currently produce.
+#### The notification class: low priority means it never disturbs
+
+> *Provide a kind of low-priority notification. Never disturbs you, but tells you if you check your
+> inbox: you have 56 low-priority notifications — or you have 615, and 612 are from the same public
+> address.*
+
+Define it by what it must **not** do, because this codebase has a history of records leaking into
+agent context by being shaped like work:
+
+- **Never rings the doorbell.** No push, no wake, no Telegram ping. Pull-only, seen when the operator
+  looks.
+- **Never counts toward unread.** It is not a message and must not inflate anything that reads as
+  one.
+- **Never reaches agent context unasked.** A refused knock is not a to-do item.
+
+#### Present the concentration, not the list
+
+**615 notifications is noise. "612 of them are from one key" is the finding.** The aggregation is
+the product here, not a compressed rendering of it. A flat list of 615 rows trains the operator to
+stop looking, which is the same failure the per-session refusal dedup was built to avoid.
+
+So the inbox section is a summary: the total, then the top callers by count with their keys, then
+the long tail as a number. That shape reads the same at 6 and at 6,000, and the one-key-dominates
+case — the abuse case — is legible at a glance rather than being something the operator has to
+notice by scrolling.
+
+It also gives the whitelist loop its natural surface: the key is right there in the summary row, so
+*"this one is the person I gave my address to"* becomes a promotion, and *"this one has hit me 612
+times"* becomes a report.
+
+⚠️ **Implementation warning.** `cello_check_notifications` returns a flat object assembled at
+several distinct `return` sites. A section added to one and missed on another is exactly the
+`DOD-M12B-INBOX-TRUTH-1` defect — `refused_session_requests` was present on one branch and absent on
+the other, so an agent with any ended-unread history silently stopped being told who it had turned
+away. Every return path gets the new section, or none does.
 
 **Depends on nothing.** Do it before making zero reachable, because zeroing sessions today throws
 away the only surface that holds the caller's key.
@@ -174,11 +219,15 @@ introduction. Configuration only, and the wording is the operator's call.
 
 ## Open — the operator's call
 
-1. **The deployer's evidence budget.** Content-free ledger only, or should a walled agent also retain
-   the payload of anything a stranger managed to send? The first is cheaper and has no injection
-   surface; the second gives a stronger abuse report.
-2. **Ledger retention.** Per-peer counters grow with the number of distinct keys that ever knocked.
-   Cap by peer count, by age, or both?
+~~1. The deployer's evidence budget.~~ **Settled 2026-09-04:** metadata is the floor and is always
+   kept — key, time, count, reason. Payload retention is not part of the wall; at `0/0` there is no
+   payload, and that is the intended shape rather than a limitation.
+
+1. **Ledger retention.** Per-peer counters grow with the number of distinct keys that ever knocked.
+   Cap by peer count, by age, or both? A key that knocked once two years ago and a key knocking now
+   are not worth the same row.
+2. **What the summary shows by default.** Top N callers plus a tail count — what is N, and is the
+   tail collapsed by key or just counted?
 3. **The stranger greeting wording.** Copy, and therefore Andre's.
 
 ## References
@@ -187,5 +236,6 @@ introduction. Configuration only, and the wording is the operator's call.
 `#quarantineRefusedContent`, `refused_sessions` schema, `isAutoAccept`;
 `agent-settings-keys.ts` — `validateSettingValue`; `contacts-tier-migration.ts` — `DEFAULT_TIER_BOUNDS`;
 `inbound-sessions.ts` — the inbound refusal path and cap alarm;
-`daemon.ts` — `STRANGER_TEXT`; `notification-handlers.ts` — the inbox refusal list.
+`daemon.ts` — `STRANGER_TEXT`; `notification-handlers.ts` — the inbox refusal list and its
+multiple return sites (`DOD-M12B-INBOX-TRUTH-1`).
 `DOD-M15-REFUSEDEVIDENCE-1` (closed 2026-09-04) for the evidence/delivery budget collision.
