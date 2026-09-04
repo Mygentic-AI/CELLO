@@ -411,8 +411,15 @@ unsalted-hash and portal-database causes are all green: `j-spine` **7/7**, `j-co
 
 **What is left is ONE row.** After Decision #16 took documents out of the gate, this lane's only
 remaining in-gate failure is **`j-suspend-tofn` — the kill switch**. Ruling C then took the kill
-switch out of the gate too (`DOD-M15-SUSPEND-UNTESTED-1`, POST-LAUNCH BACKLOG). **Whether that
-leaves this line with anything still inside the gate is Andre's to say — it is not flipped here.**
+switch out of the gate too (`DOD-M15-SUSPEND-UNTESTED-1`, POST-LAUNCH BACKLOG).
+
+> **🟡 HELD OPEN DELIBERATELY — ruled by Andre 2026-09-04: *"leave as a reminder that the kill switch
+> is untested."*** Every failure this line tracked is green, out of gate, or owned elsewhere, so on
+> the arithmetic it could close. It does not, because closing it would remove the last visible marker
+> that **we have no passing test that threshold-refusal works under the threshold we actually ship**
+> — the coverage gap `DOD-M15-SUSPEND-UNTESTED-1` records, where "no test" and "passing test" look
+> identical from a suite summary. **Do not close this line on the count.** It closes when the kill
+> switch has a test that can fail, not when the other rows go green.
 
 - **Out of gate, unfixed, and NOT to be read as passing:** the document journeys (`j-documents` 7,
   `j-stale-session` 1, `j-multiplayer` 4).
@@ -2022,6 +2029,10 @@ The guidance does not merely under-inform — it instructs an action that cannot
 ### `DOD-M15-SUSPEND-UNTESTED-1` — threshold-refusal has NO test under the threshold we actually ship
 **POST-LAUNCH under the frozen gate (§0z.4).** A COVERAGE gap in a security control, filed because
 "no test" and "passing test" look identical from a suite summary.
+
+> **📌 `DOD-M15-SPINERED-1` IS HELD OPEN FOR THIS LINE** (Andre, 2026-09-04). Every other failure in
+> the evidence lane is green, out of gate, or owned elsewhere; SPINERED stays 🟡 so this gap keeps a
+> visible marker in a tier rather than only in the backlog. Closing this closes that.
 
 - **The group is 2-of-4, not 2-of-3** — the client holds a FROST share
   (`frost-threshold-signer.ts`: `{ min: threshold, max: participants + 1 }`, *"+1 for the client"*).

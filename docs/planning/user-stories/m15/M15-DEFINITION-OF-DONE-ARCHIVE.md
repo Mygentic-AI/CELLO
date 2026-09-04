@@ -5218,6 +5218,40 @@ permanently and that was the urgent case.
 >
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
+> **📎 RE-FILED HERE 2026-09-04 on Andre's ruling.** The spec text below is this line's own, and it
+> had been sitting under `DOD-M15-EPHEMERAL-REVIVAL-1` — the line split out of it — since this line
+> closed. Moved verbatim; nothing reworded. It is the ORIGINAL specification, so read it under the
+> corrections above it and under Decisions Carried #6 and #8, which supersede its last two bullets.
+
+Relay-audit Decision 5(b), with the PQ hook built in from the start.
+- Live content today is plaintext inside libp2p's Noise session. Confidentiality is real, but it is
+  **libp2p's** key agreement over **libp2p's** ephemeral transport keys, so **CELLO cannot upgrade
+  its own confidentiality guarantee** — PQ migration would happen on libp2p's timeline with libp2p's
+  algorithm choices.
+- **Urgent rather than later:** the threat is harvest-now-decrypt-later. Every cross-NAT
+  conversation is relayed today, therefore recordable at fixed endpoints today, and adding the layer
+  later does not protect traffic already sent.
+- **Per-session ephemeral handshake**, not static-static. Each side mints a fresh keypair per
+  session, agrees a session key, destroys the ephemerals at close. **Static-static would void forward
+  secrecy** — a key derived only from long-term identity keys is the same key forever, so anyone who
+  ever obtains an identity key decrypts every conversation that agent ever had. That is strictly
+  worse than today, and [[design-problems]] already claims forward secrecy as structural.
+- **The derivation accepts an additional shared secret from day one**, before there is a PQ
+  contribution to put in it. Hybrid PQ then becomes mixing a second agreed secret into the same
+  derivation — an addition, not a rewrite. Omitting the hook defeats the entire reason for the work.
+- **⚠️ "One agreement, two outputs" WAS WRONG — corrected by Andre 2026-08-23, before SEALWIRE
+  encoded anything.** The envelope key and the content-hash salt are TWO INDEPENDENT VALUES agreed in
+  the SAME exchange — not two outputs of one derivation.
+  **Why the original was wrong, recorded so nobody rebuilds the coupling:** they are unrelated goals
+  that merely both need a shared secret. The envelope key stops the relay reading messages in flight
+  and MUST be destroyed at close. The salt stops anyone holding stored hashes from confirming a
+  guessed message and MUST survive for the life of the session. **Deriving both from one secret ties
+  "must be forgotten" to "must be kept forever"** — and every consequence previously flagged (salt
+  epochs, per-leaf epoch attribution, lockstep switching) was a symptom of that single coupling, not
+  a real requirement.
+  Keep the MOMENT, drop the DERIVATION: one round trip, two independent values.
+- The parked-content seal (X25519 + HKDF + AES-256-GCM) is the working in-tree pattern to extend.
+
 ---
 
 ### `DOD-M15-EPHEMERAL-AUTH-1` — ✅ The session ephemeral is bound to the agent's identity
@@ -5287,7 +5321,10 @@ harvest-now threat the line names — and NOT an active on-path relay.
 ---
 
 ### `DOD-M15-EPHEMERAL-REVIVAL-1` — ⬇️ OUT OF GATE (Andre 2026-08-24) · was ❌ A revived session RE-KEYS
-> **📎 Note added at move time, 2026-09-04 — an observation, not an edit.** Everything from *“Relay-audit Decision 5(b), with the PQ hook built in from the start”* onward is `DOD-M15-KEYAGREE-1`'s original spec text, which was left sitting under this heading when that line was closed. It is moved here verbatim rather than re-filed, because re-filing it would be an edit.
+> **📎 RE-FILED 2026-09-04 on Andre's ruling.** This entry used to carry, below its own bullets, the
+> block beginning *“Relay-audit Decision 5(b), with the PQ hook built in from the start”* — which is
+> `DOD-M15-KEYAGREE-1`'s original spec text, orphaned under this heading when that line closed. It has
+> been moved verbatim to `DOD-M15-KEYAGREE-1` in this file, where it belongs. Nothing was reworded.
 
 Split from `DOD-M15-KEYAGREE-1` (review F5, ruled in Decisions Carried #5).
 - CELLO sessions survive daemon restarts; the ephemeral secret is deliberately NOT persisted, so a
@@ -5297,35 +5334,6 @@ Split from `DOD-M15-KEYAGREE-1` (review F5, ruled in Decisions Carried #5).
   reads as reconnecting to the directory or revalidating a session, and it is neither.
 - **Do not "fix" this by persisting the ephemeral.** That is the option Decisions Carried #5 rules
   out, and the reason is that key material in a backup is unrecoverable once written.
-
-Relay-audit Decision 5(b), with the PQ hook built in from the start.
-- Live content today is plaintext inside libp2p's Noise session. Confidentiality is real, but it is
-  **libp2p's** key agreement over **libp2p's** ephemeral transport keys, so **CELLO cannot upgrade
-  its own confidentiality guarantee** — PQ migration would happen on libp2p's timeline with libp2p's
-  algorithm choices.
-- **Urgent rather than later:** the threat is harvest-now-decrypt-later. Every cross-NAT
-  conversation is relayed today, therefore recordable at fixed endpoints today, and adding the layer
-  later does not protect traffic already sent.
-- **Per-session ephemeral handshake**, not static-static. Each side mints a fresh keypair per
-  session, agrees a session key, destroys the ephemerals at close. **Static-static would void forward
-  secrecy** — a key derived only from long-term identity keys is the same key forever, so anyone who
-  ever obtains an identity key decrypts every conversation that agent ever had. That is strictly
-  worse than today, and [[design-problems]] already claims forward secrecy as structural.
-- **The derivation accepts an additional shared secret from day one**, before there is a PQ
-  contribution to put in it. Hybrid PQ then becomes mixing a second agreed secret into the same
-  derivation — an addition, not a rewrite. Omitting the hook defeats the entire reason for the work.
-- **⚠️ "One agreement, two outputs" WAS WRONG — corrected by Andre 2026-08-23, before SEALWIRE
-  encoded anything.** The envelope key and the content-hash salt are TWO INDEPENDENT VALUES agreed in
-  the SAME exchange — not two outputs of one derivation.
-  **Why the original was wrong, recorded so nobody rebuilds the coupling:** they are unrelated goals
-  that merely both need a shared secret. The envelope key stops the relay reading messages in flight
-  and MUST be destroyed at close. The salt stops anyone holding stored hashes from confirming a
-  guessed message and MUST survive for the life of the session. **Deriving both from one secret ties
-  "must be forgotten" to "must be kept forever"** — and every consequence previously flagged (salt
-  epochs, per-leaf epoch attribution, lockstep switching) was a symptom of that single coupling, not
-  a real requirement.
-  Keep the MOMENT, drop the DERIVATION: one round trip, two independent values.
-- The parked-content seal (X25519 + HKDF + AES-256-GCM) is the working in-tree pattern to extend.
 
 ---
 
