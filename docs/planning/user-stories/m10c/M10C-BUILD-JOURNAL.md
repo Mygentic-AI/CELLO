@@ -56,8 +56,6 @@ balance, both of which are Andre's to create. No unit is blocked by it.
 
 ---
 
----
-
 ## Entry — DOD-M10C-XCOMPOSE-1 · clause checklist (written BEFORE implementation)
 
 Order: `micro/002-XCOMPOSE-compose-the-two-signals.md`. Session worked in `m10c-002/`, portal only.
@@ -79,3 +77,34 @@ blind at EOF and nothing above it was consulted.)
 | 11 | lint + typecheck + smallest-scope tests | gate output in the closing entry |
 | 12 | `git status --porcelain` clean in `cello-client` and `trustless-cello` | asserted at close |
 | 13 | `cello-unit-reviewer`, every finding fixed, verdict quoted | verdict in the order's Review section and here |
+
+---
+
+## 003-XSCREEN — clause checklist, written before implementation (2026-09-04)
+
+Source: `micro/003-XSCREEN-compose-screen-and-mint.md` (DOD-M10C-XSCREEN-1). Expanded from its
+Definition of Done. This is what the unit reviewer receives.
+
+| # | Clause | How it is proven |
+|---|---|---|
+| 1 | Operator with a stored snapshot sees the table, **every catalogue row present, nothing ticked** | Render the screen with an empty selection; assert one row per catalogue entry and zero `checked` attributes in the markup |
+| 2 | `never` fields have **no checkbox in that column** | Structural: assert the anon cell for a `never` field contains no `<input>` at all — not that it carries `disabled` |
+| 3 | `locked` fields are shown as always-included and **cannot be unticked** | Assert no `<input>` for a `locked` cell either, and that the selection parser drops `locked`/`never` keys arriving from the URL |
+| 4 | **Preview changes when a tick changes and matches what a mint of that selection produces** | Build the view model at two selections; assert the two rendered previews differ AND each equals the `claim` decoded from `composeXSignals`' payload for that same selection |
+| 5 | **Mint route ignores values in the request body; reads the snapshot from storage** | POST a body carrying `followers: 99000` alongside the keys; assert the composed payload carries the STORED follower count |
+| 6 | A selection naming a `never` field is refused with a **named reason** | POST `display_name` in `anon`; assert 400 with a reason naming the field and the column, and that nothing was submitted |
+| 7 | Both signals submitted, **recorded**, delivered — in that order — and recorded even with **no addressable agent** | Record call order into an array across both signals; assert `submit → record → deliver` per signal, and with `agents: []` assert `record` still ran twice |
+| 8 | A refresh inside the 7-day window is refused and **the button says when it unlocks** | Pure-window test either side of the boundary; route returns the unlock instant; screen renders the unlock date instead of an armed button |
+| 9 | **Zero X calls** from loading the page, ticking, or minting | A `fetch` double installed globally records every call; assert none has an `api.x.com` / `x.com` host across all three acts |
+| 10 | Trust Signals page shows an **X row in Social**, connected and unconnected | Render the row component both ways; connected links to the compose screen, unconnected offers Add pointing at the OAuth start |
+| 11 | Each of 1–10 made to fail on purpose | Mutation record recorded below at close, naming the mutation and the reason it reddened |
+| 12 | `pnpm run lint` and `pnpm run typecheck` pass; tests at smallest scope | Gate output quoted at close |
+| 13 | `git status --porcelain` clean in `cello-client` and `trustless-cello` | Checked at close; the only `trustless-cello` edits are this journal and the order file |
+| 14 | Reviewed by `cello-unit-reviewer`, every finding fixed, verdict quoted | Verdict quoted in the order's Review section, `status:` flipped in the same commit |
+
+**Known red on arrival, by design:** this unit imports the catalogue and `composeXSignals` from
+`002-XCOMPOSE` and the snapshot store from `001-XPROFILE`, neither merged at the time of writing.
+Creating those modules locally is forbidden — it produces the duplicate catalogue 002 exists to
+prevent. Pure model, selection parsing and the refresh window are therefore written against an
+injected catalogue so they can be proven today; the clauses that need the real composer are proven
+after the merge.
