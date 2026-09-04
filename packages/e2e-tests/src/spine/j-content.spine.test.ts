@@ -449,7 +449,10 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
         senderAgentName: "agentA",
         ...args,
       })) as { ok?: boolean; reason?: string; guidance?: string };
-      expect(res, `deposit (${label}) must be ACCEPTED — it resolved, which is not the same as ok`).toMatchObject({ ok: true });
+      // The whole response goes in the message: `toMatchObject` prints only the keys it compared
+      // ("2 matching properties omitted"), so a bare match hides the `reason` and `guidance` that
+      // are the entire reason this assertion exists.
+      expect(res, `deposit (${label}) must be ACCEPTED — it resolved, which is not the same as ok. Response: ${JSON.stringify(res)}`).toMatchObject({ ok: true });
       return res;
     };
 
