@@ -346,6 +346,12 @@ yet in an operator's hands.
   read as a message that never arrives with no error anywhere they can see, so it is worth a look —
   but it belongs to whoever owns the park path, not to this unit.
 
+  **It already has a home: `DOD-M15-SPINERED-1`** ("The multi-process evidence lane is HALF RED, and
+  nobody knew"), which is the milestone's open 🟡 and which records `j-content` as **10/10 green**
+  after its four deposit-side hash defects were closed. Today the file is **10 passed / 3 failed of
+  13**. Filed against that line rather than opened as a new item, so the count of things this unit
+  spawned stays at one.
+
 **Recorded at creation, NOT part of this unit:**
 
 - **Should the standing receiver have accepted this connection at all?** Andre, 2026-09-03: *"their
