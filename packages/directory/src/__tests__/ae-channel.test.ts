@@ -19,7 +19,7 @@ import type { ConsortiumManifest } from "@cello-protocol/protocol-types";
 import {
   runAeDialer, serveAeResponder, type AeWire, type AeNodeIdentity,
 } from "../ae-channel.js";
-import type { AeStoreView, TierARecord, TierBRecord } from "../anti-entropy-engine.js";
+import type { AeStoreView, TierARecord, TierBRecord, TierBApplyResult } from "../anti-entropy-engine.js";
 import { computeTableDigest } from "../set-reconciliation.js";
 import { tierBTableDigest } from "../ae-round.js";
 import { encodeTierARecord, AGENT_REVOCATIONS_SPEC } from "../ae-table-encoders.js";
@@ -128,16 +128,18 @@ class MemStore implements AeStoreView {
     }
     return n;
   }
-  applyTierB(_t: string, records: readonly TierBRecord[]): number {
+  applyTierB(_t: string, records: readonly TierBRecord[]): TierBApplyResult {
     let n = 0;
+    let divergent = 0;
     for (const rec of records) {
       const inc = rec.body as SuspensionRecord;
       const ex = this.suspensions.get(inc.agent_id);
       const merged = ex ? mergeSuspension(ex, inc) : inc;
-      if (!ex || JSON.stringify(merged) !== JSON.stringify(ex)) n++;
+      const moved = !ex || JSON.stringify(merged) !== JSON.stringify(ex);
+      if (moved) n++; else divergent++;
       this.suspensions.set(inc.agent_id, merged);
     }
-    return n;
+    return { applied: n, divergent };
   }
 }
 

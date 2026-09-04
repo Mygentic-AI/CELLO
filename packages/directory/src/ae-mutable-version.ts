@@ -16,9 +16,13 @@
  *    only paused/burned/reason/authorized_by_account/suspension_seq/origin_node move it.
  *  - agent_presence INCLUDES `updated_at` (its merge is wall-clock LWW), so a newer write is seen.
  *  - directory_nodes INCLUDES `last_heartbeat_at` — that column IS both the value and the LWW
- *    ordering key, so there is no second timestamp to include or exclude. It carries NONE of
- *    `region`/`endpoint`/`status`: region belongs to the same table's Tier-A spec, and the other two
- *    replicate nowhere.
+ *    ordering key, so there is no second timestamp to include or exclude — and `status`, which the
+ *    merge deliberately never reconciles (DOD-M15-FORKQUIET-1). A column in the version hash that
+ *    the merge does not move is normally a defect: it makes two nodes pull each other forever over
+ *    a row they cannot converge. Here that is the POINT — a status disagreement is unresolvable and
+ *    must keep alarming until a human fixes it, and without the column in the hash no pull is ever
+ *    planned and the disagreement is never discovered at all. `region` belongs to the same table's
+ *    Tier-A spec and `endpoint` replicates nowhere.
  *
  * Representation normalization (load-bearing — the version hash is compared ACROSS nodes, so it
  * must not depend on how each node's driver typed the value). The mutable tables have columns pg
@@ -75,9 +79,11 @@ export const PRESENCE_VERSION_SPEC: TierBVersionSpec = {
 };
 
 /**
- * directory_nodes — the per-node liveness heartbeat (DOD-M15-HEARTBEAT-1). Merge-relevant set
- * matches directory-node-heartbeat-merge.ts (last_heartbeat_at) + the node_id key.
- * `last_heartbeat_at` IS included: the merge is wall-clock LWW, as presence's is.
+ * directory_nodes — the per-node liveness heartbeat (DOD-M15-HEARTBEAT-1) plus the `status` witness
+ * (DOD-M15-FORKQUIET-1). Merge-relevant set matches directory-node-heartbeat-merge.ts.
+ * `last_heartbeat_at` IS included: the merge is wall-clock LWW, as presence's is. `status` is
+ * included so a disagreement on it plans a pull and is therefore VISIBLE — the merge pins it to the
+ * receiving node's own value and never writes it, so no peer can move it.
  *
  * The same table also has a Tier-A spec, and that is deliberate rather than an oversight. The two
  * tiers carry DISJOINT columns of one row: Tier A owns the immutable identity (`node_id`, `region`)
@@ -89,7 +95,7 @@ export const PRESENCE_VERSION_SPEC: TierBVersionSpec = {
 export const DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC: TierBVersionSpec = {
   table: "directory_nodes",
   key: ["node_id"],
-  versionColumns: ["node_id", "last_heartbeat_at"],
+  versionColumns: ["node_id", "status", "last_heartbeat_at"],
 };
 
 export const TIER_B_SPECS: readonly TierBVersionSpec[] = [

@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect } from "vitest";
-import { runAntiEntropyRound, type AeStoreView, type TierARecord, type TierBRecord } from "../anti-entropy-engine.js";
+import { runAntiEntropyRound, type AeStoreView, type TierARecord, type TierBRecord, type TierBApplyResult } from "../anti-entropy-engine.js";
 import { computeTableDigest } from "../set-reconciliation.js";
 import { tierBTableDigest } from "../ae-round.js";
 import { encodeTierARecord, AGENT_REVOCATIONS_SPEC } from "../ae-table-encoders.js";
@@ -56,17 +56,24 @@ class MemStore implements AeStoreView {
     }
     return inserted;
   }
-  applyTierB(_t: string, records: readonly TierBRecord[]): number {
+  applyTierB(_t: string, records: readonly TierBRecord[]): TierBApplyResult {
     let changed = 0;
+    let divergent = 0;
     for (const rec of records) {
       const incoming = rec.body as SuspensionRecord;
       const existing = this.suspensions.get(incoming.agent_id);
       const merged = existing ? mergeSuspension(existing, incoming) : incoming;
       // Changed iff the merge-relevant content moved (mirrors the pg store's version-hash check).
-      if (!existing || JSON.stringify(merged) !== JSON.stringify(existing)) changed++;
+      const moved = !existing || JSON.stringify(merged) !== JSON.stringify(existing);
+      if (moved) changed++;
+      // agent_suspensions' merge reconciles every column it carries, so the only thing a pull can
+      // fail to settle is that our copy already dominated — DIVERGENT_IF_NOTHING_MOVED in the pg
+      // store, and it must be modelled here or the engine's verdict is proven against a stub that
+      // does not behave like the thing it stands in for.
+      if (!moved) divergent++;
       this.suspensions.set(incoming.agent_id, merged);
     }
-    return changed;
+    return { applied: changed, divergent };
   }
 
   // suspension_seq is BIGINT-as-string for the version hash (recordHash forbids raw number).
@@ -177,7 +184,7 @@ describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
       // that cannot say what is wrong cannot be acted on, and one that is always on stops being
       // read at all, which is precisely how the next REAL fork gets missed.
       expect(res.unconverged, "the fork signature must carry the table it fired for").toEqual([
-        { tier: "A", table: "agent_revocations", planned: 1, pulled: 1, applied: 0 },
+        { tier: "A", table: "agent_revocations", planned: 1, pulled: 1, applied: 0, divergent: 1 },
       ]);
     }
   });
@@ -205,7 +212,7 @@ describe("DOD-AE-APPEND-1/MUTABLE-1: two-node convergence", () => {
     expect(res.tierAApplied).toBe(1); // the new one landed
     // Still exactly one entry, and it is the fork — the applied row must not appear.
     expect(res.unconverged).toEqual([
-      { tier: "A", table: "agent_revocations", planned: 2, pulled: 2, applied: 1 },
+      { tier: "A", table: "agent_revocations", planned: 2, pulled: 2, applied: 1, divergent: 1 },
     ]);
   });
 });
@@ -332,7 +339,7 @@ class TwoTableStore implements AeStoreView {
     this.appliedOrder.push(t);
     return records.length;
   }
-  applyTierB(): number { return 0; }
+  applyTierB(): TierBApplyResult { return { applied: 0, divergent: 0 }; }
 }
 
 describe("apply ORDER follows the LOCAL registry, not the peer's advertisement", () => {

@@ -70,8 +70,26 @@ export interface AeStoreView {
   serveTierB(table: string, keys: readonly string[]): MaybePromise<readonly TierBRecord[]>;
   /** Apply pulled Tier-A records (insert-if-absent by natural key). Returns rows INSERTED. */
   applyTierA(table: string, records: readonly TierARecord[]): MaybePromise<number>;
-  /** Apply pulled Tier-B records (atomic per-key merge). Returns rows whose version CHANGED. */
-  applyTierB(table: string, records: readonly TierBRecord[]): MaybePromise<number>;
+  /** Apply pulled Tier-B records (atomic per-key merge). See `TierBApplyResult`. */
+  applyTierB(table: string, records: readonly TierBRecord[]): MaybePromise<TierBApplyResult>;
+}
+
+/**
+ * What one Tier-B apply achieved: how many rows CHANGED, and how many are still divergent.
+ *
+ * The two are separate answers and the second cannot be derived from the first (DOD-M15-FORKQUIET-1).
+ * `applied - pulled` was the fork verdict until 2026-09-04, and for an LWW table it is meaningless:
+ * a node rewrites its own `directory_nodes.last_heartbeat_at` every ~30s, so a dialer always holds a
+ * fresher copy of its own row than any peer does — the row is pulled every round, the merge
+ * correctly confirms the local copy already won, nothing applies, and `fork_suspected` fired at
+ * ERROR every three minutes indefinitely on a healthy fleet. Only the store knows which of a table's
+ * columns a disagreement can actually be resolved on, so the store answers.
+ */
+export interface TierBApplyResult {
+  /** Rows whose version hash MOVED — what actually landed. Termination is still `pulled === 0`. */
+  applied: number;
+  /** Rows this round did NOT bring into agreement — the fork alarm's input, per table. */
+  divergent: number;
 }
 
 /** The outcome of a round. Termination = pulled 0; a repeating `pulled > 0 && applied === 0` is
@@ -108,14 +126,16 @@ export interface RoundResult {
    * diffing them, because nothing in the log said. An alarm that cannot say what is wrong cannot be
    * acted on; one that is always on stops being read, which is how the next real fork gets missed.
    *
-   * READ THE TIER: the two mean different things and conflating them is what makes this alarm
-   * ambiguous. For **Tier-A** a planned record is one whose hash we do not hold, so fetching it and
-   * inserting nothing means the same natural key carries different content — a genuine fork that
-   * insert-if-absent can never resolve. For **Tier-B** `applied` counts rows whose VERSION MOVED, so
-   * a merge that correctly confirms the local copy already won reports pulled-without-applied and is
-   * perfectly healthy. A Tier-B entry here is therefore not by itself evidence of divergence.
+   * `divergent` IS THE VERDICT — `pulled > applied` is not (DOD-M15-FORKQUIET-1). For **Tier-A** they
+   * coincide: a planned record is one whose hash we do not hold, so fetching it and inserting nothing
+   * means the same natural key carries different content, a genuine fork insert-if-absent can never
+   * resolve. For **Tier-B** they do not: `applied` counts rows whose VERSION MOVED, and a merge that
+   * correctly confirms the local copy already won moves nothing and is perfectly healthy — which is
+   * why `directory_nodes` raised a permanent false fork alarm from the moment its timer-driven
+   * heartbeat joined the sync set. The store answers `divergent` per table, and an entry lands here
+   * ONLY when it is non-zero, so this field appearing at all means something.
    */
-  unconverged: Array<{ tier: "A" | "B"; table: string; planned: number; pulled: number; applied: number }>;
+  unconverged: Array<{ tier: "A" | "B"; table: string; planned: number; pulled: number; applied: number; divergent: number }>;
 }
 
 /**
@@ -260,7 +280,12 @@ export async function runAntiEntropyRound(
       tierAPulled += records.length;
       tierAApplied += applied;
       if (records.length > applied) {
-        unconverged.push({ tier: "A", table, planned: hashes.length, pulled: records.length, applied });
+        unconverged.push({
+          tier: "A", table, planned: hashes.length, pulled: records.length, applied,
+          // Tier-A apply is insert-if-absent, so every record that did not insert is a same-key /
+          // different-content collision. Here the arithmetic IS the verdict.
+          divergent: records.length - applied,
+        });
       }
     } catch (err) {
       // Containment is for STORE failures — a poisoned record must not take Tier-B, and the kill
@@ -281,14 +306,14 @@ export async function runAntiEntropyRound(
     tierBPlanned += keys.length;
     try {
       const records = await peer.serveTierB(table, keys);
-      const applied = await local.applyTierB(table, records);
+      const { applied, divergent } = await local.applyTierB(table, records);
       tierBPulled += records.length;
       tierBApplied += applied;
-      // NOT necessarily a fault for Tier-B — a merge confirming the local copy already won moves no
-      // version and is healthy. Recorded anyway, because the whole point is to say WHERE the round's
-      // pulled-without-applied came from; the tier is what tells the reader how to weigh it.
-      if (records.length > applied) {
-        unconverged.push({ tier: "B", table, planned: keys.length, pulled: records.length, applied });
+      // The STORE decides this, not the arithmetic. `pulled > applied` is the healthy steady state
+      // for an LWW table — the peer's copy was behind ours and the merge said so — and reading it as
+      // divergence is what made `directory_nodes` cry wolf every three minutes (DOD-M15-FORKQUIET-1).
+      if (divergent > 0) {
+        unconverged.push({ tier: "B", table, planned: keys.length, pulled: records.length, applied, divergent });
       }
     } catch (err) {
       if (isWireError(err)) throw err;

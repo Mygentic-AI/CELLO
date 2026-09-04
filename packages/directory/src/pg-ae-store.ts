@@ -74,8 +74,11 @@ import {
 } from "./ae-mutable-version.js";
 import { mergeSuspension, type SuspensionRecord } from "./suspension-merge.js";
 import { mergePresence, type PresenceRecord } from "./presence-merge.js";
-import { mergeDirectoryNodeHeartbeat, type DirectoryNodeHeartbeatRecord } from "./directory-node-heartbeat-merge.js";
-import type { AeStoreView, TierARecord, TierBRecord } from "./anti-entropy-engine.js";
+import {
+  mergeDirectoryNodeHeartbeat, directoryNodeHeartbeatStillDivergent,
+  type DirectoryNodeHeartbeatRecord,
+} from "./directory-node-heartbeat-merge.js";
+import type { AeStoreView, TierARecord, TierBRecord, TierBApplyResult } from "./anti-entropy-engine.js";
 import { computeTableDigest } from "./set-reconciliation.js";
 import { tierBTableDigest } from "./ae-round.js";
 
@@ -353,7 +356,29 @@ interface TierBPg {
    * converges. Authentication is not honesty; a type is part of the value.
    */
   validateBody(body: unknown): string | null;
+  /**
+   * Does this key stay DIVERGENT after the apply — the verdict `RoundResult.unconverged` and the
+   * `fork_suspected` alarm are computed from (DOD-M15-FORKQUIET-1)?
+   *
+   * Per table, and REQUIRED on every entry, because the two tables answer it from different
+   * evidence and a shared default would silently give a new table the wrong one:
+   *  - a table whose merge reconciles EVERY column can only report "the peer had nothing to give
+   *    us" — `moved === false`, which is the pre-existing rule and stays exactly as it was;
+   *  - `directory_nodes` also carries a column the merge deliberately never reconciles, and that
+   *    disagreement is the real signal. Its heartbeat is excluded, because a node rewrites its own
+   *    every ~30s and no two nodes can ever agree on it.
+   *
+   * `moved` is whether the merge changed the local version — i.e. whether `update` ran.
+   */
+  stillDivergent(args: { local: unknown; incoming: unknown; merged: unknown; moved: boolean }): boolean;
 }
+
+/**
+ * The verdict for a table whose merge reconciles every column it carries: the only thing a pull can
+ * fail to settle is that our copy already dominated the peer's, which is what `moved === false`
+ * says. Byte-for-byte the rule these tables have always used.
+ */
+const DIVERGENT_IF_NOTHING_MOVED = (args: { moved: boolean }): boolean => !args.moved;
 
 const SUSPENSIONS: TierBPg = {
   spec: SUSPENSION_VERSION_SPEC,
@@ -364,6 +389,7 @@ const SUSPENSIONS: TierBPg = {
     `SELECT agent_id, paused, burned, reason, authorized_by_account::text AS authorized_by_account,
             suspension_seq, COALESCE(origin_node,'') AS origin_node FROM agent_suspensions`,
   merge: (a, b) => mergeSuspension(a as SuspensionRecord, b as SuspensionRecord),
+  stillDivergent: DIVERGENT_IF_NOTHING_MOVED,
   rowToBody: (r): SuspensionRecord => ({
     agent_id: r.agent_id as string,
     paused: r.paused as boolean,
@@ -431,6 +457,7 @@ const PRESENCE: TierBPg = {
             (EXTRACT(EPOCH FROM updated_at )*1000)::bigint AS updated_at
        FROM agent_presence`,
   merge: (a, b) => mergePresence(a as PresenceRecord, b as PresenceRecord),
+  stillDivergent: DIVERGENT_IF_NOTHING_MOVED,
   rowToBody: (r): PresenceRecord => ({
     k_local_pubkey: r.k_local_pubkey as string,
     online: r.online as boolean,
@@ -498,19 +525,43 @@ const DIRECTORY_NODE_HEARTBEATS: TierBPg = {
   // in a migration (it locks the table and breaks the append-only contract), and there is no way to
   // make an existing nullable column NOT NULL without one. The chokepoint is the correct place
   // regardless — it is where the two encodings are guaranteed to agree.
+  //
+  // `status` RIDES THIS SAME SELECT (DOD-M15-FORKQUIET-1), for the same reason the COALESCE is here:
+  // one query feeds both the version hash and the served body, so the only place the two encodings
+  // are guaranteed to agree is this projection. It is NOT NULL with a DEFAULT, so no coalesce is
+  // needed. It is carried to be COMPARED, never merged and never written — see the merge module.
   select:
     `SELECT node_id,
+            status,
             (EXTRACT(EPOCH FROM COALESCE(last_heartbeat_at, to_timestamp(0)))*1000)::bigint AS last_heartbeat_at
        FROM directory_nodes`,
   merge: (a, b) => mergeDirectoryNodeHeartbeat(a as DirectoryNodeHeartbeatRecord, b as DirectoryNodeHeartbeatRecord),
+  // The heartbeat is EXCLUDED from the verdict and `status` is what is left. `moved` is ignored on
+  // purpose: the row most likely to carry a status fork is a peer's OWN row, whose heartbeat the
+  // peer is always fresher on — so gating the verdict on `moved` would hide precisely that case.
+  stillDivergent: ({ local, incoming }) => directoryNodeHeartbeatStillDivergent(
+    local as DirectoryNodeHeartbeatRecord, incoming as DirectoryNodeHeartbeatRecord,
+  ),
   rowToBody: (r): DirectoryNodeHeartbeatRecord => ({
     node_id: r.node_id as string,
+    status: r.status as string,
     last_heartbeat_at: String(r.last_heartbeat_at), // BIGINT epoch-millis string
   }),
   toVersionRow: (body): MutableRow => body as MutableRow,
   validateBody: (body): string | null => {
     const b = body as Record<string, unknown>;
     if (typeof b["node_id"] !== "string") return "node_id must be a string";
+    // MISSING AND MALFORMED TAKE THE SAME PATH as a mismatched value. `status` is the table's only
+    // divergence signal, and `undefined !== "active"` would read as a fork while `undefined` from a
+    // peer that simply does not send the column would read as one too — so it is refused outright
+    // rather than compared. A node running a build from before this column joined the record serves
+    // a body without it and is refused here, loudly, for the length of a rolling deploy: that costs
+    // heartbeat replication between mixed-version nodes for the roll and nothing after it, and both
+    // read surfaces dropped the heartbeat-freshness conjunct (agent-presence-repository.ts), so no
+    // agent reads offline because of it.
+    if (typeof b["status"] !== "string") {
+      return `status must be a string, got ${typeof b["status"]}`;
+    }
     // A string on the wire; the merge normalises non-finite to -Infinity, but a non-string here
     // still means the peer is not speaking the encoding both sides hash.
     if (typeof b["last_heartbeat_at"] !== "string") {
@@ -826,16 +877,23 @@ export class PgAeStore implements AeStoreView {
    * dedicated connection: read the local row `FOR UPDATE` (so a concurrent write-seam upsert blocks on
    * the row lock and can't be reverted), merge, and UPDATE — or, if the row is absent, INSERT and
    * RETRY on a unique-violation race (the retry then finds the row under FOR UPDATE and merges it).
-   * Returns the number that actually CHANGED local state (by version hash) — a converged re-apply
-   * returns 0, the termination signal.
+   *
+   * `applied` is the number that actually CHANGED local state (by version hash) — a converged
+   * re-apply returns 0, the termination signal. `divergent` is the number this round did NOT bring
+   * into agreement, per the table's `stillDivergent`; it is the alarm's input and it is deliberately
+   * NOT `records.length - applied` (DOD-M15-FORKQUIET-1 — that arithmetic reads a healthy LWW merge
+   * confirming the local copy already won as a permanent fork).
    */
-  async applyTierB(table: string, records: readonly TierBRecord[]): Promise<number> {
-    if (records.length === 0) return 0;
+  async applyTierB(table: string, records: readonly TierBRecord[]): Promise<TierBApplyResult> {
+    if (records.length === 0) return { applied: 0, divergent: 0 };
     const t = tierB(table);
     let changed = 0;
+    let divergent = 0;
     for (const rec of records) {
       try {
-        changed += await this.#applyOneTierB(t, rec);
+        const one = await this.#applyOneTierB(t, rec);
+        changed += one.applied;
+        divergent += one.divergent;
       } catch (err) {
         // ONLY the unknown-key case is contained. Everything else — a key/body mismatch, a type
         // violation, a pg error — still propagates and aborts the table's batch, because those are
@@ -849,10 +907,10 @@ export class PgAeStore implements AeStoreView {
         });
       }
     }
-    return changed;
+    return { applied: changed, divergent };
   }
 
-  async #applyOneTierB(t: TierBPg, rec: TierBRecord): Promise<number> {
+  async #applyOneTierB(t: TierBPg, rec: TierBRecord): Promise<TierBApplyResult> {
     // WIRE-INPUT DISCIPLINE (kill-switch critical): the row is LOCKED by rec.key but the merge
     // output would be WRITTEN by the body's key column. If those disagree — a malicious
     // authenticated peer sending {key: victimA, body: {agent_id: victimB, …}} — the write lands on
@@ -884,22 +942,24 @@ export class PgAeStore implements AeStoreView {
           const priorVersion = encodeTierBVersion(t.spec, t.toVersionRow(local)).versionHash;
           const merged = t.merge(local, incoming);
           const mergedVersion = encodeTierBVersion(t.spec, t.toVersionRow(merged)).versionHash;
-          if (mergedVersion !== priorVersion) {
-            await t.update(client, merged);
-            await client.query("COMMIT");
-            return 1;
-          }
+          const moved = mergedVersion !== priorVersion;
+          if (moved) await t.update(client, merged);
           await client.query("COMMIT");
-          return 0;
+          return {
+            applied: moved ? 1 : 0,
+            divergent: t.stillDivergent({ local, incoming, merged, moved }) ? 1 : 0,
+          };
         }
         // Absent locally: FOR UPDATE locked nothing, so a concurrent insert (peer round OR the
         // operator seam) can win the unique index between our SELECT and INSERT. On that violation we
         // ROLLBACK and retry — the next pass sees the now-present row under FOR UPDATE and merges it,
         // so a burn/pause that landed in the window is preserved by the merge, never clobbered.
         try {
+          // The key was absent locally, so we took the peer's row wholesale: there is nothing left to
+          // disagree about and this is convergence, not divergence.
           await t.insert(client, incoming);
           await client.query("COMMIT");
-          return 1;
+          return { applied: 1, divergent: 0 };
         } catch (err) {
           if (isUniqueViolation(err)) {
             await client.query("ROLLBACK");

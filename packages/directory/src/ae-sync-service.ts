@@ -16,9 +16,9 @@
  * Observability (§6, injected logger, correlationId minted once per round):
  *   antientropy.peer.authenticated / antientropy.peer.auth_failed {peerNodeId, reason}
  *   antientropy.round.started / .completed {peerNodeId, pulled, applied, durationMs} / .failed
- *   antientropy.round.fork_suspected {peerNodeId, consecutive} — the engine's fork signature
- *     (`pulled > 0 && applied === 0`) seen ≥2 consecutive rounds against one peer. This is the
- *     consumer the engine header contracts; a repeating signature is an alarm, never health.
+ *   antientropy.round.fork_suspected {peerNodeId, tier, table, consecutive} — the engine's per-table
+ *     `divergent > 0` verdict seen ≥2 consecutive rounds against one peer. This is the consumer the
+ *     engine header contracts; a repeating signature is an alarm, never health.
  */
 
 import { randomUUID } from "node:crypto";
@@ -361,7 +361,8 @@ export class AeSyncService {
           const k = `${u.tier}:${u.table}`;
           const prev = m.get(k);
           m.set(k, prev
-            ? { ...prev, planned: prev.planned + u.planned, pulled: prev.pulled + u.pulled, applied: prev.applied + u.applied }
+            ? { ...prev, planned: prev.planned + u.planned, pulled: prev.pulled + u.pulled,
+                applied: prev.applied + u.applied, divergent: prev.divergent + u.divergent }
             : { ...u });
           return m;
         }, new Map<string, RoundResult["unconverged"][number]>())
@@ -410,7 +411,7 @@ export class AeSyncService {
       // nothing, and clearing the counter on a round that proved nothing is how a fork hides.
       //
       // ⚠️ PER (PEER, TIER, TABLE) — NOT ROUND-WIDE TOTALS, and the difference is load-bearing.
-      // Round-wide, the signature is `pulled > 0 && applied === 0`, which requires EVERY table to
+      // Round-wide, the signature was `pulled > 0 && applied === 0`, which requires EVERY table to
       // apply nothing. That held while every synced table changed on an EVENT (a suspension, a
       // presence edge, a new profile), so a quiet round was the normal case. It stopped holding when
       // `directory_nodes.last_heartbeat_at` joined Tier B (DOD-M15-HEARTBEAT-1): every node
@@ -419,8 +420,15 @@ export class AeSyncService {
       // `pulled=2, applied=1`, `applied === 0` would be false, the streak would never increment, and
       // the alarm would never fire. Keying the streak per table is what keeps one chatty table from
       // masking every other table's divergence, and it is what `unconverged` was introduced for.
+      //
+      // AND THE PER-TABLE COUNTS ARE READ THE SAME WAY, one level down (DOD-M15-FORKQUIET-1). This
+      // filtered on `pulled > 0 && applied === 0` within the table, so one row of `directory_nodes`
+      // applying a fresher heartbeat masked a genuine `status` fork on a DIFFERENT row of the same
+      // table — and on a live fleet a heartbeat lands almost every round. `divergent` is counted per
+      // record by the store, which is the only layer that knows which columns a merge can settle, so
+      // neither a sibling table nor a sibling row can hide a fork behind it.
       const forkKeys = unconverged
-        .filter((u) => u.pulled > 0 && u.applied === 0)
+        .filter((u) => u.divergent > 0)
         .map((u) => `${u.tier}:${u.table}`);
 
       if (shortfall > 0 || failures.length > 0) {
@@ -446,9 +454,13 @@ export class AeSyncService {
               // rows whose VERSION MOVED, so a merge confirming the local copy already won is healthy
               // and lands here anyway. This alarm ran for a day on totals alone with no way to tell
               // the two apart, and answering it took diffing every table off two live nodes.
+              // Both reasons now name a real disagreement. The Tier-B text used to say the alarm
+              // "may be a benign merge that confirmed the local copy" — true of the old verdict, and
+              // an alarm that admits it might mean nothing is one nobody reads. The verdict is now
+              // the store's per-record `divergent`, which excludes exactly that benign case.
               reason: tier === "A"
                 ? "a Tier-A table fetched records that did not insert — same natural key, different content"
-                : "Tier-B only — may be a benign merge that confirmed the local copy, NOT necessarily divergence",
+                : "a Tier-B merge could not reconcile this table's rows with the peer's — a real disagreement, not a stale copy",
             });
           }
         }

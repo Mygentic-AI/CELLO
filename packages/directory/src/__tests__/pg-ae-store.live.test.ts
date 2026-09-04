@@ -85,7 +85,7 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
 
   /** A peer advertising ONLY directory_nodes' Tier-B half, holding one node at one heartbeat. */
   const heartbeatPeer = (nodeId: string, heartbeatMs: number): AeStoreView => {
-    const body: DirectoryNodeHeartbeatRecord = { node_id: nodeId, last_heartbeat_at: String(heartbeatMs) };
+    const body: DirectoryNodeHeartbeatRecord = { node_id: nodeId, status: "active", last_heartbeat_at: String(heartbeatMs) };
     const versions = new Map([[
       nodeId,
       encodeTierBVersion(DIRECTORY_NODE_HEARTBEAT_VERSION_SPEC, body as unknown as Record<string, string>).versionHash,
@@ -100,7 +100,7 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
       serveTierA: () => [],
       serveTierB: (_t, keys) => keys.filter((k) => k === nodeId).map((k) => ({ key: k, body })),
       applyTierA: () => 0,
-      applyTierB: () => 0,
+      applyTierB: () => ({ applied: 0, divergent: 0 }),
     };
   };
 
@@ -185,11 +185,11 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
     await seedNode(realNode, 0);
 
     const changed = await store.applyTierB("directory_nodes", [
-      { key: `${P}unknown-first`, body: { node_id: `${P}unknown-first`, last_heartbeat_at: String(fresh) } },
-      { key: realNode, body: { node_id: realNode, last_heartbeat_at: String(fresh) } },
+      { key: `${P}unknown-first`, body: { node_id: `${P}unknown-first`, status: "active", last_heartbeat_at: String(fresh) } },
+      { key: realNode, body: { node_id: realNode, status: "active", last_heartbeat_at: String(fresh) } },
     ]);
 
-    expect(changed, "the real record behind the poisoned one must still apply").toBe(1);
+    expect(changed.applied, "the real record behind the poisoned one must still apply").toBe(1);
     const ms = (await pool.query(
       `SELECT (EXTRACT(EPOCH FROM last_heartbeat_at)*1000)::bigint AS ms FROM directory_nodes WHERE node_id=$1`,
       [realNode],
@@ -207,7 +207,7 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
     await seedNode(nodeId, 0);
     await expect(
       store.applyTierB("directory_nodes", [
-        { key: nodeId, body: { node_id: nodeId, last_heartbeat_at: 1785200060000 } as unknown as DirectoryNodeHeartbeatRecord },
+        { key: nodeId, body: { node_id: nodeId, status: "active", last_heartbeat_at: 1785200060000 } as unknown as DirectoryNodeHeartbeatRecord },
       ]),
     ).rejects.toThrow(/last_heartbeat_at must be a string/);
   });
@@ -225,10 +225,10 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
     } as never);
 
     const nodeId = `${P}never-registered`;
-    const body: DirectoryNodeHeartbeatRecord = { node_id: nodeId, last_heartbeat_at: "1785200060000" };
+    const body: DirectoryNodeHeartbeatRecord = { node_id: nodeId, status: "active", last_heartbeat_at: "1785200060000" };
     const changed = await capturing.applyTierB("directory_nodes", [{ key: nodeId, body }]);
 
-    expect(changed, "nothing changed — the record was skipped, not applied").toBe(0);
+    expect(changed.applied, "nothing changed — the record was skipped, not applied").toBe(0);
     expect((await pool.query(`SELECT 1 FROM directory_nodes WHERE node_id=$1`, [nodeId])).rows,
       "no row may be fabricated").toHaveLength(0);
 
@@ -245,7 +245,7 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
     const nodeId = `${P}tz-node`;
     const ms = 1785200000123;
     await seedNode(nodeId, 0);
-    await tzStore.applyTierB("directory_nodes", [{ key: nodeId, body: { node_id: nodeId, last_heartbeat_at: String(ms) } }]);
+    await tzStore.applyTierB("directory_nodes", [{ key: nodeId, body: { node_id: nodeId, status: "active", last_heartbeat_at: String(ms) } }]);
     const tzServed = (await tzStore.serveTierB("directory_nodes", [nodeId]))[0].body as DirectoryNodeHeartbeatRecord;
     const utcServed = (await store.serveTierB("directory_nodes", [nodeId]))[0].body as DirectoryNodeHeartbeatRecord;
     expect(tzServed.last_heartbeat_at).toBe(String(ms));
@@ -612,7 +612,7 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
       serveTierA: () => [],
       serveTierB: (_t, keys) => keys.filter((k) => k === id).map((k) => ({ key: k, body: newer })),
       applyTierA: () => 0,
-      applyTierB: () => 0,
+      applyTierB: () => ({ applied: 0, divergent: 0 }),
     };
 
     const first = await runAntiEntropyRound(store, peer);
