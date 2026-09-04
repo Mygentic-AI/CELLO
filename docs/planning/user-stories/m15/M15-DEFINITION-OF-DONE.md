@@ -150,6 +150,24 @@ does not move them.
 **The five S items were mostly "wire up something that already exists" or "write down what is true."**
 They are the quick wins and were to be taken first, in a batch, rather than one per unit.
 
+---
+
+## 🔭 FOUND LIVE 2026-09-04 — four items, NOT YET GATED, none of them finished
+
+Found while publishing 020–024 and rolling the fleet, not by review. Recorded here because they came
+out of a working conversation and would otherwise live only in a transcript. **None is in a tier
+yet** — tiering is Andre's call, and three of the four are behaviour changes that are his to decide.
+
+| # | What a reader would find | Status |
+|---|---|---|
+| **1** | **A refusal that can never succeed is retried forever.** `CELLO_Coder_1` knocked on a closed conversation **232,056 times over 62 hours**, ~2/second, growing `daemon.log` to **484 MB**. The loop is on the RECEIVER: it holds a leaf it cannot resolve, because resolving it means ingesting content that is refused every time, and nothing marks the refusal terminal. **Andre approved the fix 2026-09-04: *"a message refused should stop being retried."*** ⚠️ **`CELLO_Support` is OFFLINE right now as the only available mitigation** — `cello_dismiss` was measured and does NOT stop it. Bringing that agent back online restarts the loop. | ❌ approved, not started |
+| **2** | **The refusal count shown to the operator is wrong by three orders of magnitude.** `cello_inbox`'s `refusals.times` reported **58** for those 232,056 knocks. `022-REFUSALVISIBLE` made the refusal visible; it did not make its scale true, and 58 reads as a papercut rather than as something burning half a gigabyte. Same area as #1 and plausibly one work order with it. | ❌ not started |
+| **3** | **`021-HEARTBEAT` introduced a permanent false alarm.** `antientropy.round.fork_suspected` fires on `directory_nodes` **every 3 minutes, forever**: every node rewrites its own `last_heartbeat_at` every ~30 s, so two nodes can never agree on a hash of a table one of them is always mutating. It pages nobody and masks nothing (the event names its own table), but it is an ERROR-level cry-wolf on a healthy fleet. **Andre's steer 2026-09-04: judge agreement ignoring the heartbeat column** — NOT by muting the table, which would also hide a real `status` divergence. Costs a build and a five-node roll. | ❌ not started |
+| **4** | **The defensive half cannot be tested from a legitimate client, so it has never run live.** The sender's own `exfil:injection_artifact` guard refused two attempts to probe the receiving screener — including the forged `[[END PAYLOAD]]` framing that `023` was designed against — and it is not one of the five configurable guards, so every client refuses identically. **`024-ORPHANTRIAGE`, the screener block, and evidence-on-block have therefore never been exercised outside the in-process spine tests.** Needs a deliberately modified client. **Decided 2026-09-04: build it on a fresh GCP box, on credits.** | ❌ in progress |
+
+> **Do not read #4's absence of live evidence as evidence the defence works.** "Could not reproduce
+> live" here means the attack could not be *sent* — not that it would have been *stopped*.
+
 > _(trail moved to [[M15-BUILD-JOURNAL]] — see “DoD trails, moved 2026-08-24”.)_
 
 ### What the filter DEMOTES, and this is the point of writing it down
