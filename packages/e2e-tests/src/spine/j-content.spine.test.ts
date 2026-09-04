@@ -1534,6 +1534,32 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expect(keys[keys.length - 1], `refused_message must be last; got ${keys.join(",")}`).toBe("refused_message");
 
     /**
+     * ⚠️ **AND ON THE PATH THAT ACTUALLY BREAKS IT — review F2, which the assertion above missed.**
+     *
+     * Everything so far runs on a connection that called `cello_use_agent`. A connection that did
+     * NOT takes the sole-online-agent fallback, which annotates the response with three more keys —
+     * and they used to be spread AFTER the handler's own, landing genuine CELLO-authored prose after
+     * the payload. That is not a corner: the CLI never sends `ipc.connect`, so every plain
+     * `cello quarantined` on a single-agent daemon took this path.
+     *
+     * A fresh connection with NO `cello_use_agent` is the whole fixture.
+     */
+    const connBnoSel = await connectMcp(dirB, "ev-B-nosel");
+    mcpConns.push(connBnoSel);
+    const qFallback = (await connBnoSel.call("cello_quarantined", { cello_session_id: sessionId, sequence: quarantinedSeq })) as Q & Record<string, unknown>;
+    expect(qFallback.ok, `the fallback path answers too: ${JSON.stringify(qFallback).slice(0, 300)}`).toBe(true);
+    expect(
+      Object.keys(qFallback),
+      "the sole-online-agent fallback must have fired, or this leg is testing the same path twice",
+    ).toContain("agent_selection");
+    const fbKeys = Object.keys(qFallback);
+    expect(
+      fbKeys[fbKeys.length - 1],
+      `NOTHING may follow the payload, including CELLO's own prose — a reader who has seen real ` +
+      `framing after it will believe a forged one. Got: ${fbKeys.join(",")}`,
+    ).toBe("refused_message");
+
+    /**
      * ─── 5. THE SESSION STILL SEALS AND BOTH ROOTS MATCH ──────────────────────────────────────
      *
      * The point of this leg is that retention changed NOTHING about the chain. The blocked message
