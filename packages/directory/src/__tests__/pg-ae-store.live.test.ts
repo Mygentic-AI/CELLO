@@ -325,6 +325,65 @@ describeLive("PgAeStore — pg-backed anti-entropy (real schema)", () => {
     expect(String(row.ms)).toBe("1785200060000");
   });
 
+  it("names the DIVERGENT ROW and calls it a content fork — the alarm carried counts only", async () => {
+    // The alarm could name a table and nothing else, and answering the last one meant dumping whole
+    // tables off two live nodes and diffing them. The store holds the key at the moment it decides.
+    const nodeId = `${P}named`;
+    await seedNode(nodeId, 1785200000000);
+    const res = await store.applyTierB("directory_nodes", [
+      { key: nodeId, body: { node_id: nodeId, status: "drained", last_heartbeat_at: "1785200000000" } },
+    ]);
+    expect(res.divergentKeys, "the alarm must be able to say WHICH row").toEqual([nodeId]);
+    expect(res.verdict, "a witness disagreement is a fork, not lag").toBe("content_fork");
+  });
+
+  // ── DOD-M15-FORKQUIET-1: the tables with NO witness keep their own rule, at the store ───────
+  //
+  // Caught in review: judging these per RECORD is strictly more sensitive than the rule they have
+  // had since M12, and it puts the kill switch on the same false alarm this unit exists to remove.
+
+  it("agent_suspensions is judged PER TABLE — one row not moving alongside one that did is NOT divergence", async () => {
+    const ahead = `${P}ptahead`;   // the peer is ahead on this one → it applies
+    const behind = `${P}ptbehind`; // we are ahead on this one → nothing moves
+    await pool.query(
+      `INSERT INTO agent_suspensions (agent_id, paused, burned, suspension_seq, origin_node, authorized_by_account, updated_at)
+       VALUES ($1, false, false, 2, 'local', $3, now()), ($2, true, false, 9, 'local', $3, now())`,
+      [ahead, behind, ACC],
+    );
+    const res = await store.applyTierB("agent_suspensions", [
+      { key: ahead, body: { agent_id: ahead, paused: true, burned: false, reason: "pause",
+        authorized_by_account: ACC, suspension_seq: 5, origin_node: "peer" } },
+      { key: behind, body: { agent_id: behind, paused: false, burned: false, reason: null,
+        authorized_by_account: ACC, suspension_seq: 3, origin_node: "peer" } },
+    ]);
+    // Prove the CONDITION: exactly one really applied and one really did not.
+    expect(res.applied, "one row must apply and one must not, or this proves nothing").toBe(1);
+    expect(
+      res.divergent,
+      "the rule these tables have had since M12 is per TABLE — nothing applied — not per record",
+    ).toBe(0);
+    expect(res.divergentKeys).toEqual([]);
+    expect(res.verdict).toBeUndefined();
+  });
+
+  it("a witness-less table that applied NOTHING says `peer_behind` and names the rows", async () => {
+    // The other half. It still alarms on a streak, exactly as before — but the operator is told it is
+    // replication lag rather than sent hunting a fork in the kill switch.
+    const id = `${P}ptlag`;
+    await pool.query(
+      `INSERT INTO agent_suspensions (agent_id, paused, burned, suspension_seq, origin_node, authorized_by_account, updated_at)
+       VALUES ($1, true, false, 9, 'local', $2, now())`, [id, ACC],
+    );
+    const res = await store.applyTierB("agent_suspensions", [
+      { key: id, body: { agent_id: id, paused: false, burned: false, reason: null,
+        authorized_by_account: ACC, suspension_seq: 3, origin_node: "peer" } },
+    ]);
+    expect(res.applied, "our higher seq must win, so nothing moves").toBe(0);
+    expect(res.divergent).toBe(1);
+    expect(res.verdict, "nothing applied means the PEER is behind — not a fork").toBe("peer_behind");
+    expect(res.divergentKeys, "and the row is named").toEqual([id]);
+  });
+
   it("REFUSES a body with no `status` — missing takes the same path as malformed", async () => {
     // ABSENT IS NOT FINE. `undefined !== 'active'` would read as a fork, and a peer that simply
     // omits the column would look identical to one that disagrees. Both are refused instead.
