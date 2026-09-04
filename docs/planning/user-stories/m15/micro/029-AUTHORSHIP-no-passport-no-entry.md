@@ -380,9 +380,10 @@ provable) is now held by a verify rather than a null check.
 
 ## Newly discovered
 
-*Found and NOT acted on, per rule 3. **The §0z.2 spawn trip-wire is TRIPPED — three items.** The
-vein is producing PRODUCTION DEFECTS, not test hygiene: all three are live behaviours an operator or
-a counterparty can reach.*
+*Found and NOT acted on, per rule 3. **The §0z.2 spawn trip-wire is TRIPPED — three items**, and
+Andre ruled on the third the same day: item 3 was built as `029b`, items 1, 2 and 5 stand. The vein
+is producing PRODUCTION DEFECTS, not test hygiene: all of these are live behaviours an operator or a
+counterparty can reach.*
 
 **1. The inbound encryption refusals file no inbox notice — the operator never sees them.**
 `session-node-manager.ts`'s content-stream handler refuses three ways before authorship is ever
@@ -413,10 +414,47 @@ Inherited from `#recordFrameOrdering`, which never checked it either, but this u
 that claim became the only thing standing between a message and the transcript, so the missing
 binding is now load-bearing. The tell is visible in the diff: `#signOwnContentClaim` encodes the
 full session id while the new test fixture encodes `subarray(0, 16)`, and nothing notices, because
-the field is unread. **Classification: needs Andre's call.** It is a transcript-integrity hole
-reachable by the counterparty, which reads BLOCKS; it is also narrow (replay of a message they did
-write, into another session with the same person) and the fix reddens fixtures in two other units'
-test files, which reads POST-LAUNCH. Not started, per the trip-wire.
+the field is unread.
+
+> ### ✅ **RULED IN AND BUILT — Andre, 2026-09-04: *"Do it now."*** (branch `m15/029b-session-binding`, merged)
+>
+> **Proved before enforced, because getting it wrong refuses every message on every live session in
+> both directions.** The signed value and the compared value derive from ONE session id per side, by
+> construction: initiator `sessionId = hex(assignment.session_id)` + `relayParams.sessionIdBytes =
+> assignment.session_id`; responder `acceptSession(parsed.sessionIdHex)` +
+> `sessionIdBytes = Buffer.from(parsed.sessionIdHex,"hex")`; direct/persisted
+> `relaySessionIdBytes = Buffer.from(sessionId,"hex")`. The two names exist because one keys the
+> in-memory maps and one goes on the wire. The reviewer attacked this proof hardest and it stood.
+>
+> `#verifyAuthorshipClaim` compares the signed `session_id` against the session's own, and a
+> mismatch is **refused by name (`authorship_wrong_conversation`), not frozen** — the signature
+> verified and the signer is the counterparty; what is wrong is the conversation.
+>
+> **The review's blocking finding was the ORDER, and it is the part worth remembering.** The binding
+> ran BEFORE the signature was verified. Everything returning `unusable` refuses the message and
+> lets the session live; everything returning `refuted` freezes it. So a peer could pick the softer
+> outcome — a garbage signature, or a valid signature by a MITM's own key, PLUS one flipped
+> unauthenticated byte of `session_id` — and the freeze never fired. **The session-open MITM
+> detection was switchable off by the party it exists to detect.** Order is now decode → SIGNATURE →
+> SIGNER → what the proof is about, matching `seal-frontier-verify`. Measured red against the
+> pre-fix source, not argued.
+>
+> Second blocking finding: the replay reached the operator under the generic wording — *"unreadable,
+> or signed over different content"* (neither true) and *"tell them to upgrade"*. A replayed
+> signature is not a version problem. It has its own impact and guidance now, naming out-of-band
+> confirmation, and a test asserts the guidance does NOT mention upgrading.
+>
+> **Five fixtures were signing a session id that was not the session's — three of them 16 ZERO
+> bytes.** They sign the real id now, which is what production signs. Eleven mutants, eleven caught.
+> Gate: 4,881 tests, lint, typecheck.
+
+**5. The relay leaf handler reads a counterparty Structure 1 without binding the session** (found by
+the `029b` review). `session-node-manager.ts` decodes a relay-delivered counterparty leaf and calls
+`recordWitnessedSequence` on it without comparing `session_id` — so a malicious or confused relay
+could set a witnessed position from a leaf belonging to another conversation. Pre-existing, gated
+behind trusting the relay, and outside `029b`'s stated scope. Recorded because `029b` established
+that read everywhere else and this is the one place it did not reach. **Classification:
+POST-LAUNCH** — it needs a hostile relay, and the position it corrupts is soft by design.
 
 **4. What the park path passes** — the order asked for this explicitly. `recordOrderingRecord`
 (`source: "park"`) calls `#recordFrameOrdering` only when the envelope carries BOTH
