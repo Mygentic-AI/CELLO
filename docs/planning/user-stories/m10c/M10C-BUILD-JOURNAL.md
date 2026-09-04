@@ -385,3 +385,94 @@ never the mechanism, for X or for GitHub.
 
 Nothing to fix, nothing owed, and no follow-up work implied. Recorded so the entry is not re-raised
 by a later reader who finds only the original claim.
+
+---
+
+## Entry — the night the premise broke, and everything that followed from it
+
+**One measurement invalidated most of the milestone's design, and it took ninety seconds to make.**
+
+M10C was built on "X has no free tier, every `GET /2/users/me` bills about a penny against a prepaid
+balance". Every cost rule, the weekly limit, the Refresh button, and the decision to persist the
+snapshot in Postgres all descended from it. Nobody had tested it, because the procedure forbade any
+test from contacting X — correctly, for cost reasons that were themselves the unverified claim.
+
+Andre asked how it had ever been tested. It hadn't: every test injects a fetch double, so nothing in
+the milestone had touched X at all. The first real connect, against his own account with **no credits
+and no card attached**, returned **200**.
+
+### What that one fact changed
+
+| Built for the cost | What it is now |
+|---|---|
+| Snapshot persisted in Postgres, so a re-mint need not pay again | Sealed on the operator's device for an hour; `x_connections` holds what `github_connections` holds |
+| Weekly rate limit, one read per account per 7 days | Parked behind a flag, logic still under test, waiting for a reason that is not money |
+| A second button: "Refresh from X (billed, weekly)" | Deleted. Re-minting is GitHub's flow — press Add, approve, compose |
+| "That read has already been charged, connecting again will be refused" | Removed. Both halves were false, and it reached operators |
+
+### What the same session also measured, rather than assumed
+
+- **`tweet.read` is required for `/2/users/me` at all.** With `users.read` alone the token issues and
+  every field combination 403s — bare, `created_at`, `protected`, `is_identity_verified`,
+  `public_metrics`. There is no narrower scope to find, and the consent screen X shows because of it
+  ("All the posts you can view, including posts from protected accounts") is a product problem with
+  no code fix.
+- **`verified_followers_count` is gated above our access level.** Requested, and a 200 came back
+  carrying every other field and not that one. Asking for a field X withholds turned every real
+  connect into a refused one.
+- **The display name was free the whole time.** Recorded as a contract gap — the catalogue offered a
+  field nothing could supply — until the live response showed `name` arriving on every read as one of
+  X's defaults and being discarded in the normalizer. The gap was in our reading, not in what X sends.
+
+### The first X signals ever minted
+
+Against a REAL directory node on schema 64, not the stub: `65f76ae8…` (`x_anon`) and `9df2da2d…`
+(`x_id`), both `active` in `signal_records`, both recorded in the portal. The node accepted two types
+it had never seen with no code change and no migration — **the zero-bump invariant demonstrated, not
+asserted.** Its column set was read directly and carries no payload and no plaintext, which verifies
+"the nodes store only a hash" against the live schema rather than against the migration's own comment
+about itself.
+
+### Reviewer verdict on everything after the XCOMPOSE review
+
+`cello-unit-reviewer`, one pass, Opus. Verbatim:
+
+> **SPEC: DEVIATIONS FOUND** — five un-journaled deviations across three DoD lines and one pinned
+> contract. `[blocking]`
+>
+> **SILENT FALLBACKS FOUND** — HIGH-2 (the profile cookie survives sign-out) and MED-2 (expiry
+> enforced only by the client). `[blocking]`
+>
+> **ERROR SUBSTITUTION FOUND** — HIGH-3 (a decrypt failure is indistinguishable, in every log, from a
+> first-time visitor), MED-1 ("the portal holds no X profile" for a cookie that expired on one
+> device), HIGH-4 (an operator told a read was charged and a retry will be refused, when neither is
+> true). `[blocking]`
+>
+> **HOLLOW TESTS FOUND** — the sealed-cookie module, the callback's cookie write, and the row filter
+> have **zero** coverage; all three fail the revert test outright. Both consumer suites mock away the
+> layer the property lives in. `[blocking]`
+>
+> **REMOVALS PROVEN** — with one exception: `src/lib/utc-day.ts` is production-dead and was left
+> behind, and the deletion of `x-mint-route.test.ts`'s money-clock test silently removed the only
+> coverage of `buildXComposeView`.
+
+**The worst finding was mine and it was a forgery hole.** Moving the profile to a cookie dropped an
+account binding that the database design had held by construction (`WHERE account_id = $1`). Nothing
+about the move looked like a security change. Bob connects on a shared laptop and signs out; Alice
+signs in within the hour; her compose screen renders Bob's profile and her Mint notarizes *"This
+operator owns the X account @bob"* — subject Alice, signed by the portal. No attacker required. The
+seal now carries the account and the seal time, and refuses both a mismatch and an expiry.
+
+Every finding fixed, one commit each: `385fb2b` (account binding, server-side expiry, distinct
+rejection causes, and the module's first tests), `4bec984` (sign-out), `adcf233` (the false cost
+messages), `a8bf467` (connected-vs-expired), `cbb2944` (three hollow tests + a structural guard for
+invented Tailwind classes), `c6152cf` (comments arguing from the dead premise), `dcd5335` (duplicate
+type, dead module, no-op migration hedge).
+
+### The lesson worth keeping past this milestone
+
+**A cost rule nobody has ever tested is a design constraint nobody has ever tested.** This one shaped
+a database schema, a rate limiter, a second button, an error taxonomy and four operator-facing
+sentences — and it was wrong. The procedure that forbade testing it was itself derived from it. When
+a single unverified claim is load-bearing for that much, verifying it is the highest-value thing
+available, and it cost one click.

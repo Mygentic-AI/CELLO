@@ -156,13 +156,39 @@ Four things about that text are load-bearing:
 `micro/001-XPROFILE-oauth-and-profile-read.md`
 
 OAuth 2.0 authorization-code **with PKCE** (X rejects anything else), one authenticated
-`GET /2/users/me` carrying every field in Contract 1, normalized and persisted as an
-`XProfileSnapshot`. The token is discarded immediately, as GitHub's is; no `offline.access`, no
-refresh token stored.
+`GET /2/users/me`, normalized into an `XProfileSnapshot`. The token is discarded immediately, as
+GitHub's is; no `offline.access`, no refresh token stored.
 
-**Refresh is an explicit, rate-limited, billed act.** One pull per account per 7 days, and the
-interval is a named constant with its reason beside it. **Signing in must never touch the X API** —
-the existing login-mint path bills nothing today and must keep billing nothing.
+**Signing in must never touch the X API.** The reason changed and the rule did not: it was about
+money, and it is now about consent. A read on every login is a profile read nobody was shown and
+nobody agreed to.
+
+> ### ⚠️ AMENDED 2026-09-04, AFTER THE FIRST LIVE RUN. THREE CLAUSES HERE WERE WRITTEN ON A PREMISE THAT TURNED OUT TO BE FALSE.
+>
+> This line used to require *"every field in Contract 1"*, *"persisted as an `XProfileSnapshot`"*,
+> and *"refresh is an explicit, rate-limited, billed act — one pull per account per 7 days"*. All
+> three followed from the belief that X has no free tier and every read bills about a penny.
+>
+> **Measured live against a real account with no credits and no card attached: the read returned
+> 200.** Whatever tier this app is on, the sign-in read is not charged. What that changed:
+>
+> - **Not every field.** `verified_followers_count` is gated above our access level — asked for, and
+>   X returned 200 carrying every other requested field and not that one. Requesting a field X
+>   withholds made every real connect fail, because the absence of a field we ASKED for is correctly
+>   read as a malformed response. It is no longer requested; the catalogue row remains and refuses
+>   the tick by name.
+> - **Not persisted.** The snapshot lived in Postgres only to avoid paying to read it again. It now
+>   lives sealed on the operator's own device for an hour, and `x_connections` holds what
+>   `github_connections` holds: account, handle, connected time. A re-mint means re-approving at X,
+>   which is free — and which is the honest design, because every read of their profile is one they
+>   were shown and agreed to.
+> - **No weekly limit, and no Refresh button.** Both rationed a cost that does not exist. The limit
+>   is PARKED behind `X_REFRESH_LIMIT_ENFORCED` with its logic still under test, for the day X's own
+>   rate limits or an access change give it a reason. The button, its route and its tests are
+>   deleted.
+>
+> The measurement is the authority here, not this document and not the code comments that argued
+> from the old premise — those were corrected in the same pass.
 
 ### `DOD-M10C-XCOMPOSE-1` ❌ The portal composes both claim texts from the operator's ticks
 
@@ -172,20 +198,39 @@ the existing login-mint path bills nothing today and must keep billing nothing.
 shape, carries the same facts as structured payload fields beside the prose, and refuses a
 selection that names a field the catalogue marks `never` for that signal.
 
-The floor is structural: `account_age` (both) and `handle` + `x_user_id` (`x_id`) are added
-unconditionally and **cannot be expressed as absent by any input**.
+The floor is structural: `account_age` (both) and `handle` (`x_id`) are added unconditionally and
+**cannot be expressed as absent by any input**.
+
+> **AMENDED 2026-09-04.** This said `handle` + `x_user_id`. The numeric user id is gone entirely —
+> not a row, not a tick, not a payload field — because nobody reads, quotes or checks one, and the
+> sentence a counterparty actually reads is better without it. The handle carries the identity
+> instead. The trade is real and recorded in the code: X handles are releasable and re-registrable,
+> and the id was the only thing that survived a rename, so the claim is about the account answering
+> to `@name` at mint time, which `issued_at` already dates.
 
 ### `DOD-M10C-XSCREEN-1` ❌ The operator sees what they are about to say, and changes it
 
 `micro/003-XSCREEN-compose-screen-and-mint.md`
 
 The four-column table (field · what it says · anon tick · id tick), nothing ticked by default, the
-two claim texts rendering live below it as ticks change, and two distinct buttons — **Mint** (free)
-and **Refresh from X** (billed, weekly, and inside the window it says when it unlocks rather than
-failing on click).
+two claim texts rendering live below it as ticks change, and **one button: Mint.**
 
-The mint route takes **field keys, never values**: a request carries which boxes were ticked and
-the values come from our stored snapshot. A request naming a `never` field is refused.
+The mint route takes **field keys, never values**: a request carries which boxes were ticked and the
+values come from the operator's sealed profile, never from the request. A request naming a `never`
+field is refused.
+
+> **AMENDED 2026-09-04.** This required a second button, *"Refresh from X (billed, weekly…)"*. It is
+> deleted — see the amendment on `DOD-M10C-XPROFILE-1`. Re-minting is what it is for GitHub: press
+> Add, approve at X, compose again.
+>
+> "Our stored snapshot" is now the operator's device. The counterbalance the clause exists for is
+> unchanged and is what matters: values never come from the request, so a body carrying
+> `followers: 99000` is a request to notarize a lie and is ignored. The seal is bound to the account
+> and expires, so it cannot be replayed under another operator either.
+>
+> A row the snapshot cannot state is **not shown at all**. It used to render with the catalogue's
+> refusal where a value belongs — four apology rows on a typical account, crowding out the five that
+> matter and telling the operator to untick a box that was never there.
 
 ---
 
