@@ -113,13 +113,22 @@ describe("DOD-M15-HEARTBEAT-1: directory_nodes heartbeat merge", () => {
     expect(merged.status, "the peer's status must NOT come through").toBe("drained");
   });
 
-  it("keeps the receiving node's `status` on the TIE branch too", () => {
-    // Two branches return a record and both had to be pinned. The tiebreak picks a winner by a
-    // canonical string, so on equal heartbeats the winner can be the peer — and this is the branch a
-    // test that only exercised the fresher-wins case would leave uncovered.
-    const local = rec("n", "1785200000000", "drained");
-    const peer = rec("n", "1785200000000", "active");
-    expect(mergeDirectoryNodeHeartbeat(local, peer).status).toBe("drained");
+  it("keeps the receiving node's `status` on the TIE branch, where the PEER wins the tiebreak", () => {
+    // Two branches return a record and both had to be pinned. This one needs a value that ties
+    // NUMERICALLY while sorting HIGHER as a string, or the tiebreak always returns `a` and the
+    // branch is dead — a mutation loop caught exactly that: identical heartbeat strings made
+    // `{...winner}` and `{...winner, status: a.status}` indistinguishable, and the mutant survived.
+    //
+    // `1e2` is reachable: `validateBody` requires a string and nothing more, and anti-entropy input
+    // comes from other sovereign nodes where authentication is not honesty. Without the pin, a peer
+    // rewrites our status by sending a heartbeat that ties on value and beats us on bytes.
+    const local = rec("n", "100", "drained");
+    const peer = rec("n", "1e2", "active"); // Number("1e2") === 100, and "1e2" sorts above "100"
+    const merged = mergeDirectoryNodeHeartbeat(local, peer);
+    expect(merged.last_heartbeat_at, "the peer must really win this tiebreak, or the test proves nothing")
+      .toBe("1e2");
+    expect(merged.status, "and it still may not move our status").toBe("drained");
+    // Argument order flipped: now WE are `b`, and the receiving node is still `a`.
     expect(mergeDirectoryNodeHeartbeat(peer, local).status).toBe("active");
   });
 
