@@ -1437,15 +1437,17 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
      * invitation does, and the page is read by an agent skimming for something to do.
      */
     const CONTACT_VERBS = [
-      /\bcontact\b/i, /reach out/i, /\breply\b/i, /get in touch/i, /cello_initiate_session/,
-      /\bnew conversation\b/i, /\bnew session\b/i, /\bask them\b/i, /\btell them\b/i, /\bresend\b/i,
+      /\bcontact\b/i, /reach out/i, /\breply\b/i, /\bget back to\b/i, /get in touch/i,
+      /cello_initiate_session/, /\bnew conversation\b/i, /\bnew session\b/i, /\bmessage them\b/i,
+      /\bask them\b/i, /\btell them\b/i, /\bnotify\b/i, /\bresend\b/i, /\banswer\b/i,
+      /\brespond\b/i, /\bping them\b/i, /\bwrite to them\b/i, /\blet them know\b/i,
     ];
     const expectReportOnly = (n: InboxRefusal, why: string): void => {
       const notice = `${n.impact ?? ""} ${n.guidance ?? ""}`;
       for (const verb of CONTACT_VERBS) {
         expect(notice, `${why}: matched ${String(verb)} in\n${notice}`).not.toMatch(verb);
       }
-      expectMatches(n.guidance, "the one action is report", /ONE thing to do: report it/);
+      expectMatches(n.guidance, "the one action is report", /ONE thing to do: record it as a report/);
       expectMatches(n.guidance, "and an unsure operator is caught", /When in doubt, report it/);
     };
 
@@ -1453,7 +1455,11 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     //
     // B forgets A first (accepting a session auto-adds the counterparty), so the ONLY thing that
     // differs from case 3 below is that address-book row.
-    expect(((await connB.call("cello_contact_remove", { pubkey: pubA })) as { ok?: boolean }).ok).toBe(true);
+    // `removed` — not `ok`. `cello_contact_remove` returns ok:true for a key that was never stored,
+    // so asserting `ok` alone would leave "accepting a session auto-adds the counterparty" unproven,
+    // which is the thing that makes case 2 and case 3 differ by exactly one row.
+    const removal = (await connB.call("cello_contact_remove", { pubkey: pubA })) as { ok?: boolean; removed?: boolean };
+    expect(removal.removed, `B had A in its address book from accepting the session, and it is gone now: ${JSON.stringify(removal)}`).toBe(true);
     const dbB = await openEncryptedDb(join(dirB, "sessions.db"));
     dbB.prepare("DELETE FROM sessions WHERE session_id = ?").run(sessionId);
     dbB.close();
@@ -1469,8 +1475,8 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expectReportOnly(n2, "a stranger who can sign is still a stranger");
     expectMatches(n2.impact, "the key in FULL — the operator may need to paste, compare or report it", new RegExp(pubA));
     expect(n2.impact, "and never abbreviated").not.toMatch(/…|\.\.\./);
-    expectMatches(n2.impact, "a verified signature proves possession of a key and nothing more", /proves only that whoever produced it holds the private key/);
-    expectMatches(n2.impact, "and the address book is named as the thing that does not hold it", /not in your address book/);
+    expectMatches(n2.impact, "a verified signature proves possession of a key and nothing more", /proves only that whoever produced it holds the private key matching that public key/);
+    expectMatches(n2.impact, "and WHY they count as a stranger is said, not left as a silence", /absent from your address book, or present only because somebody dialled you, or blocked/);
     for (const claim of [/message (is|was|came) from/i, /\bsent by\b/i]) {
       expect(`${n2.impact} ${n2.guidance}`, `a signature identifies nobody; matched ${String(claim)}`).not.toMatch(claim);
     }
@@ -1487,8 +1493,10 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     expectMatches(n3.guidance, "the named conversation is off limits, and the reason is stated", /does not exist on this machine/);
     expectMatches(n3.guidance, "and the outcome that makes it worth doing is named", /is being used by someone else, and they can pause or burn that agent identity/);
     expectMatches(n3.impact, "possession, never identity", /does NOT prove they are "Bob"/);
-    expectMatches(n3.impact, "the operator's own name for the key is used", /in your address book as "Bob"/);
+    expectMatches(n3.impact, "the operator's own name for the key is used", /vouched for in your address book as "Bob"/);
     expectMatches(n3.impact, "and the local trace comes from B's OWN transcript", /still holds part of a conversation under that id/);
+    expectMatches(n3.guidance, "and the remedy admits CELLO cannot answer its own question — a thief holding the key answers it too", /comes from whoever holds that key, so a "yes, that was me" proves nothing new/);
+    expectMatches(n3.guidance, "naming the channel that can", /out of band/);
     expectMatches(n3.guidance, "the unsure operator is caught HERE most of all", /When in doubt, report it/);
 
     // ═══ CASE 1 — no signed ordering record on the frame at all ════════════════════════════════
