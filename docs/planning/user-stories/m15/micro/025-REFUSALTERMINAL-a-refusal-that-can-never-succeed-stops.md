@@ -242,4 +242,61 @@ load `/worktree-permissions` before creating one.
 
 ## Newly discovered
 
-*(anything found and NOT acted on, per rule 3)*
+### A SECOND, slower engine keeps the same message in a refusal loop — 6 log lines every 5 minutes
+
+**Found while measuring DoD 7, not by review. Recorded and NOT fixed, per rule 3.**
+
+Stopping the leaf-fetch backstop killed the fast loop (5,954 `leaf_unresolved.fetch` events in the
+last 20 MB of the pre-fix log → **0** after). What remains is the **periodic park-drain backstop**,
+which runs every 300 s regardless of any signal and re-pulls everything the relay is still holding.
+The relay is still holding this message, so it is re-verified and re-refused once per sweep:
+
+```
+12:02:01Z  cycle 1   (agent start)
+12:04:31Z  cycle 4   (my manual start-agent)
+12:06:56Z  cycle 5   ← the 300 s periodic sweep, ~5 min after cycle 1
+```
+
+Six log lines per cycle. Measured across a clean 3-minute window between sweeps: **0 events**.
+
+**Why the relay copy is never deleted, and this is the part worth acting on.** The park drain's
+`session_committed` branch annexes the message and only then confirm-deletes the relay copy —
+correct ordering, and the annex is what makes deletion safe. On this message the annex fails with
+`content.recover.annex.salt_unavailable`: the sender used the salted hash algorithm and this side
+holds no salt for a session that is already closed. **That salt is never coming back.** So the annex
+can never succeed, the copy is never deleted, and the sweep re-refuses it forever at 1/5min.
+
+**And that branch's operator guidance is FALSE for this exact case.** It says:
+
+> *"This message will keep being re-pulled and re-refused until the session is closed, so close it
+> and start a new one."*
+
+The session **is** closed — that is why the message is being refused. An operator following that
+advice has nothing to do and no way to stop it.
+
+**Recommendation, so this is not a bare open question.** Two candidate fixes, and I would take the
+first:
+
+1. **Confirm-delete the relay copy when the refusal is TERMINAL and the bytes are already retained
+   locally.** `023-REFUSEDEVIDENCE` quarantines these bytes durably before the annex is attempted —
+   `session.content.quarantine.duplicate` fires on every one of these cycles, so a local copy
+   provably exists. Deleting a relay copy whose content this machine already holds is not the
+   permanent-silent-loss case the ordering rule protects against; it is the same argument the
+   terminal-screen-block branch two hundred lines above already makes ("nothing to keep and nothing
+   to store — delete so it stops being re-pulled"). The retention must be **proven** at the call
+   site, not assumed.
+2. Failing that, rewrite the guidance so it stops naming a remedy the operator has already
+   performed.
+
+**Classification: POST-LAUNCH** (§0z.4 — the gate is frozen and this is not a security hole a
+customer reaches). One message stuck at 6 log lines per 5 minutes is a papercut; the same message at
+120 lines per minute filling a 484 MB log was not, and that half is fixed. It needs its own micro
+order because the fix is in the relay-deletion path, where getting it wrong loses a message
+permanently — the one thing worse than the loop.
+
+### The `relay_witness_unreadable` inbox section also reports a bare `times`
+
+`notification-handlers.ts` maps `times: u.count` for `relay_witness_unreadable` from a different,
+in-memory store. **NOT MEASURED and NOT touched** — I did not establish what drains that counter, so
+I am recording the shape, not asserting a defect. Worth one look by whoever owns that surface, on the
+grounds that this unit just proved the name `times` is read as a lifetime figure.

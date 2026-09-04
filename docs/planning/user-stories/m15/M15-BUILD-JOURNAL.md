@@ -10853,3 +10853,115 @@ does.** The whole change is in `cello-client` — a new MCP tool, a new CLI verb
 and the daemon behaviour behind them. There is no wire-behaviour or crypto-type change, so it is not
 a batch that has to ship with a directory or relay roll and needs no `trustless-cello` re-pin: it
 rides the next ordinary `/cello-publish` cascade.
+
+---
+
+## Entry 72 — 025-REFUSALTERMINAL: a refusal that can never succeed now stops, and the count is true
+
+**Unit:** micro work order `025-REFUSALTERMINAL`, closing `DOD-M15-REFUSALTERMINAL-1`.
+**Where:** paired worktree `/Users/andrep/Documents/code/m15-025/{cello-client,trustless-cello}`,
+branch `m15/025-refusalterminal` in both. No Postgres, so no `COMPOSE_PROJECT_NAME` /
+`CELLO_PG_HOST_PORT` was needed — the whole unit is client-side.
+
+### What was broken, from the operator's chair
+
+Somebody sent a message to a conversation that had already been closed. It could never be
+delivered — a closed conversation is signed, and nothing can be added to it. The daemon refused it,
+correctly, and then went back for it again roughly twice a second for two and a half days. It kept
+doing that through several restarts. `daemon.log` reached 484 MB. When the operator asked the inbox
+how bad it was, the answer was "58".
+
+### The producer/consumer, as mapped
+
+- **Consumer:** `#scheduleLeafFetchIfUnresolved`. It returns early only when the content hash is in
+  `#resolvedContent`.
+- **Producer:** `#markContentResolved`, whose docstring says it is called "wherever content actually
+  lands".
+- **The gap:** refused content never lands, so the hash is never added, so the next relay
+  redelivery of the witness leaf arms another fetch. Forever.
+
+### What was built
+
+**A terminal refusal is a new fact, deliberately not filed under "resolved".**
+`#markContentTerminallyRefused` is a sibling of `#markContentResolved`, not a reuse of it: one means
+"we have the content", the other means "we have it and will never accept it", and collapsing them
+would tell a future reader that refused content was delivered.
+
+**The durable store, and which one was taken.** The order suggested `023`'s quarantine row as the
+natural source of truth. **It does not work, and the reason is worth recording:** that row is keyed
+on the BYTES (`agent_id, session_id, reason, blob`) and the fetch scheduler is keyed on the content
+hash the SENDER committed to. On the two refusals where those provably differ — a tamper
+(`content_hash_mismatch`) and an algorithm this build cannot read — the row cannot answer the
+question. So a new table, `terminal_content_refusals (agent_id, session_id, content_hash, reason,
+marked_at)`, keyed on the stable `agent_id`. It is the smallest record that answers the question
+asked. Read once per session into a memory cache, so the hot path stays a `Set` lookup.
+
+**The set has exactly one member and the code says why.** `TERMINAL_REFUSAL_REASONS =
+{session_committed}`, with the bar written above it (a committed session carries a signature over
+its contents; nothing can be appended by anyone, including us) and the five tempting near-misses
+listed with the reason each still retries.
+
+**The count.** `cello_dismiss` DELETEs the notice row, so `content_refusal_notices.count` restarts
+at 1 after every dismissal — that is why 58 was a true number describing something other than what
+the shipped sentence claimed. A second table, `content_refusal_totals`, is incremented in the same
+`try` as the notice and is never deleted. The inbox now returns `times_since_dismissed` and
+`times_total`; neither is called `times`, because `times` is the word that gets read as a lifetime
+figure. On the in-memory fallback path (the notice store's DB write failed) `times_total` is
+**omitted rather than guessed** — reporting the smaller number twice would put the original lie back
+with two names on it. `repeat: true` still compares the dismissable count, which is consistent: a
+dismissal deletes the read rows too, so the next announcement is a first-time one.
+
+### A mutation found the set was decorative
+
+Mutation 5 — delete `if (!TERMINAL_REFUSAL_REASONS.has(reason)) return;` so every refusal is treated
+as terminal — **survived the entire suite.** The only caller passed `session_committed` anyway, so
+nothing in the running system ever consulted the set; it was documentation with a pin test on it,
+and a reviewer reading the diff could not have told.
+
+Fixed by making `#quarantineRefusedContent` the funnel: it retains, then offers the refusal for
+termination, and the set decides. Six non-terminal reasons flow through it (hash mismatch, unreadable
+algorithm, missing salt, unresolved sender, orphaned session, terminal screen block), so the gate is
+now observable. A new test — a `content_hash_mismatch` is refused, retained, and **still retried** —
+is what makes it observable, and it is the sharpest case: the fetch is by content hash, so a correct
+copy may still come from another relay.
+
+### Mutation results — eight mutants, each re-run alone, each red for the expected reason
+
+| # | Mutation | Result | Which test, and why that is the right one |
+|---|---|---|---|
+| 1 | remove the terminal check in the scheduler | RED ×2 | redelivery + restart. The "cancels a pending fetch" test correctly stayed green — that is mutant 3's job, and two writers are covered independently |
+| 2 | marker in memory only, no durable row | RED ×1 | **only** the restart test — the mutation that separates the real fix from the one that ships nothing |
+| 3 | leave the armed timer to fire | RED ×1 | "the armed fetch must be cancelled, not merely never re-armed" |
+| 4 | widen the set with `content_hash_mismatch` | RED ×2 | the set pin, and the mismatch-still-retries test |
+| 5 | drop the set gate | **SURVIVED**, then RED after the funnel fix above |
+| 6 | never write the lifetime total | RED ×1 | `times_total` absent |
+| 7 | report the dismissable count as the lifetime one | RED ×1 | after a dismiss: 1 where 4 was owed |
+| 8 | restore the false guidance sentence | RED ×1 | the guidance test |
+
+All eight compiled (`tsc --noEmit` before each run), so none was a false catch on a syntax error.
+
+### Live proof
+
+`CELLO_Support` had been parked offline as the only known mitigation, so the loop was quiet before
+the fix and re-measuring the 120/minute baseline would have meant restarting it unfixed. The
+baseline is Andre's, measured on 2026-09-04 over three 30-second windows.
+
+The 484 MB log was rotated to `~/.cello/daemon.log.pre025`, the daemon package's three changed
+compiled files were dropped into the installed `@cello-protocol/daemon@0.0.188` (identical version;
+`diff -rq` confirmed nothing else differs), and the daemon was restarted with `cello logout` /
+`cello login` — never `pkill`. Backup of the replaced files: `/tmp/025-dist-backup`.
+
+`session.content.terminal_refusal` fired against the real stuck message on the first drain:
+
+```
+{"event":"session.content.terminal_refusal","agentName":"CELLO_Support",
+ "sessionId":"dcec3c3fb9856065d2f27b4673f0f40a","reason":"session_committed",
+ "contentHash":"713ab9307e1151549f3092cbcfd545ea2ce99eee9790f5e5cc68953fc028b174"}
+```
+
+### Gate
+
+`pnpm run test` 4860 passed / 11 skipped, `lint` clean, `typecheck` clean, all in `cello-client`.
+Nothing published — the fix is committed on the branch and reaches operators on the next
+`/cello-publish` cascade, which is not this unit's to run.
+
