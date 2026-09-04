@@ -621,53 +621,131 @@ probe.
 The relay logs the redial and the seal still fails, and `relay.directory.dial.failed` has **never**
 appeared — so the dial does not throw, yet nothing is repaired. That is the gap `7838bbeb` measures.
 
-## ⏳ PENDING — a fleet roll to `1e2a56f3` is READY AND OWED, blocked only on gcloud reauth (2026-09-04)
+## 🟢 CURRENT — WHOLE FLEET ON `1695c1a9` (017-TBS / 020-ACKHASH / 021-HEARTBEAT), ALL 5 ROLLED (2026-09-04)
 
-**Nothing in GCP was changed by the session that wrote this.** The fleet is still on `7e9c56f4`
-below. This entry exists so the next person does not have to re-derive what is owed.
+**Every node confirmed by reading the RUNNING instance's metadata, not the template or the tag.**
 
-**The client half is DONE.** The npm cascade shipped and was promoted to `latest`:
-`crypto@0.0.64`, `protocol-types@0.0.68`, `transport@0.0.70`, `gateway@0.0.48`, `daemon@0.0.188`,
-`cli@0.0.195`, `connect@0.0.163` (git tag `v0.0.270`). That clears the *"a second client publish is
-owed"* line in the `7e9c56f4` entry below — **it is no longer owed.**
+| node | instance NOW | replaced | zone | machine type | image |
+|---|---|---|---|---|---|
+| `gcp-use1` | `cello-gcp-use1-tr2g` | `cello-gcp-use1-ng8r` | `us-east1-d` | `n2-standard-2` | `directory:1695c1a9` |
+| `gcp-usc1` | `cello-gcp-usc1-zw6x` | `cello-gcp-usc1-rw59` | `us-central1-a` | `e2-standard-2` | `directory:1695c1a9` |
+| `gcp-euw1` | `cello-gcp-euw1-9kd6` | `cello-gcp-euw1-1kwt` | `europe-west1-c` | `e2-standard-2` | `directory:1695c1a9` |
+| `gcp-relay-use1` | `cello-gcp-relay-use1-6mts` | `cello-gcp-relay-use1-2k09` | `us-east1-d` | `n2-standard-2` | `relay:1695c1a9` |
+| `gcp-relay-euw1` | `cello-gcp-relay-euw1-5rdx` | `cello-gcp-relay-euw1-t2gh` | `europe-west1-c` | `e2-small` | `relay:1695c1a9` |
 
-**The server half is not started.** `main` is at `1e2a56f3`, which carries three units the fleet has
-never run: **017-TBS** (the directory signs `high_stakes` and stops carrying its own copy of the
-assignment encoder), **020-ACKHASH** (four readers accept a v2 Structure 1; one was refusing seven
-fields outright), **021-HEARTBEAT** (`directory_nodes` heartbeats replicate as Tier B).
+**Moved off `7e9c56f4`** (the seal block roll of 2026-09-02).
 
-### What is already done, so it does not need redoing
+**What shipped.** **017-TBS** (the directory signs `high_stakes` and stops carrying its own copy of
+the assignment encoder — the builder now comes from `protocol-types`, so both sides encode
+identically), **020-ACKHASH** (four readers accept a v2 Structure 1, one of which was refusing seven
+fields outright), **021-HEARTBEAT** (`directory_nodes` heartbeats replicate as Tier B, so a receipt
+stops resting on one node's word).
 
-- **The lockfile now resolves the server to the packages that were just published** (`1e2a56f3`).
-  This mattered: both Dockerfiles install with `--frozen-lockfile`, so the lockfile — not the
-  `latest` range in `package.json` — is what lands in the image. It still recorded
-  `protocol-types@0.0.67`, and 017-TBS moved the session-establishment TBS encoder into that
-  package precisely so both sides encode identically.
-- **Gate green on `1e2a56f3`:** typecheck, lint, and 2569 tests, run with `CELLO_ENV=local` against
-  a Postgres rebuilt from the current migrations.
-- **`ops_agent_expected_migration_version` needs no bump** — it is `64` and correct. 021-HEARTBEAT
-  withdrew V65 (`e4601f43`) and shipped no migration; the note in `ops-agent.tf` explains why.
+**The client cascade shipped first and is promoted to `latest`:** `crypto@0.0.64`,
+`protocol-types@0.0.68`, `transport@0.0.70`, `gateway@0.0.48`, `daemon@0.0.188`, `cli@0.0.195`,
+`connect@0.0.163` (git tag `v0.0.270`). This clears the *"a second client publish is owed"* line the
+`7e9c56f4` entry carried.
 
-### What is blocked, and it is the ONLY thing
+> ### ⚠️ The lockfile is what lands in the image, NOT the `latest` range in `package.json`
+> Both Dockerfiles install with `--frozen-lockfile`, and `pnpm-lock.yaml` still recorded
+> `protocol-types@0.0.67` after the npm publish. Building at that point would have shipped a fleet
+> running older packages than the client — and 017-TBS moved the session-establishment TBS encoder
+> into `protocol-types` *precisely* so both sides encode identically. `1e2a56f3` re-resolved the
+> lockfile first; `1695c1a9` (this image) is that plus docs. **A future roll must re-resolve the
+> lockfile after any client publish, or the two halves silently diverge.**
 
-`gcloud` cannot authenticate non-interactively: **`Reauthentication failed. cannot prompt during
-non-interactive execution`** on `andre@mygentic.ai`, for both the CLI credential and ADC. There is
-no service account key on disk, the second account (`apemmelaar@gmail.com`) authenticates but has no
-`compute.instances.list` on `cello-infra`, and the GitHub repo holds no GCP secret — only
-`NPM_TOKEN`. So no build can be submitted and no `terraform apply` can run.
+### Order, and why
 
-**To resume, one interactive command clears it:** `gcloud auth login`. Then follow
-`/cello-deploy-gcp` from step 1 with `SHA=1e2a56f3e650f94e30b5bdddfba71945b7355306` —
-**capacity-probe all five (zone, machine-type) pairs BEFORE anything is deleted**, then relays
-first, directories second, one node at a time.
+**Relays first, directories second** — the relay legs accept and forward, the directory legs are the
+ones that start refusing. Directories then `usc1` → `euw1` → `use1`, primary last.
 
-> ⚠️ **`terraform.tfvars` was deliberately NOT pinned to `1e2a56f3`.** The images do not exist yet —
-> the builds never ran. A committed tag pointing at an image that was never pushed plans cleanly and
-> fails at instance creation, which is a worse trap than an unpinned file.
+### Capacity probe — run BEFORE anything was deleted, all four (zone, machine-type) pairs
+
+```
+✅ us-east1-d / n2-standard-2
+✅ europe-west1-c / e2-small
+✅ us-central1-a / e2-standard-2
+✅ europe-west1-c / e2-standard-2
+```
+All created and deleted cleanly. No `ZONE_RESOURCE_POOL_EXHAUSTED`, no `QUOTA_EXCEEDED`.
+
+### Health signals used, and the windows they were read over
+
+- **Directory** — `antientropy.round.(started|completed)` by `resource.labels.zone`, **4-minute**
+  window after each roll. Final: **16 / 16 / 16**.
+- **Relay** — `relay.health.check.passed` by `relayId`, **3-minute** window. Final: **17 / 17**.
+- The short-window warning was observed twice more and is real: the rolled relay read **5 → 8 → 14**
+  and the `euw1` directory **5 → 8 → 12 → 16** as each filled its window. Neither was a sick node.
+
+### Proof the CHANGE runs, not just that the fleet booted
+
+**021-HEARTBEAT, from the nodes' own logs:** over 10 minutes, **47 Tier-B `directory_nodes` rounds
+applied 46 peer rows locally**. Nodes are pulling and writing each other's heartbeats, which is the
+whole unit.
+
+**020-ACKHASH is reader-only and there is deliberately nothing to observe yet** — it teaches four
+verifiers to accept a layout that *nothing emits*. That is the reader-first rollout working as
+designed, not a gap in the evidence. The emitter unit is not written.
+
+**Not driven end-to-end post-roll:** no live two-agent session was run against the new fleet, because
+the CELLO MCP server was not connected in the deploying session. The tree's own evidence lane (2569
+tests, including the multi-process spine journeys) was green on this exact commit.
+
+### ⚠️ NEW STANDING NOISE — `antientropy.round.fork_suspected` on `directory_nodes`, every 3 minutes, at ERROR
+
+**Introduced by this roll and expected to continue.** 021-HEARTBEAT made `directory_nodes` a Tier-B
+anti-entropy table, and every node rewrites its own `last_heartbeat_at` roughly every 30 s. Two nodes
+therefore can never agree on a hash of a table one of them is continuously mutating, so a round ends
+`unconverged` (`planned 1, pulled 1, applied 0` — the merge confirmed the local copy), and two
+consecutive unconverged rounds raise `fork_suspected`.
+
+**Measured, not assumed:** fires at 09:21, 09:24, 09:27, 09:30 — exactly every 3 minutes, always
+`consecutive: 2`, never climbing, always `table: directory_nodes`, `tier: B`.
+
+- **It does not page anyone.** `fork_suspected` appears in no filter in `alerting.tf`.
+- **It does not mask a real fork elsewhere.** The event names its `table`, so a fork in the
+  kill-switch table still surfaces under its own name — the risk 021's own commit called out.
+- **The event's own `reason` field admits it:** *"Tier-B only — may be a benign merge that confirmed
+  the local copy, NOT necessarily divergence."*
+
+**Left as-is deliberately.** It is error-level noise on a healthy fleet, and silencing it is a design
+question (should a continuously-mutating table take part in fork detection at all?) that costs
+another build and another five-node roll. Recorded so the next person does not investigate it as an
+incident.
+
+### Expected during the roll, all recovered
+
+`antientropy.round.failed` ×3 with `reason=connection_lost` against `gcp-euw1` (09:10–09:11) and
+`gcp-use1` (09:16–09:17) — peers reaching a node while it was being replaced.
+`relay.directory.connection.lost` at 09:17:43 → `relay.directory.connection.restored` at 09:18:13.
+**It recovered by itself in 30 seconds**, which is worth noting against the open never-recovers
+entry further down this file.
+
+### Schema
+
+**No migration in this roll**, and `ops_agent_expected_migration_version` correctly stays at `64`.
+021-HEARTBEAT withdrew V65 (`e4601f43`) — the fix was an encoding one at the anti-entropy SELECT,
+not a schema change.
+
+> ⚠️ **Trap for any local Postgres that predates 2026-09-03.** A dev database that applied V65 before
+> it was withdrawn keeps its effect — `directory_nodes.last_heartbeat_at NOT NULL`, which V33 never
+> declared. That reddens `pg-ae-store.live` and `dod-m15-chainroundtrip-1`, and both read as code
+> defects. They are not. `docker compose down -v && docker compose up -d` clears it.
 
 ---
 
-## 🟢 CURRENT — WHOLE FLEET ON `7e9c56f4` (the seal block: 012/013/014/015), ALL 5 ROLLED (2026-09-02)
+## SUPERSEDED — this roll was pending on gcloud reauth for part of 2026-09-04
+
+Held for one reason only: `gcloud` could not authenticate non-interactively (`Reauthentication
+failed. cannot prompt during non-interactive execution`) on `andre@mygentic.ai`, for both the CLI
+credential and ADC. No service account key on disk, the second account has no `compute.instances.list`
+on `cello-infra`, and the repo holds no GCP secret — only `NPM_TOKEN`. **`gcloud auth login` cleared
+it and the roll completed the same day; see the entry above.** Kept because the next agent to hit a
+non-interactive reauth wall should know there is no key-based way around it in this project.
+
+---
+
+## SUPERSEDED — WHOLE FLEET ON `7e9c56f4` (the seal block: 012/013/014/015), ALL 5 ROLLED (2026-09-02)
 
 **Every node confirmed by reading the RUNNING instance's metadata, not the template or the tag.**
 
