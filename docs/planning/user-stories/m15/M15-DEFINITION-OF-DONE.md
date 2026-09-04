@@ -685,10 +685,35 @@ occurred."* Same action, two outcomes, no way to tell which they will get.
 > cannot be drained — and nothing announces it. **Not test-only:** the production
 > `content.recover.auto.*` drain fails in the same instant for the same reason.
 >
-> **Cause NOT yet established, and the distinction matters for whoever picks this up.** That the
-> denied reservation *causes* the later resets is a temporal correlation. And the proof arriving from
-> a different peer id is as consistent with the new receiver never sending one as with the relay
-> dropping it. **Start there:** establish which peer is supposed to be proving.
+> **⚙️ TRACED 2026-09-04 (Andre asked "is it an easy fix?"). It is NOT the client, and the answer
+> reverses the reading above.** The receiver's peer id was followed across both logs in one run:
+>
+> - The surviving receiver is the daemon's **plain fallback node**, built deliberately without a
+>   reservation. It never proves because it holds no circuit — by design, not a bug.
+> - The node before it **proved successfully, and both sides logged it**: the relay wrote
+>   `relay.auth.reservation_proof remotePeerId 12D3KooWLJou… pubkey 79ea6a7d` at `19.680`, and the
+>   daemon wrote `reservation_proof.result ok:true` / `prove.result proven:true` at `19.684`.
+> - Four milliseconds later the daemon abandoned it —
+>   `session.standing_receiver.relay.rejected reason:"relay_unreachable" attempts:2`.
+> - **🔑 THE RELAY'S LOG ENDS AT `19.680`.** After accepting that proof it writes nothing: no grant,
+>   no denial, no `Peer disconnected`, **and no `Peer connected` for any later dial**, through the
+>   deposit failures and on to the end of the run. Every dial after it dies in the transport
+>   handshake (`ECONNRESET`, `Encryption failed`, `Unexpected EOF … 0/1 bytes`).
+>
+> **So the earlier "a different peer id proved" reading is superseded:** the right peer proved, the
+> proof was accepted, and the relay then went silent to that daemon. The client's fallback,
+> reservation-none and dial failures are all correct handling of a silent relay.
+>
+> **Two suspects are ruled out by measurement, so nobody should spend a run on them.** The per-agent
+> slot cap never fired (`relay.slot.cap_exceeded` absent; ceiling 4096 against `reservedSlots: 0`),
+> and the relay connection gater does not gate plain inbound connections — its own comment says
+> denying an unproven peer *"would strand every new agent"*. **The relay process does not die:** it
+> keeps submitting hashes and delivering leaves for the live session while refusing the park dial.
+>
+> **Still not established: WHO closes the connection, and why.** Three live candidates — the relay's
+> listener stops accepting; something relay-side closes during the Noise handshake below any CELLO
+> logging; or the daemon dials an address it should not. **`030-RELAYSILENT` is written for exactly
+> that** and carries the evidence, the ruled-out suspects and a stop rule.
 >
 > **Two corrections to what is written above this box:**
 > - **024's control is not contradicted, but it is narrower than it reads.** Re-running with
