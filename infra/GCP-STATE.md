@@ -1688,7 +1688,7 @@ is its own migration, later.
 | Cloud SQL | `cello-portal`, us-east1, POSTGRES_17, `db-g1-small`, deletion_protection ON |
 | Signing key | Cloud KMS `cello-portal/portal-submission` v1, `EC_SIGN_ED25519`, us-east1. Pubkey `6f0203b8…80e5`, enrolled `submitter` in all 3 node DBs |
 | Directory path | `DIRECTORY_API_URLS` → the three PINNED internal IPs on **8081**, over Direct VPC egress; one key per node in `cello-portal-directory-api-keys`, positionally paired |
-| Secrets | `cello-portal-database-url`, `cello-portal-kms-master-key` (both `prevent_destroy`), `cello-portal-directory-api-keys`, **`cello-ops-agent-ses-credentials` (added 2026-08-07 — see below)**, copied from AWS: `-github-client-id`, `-github-client-secret`, `-intake-key-0`, `-ingress-trigger-secret`, `-submission-seed`, and **`cello-portal-x-client-id` + `cello-portal-x-client-secret` (created 2026-09-04, M10C — created directly in GCP, no AWS original, since X was never wired there). `portal.tf` reads both and grants the accessor, but THE APPLY HAS NOT RUN — see below.** |
+| Secrets | `cello-portal-database-url`, `cello-portal-kms-master-key` (both `prevent_destroy`), `cello-portal-directory-api-keys`, **`cello-ops-agent-ses-credentials` (added 2026-08-07 — see below)**, copied from AWS: `-github-client-id`, `-github-client-secret`, `-intake-key-0`, `-ingress-trigger-secret`, `-submission-seed`, and **`cello-portal-x-client-id` + `cello-portal-x-client-secret` (created 2026-09-04, M10C — created directly in GCP, no AWS original, since X was never wired there). `portal.tf` reads both, grants the accessor, and was APPLIED 2026-09-04 — see below.** |
 | Verified | 307 → `/sign-in` over https on the real hostname; **portal→directory proven through the app** — POST `/api/internal/ingress/drain` returns `ok:true` with `nodeErrors: []` (refuses 401 without the trigger secret); issuer enrolled on usc1/euw1/use1 |
 
 ### 🟢 2026-08-11 — the submission queue finally has something draining it
@@ -2568,18 +2568,39 @@ locally:
 | `cello-portal-x-client-secret` | 2026-09-04 | `portal.tf` (env `X_CLIENT_SECRET`) — **not applied** |
 
 `infra/terraform/portal.tf` carries both env blocks (mirroring the GitHub pair) and both entries in
-`google_secret_manager_secret_iam_member.portal_copied`. **The apply was deliberately not run**: it
-was authored overnight with nobody watching, and this file already records an untargeted apply that
-would have silently reverted a security fix, plus standing cosmetic drift on four Cloud Run services.
-Run it `-target`ed, awake.
+`google_secret_manager_secret_iam_member.portal_copied`.
 
-**⚠️ THE APPLY ALONE IS NOT ENOUGH, AND THE MISSING STEP FAILS LATE.** The X app's registered
-redirect URI is still only `http://localhost:3000/api/auth/x/callback`. Production needs
-`https://portal.cello.mygentic.ai/api/auth/x/callback` added in the X developer console
-(console.x.com → the CELLO Protocol app → Settings → Callback URI). A missing redirect URI is
-rejected at the TOKEN EXCHANGE — that is, *after* the operator has already approved at X — so it
-looks like a portal bug rather than a registration gap. Only Andre can do this; it needs his X
-account.
+### ✅ APPLIED AND DEPLOYED 2026-09-04 — revision `cello-portal-00019-qdh`
+
+Done awake and `-target`ed, per the rule above. The plan was read before applying and contained
+exactly three things and nothing else: the image change, the two X env blocks, the two accessor
+grants. **2 to add, 1 to change, 0 to destroy** — none of the standing Cloud Run drift was swept in.
+
+```
+terraform apply -target=google_cloud_run_v2_service.portal \
+  -target='google_secret_manager_secret_iam_member.portal_copied["cello-portal-x-client-id"]' \
+  -target='google_secret_manager_secret_iam_member.portal_copied["cello-portal-x-client-secret"]'
+```
+
+| Check | Result |
+|---|---|
+| Image live | `portal:portal-dcd5335` (built manually — the trigger still does not fire, §3) |
+| `portal_image_tag` in `terraform.tfvars` | bumped in the same change, per the rule that a mismatch invites the next apply to roll it back |
+| Revision ready | `cello-portal-00019-qdh`, condition True |
+| Serving | `https://portal.cello.mygentic.ai/sign-in` → 200 |
+| Portal migrations | booted at `0015_x_connections_handle_only` — 0014 and 0015 applied at container start |
+| X env bound | `X_CLIENT_ID`, `X_CLIENT_SECRET` present on the live revision |
+| X connect route | `GET /api/auth/x` → 401 unauthenticated, so it shipped and correctly demands a session |
+| Errors since deploy | none at severity ≥ ERROR |
+
+**No directory change and no node roll.** This is portal-only: `ops_agent_expected_migration_version`
+governs the DIRECTORY's Flyway schema and nothing here touched it. The portal runs its own migrations
+at container start, from its own ladder.
+
+**The X app's redirect URI is registered** — `https://portal.cello.mygentic.ai/api/auth/x/callback`
+alongside the localhost one, confirmed in the developer console on 2026-09-04. Worth keeping in mind
+if it is ever removed: a missing redirect URI is rejected at the TOKEN EXCHANGE, i.e. *after* the
+operator has already approved at X, so it presents as a portal bug rather than a registration gap.
 
 Also still required before the portal can mint X signals in production: the portal's KMS submission
 key must be enrolled as an authorized issuer at each directory node, exactly as it already is for

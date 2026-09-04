@@ -171,7 +171,7 @@ consortium_threshold = 1
 preauth_issuer_pubkey = "4468292bbe38ab929e504a1d962abeebe4f02db0a380b4d7880eb4f4dbd56c07"
 
 # DOD-MOVE-PORTAL-1 — the operator surface on GCP.
-portal_image_tag = "portal-ab7e75f"
+portal_image_tag = "portal-dcd5335"
 ops_agent_image_tag = "ops-11941353"
 waitlist_image_tag = "waitlist-a12fd1a3"
 
