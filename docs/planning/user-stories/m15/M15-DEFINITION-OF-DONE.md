@@ -43,6 +43,26 @@ that losing one would silently change the meaning of the line.
 **Lines that name an enforcer are ✅ only when that enforcer ran as separate OS processes**, with the
 run output quoted. Vitest green is necessary, never sufficient.
 
+> ### ✅ MERGED IS DONE. PUBLISHING IS A RELEASE STEP, NOT A COMPLETION CRITERION (Andre, 2026-09-04)
+> *"I'm not worried about things that have already been coded but haven't been published yet. We made
+> that decision because we like to bundle things. To me those things are done."*
+>
+> **A line whose work is written, reviewed and merged is ✅**, and it does not hold a lesser tag
+> waiting on an npm cascade or a fleet roll. We bundle releases deliberately — publishing one fix at a
+> time multiplies a 25–30 minute roll by the number of fixes — so an unpublished merge is a queue
+> position, not unfinished work. **Do not re-open a ✅ because it is not yet on operators' machines,
+> and do not write "not done until published" into a line.**
+>
+> **What still gets recorded, because it is a fact about operators rather than about the line:** if a
+> defect is still live for installed users until the cascade runs, say so plainly beside the ✅. That
+> is a release note, not a doubt about the tag.
+>
+> **⚠️ THE ONE THING THIS DOES NOT RELAX — a DEPLOY ORDER between two units is load-bearing.** Where
+> unit B cannot start until unit A is live on every node, that is a correctness constraint, not
+> bookkeeping: `DOD-M15-SUBMIT-ID-1` already paid for getting it backwards, and *"a client that
+> appended a submission id had every frame refused as `signature_invalid` by any relay not yet
+> updated — including the one deployed."* Those constraints stay stated, on the units, in full.
+
 > ### 📁 SPLIT 2026-08-24 (Andre) — this file is the SCOREBOARD again, and only that
 > It had reached **7,600 lines**, more than half of it closed work and investigation trails, and a
 > scoreboard nobody can read stops being a scoreboard. Two costs were measured in this milestone: a
@@ -685,8 +705,9 @@ the loop; the order's DoD 7 is to bring it back and prove the loop is gone.
 > count is two fields now — `times_since_dismissed` and `times_total` / `times_total_at_least` —
 > because `cello_dismiss` deletes the notice row, so the old `times` was never a lifetime figure.
 > Two reviews, twelve findings, all fixed; a thirteenth was found by the live daemon itself.
-> **⚠️ NOT YET PUBLISHED** — the daemon → connect/cli cascade is owed, and until it runs every
-> installed operator still has the loop. A slower second engine (the 300s park sweep, 6 lines per
+> **📦 Release note, not a caveat on the tag** (see *"merged is done"* under How to read this): this
+> rides the next bundled `/cello-publish` cascade, and until that runs an installed operator still has
+> the loop. Nothing is owed on this line. A slower second engine (the 300s park sweep, 6 lines per
 > sweep) is recorded POST-LAUNCH in the order's *Newly discovered*.
 
 ### `DOD-M15-FORKQUIET-1` — ✅ A table that is always moving is not a fork

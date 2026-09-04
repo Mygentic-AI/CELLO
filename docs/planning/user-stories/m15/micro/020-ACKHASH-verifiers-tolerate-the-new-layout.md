@@ -3,11 +3,13 @@ name: 020-ACKHASH — Every verifier accepts the v2 layout, before anything emit
 type: micro-work-order
 date: 2026-09-03
 status: complete
-remaining: >
-  ⚠️ COMPLETE MEANS WRITTEN, REVIEWED AND MERGED — NOT PUBLISHED. DoD 9 is still open: the npm
-  publish of protocol-types and the GCP fleet roll, both Andre's to run. THE EMITTER UNIT MUST NOT
-  START until this is LIVE ON EVERY NODE, not merely merged — see the deployment section before the
-  Newly discovered list, where the cost is silent message loss rather than a visible refusal.
+deploy_gate: >
+  ⚠️ THIS UNIT IS DONE — merged is done (M15-DEFINITION-OF-DONE, "merged is done", Andre 2026-09-04),
+  and its npm publish and GCP roll ride the next bundled release. Nothing is owed here.
+  WHAT SURVIVES IS A SEQUENCING CONSTRAINT ON THE *NEXT* UNIT, and it is load-bearing: THE EMITTER
+  UNIT MUST NOT START until this is LIVE ON EVERY NODE, not merely merged — see the deployment
+  section before the Newly discovered list, where the cost is silent message loss rather than a
+  visible refusal.
 description: >
   Structure 1 gains `last_seen_hash` so an acknowledgement binds to CONTENT, not to a position.
   This unit ships the READING half only — relay, directory and daemon all accept a v2 Structure 1
