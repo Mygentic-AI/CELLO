@@ -10187,3 +10187,103 @@ after all three tests report passed; that is the reporter, not a test. One run i
 condition immediately after Docker was restarted, where registration had not reached the directory
 the daemon asked and the relay was unreachable. Named rather than called flaky: it is a startup
 ordering in the harness against a fresh database, and it cleared on a warm stack.
+
+---
+
+## Entry 69 — 023-REFUSEDEVIDENCE: nothing is refused without keeping what was refused (PLAN + clause checklist)
+
+**Unit:** `micro/023-REFUSEDEVIDENCE`. Closes `DOD-M15-REFUSEDEVIDENCE-1`.
+**Worktrees:** `/Users/andrep/Documents/code/m15-023/trustless-cello` and
+`/Users/andrep/Documents/code/m15-023/cello-client`, both on branch `m15/023-refusedevidence`
+off `origin/main` (540e90cc / f724a51). Two repos: the daemon change lands in cello-client, the
+spine journey in trustless-cello.
+
+### The counterbalance, named before the code (§2b Invariant 1)
+
+**There is none to name, and that is the correct answer for this unit.** Retention is not a guard
+over the counterparty — it constrains nobody and asks nothing of them. It is a local durability
+property of the receiver's own machine, on content the receiver already holds in memory. A peer who
+rewrites their daemon cannot make this side store less; the only party who can is the operator whose
+disk it is, and the tier byte cap is the bound they already control. The lens fires and the answer
+is *"not a guard"*, stated rather than skipped.
+
+### What the ten refusal paths do — the DoD 1 enumeration
+
+`ingestReceivedContent` has ten exits that do not deliver. Seven retain; three cannot, and each says
+why here.
+
+| Exit | Retained? | Why |
+|---|---|---|
+| `session_orphaned` | **yes** | No session row, so no tier — bounded by the UNKNOWN-tier byte cap, sequence allocated negative. This is the one Part 5.6 tests. |
+| `session_committed` | **yes** | A post-seal straggler on the DIRECT path keeps nothing today. (The `sealed_session_annex` is a different path — the park drain and held-content drift — and does not cover this exit.) |
+| `content_hash_alg_unknown` | **yes** | |
+| `content_hash_salt_unavailable` | **yes** | |
+| `content_hash_mismatch` | **yes** | The tampered frame. Highest-value evidence in the list. |
+| `sender_unresolved` | **yes** | No counterparty pubkey, so no tier — UNKNOWN-tier cap, as above. |
+| screener TERMINAL block | **yes** | The flagship case. It already leafs at its canonical position; the row now carries the bytes at that same sequence. |
+| `session_size_limit_exceeded` (2 sites) | **no** | **Retaining would defeat the cap it enforces.** Andre, 2026-09-03: *"The message limit is the message limit, already handled by the cap. If you're unknown and you have 25 MB and you just tried to send me one gig, well that's it."* The abuse itself is still evidenced — the refusal notice records the reason, the cap and the tier. |
+| transient screen block | **no** | Nothing was recorded and **nothing was acknowledged** — the message is still with the sender, whose daemon redelivers it. When the gateway recovers it is screened, and if it is blocked it is retained *then*. Storing a copy of a message that is coming back is a second copy, not evidence. |
+| `transcript_write_failed` | **no** | The storage layer is the thing that just failed. A quarantine write is the same `INSERT` into the same table and fails identically; attempting it adds a second error line and no evidence. |
+
+### The design decision the order left to this unit — one store, not two
+
+**Taken: the first option. `session_orphaned` and `sender_unresolved` write a transcript row with a
+session id that has no `sessions` row.** The `transcript` table declares no foreign key, so the row
+is legal; the quarantine flag already excludes it from everything that would trip over it. A second
+table for two exits would be the "built worse and nobody knows which to look in" outcome the order
+names.
+
+### The flag is `direction`, and that is what makes exclusion BY CONSTRUCTION rather than by edit
+
+`direction` is already the delivery discriminator, it is in the primary key, and **every** delivery
+and unread reader filters it with an equality literal:
+
+- `findNextReceivedAfter` — `AND direction = 'received'`
+- `#UNREAD_RECEIVED_WHERE` — `t.direction = 'received'` (used by `getUnreadSummary`,
+  `getEndedUnread`, `getUnreadReceivedCount`)
+- `countReceivedMessages`, `#getReceivedBytesTotal` — same literal
+
+A row written `direction = 'quarantined'` cannot be returned by `WHERE direction = 'received'`. No
+existing query is modified to exclude it and no future one has to remember to. A boolean column
+alone would have been exclusion by *edit*, which is the half-flagged row the order refuses.
+
+`quarantine_reason TEXT` rides alongside as the evidence label. `attribution` needs no new value:
+the existing expression is `direction === "sent" ? … : authorship ? "verified_signature" : …`, and
+`'quarantined'` is not `'sent'`, so a verified frame lands `verified_signature` and an unverified one
+`local_session_state` — exactly the distinction `SEALWIRE-1` bullet 5 built the column for.
+
+### The bound, confirmed rather than assumed (DoD 2's precondition)
+
+Per-message: `MAX_CONTENT_BYTES` (1 MB), enforced on the frame before ingest.
+Per-session: the sender's tier bound — **and `#getReceivedBytesTotal` now counts quarantined rows
+too.** Without that, retention is an unbounded side channel: a counterparty who can get messages
+blocked stores bytes forever against a budget that cannot see them. With it, total retention per
+session is bounded by the same cap that bounds delivery. The quarantine write is gated on the same
+computation, so a session at its cap stores no more.
+
+**No new capability is handed to an attacker by that change.** The counterparty already spends the
+session's byte budget by sending ordinary messages; spending it with blocked ones costs them the
+same and gains them nothing.
+
+### Sequence allocation
+
+A terminal block has a canonical sequence and uses it — the leaf at that position and the quarantine
+row now describe the same event, and **DoD 7's leaf index is untouched.** An exit with no leaf gets
+the next negative sequence for that session (−1, −2, …), which cannot collide with a leaf position
+and cannot collide with another quarantine row.
+
+### Clause checklist (what the reviewer receives)
+
+1. every refusal path retains — table above, three accounted for in writing
+2. plaintext + `sender_pubkey` + `sender_sig` + `attribution` + flag + reason on the row
+3. the stored signature **verifies against the sender's key** — recomputed in the journey, not asserted non-null
+4. excluded by construction from `cello_receive` and unread — both proved
+5. `cello_transcript` returns the entry redacted, with reason and location
+6. every route frames it: metadata above, payload last, **no closing delimiter**, forged-ending case tested
+7. seal + both roots match
+8. nothing interpolates stored content into a log, error, path or prompt
+9. the spine journey green as separate OS processes, output quoted
+10. every new assertion made to fail on purpose — **committed before the mutation loop exists**
+11. gate in cello-client; publish disposition stated
+12. `cello-unit-reviewer` verdict quoted
+13. DoD line flipped in the same commit as the verdict
