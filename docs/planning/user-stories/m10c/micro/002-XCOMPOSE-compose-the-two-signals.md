@@ -331,17 +331,30 @@ still redden.
 
 *(Recorded, not acted on.)*
 
-- **`display_name` is pinned in the catalogue but has no source in the pinned snapshot.** The table
-  gives it a fragment (`display name "Acme Agent"`) and marks it `optional` for `x_id`, but
-  `XProfileSnapshot` carries no display name and order 001 does not capture X's `name` field. The
-  contract was not changed: ticking it is refused with a named error saying the portal stores no
-  display name and that reconnecting will not supply one. Andre's call whether 001 should capture
-  `name` or the row should leave the catalogue.
-- **The duplicate `XProfileSnapshot` will not retire itself.** 002 declares it because 001 had not
-  landed. Structural typing means that when 001 lands and adds a field, this copy still compiles and
-  still cannot see it — so the `display_name` refusal above would become permanent by accident with
-  nothing going red. Whichever order integrates 001 needs an explicit line item to make one file
-  re-export the other.
+- **`display_name` is pinned in the catalogue but has no source in the pinned snapshot.**
+  **Recommendation: capture it, do not drop the row — it is free.** The table gives it a fragment
+  (`display name "Acme Agent"`) and marks it `optional` for `x_id`, but `XProfileSnapshot` carries no
+  display name. The contract was not changed: ticking it is refused with a named error saying the
+  portal stores no display name and that reconnecting will not supply one.
+
+  The cost fact, which 001 holds and which changes the decision: **X bills per RESOURCE RETURNED, not
+  per field**, so one user object costs the same whether we ask for a handle or for everything. There
+  is no second read and no extra penny. Checked in 001's code rather than taken on trust, and it is
+  cheaper still than that: `x.ts` reads `u.username` at normalization although `username` is *not* in
+  `X_USER_FIELDS` — which is only possible because `id`, `name` and `username` are X's default user
+  fields. **The display name is already in the response we pay for today, and is discarded during
+  normalization.** So the whole cost is one field on the contract and one line in the normalizer
+  (adding `name` to `X_USER_FIELDS` too is harmless insurance, not a requirement).
+
+  This must land in the SAME change as collapsing the duplicate `XProfileSnapshot` below, so the field
+  and its only source arrive together. It changes a pinned contract, which no micro order may do —
+  it belongs to whoever owns the contract.
+- **The duplicate `XProfileSnapshot` will not retire itself, and a green gate is not evidence here.**
+  002 declares it because 001 had not landed; 001 declares it in `src/server/trust/x.ts`. The drift is
+  ONE-DIRECTIONAL and silent: add a field to 001's declaration and this copy still compiles, still
+  cannot see it, and nothing goes red. That is what makes it an assigned task rather than a note in
+  two *Newly discovered* sections — nobody will be told. One file must re-export the other, in the
+  same change as the `display_name` fix above.
 - **Two notes for `003`, both free.** Its screen can call `entry.render(snapshot)` before the operator
   ticks anything, and grey out a row the snapshot cannot back — so the refusal arrives before a failed
   mint rather than after. And the two arms compose sequentially, so a selection with problems in both
