@@ -158,6 +158,12 @@ Found while publishing 020–024 and rolling the fleet, not by review. Recorded 
 out of a working conversation and would otherwise live only in a transcript. **None is in a tier
 yet** — tiering is Andre's call, and three of the four are behaviour changes that are his to decide.
 
+**Orders written 2026-09-04 — items 1+2 are ONE order, item 3 is its own:**
+
+- `micro/025-REFUSALTERMINAL-a-refusal-that-can-never-succeed-stops.md` → `DOD-M15-REFUSALTERMINAL-1` (items 1 and 2)
+- `micro/026-FORKQUIET-a-table-that-always-moves-is-not-a-fork.md` → `DOD-M15-FORKQUIET-1` (item 3)
+- item 4 is a build, not a fix — no order, tracked here only
+
 | # | What a reader would find | Status |
 |---|---|---|
 | **1** | **A refusal that can never succeed is retried forever.** `CELLO_Coder_1` knocked on a closed conversation **232,056 times over 62 hours**, ~2/second, growing `daemon.log` to **484 MB**. The loop is on the RECEIVER: it holds a leaf it cannot resolve, because resolving it means ingesting content that is refused every time, and nothing marks the refusal terminal. **Andre approved the fix 2026-09-04: *"a message refused should stop being retried."*** ⚠️ **`CELLO_Support` is OFFLINE right now as the only available mitigation** — `cello_dismiss` was measured and does NOT stop it. Bringing that agent back online restarts the loop. | ❌ approved, not started |
@@ -1114,6 +1120,48 @@ is unavailable; naming a verb nobody can perform is Invariant 4's failure.
   when it lands — **do not wait for it.**
 - **Enforcer:** journey — unsigned, signed-but-unknown, and signed-by-a-known-contact each produce a
   notice offering exactly ONE action, with no contact verb present in the first two.
+
+### `DOD-M15-REFUSALTERMINAL-1` — ❌ A refusal that can never succeed stops, and the count is true
+
+Found live 2026-09-04, not by review. A message refused `session_committed` — a conversation that is
+signed and closed, so no retry can ever succeed — was retried **232,056 times over 62 hours**, ~2 per
+second, growing `daemon.log` to **484 MB**. The loop is on the RECEIVER: `#markContentResolved` is
+called *"wherever content actually lands"*, refused content never lands, so the leaf-fetch backstop
+re-schedules forever. **It survived several daemon restarts**, so the marker that stops it must be
+durable. `cello_dismiss` was measured and does not stop it; only taking the agent offline did.
+
+Carries a second, related line: `cello_inbox` reported that as `times: 58`, because the counter is
+drained on read — while the shipped guidance sentence claims it is a lifetime figure. The number was
+accurate for what it measured; the sentence describing it was false.
+
+⚠️ **`CELLO_Support` is offline as the only mitigation.** Bringing it back before this ships restarts
+the loop; the order's DoD 7 is to bring it back and prove the loop is gone.
+
+- **Order:** `micro/025-REFUSALTERMINAL-a-refusal-that-can-never-succeed-stops.md`
+- **Approved by Andre 2026-09-04:** *"Yes, a message refused should stop being retried."*
+- **Pairs with `DOD-M15-REFUSEDEVIDENCE-1`**, whose dedup held perfectly under this load — 232,056
+  arrivals produced exactly one retained row.
+
+### `DOD-M15-FORKQUIET-1` — ❌ A table that is always moving is not a fork
+
+`021-HEARTBEAT` made `directory_nodes` a Tier-B anti-entropy table. Every node rewrites its own
+`last_heartbeat_at` every ~30 s, so two nodes can never agree on a hash of a table one of them is
+continuously mutating — and `antientropy.round.fork_suspected` fires at **ERROR every three minutes,
+indefinitely, on a healthy fleet**. Measured on `1695c1a9`: 09:21, 09:24, 09:27, 09:30, flat, with
+`consecutive` pinned at 2. The event's own `reason` field already says it *"may be a benign merge
+that confirmed the local copy, NOT necessarily divergence"*.
+
+It pages nobody (`fork_suspected` is in no policy in `alerting.tf`) and masks nothing (the event
+names its own table, which is `021`'s per-table streak working as designed). It is cry-wolf, and the
+cost of leaving it is that a real fork in that table reads as more of the same.
+
+**Andre's steer 2026-09-04: judge agreement ignoring the heartbeat column** — *"if the difference is
+only a heartbeat logging then it's ignored"* — and NOT by muting the table, which would also hide a
+genuine `status` divergence. He rejected the alternative (slowing the heartbeat) himself: it only
+makes the false alarm rarer and degrades online/offline accuracy.
+
+- **Order:** `micro/026-FORKQUIET-a-table-that-always-moves-is-not-a-fork.md`
+- Costs a build and a five-node roll, so it is worth batching with the next directory change.
 
 ### `DOD-M15-REFUSEDEVIDENCE-1` — ✅ Nothing is refused without keeping what was refused
 
