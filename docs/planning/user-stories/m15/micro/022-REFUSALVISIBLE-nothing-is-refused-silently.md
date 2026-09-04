@@ -3,6 +3,8 @@ name: 022-REFUSALVISIBLE — Nothing is refused silently
 type: micro-work-order
 date: 2026-09-03
 status: complete
+dod_line: DOD-M15-NO-SILENT-REFUSAL-1
+dod_effect: closes
 description: >
   Three refusal reasons reach the operator; NINE do not, including the screener block — the moment
   the product catches the attack it exists to catch. The three that ARE wired live in an in-memory

@@ -3,6 +3,8 @@ name: 026-FORKQUIET — A table that is always moving is not a fork
 type: micro-work-order
 date: 2026-09-04
 status: complete
+dod_line: DOD-M15-FORKQUIET-1
+dod_effect: closes
 description: >
   021-HEARTBEAT made directory_nodes an anti-entropy table. Every node rewrites its own
   last_heartbeat_at every ~30s, so two nodes can never agree on a hash of a table one of them is

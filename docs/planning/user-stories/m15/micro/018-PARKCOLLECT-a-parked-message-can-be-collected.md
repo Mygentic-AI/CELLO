@@ -3,6 +3,8 @@ name: 018-PARKCOLLECT — A parked message can actually be collected
 type: micro-work-order
 date: 2026-09-02
 status: complete
+dod_line: DOD-M15-PARKCOLLECT-1
+dod_effect: closes
 description: >
   The spine lane says a recipient cannot collect a parked message — the relay refuses with
   not_a_participant. The SAME run shows the real send-to-offline path collecting fine, twice. This

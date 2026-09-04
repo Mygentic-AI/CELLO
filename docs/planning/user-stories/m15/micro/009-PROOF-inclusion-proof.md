@@ -3,6 +3,8 @@ name: 009-PROOF — An operator can prove one message sits under a sealed root
 type: micro-work-order
 date: 2026-09-01
 status: complete
+dod_line: DOD-M15-INCLUSION-1
+dod_effect: closes
 description: >
   `cello_get_inclusion_proof` is a stub that returns not_implemented. Build it: given a message,
   return a proof that it sits under the root the directory actually notarized — and a verify path

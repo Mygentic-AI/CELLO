@@ -3,6 +3,10 @@ name: 008-RELAY — An agent cannot flood a relay's reservation slots
 type: micro-work-order
 date: 2026-09-01
 status: complete
+dod_line: DOD-M15-RELAYSLOTS-1
+dod_effect: closes. The line did not exist while this unit ran — it was extracted from
+  DOD-M15-RELAYABUSE-1 and DOD-M15-RELAYAUTH-1 afterwards, on Andre's ruling, precisely because
+  "a work item with no DoD clause is invisible to the gate".
 description: >
   A relay grants circuit reservation slots to anyone holding any keypair, and counts nothing. Mint
   keys and take the table; or, once that is closed, open thousands of sessions between two agents you

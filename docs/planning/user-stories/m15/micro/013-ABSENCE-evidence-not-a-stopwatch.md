@@ -3,6 +3,8 @@ name: 013-ABSENCE — Sealing alone needs evidence the other side is gone, not j
 type: micro-work-order
 date: 2026-09-02
 status: complete
+dod_line: DOD-M15-UNILATERAL-1
+dod_effect: closes
 description: >
   A party can seal without their counterparty once 600 seconds have passed. There is NO presence
   check of any kind — a fully reachable person who takes eleven minutes to reply can be sealed out

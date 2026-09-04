@@ -3,6 +3,8 @@ name: 007-CRYPTO — Bind the throwaway key to the agent's identity
 type: micro-work-order
 date: 2026-08-24
 status: complete
+dod_line: DOD-M15-EPHEMERAL-AUTH-1
+dod_effect: closes
 description: >
   The WIRE half of our own end-to-end encryption, and the order that makes the feature real: exchange
   the per-session throwaway keys, sign them so the relay cannot swap in its own and read everything,

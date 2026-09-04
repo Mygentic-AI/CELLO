@@ -3,6 +3,11 @@ name: 005-RELAY — The checked-then-ignored sweep, RELAY PACKAGE ONLY
 type: micro-work-order
 date: 2026-08-24
 status: complete
+dod_line: DOD-M15-SWEEP-RELAY-1
+dod_effect: closes. The description below says "Source: DOD-M15-SWEEP-1" — that line no longer
+  exists. It was SPLIT on 2026-09-01 (Andre) into DOD-M15-SWEEP-RELAY-1, which this unit closed,
+  and DOD-M15-SWEEP-DAEMON-DIR-1, which is still open. The old pointer is left in place below
+  rather than rewritten, because it is what the unit was actually pulled against.
 description: >
   Six times this milestone found a security check that runs, gets the right answer, and is then
   ignored. This sweeps every frame handler and every verification call IN THE RELAY PACKAGE for the

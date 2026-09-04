@@ -3,6 +3,8 @@ name: 024-ORPHANTRIAGE — A message for a conversation we never had
 type: micro-work-order
 date: 2026-09-03
 status: complete
+dod_line: DOD-M15-ORPHANTRIAGE-1
+dod_effect: closes
 description: >
   A message arrives for a session this daemon holds no record of. Today the operator is told to ask
   the counterparty to start a new one — which, when this is a stranger probing a peer ID, is the

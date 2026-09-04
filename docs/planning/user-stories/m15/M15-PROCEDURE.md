@@ -765,6 +765,34 @@ ledger in the DoD: one row per claim, its current text, where it appears, and it
     the one this milestone keeps paying: a finished order reads as untouched work, and the next
     session either redoes it or waits on it. The verdict and the status are the same fact; if they
     land in different commits, one of them is wrong for as long as that gap lasts.
+
+    > **⚠️ AND THE DRIFT RUNS THE OTHER WAY TOO — the orders stay current and the SCOREBOARD falls
+    > behind** (Andre, 2026-09-04: *"I want to make sure the work orders are in sync with the DoD,
+    > because the DoD keeps falling behind"*). The order has a forcing function — the rule above,
+    > and the order is the file you are in. **The DoD has none**, so the tag is the half that gets
+    > left. Same commit, both files, every time.
+    >
+    > **Every order declares which line it moves, in frontmatter, so this is checkable rather than
+    > remembered:**
+    > ```yaml
+    > dod_line: DOD-M15-XXX-1        # or "none — housekeeping"
+    > dod_effect: closes             # closes | unit-of | none
+    > ```
+    > **`closes`** — when the order is `complete`, that line MUST read ✅.
+    > **`unit-of`** — this is one unit of a bigger line; the line stays open and that is correct.
+    > Say which unit and what is still owed, in the `dod_effect` text.
+    > **`none`** — housekeeping, closes no line.
+    >
+    > **The distinction is the whole point.** Without it nothing can tell *"unit 1 of 4 is done"*
+    > from *"somebody forgot to flip the tag"* — so a checker would either miss the real drift or
+    > cry wolf on every multi-unit line, and a crying checker gets ignored.
+    >
+    > **Run it before you close, and before any status report:**
+    > ```
+    > python3 docs/planning/user-stories/m15/tools/dod-order-sync.py
+    > ```
+    > Exit 0 is in sync. It also prints the in-gate open lines with **no order**, which is the list
+    > of orders still to be written — visible instead of counted by hand.
 11. **Merge the branch** (§2e) — a reviewed-green unit does not sit on a branch.
 12. Back to 1.
 

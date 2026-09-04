@@ -3,6 +3,8 @@ name: 027-SCREENORDER — The language check must read the original text, not th
 type: micro-work-order
 date: 2026-09-04
 status: open
+dod_line: DOD-M15-SCREENORDER-1
+dod_effect: closes
 description: >
   Inbound sanitization normalizes confusable letters (Cyrillic/Greek lookalikes → Latin) BEFORE the
   language allowlist screen runs — and the language screen judges the normalized text. So a jailbreak

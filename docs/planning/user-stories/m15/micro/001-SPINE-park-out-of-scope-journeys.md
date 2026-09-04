@@ -3,6 +3,8 @@ name: 001-SPINE — Park the out-of-scope cross-machine journeys
 type: micro-work-order
 date: 2026-08-24
 status: complete
+dod_line: none — housekeeping
+dod_effect: none. Parks journeys Andre ruled out of the gate; closes no DoD line.
 description: >
   Skip the four spine journey files whose failures Andre ruled out of the launch gate on
   2026-08-24 (shared documents, and the kill switch), so the remaining red in the lane is

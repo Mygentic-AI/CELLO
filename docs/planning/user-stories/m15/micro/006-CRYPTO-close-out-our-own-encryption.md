@@ -3,6 +3,8 @@ name: 006-CRYPTO — Close out our own encryption layer
 type: micro-work-order
 date: 2026-08-24
 status: complete
+dod_line: DOD-M15-KEYAGREE-1
+dod_effect: closes
 description: >
   DONE: the key agreement was reviewed (six findings, all fixed) and given a caller — a throwaway
   keypair is now minted per session, held in memory only, and destroyed at teardown and shutdown.

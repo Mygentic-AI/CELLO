@@ -3,6 +3,8 @@ name: 019-PARKERROR — A failed park deposit says what went wrong
 type: micro-work-order
 date: 2026-09-02
 status: complete
+dod_line: DOD-M15-PARKERROR-1
+dod_effect: closes
 description: >
   A failing park deposit reports internal_error with the message "[object Object]", so the cause is
   destroyed at the point of reporting and nobody has ever read it. The bug is NOT in the park code —

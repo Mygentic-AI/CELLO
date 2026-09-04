@@ -3,6 +3,9 @@ name: 016-RELAYLOSS — What actually happens when a relay goes away, and then f
 type: micro-work-order
 date: 2026-09-02
 status: complete
+dod_line: DOD-M15-SESSION-RELAY-PINNED-1, DOD-M15-MULTIRELAY-1
+dod_effect: unit-of. Ran the MEASUREMENT both lines demanded and shipped the honesty half (a send
+  the relay did not witness now says so). Neither line closes: the fix is M15-STORY-RELAYHANDOVER.
 description: >
   Two open lines ask the same question from different ends: can an agent still be REACHED when a
   relay dies, and does a live CONVERSATION survive it. Both are written "measure first", and it is

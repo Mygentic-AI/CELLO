@@ -3,6 +3,8 @@ name: 010-SIGNAL — A trust signal reaches the directory when one node is down
 type: micro-work-order
 date: 2026-09-01
 status: complete
+dod_line: DOD-M15-ENDORSE-RETRY-1
+dod_effect: closes
 description: >
   Minting a trust signal fails outright when the directory node this daemon is connected to is
   unreachable, and the operator has to notice and re-run the command. The consortium has three

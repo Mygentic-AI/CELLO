@@ -3,6 +3,8 @@ name: 014-LEAVES — Is every message in a sealed conversation tied to the two p
 type: micro-work-order
 date: 2026-09-02
 status: complete
+dod_line: DOD-M15-LEAFPARTIES-1
+dod_effect: closes
 description: >
   The seal checks that the final two control entries came from two distinct participants. Nobody has
   ever confirmed the same constraint applies to the CONTENT leaves — the actual messages. This is a

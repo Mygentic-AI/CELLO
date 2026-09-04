@@ -3,6 +3,8 @@ name: 012-SEAL — Both real participants approve before any signature exists
 type: micro-work-order
 date: 2026-09-02
 status: complete
+dod_line: DOD-M15-SEALPARTIES-1, DOD-M15-NOTCARRIED-REFUSE-1
+dod_effect: closes
 description: >
   Today only the closing party checks the receipt before signing. The counterparty checks after
   `session_sealed`, when the artifact is already durable and there is nothing to invalidate it. And

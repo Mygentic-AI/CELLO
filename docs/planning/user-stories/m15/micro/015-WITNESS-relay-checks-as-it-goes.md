@@ -3,6 +3,8 @@ name: 015-WITNESS — The relay verifies every hash as it passes, not when asked
 type: micro-work-order
 date: 2026-09-02
 status: complete
+dod_line: DOD-M15-CORROBORATE-1
+dod_effect: closes
 description: >
   The relay already receives every signed message hash and already holds both participants' real
   pubkeys. It checks nothing until seal time. Verify each hash against the two expected keys as it

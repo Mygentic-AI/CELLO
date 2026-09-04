@@ -3,6 +3,9 @@ name: 017-TBS — One assignment TBS builder, and the layout the handover needs
 type: micro-work-order
 date: 2026-09-02
 status: complete
+dod_line: DOD-M15-SESSION-RELAY-PINNED-1, DOD-M15-MULTIRELAY-1
+dod_effect: unit-of. Unit 1 of 4 of M15-STORY-RELAYHANDOVER. Units 2-4 are unwritten, so neither
+  line closes on this.
 claimed_by: CELLO_Support lane — worktree /Users/andrep/Documents/code/m15-017, branches m15/017-tbs in BOTH repos
 claimed_at: 2026-09-03
 completed_at: 2026-09-03

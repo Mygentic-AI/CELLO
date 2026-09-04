@@ -3,6 +3,8 @@ name: 021-HEARTBEAT — Directory nodes can see each other's heartbeats
 type: micro-work-order
 date: 2026-09-03
 status: complete
+dod_line: DOD-M15-HEARTBEAT-1
+dod_effect: closes
 description: >
   Every directory node reads the other two as never-heartbeated and counts availableNodes 1 against
   requiredThreshold 2, so the federated 2-of-3 checkpoint has NEVER ONCE SUCCEEDED and every receipt

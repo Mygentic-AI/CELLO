@@ -3,6 +3,8 @@ name: 003-RELAY — Relay rate limiting, and the idle timer that is off in produ
 type: micro-work-order
 date: 2026-08-24
 status: complete
+dod_line: DOD-M15-RELAYABUSE-1
+dod_effect: closes
 description: >
   Three relay paths still have no rate limiting of any kind, and the per-session idle timer exists
   but the production binary never passes it. Add per-peer and per-pubkey limits to the three

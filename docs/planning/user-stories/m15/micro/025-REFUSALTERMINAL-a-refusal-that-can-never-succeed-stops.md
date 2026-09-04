@@ -3,6 +3,8 @@ name: 025-REFUSALTERMINAL — A refusal that can never succeed stops, and the co
 type: micro-work-order
 date: 2026-09-04
 status: complete
+dod_line: DOD-M15-REFUSALTERMINAL-1
+dod_effect: closes
 description: >
   A message refused because the conversation is CLOSED is retried forever — measured at 232,056
   refusal events over 62 hours, ~2 per second, on one message, growing daemon.log to 484 MB. The

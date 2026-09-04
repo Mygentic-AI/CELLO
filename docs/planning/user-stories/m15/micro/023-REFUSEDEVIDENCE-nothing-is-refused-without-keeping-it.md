@@ -3,6 +3,8 @@ name: 023-REFUSEDEVIDENCE — Nothing is refused without keeping what was refuse
 type: micro-work-order
 date: 2026-09-03
 status: complete
+dod_line: DOD-M15-REFUSEDEVIDENCE-1
+dod_effect: closes
 description: >
   Every refusal path DISCARDS the message. The screener block keeps only a hash; every other refusal
   keeps nothing at all. So the messages an operator would most want to prove — an injection aimed at

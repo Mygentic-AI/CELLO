@@ -3,6 +3,8 @@ name: 004-RELAY — Three admin frame types with no sender
 type: micro-work-order
 date: 2026-08-24
 status: complete
+dod_line: DOD-M15-RELAYADMIN-DEAD-FRAMES-1
+dod_effect: closes
 description: >
   The directory→relay admin stream accepts four frame types. Only one has a caller. Delete the two
   that provably have none, and check the deployed fleet before touching the third. Source:

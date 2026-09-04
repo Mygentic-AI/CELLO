@@ -3,6 +3,8 @@ name: 002-RELAY — No relay service without a directory-issued assignment
 type: micro-work-order
 date: 2026-08-24
 status: complete
+dod_line: DOD-M15-RELAYAUTH-1
+dod_effect: closes
 description: >
   The relay serves anyone holding any Ed25519 keypair. Make it refuse unless the caller presents a
   directory-signed session assignment naming them as a participant, and install the connection gater

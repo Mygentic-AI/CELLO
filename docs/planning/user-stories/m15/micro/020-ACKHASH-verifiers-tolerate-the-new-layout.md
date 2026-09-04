@@ -3,6 +3,9 @@ name: 020-ACKHASH — Every verifier accepts the v2 layout, before anything emit
 type: micro-work-order
 date: 2026-09-03
 status: complete
+dod_line: DOD-M15-WITHHOLD-SEAL-1
+dod_effect: unit-of. Ships the READING half only and emits nothing. The EMITTER unit closes the
+  line, and cannot start until this one is live on every node — see deploy_gate.
 deploy_gate: >
   ⚠️ THIS UNIT IS DONE — merged is done (M15-DEFINITION-OF-DONE, "merged is done", Andre 2026-09-04),
   and its npm publish and GCP roll ride the next bundled release. Nothing is owed here.
