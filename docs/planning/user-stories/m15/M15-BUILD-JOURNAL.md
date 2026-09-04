@@ -10187,3 +10187,342 @@ after all three tests report passed; that is the reporter, not a test. One run i
 condition immediately after Docker was restarted, where registration had not reached the directory
 the daemon asked and the relay was unreachable. Named rather than called flaky: it is a startup
 ordering in the harness against a fresh database, and it cleared on a warm stack.
+
+---
+
+## Entry 024a — 024-ORPHANTRIAGE: falsifying the premise before writing a branch on it
+
+**Unit:** `DOD-M15-ORPHANTRIAGE-1` (micro work order 024). **Lane worktrees:**
+`/Users/andrep/Documents/code/m15-024/trustless-cello` and `/Users/andrep/Documents/code/m15-024/cello-client`,
+both on `m15/024-orphantriage`, pushed on creation.
+
+### What `verifiedAuthorship` actually contains on an orphaned session: NOTHING. Always.
+
+The work order required this be measured before a single branch was written on it, and the answer is
+the contingency it named, not the assumption it started from.
+
+Produce/consume, in order:
+
+1. `#handleContentStream` decrypts the body, then calls `#recordFrameOrdering(agentName, sessionId, s1, s2, hash)`.
+2. `#recordFrameOrdering` decodes Structure 1 (sender pubkey at index 2, content hash at index 1),
+   decodes Structure 2 (sequence at 0, signature at 3), and runs
+   `verify(s1Pubkey, structure1Cbor, s2Sig)`. **That verification is session-independent — it checks
+   the signature against the key carried inside the sender's own signed bytes, and nothing else.**
+   It passes or it does not, with no session lookup involved.
+3. **Then** it cross-checks the signer against `getSessionRecord(agentName, sessionId)?.counterparty_pubkey`.
+   On an orphaned session there is no record, so `counterparty` is `undefined`,
+   `pubkeyMatchesHex(s1Pubkey, undefined)` is false, and the branch returns
+   `{ seq: null }` under `reason: "counterparty_unknown"` — **discarding the pubkey and signature it
+   just verified.**
+4. The caller only sets `verifiedAuthorship` when `senderPubkey` AND `senderSig` come back, so it is
+   `undefined` on every orphaned message, unconditionally.
+
+So the daemon *does* establish, cryptographically, that the sender holds the private key for the key
+on the frame — and then throws that away one line before the place that needs it. **This unit's first
+job is therefore the one the order named: make the verified signer survive the session lookup.**
+
+### And the fix must not widen `verifiedAuthorship`'s meaning
+
+`senderPubkey`/`senderSig` mean *verified AND matched to this session's counterparty*; the transcript
+row's `sender_sig` column is documented as exactly that ("verified, never claimed"), and seal-time
+attribution rests on it. Returning the unmatched signer under the same names would silently downgrade
+a proof the rest of the system reads as stronger. So the unmatched signer comes back under its own
+name and is consumed in exactly one place — the orphan branch.
+
+### What the orphan branch can ever see, enumerated rather than assumed
+
+`#recordFrameOrdering` has exactly two outcomes that reach ingest: a signature that **verified**, or
+**no readable signed record at all** (record absent, malformed, hash-mismatched, or a decode throw).
+A signature that is present and **fails** to verify never reaches ingest — it is FATAL
+(`bad_signature` → `#freezeOnIdentityFailure` → return). So the triage has two input states, not
+three, and the guidance is written for two.
+
+### How an orphaned message actually arrives — measured, because it changes the journey
+
+Both production callers of `ingestReceivedContent` were traced:
+
+- **Park recovery (`recoverParkedContent`)** cannot reach the orphan branch at all:
+  `authenticateParkedEntry` refuses `counterparty_unknown` first, because it is handed
+  `getSessionRecord(...)?.counterparty_pubkey` — the same absent value.
+- **The content stream** can. Its peer gate reads `#activeNodes` (in memory) and its decryption reads
+  `#sessionContentKeys` (in memory); neither consults the `sessions` table. So the reachable
+  production state is **a session node live in this process whose `sessions` row is gone** — the row
+  deleted underneath a running daemon, or a lookup that no longer resolves it.
+
+That is what the journey has to reproduce, and it reproduces it with a real message from a real
+second daemon rather than a hand-built frame.
+
+### Decisions taken under §3a (pick the choice least likely to need reversing)
+
+1. **No new column on `content_refusal_notices`.** The order asks for the signals "as fields the agent
+   can branch on"; a structured field there is a client-side schema migration, which this project
+   treats as its highest-risk change class, for a field nothing in the shipped tool surface reads —
+   §5 *"NO CONSUMER, NO SHIP"*. The four signals are recorded **structurally in the log event**
+   (`session.content.orphaned`, the durable forensic record Invariant 2 requires) and **verbatim in
+   the notice prose** the agent actually reads, full pubkey included. Recorded here so the next reader
+   can disagree with the judgement rather than re-derive it.
+2. **Part 2 takes option (b): reporting is named as NOT YET AVAILABLE.** Provisioning `CELLO_Reporting`
+   needs a registered identity, somewhere to host it, and a pubkey published in shipped guidance —
+   outward-facing wording, which is Andre's under §2f, and a pre-auth token, which §3a lists as a
+   human-only blocker. Invariant 4 forbids naming a verb that resolves to nothing, so the guidance says
+   plainly that there is no CELLO destination yet and tells the operator to keep the evidence.
+   **Parked with a trigger: when `CELLO_Reporting` exists and its pubkey is published, this sentence is
+   replaced by the session-open verb.**
+3. **023-REFUSEDEVIDENCE has not landed** (`status: open` as of this entry), so nothing retains the
+   refused message. The guidance says so rather than implying there is something to attach.
+
+### The counterbalance (§2 step 4), before the code
+
+There is none on the sender's side, and that is the point: **this unit deliberately makes the
+receiver do less.** The adversary's goal here is a reply — any reply — that confirms someone is home.
+Every signal the triage uses is anchored on something the sender does not control: their signature is
+checked against the key inside their own signed bytes (self-attesting, so it proves possession and
+nothing more, and the guidance says exactly that); "known contact" is read from **our** address book;
+"ongoing conversation" is read from **our** transcript rows, never from the sequence number the sender
+chose. A sender who wants the reach-out branch has to already be in the receiver's address book and
+already have a conversation on the receiver's disk — neither of which they can cause from the wire.
+
+---
+
+## Entry 024b — 024-ORPHANTRIAGE: what shipped, and the proof it holds
+
+**Unit:** `DOD-M15-ORPHANTRIAGE-1`. Continues Entry 024a (the falsification). Status at this entry:
+implemented, gates green in both repos, `cello-unit-reviewer` dispatched — **not yet DONE.**
+
+### What an operator gets now
+
+A message arrives naming a conversation their machine has never held. It is refused, as before —
+nothing delivered, nothing shown, nothing acknowledged. What changed is what they are told next, and
+there are exactly three shapes:
+
+- **Nothing checkable on the message.** *"It carried NO signature that could be checked, so nothing
+  at all is known about who sent it — that is a finding, not a gap."* One action: report. **Not one
+  contact verb appears in the notice**, including in a prohibition — "do not contact them" puts the
+  verb on the page just as surely as an invitation does, and the page is read by an agent skimming
+  for something to do.
+- **A signature that verified, against a key their address book does not hold.** The key is printed
+  in full, because they may need to paste it, compare it or report it. Same one action.
+- **A signature that verified, against a key they DO hold.** Reaching out is offered — *"open a NEW
+  conversation with …"*, never the one the message names — worded as key possession rather than
+  identity, and naming the outcome that makes it worth doing: the counterparty says they sent
+  nothing, and both sides have just learned the key is being used by someone else.
+
+Every one of the three ends with *"When in doubt, report it."*
+
+### Where the evidence comes from, and why none of it is the sender's to choose
+
+The signature is checked against the key inside the sender's own signed bytes, so it proves
+possession of a private key and nothing more — every sentence in the notice survives *"and what if
+the key was stolen?"*. "Known" is read from the operator's own address book. "Ongoing" is read from
+the operator's own transcript rows, **never from the sequence number on the frame** — that number is
+written by the sender, so anyone wanting the reach-out branch would simply write a large one.
+
+**The counterbalance is that the receiver does LESS.** The adversary here wants a reply; the unit's
+whole effect is to stop offering one unless the receiver already knows the key.
+
+### Part 2 — reporting names nothing reachable, and says so
+
+Option (b), as anticipated. `CELLO_Reporting` needs a registered identity, somewhere to run, and a
+pubkey published in shipped guidance — a pre-auth token and outward-facing wording, both of which
+§3a and §2f put outside a lane's authority. So the guidance says plainly that CELLO has no agent to
+receive reports yet and names the one thing the operator CAN do: keep the key, the conversation id
+and the time, because that IS the report. **Parked with a trigger in `orphan-triage.ts` beside the
+sentence it replaces.** `023-REFUSEDEVIDENCE` has not landed, so the notice also says the message
+itself was not kept.
+
+### The journey — two daemons, separate OS processes
+
+`J-CONTENT` › *024-ORPHANTRIAGE — a message for a conversation B never had names ONE action, and the
+signature decides which*:
+
+```
+ ✓ src/spine/j-content.spine.test.ts (13 tests | 12 skipped) 73538ms
+   ✓ 024-ORPHANTRIAGE — a message for a conversation B never had names ONE action, and the
+     signature decides which  12933ms
+ Test Files  1 passed (1)
+      Tests  1 passed | 12 skipped (13)
+   Duration  74.71s
+exit=0
+```
+
+B's `sessions` row is deleted underneath the live daemon. That is not a shortcut around the
+transport — it is the only state the orphan branch is reachable from, because the peer gate reads
+`#activeNodes` and the content key reads `#sessionContentKeys`, both in memory, while the park path
+cannot reach the branch at all. **Nothing separates case 2 from case 3 except a row in B's own
+address book**, and case 1 is produced by black-holing the relay so the sender emits a frame with no
+signed ordering record — the way production produces it. No frame is hand-built and nothing is
+tampered.
+
+### The mutation loop — nine mutants, all caught, each for the reason claimed
+
+Loop refused a dirty tree (`git status --porcelain`, which covers staged and untracked work that
+`git diff --quiet` is silent on), printed a baseline before the first mutant, and typechecked every
+mutant before trusting its run.
+
+| | Mutation | Caught by |
+|---|---|---|
+| **M1** | revert `verifiedSignerUnmatched` — the verified signer stops surviving the session lookup | **the SPINE journey**, red with *"It carried NO signature that could be checked"* against A's real key |
+| M2 | `knownContact` always false | the branch-flip test, and the mixed-case test |
+| M3 | case-SENSITIVE contact lookup | the mixed-case test alone |
+| M4 | `ongoingConversation` always false | *"still holds part of a conversation under that id"* |
+| M5 | the unsigned case takes the reach-out branch | *"nothing at all is known about who sent it"* |
+| M6 | drop when-in-doubt from the reach-out guidance | three tests, including the every-case one |
+| M7 | truncate the key to 8 chars + ellipsis | three tests |
+| M8 | claim identity instead of possession | *"does NOT prove they are"* and the from-anyone grep |
+| M9 | insert *"Do not contact them, and do not reply"* into the report-only guidance | the contact-verb grep, three tests |
+
+**M1 is the one that matters** and it is why the spine journey exists: the unit's whole subject is a
+proof that was being computed and thrown away, and only a real message from a real second daemon can
+show that the proof is what the branch turns on.
+
+### Gates
+
+- cello-client: **4820 passed | 11 skipped**, lint 0, typecheck 0.
+- trustless-cello: **1982 passed | 624 skipped | 4 todo**, lint 0, typecheck 0.
+- **Nothing publishes.** No version bump; this change is not in an operator's hands yet.
+
+### Size, measured rather than claimed
+
+The order caps a micro unit at 500 lines. The diff adds ~760: ~450 of tests (284 unit + ~215 spine),
+~184 of new module, and ~141 in `session-node-manager.ts` — of which the majority in every file is
+comment, at this codebase's usual density. **Said plainly rather than trimmed to fit:** the mission
+did not grow — three journey cases and a mutation proof are DoD clauses — and cutting the comments to
+hit a number would remove the part that keeps the next reader from re-deriving why the sequence
+number on the frame is not a signal.
+
+### Decision recorded under §3a: no new column on `content_refusal_notices`
+
+The order's body asks for the signals "as fields the agent can branch on". A structured field there
+is a client-side schema migration — the change class this project treats as highest-risk — for a
+field no shipped tool surface reads, which is §5's *"NO CONSUMER, NO SHIP"*. The four signals go
+structurally onto the `session.content.orphaned` log event (the durable forensic record Invariant 2
+requires) and verbatim into the notice prose the agent reads. Put to the reviewer explicitly rather
+than settled unilaterally.
+
+---
+
+## Entry 024c — 024-ORPHANTRIAGE: the review found the predicate, and the mutation loop found the fix that had no teeth
+
+**Unit:** `DOD-M15-ORPHANTRIAGE-1`. Closes it. Continues Entries 024a (falsification) and 024b (what
+shipped). One review pass, every finding fixed, verdict quoted below.
+
+### The one that mattered: "known contact" was reading the wrong thing, and it inverted the unit
+
+`knownContact` was `does a contacts row exist`. It cannot be, and this project had already decided
+that in writing:
+
+- **A row is written FROM THE WIRE.** `inbound-sessions.ts` calls
+  `addContact(..., "signal_presentation")` at `TIER.UNKNOWN` for any inbound offer inside the
+  acceptance bound, because the trust-signal foreign key needs a row to point at. No operator action
+  at any point.
+- **Blocking a contact leaves the row.** It is an `UPDATE` to `TIER.BLOCKED`; removing is a separate
+  verb.
+
+So a stranger who merely dialled, **and a key the operator had deliberately blocked**, both got:
+*"open a NEW conversation with `<key>` and ask whether they sent it."* That is the population this
+unit exists to refuse, handed the exact action it exists to withhold — the unit inverted, by one
+predicate. `DOD-TIER-4` had already retired `isContact` for precisely this and says so in the source:
+*"An UNKNOWN-tier contact (a mere row) is NOT known."* I re-implemented the retired semantics in raw
+SQL and hung the unit's most consequential branch on it.
+
+It also **falsifies the counterbalance sentence in Entry 024a and in the module**: *"a sender who
+wants the reach-out branch would have to already be in the receiver's address book — they cannot
+cause that from the wire."* They can. Both sentences are rewritten rather than deleted, per
+`DOD-M15-CLAIM-COMMENTS-1`: the wrong sentence is why the gap would survive the next reading.
+
+### And the reach-out dropped a conjunct from Andre's own rule
+
+*"if they are a known contact **and this was an ongoing conversation until this point**"* — a
+conjunction, and the code branched on the vouch alone. The notice then argued with itself: an impact
+saying *"there is nothing here that makes a technical fault more likely than a probe"* directly above
+a guidance saying *"ONE thing to do, and it is worth doing: open a NEW conversation."* Now gated on
+both, and the notice names WHICH half failed instead of leaving the operator to wonder why the advice
+is what it is.
+
+### The remedy could not answer its own question
+
+A CELLO conversation is authenticated by the key itself. So in the **stolen-key case — the exact case
+the reach-out exists to detect** — the thief receives the question and answers *"yes, that was me"*,
+and the operator is reassured while the probe is confirmed. The guidance now says so and names
+out-of-band as the channel that actually settles it. Same idiom the `decrypt_failed` notice already
+uses a few thousand lines up.
+
+### 🧪 THE MUTATION LOOP CAUGHT A FIX THAT HAD NO TEETH, AND THAT IS THE ENTRY'S REAL LESSON
+
+Review finding F6 said the orphan log published `knownContact: false` and `ongoingConversation:
+false` on paths that never looked — a default wearing the shape of a measurement, read by the one
+person who ever comes asking. I added a `"not_checked"` state, went green, and ran the loop.
+
+**The mutant that turns `"not_checked"` straight back into `false` SURVIVED.** Sixteen tests, whole
+suite green. Nothing exercised the manager's failure path, so the fix was prose with no consumer —
+the exact shape this milestone keeps finding, produced *by the fix for a finding about that shape*.
+
+The test that kills it injects the fault the only way it happens for real: the address-book read
+throws (its table is dropped), the real catch runs, and the assertions are the three things the
+mutant breaks — the operator is told it *could not be checked* rather than told the answer was no,
+the log carries `not_checked` for both signals, and `session.content.orphaned.evidence.failed` is on
+the record. Mutant re-run alone afterwards: **red, for that reason.**
+
+**Recorded because the sequence is the point: neither review nor the author found this. The loop
+did**, on a fix that had just been written in response to a review finding, by someone who had read
+the rule that morning.
+
+### The second round of mutants
+
+| | Mutation | Result |
+|---|---|---|
+| MA | a mere contact ROW counts as vouched (revert F1) | caught — the UNKNOWN-tier and BLOCKED tests |
+| MB | drop the `AND ongoing conversation` conjunct (revert F3) | caught — both no-trace tests |
+| MC | `not_checked` → a plain `false` (revert F6) | **SURVIVED**, then caught after the test above |
+| ME | drop the out-of-band clause (revert F5) | caught — two tests |
+| MF | the unsigned notice asks for the public key again (revert F4) | caught — three, via the word-for-word pin |
+
+The word-for-word guidance pin is what makes MF fail in three places. The hand-maintained verb
+blocklist is now a belt rather than the gate — review T1's point, and it was right: the first version
+of that list had been calibrated to the prose instead of to the rule, so *"Answer nothing"* sailed
+through a check whose entire job was to catch it.
+
+### Everything else the review raised, and what it became
+
+**F4** the unsigned notice no longer asks the operator to write down a public key it has just called
+a string somebody typed · **F7** the `!this.#db` early return is GONE rather than tested — it threw
+nothing and logged nothing while the operator still got a notice (`noteContentRefusal` keeps its own
+in-memory fallback), so removing the branch is stronger than asserting on it · **F8** *"the private
+key you know as Bob"* is now the **public** key they know · **F9** *"the time"* is the time they are
+reading, because the inbox projection carries no timestamp · **F10** *"report it"* followed by
+*"there is no command that would send one"* now reads *"record it as a report"* · **F11** a
+deduplicated notice no longer implies every earlier arrival looked like the newest · **F12/T1** both
+offending verbs gone, both in the list, list demoted to a belt · **T2** three tier tests, which is the
+gap that let F1 ship · **T4** the spine asserts `removed`, not `ok` — `cello_contact_remove` returns
+`ok: true` for a key that was never stored, so the old line left unproven the very row that separates
+case 2 from case 3 · **T5** a second in-process guard on the central mechanism, with a real Ed25519
+signature over real `encodeStructure1` bytes.
+
+### The reviewer's verdict, in its own words
+
+> *"The unit does the hard part right. The falsification is correct and I re-verified it
+> independently … Carrying it under its own name rather than widening `senderPubkey`/`senderSig` is
+> the right call and the comment explaining why is load-bearing. The prose is careful, the spine
+> journey is real, and the mutation loop is the most convincing part of the submission.*
+>
+> ***But the single decision the whole unit turns on — "is this key a known contact?" — is wrong, and
+> it is wrong in the direction that hands the prober exactly what the unit was written to deny."***
+
+Lens lines: **SPEC: DEVIATIONS FOUND** (F3 blocking; F1 leaves clause 3 unmet in practice) · **SILENT
+FALLBACKS FOUND** (F7, F6 blocking) · **ERRORS NAME THEIR CAUSE** — *"no exit-point label substitution
+anywhere in the diff"* · **HOLLOW TESTS FOUND** (T1, T2 blocking; every new test survives the revert
+test) · **REMOVALS PROVEN** — not applicable · **NO COMPATIBILITY DEBT**.
+
+On the two things I put to it explicitly: the no-schema-column decision — *"your call was right … I
+would not add the column"* — and the counterbalance claim — *"**false as written**"*, which is F2.
+
+And on itself: *"I do not think I am rubber-stamping this one. The unit touches registration-adjacent
+trust state and I found the defect where this reviewer's brief says to expect it: in the predicate
+that reads the contacts table."*
+
+### Gates after the fixes
+
+- cello-client **4827 passed | 11 skipped**, lint 0, typecheck 0.
+- trustless-cello **1982 passed | 624 skipped | 4 todo**, lint 0, typecheck 0.
+- Spine journey re-run after every prose change: **1 passed | 12 skipped, 70.5s, exit 0.**
+- **Nothing publishes.** No version bump; this is not in an operator's hands yet.
