@@ -367,6 +367,49 @@ export function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
   };
 }
 
+/**
+ * DOD-M15-RELAYSILENT-1 — **HOW MANY INBOUND CONNECTIONS ONE SOURCE IP MAY OPEN PER SECOND.**
+ *
+ * libp2p's default is FIVE, and inheriting it broke the advertised messaging journey. Measured on
+ * the live spine, quoted from this relay with libp2p's own debug logging on:
+ *
+ *     connection from /ip4/127.0.0.1/tcp/64907 refused - inboundConnectionThreshold
+ *     exceeded by host 127.0.0.1                                                   (×6 in one second)
+ *
+ * In that second: **11 inbound attempts from one host, 5 admitted, 6 refused — while 4 connections
+ * were open against a ceiling of 300.** The per-second IP rate was the only binding constraint, at
+ * 1.3% of capacity. Proven both ways: raising this one value turned `DOD-MSG-5`, `MSG-7` and
+ * `MSG-8` green across three consecutive live runs, and restoring it turned all three red again.
+ *
+ * **Why a relay is different from a daemon, which stays at five.** A daemon has no business
+ * accepting bursts of inbound connections from one host; a relay's entire job is accepting client
+ * connections. Every agent behind one office NAT, one home router or one cloud egress IP shares a
+ * single source address — and a single daemon bursts several connections at session start and at
+ * seal (prove, two reservation attempts, then the park dials), so one operator alone can spend the
+ * budget. This is the same mistake `DOD-NAT-REACHABILITY-1` already corrected one field over, where
+ * libp2p's `maxReservations: 15` was sized for a public DHT in which relaying is a courtesy.
+ *
+ * **Why weakening it is not a security regression — ruled by Andre, 2026-09-05.** The control is
+ * keyed on SOURCE IP: an attacker with a handful of addresses pays nothing, and one who simply
+ * dials at five per second pays nothing either. It costs an honest NAT'd operator their relay. That
+ * is a guard that is optional for the party it guards against. What actually bounds relay abuse is
+ * untouched and was nowhere near binding — `maxConnections` (300, observed peak 4), the per-agent
+ * reservation slot cap (`DEFAULT_SLOT_CEILING`, measured never to have fired), reservation
+ * authentication, and `DOD-M15-RELAYABUSE-1`'s limiter.
+ *
+ * **256, and the ordering against `maxConnections` is the argument for the number, not decoration.**
+ * A per-second rate ABOVE the connection ceiling would make this limiter unreachable and leave the
+ * relay with one control where it should have two. Below it, `maxConnections` binds first and this
+ * stays a real backstop against a single host opening connections faster than the ceiling prunes.
+ *
+ * ⚠️ **AND THE REFUSAL REMAINS INVISIBLE, WHICH IS A SEPARATE DEBT.** `acceptIncomingConnection`
+ * emits no event, and `upgrader.js` calls it BEFORE the connection gater — so CELLO has no hook at
+ * any layer it controls, and a refusal reaches no CELLO log, no status output and no client. Raising
+ * the number makes the refusals rare; it does not make them observable. Reading libp2p's
+ * `inboundErrors{ConnectionDeniedError}` metric is the real fix and is still owed.
+ */
+export const RELAY_INBOUND_CONNECTION_THRESHOLD = 256;
+
 // ─── CelloRelayNode ────────────────────────────────────────────────────────────
 
 /**
@@ -3198,6 +3241,9 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     listenAddresses: opts.listenAddresses ?? ["/ip4/127.0.0.1/tcp/0"],
     transportPrivateKey: opts.transportPrivateKey,
     connectionGater,
+    // DOD-M15-RELAYSILENT-1. Only this key is overridden; `resolveConnectionLimits` spreads the
+    // declared block first, so the other three keep the values `DOD-M15-IDLE-CONNS-1` authored.
+    connectionLimits: { inboundConnectionThreshold: RELAY_INBOUND_CONNECTION_THRESHOLD },
     // DOD-NAT-REACHABILITY-1 — THE ROOT CAUSE of "agents cannot get a reservation".
     //
     // The relay was running libp2p's DEFAULTS, which are sized for a public DHT where
@@ -3275,6 +3321,29 @@ export async function createRelayNode(opts: CreateRelayNodeOptions): Promise<{
     },
   });
   await node.start();
+  /**
+   * DOD-M15-RELAYSILENT-1 — **SAY WHAT THE INBOUND BUDGET IS, BECAUSE THE REFUSALS CANNOT BE SEEN.**
+   *
+   * libp2p refuses an over-rate inbound connection inside `acceptIncomingConnection`, which emits no
+   * event and runs BEFORE the connection gater — so nothing CELLO owns observes it, and an operator
+   * whose relay was turning agents away saw nothing anywhere. That is how a five-per-second limit
+   * broke the messaging journey unnoticed for weeks.
+   *
+   * This does NOT report refusals and must not be read as if it did; the `impact` line says so. It
+   * makes the number that causes them readable, so the next person watching connections die at a
+   * relay has somewhere to start. Read off the LIVE node rather than the constant, so a value that
+   * failed to reach libp2p cannot be reported as if it had.
+   */
+  const liveLimits = node.getConnectionLimits();
+  relayLogger.info("relay.config.connection_limits", {
+    ...liveLimits,
+    impact:
+      "these are the ceilings this relay runs with. libp2p REFUSES an inbound connection that " +
+      "exceeds inboundConnectionThreshold (per source IP, per second) before any CELLO code sees " +
+      "it, and emits no event — so refusals appear in NO relay log, no status output and nothing " +
+      "the client can read beyond a reset socket. If agents at one site cannot reach this relay, " +
+      "this number is the first thing to check.",
+  });
   connectionGater.attachNode(node);
 
   const relay = new CelloRelayNode({
