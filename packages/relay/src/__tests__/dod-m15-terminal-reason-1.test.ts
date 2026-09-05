@@ -50,6 +50,7 @@ import { generateKeypair } from "@cello-protocol/crypto";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
+import { seedChain, chainLinks, chainAdvance } from "./helpers/relay-submit-harness.js";
 import type { DirectoryAdapter } from "../relay-node.js";
 import type { SessionAssignment } from "../relay-types.js";
 import { testOnlineToken } from "./helpers/online-token.js";
@@ -111,9 +112,13 @@ async function makeStructure1(
   kp: ReturnType<typeof generateKeypair>,
   seq: number,
 ): Promise<{ structure1_cbor: Uint8Array; sender_signature: Uint8Array }> {
+  const pubkey = await kp.getPublicKey();
+  const contentHash = new Uint8Array(randomBytes(32));
+  const { lastSeenHash, prevOwnHash } = chainLinks(sessionId, pubkey, seq);
   const tbs = CBOR_ENC.encode([
-    1, new Uint8Array(randomBytes(32)), await kp.getPublicKey(), sessionId, seq, Date.now(),
+    3, contentHash, pubkey, sessionId, seq, Date.now(), lastSeenHash, prevOwnHash,
   ]) as Uint8Array;
+  chainAdvance(sessionId, pubkey, contentHash);
   return { structure1_cbor: tbs, sender_signature: await kp.sign(tbs) };
 }
 
@@ -128,6 +133,7 @@ async function makeAssignment(
     sessionId, pubA, pubB,
     session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
   ]) as Uint8Array;
+  seedChain(sessionId, pubA, pubB, session_timestamp);
   return {
     session_id: sessionId,
     participant_a: pubA,

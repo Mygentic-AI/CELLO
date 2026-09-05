@@ -31,6 +31,7 @@ import {
 } from "@cello-protocol/crypto";
 import type { LeafInput } from "@cello-protocol/crypto";
 import { createRelayNode } from "../relay-node.js";
+import { seedChain, chainLinks, chainAdvance } from "./helpers/relay-submit-harness.js";
 import type { SessionAssignment } from "../relay-types.js";
 import { randomBytes } from "node:crypto";
 import { Encoder } from "cbor-x";
@@ -176,7 +177,9 @@ async function makeStructure1(
 ): Promise<{ structure1_cbor: Uint8Array; sender_signature: Uint8Array }> {
   const pubkey = await kp.getPublicKey();
   const ts = Date.now();
-  const tbs = CBOR_ENC.encode([1, contentHash, pubkey, sessionId, lastSeenSeq, ts]) as Uint8Array;
+  const { lastSeenHash, prevOwnHash } = chainLinks(sessionId, pubkey, lastSeenSeq);
+  const tbs = CBOR_ENC.encode([3, contentHash, pubkey, sessionId, lastSeenSeq, ts, lastSeenHash, prevOwnHash]) as Uint8Array;
+  chainAdvance(sessionId, pubkey, contentHash);
   const sender_signature = await kp.sign(tbs);
   return { structure1_cbor: tbs, sender_signature };
 }
@@ -194,6 +197,7 @@ async function makeAssignment(
     pubB,
     session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
   ]) as Uint8Array;
+  seedChain(sessionId, pubA, pubB, session_timestamp);
   const directory_signature = await dirKp.sign(tbs);
   return { session_id: sessionId, participant_a: pubA, participant_b: pubB, session_timestamp, directory_signature };
 }

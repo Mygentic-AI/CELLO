@@ -35,6 +35,7 @@ import { generateKeypair } from "@cello-protocol/crypto";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
+import { seedChain, chainLinks, chainAdvance } from "./helpers/relay-submit-harness.js";
 import type { DirectoryAdapter } from "../relay-node.js";
 import type { SessionAssignment } from "../relay-types.js";
 import { testOnlineToken } from "./helpers/online-token.js";
@@ -103,7 +104,12 @@ async function makeStructure1(
   lastSeenSeq: number,
 ): Promise<{ structure1_cbor: Uint8Array; sender_signature: Uint8Array }> {
   const pubkey = await kp.getPublicKey();
-  const tbs = CBOR_ENC.encode([1, new Uint8Array(randomBytes(32)), pubkey, sessionId, lastSeenSeq, Date.now()]) as Uint8Array;
+  const { lastSeenHash, prevOwnHash } = chainLinks(sessionId, pubkey, lastSeenSeq);
+  // ONE content hash, used in the bytes AND recorded in the chain. Generating it twice records a
+  // message the relay never saw, and the NEXT submit's links then name content that does not exist.
+  const contentHash = new Uint8Array(randomBytes(32));
+  const tbs = CBOR_ENC.encode([3, contentHash, pubkey, sessionId, lastSeenSeq, Date.now(), lastSeenHash, prevOwnHash]) as Uint8Array;
+  chainAdvance(sessionId, pubkey, contentHash);
   return { structure1_cbor: tbs, sender_signature: await kp.sign(tbs) };
 }
 
@@ -119,6 +125,7 @@ async function makeAssignment(
     sessionId, pubA, pubB,
     session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
   ]) as Uint8Array;
+  seedChain(sessionId, pubA, pubB, session_timestamp);
   return {
     session_id: sessionId,
     participant_a: pubA,

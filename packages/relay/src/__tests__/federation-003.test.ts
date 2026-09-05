@@ -43,6 +43,7 @@ import {
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID, DIRECTORY_RELAY_PROTOCOL_ID } from "../relay-node.js";
+import { seedChain, chainLinks, chainAdvance } from "./helpers/relay-submit-harness.js";
 import type { DirectoryAdapter } from "../relay-node.js";
 import type { RelayPubkeyLookup } from "../relay-types.js";
 import { NetworkDirectoryAdapter } from "../network-directory-adapter.js";
@@ -354,6 +355,7 @@ describe("FEDERATION-003 AC-005/AC-006/SI-002: predecessor relay ACK verificatio
       ]);
       const dirSig = await directoryKp.sign(assignmentTbs);
 
+      seedChain(sessionId, pubA, pubB, sessionTimestamp);
       const recResult = relay.relay.recordAssignment({
         session_id: sessionId,
         participant_a: pubA,
@@ -367,7 +369,8 @@ describe("FEDERATION-003 AC-005/AC-006/SI-002: predecessor relay ACK verificatio
       const contentHash = new Uint8Array(randomBytes(32));
       const lastSeenSeq = 0;
       const msgTimestamp = Date.now();
-      const struct1Array = [1, contentHash, pubA, sessionId, lastSeenSeq, msgTimestamp];
+      const fedLinks = chainLinks(sessionId, pubA, lastSeenSeq);
+      const struct1Array = [3, contentHash, pubA, sessionId, lastSeenSeq, msgTimestamp, fedLinks.lastSeenHash, fedLinks.prevOwnHash];
       const struct1Cbor = CBOR_ENC.encode(struct1Array) as Uint8Array;
       const senderSig = await sessionKpA.sign(struct1Cbor);
 
@@ -476,6 +479,7 @@ describe("FEDERATION-003 AC-005/AC-006/SI-002: predecessor relay ACK verificatio
         sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
       ]);
       const dirSig = await directoryKp.sign(assignmentTbs);
+      seedChain(sessionId, pubA, pubB, sessionTimestamp);
       const recResult2 = relay.relay.recordAssignment({
         session_id: sessionId, participant_a: pubA, participant_b: pubB,
         session_timestamp: sessionTimestamp, directory_signature: dirSig,
@@ -483,7 +487,8 @@ describe("FEDERATION-003 AC-005/AC-006/SI-002: predecessor relay ACK verificatio
       expect(recResult2.ok, `recordAssignment failed: ${JSON.stringify(recResult2)}`).toBe(true);
 
       const contentHash = new Uint8Array(randomBytes(32));
-      const struct1Array = [1, contentHash, pubA, sessionId, 0, Date.now()];
+      const fedLinks = chainLinks(sessionId, pubA, 0);
+      const struct1Array = [3, contentHash, pubA, sessionId, 0, Date.now(), fedLinks.lastSeenHash, fedLinks.prevOwnHash];
       const struct1Cbor = CBOR_ENC.encode(struct1Array) as Uint8Array;
       const senderSig = await sessionKpA.sign(struct1Cbor);
 
@@ -594,6 +599,7 @@ describe("FEDERATION-003 AC-005/AC-006/SI-002: predecessor relay ACK verificatio
         sessionId, pubA, pubB,
         sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
       ]);
+      seedChain(sessionId, pubA, pubB, sessionTimestamp);
       const rec = relay.relay.recordAssignment({
         session_id: sessionId, participant_a: pubA, participant_b: pubB,
         session_timestamp: sessionTimestamp, directory_signature: await directoryKp.sign(assignmentTbs),
@@ -601,7 +607,10 @@ describe("FEDERATION-003 AC-005/AC-006/SI-002: predecessor relay ACK verificatio
       expect(rec.ok, `recordAssignment failed: ${JSON.stringify(rec)}`).toBe(true);
 
       const contentHash = new Uint8Array(randomBytes(32));
-      const struct1Cbor = CBOR_ENC.encode([1, contentHash, pubA, sessionId, 0, Date.now()]) as Uint8Array;
+      const fedLinks = chainLinks(sessionId, pubA, 0);
+      const struct1Cbor = CBOR_ENC.encode([
+        3, contentHash, pubA, sessionId, 0, Date.now(), fedLinks.lastSeenHash, fedLinks.prevOwnHash,
+      ]) as Uint8Array;
       const senderSig = await sessionKpA.sign(struct1Cbor);
       const predecessorSeq = 1;
       const predecessorTs = Date.now();
@@ -703,6 +712,7 @@ describe("FEDERATION-003 AC-005/AC-006/SI-002: predecessor relay ACK verificatio
         sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
       ]);
       const dirSig = await directoryKp.sign(assignmentTbs);
+      seedChain(sessionId, pubA, pubB, sessionTimestamp);
       const recResult3 = relay.relay.recordAssignment({
         session_id: sessionId, participant_a: pubA, participant_b: pubB,
         session_timestamp: sessionTimestamp, directory_signature: dirSig,
@@ -710,7 +720,8 @@ describe("FEDERATION-003 AC-005/AC-006/SI-002: predecessor relay ACK verificatio
       expect(recResult3.ok, `recordAssignment failed: ${JSON.stringify(recResult3)}`).toBe(true);
 
       const contentHash = new Uint8Array(randomBytes(32));
-      const struct1Array = [1, contentHash, pubA, sessionId, 0, Date.now()];
+      const fedLinks = chainLinks(sessionId, pubA, 0);
+      const struct1Array = [3, contentHash, pubA, sessionId, 0, Date.now(), fedLinks.lastSeenHash, fedLinks.prevOwnHash];
       const struct1Cbor = CBOR_ENC.encode(struct1Array) as Uint8Array;
       const senderSig = await sessionKpA.sign(struct1Cbor);
 

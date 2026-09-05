@@ -224,43 +224,79 @@ export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>)
 }
 
 /**
- * A test-side chain, kept the way a real client keeps one — `DOD-M15-SELFCHAIN-1`.
+ * ─── THE TEST-SIDE CHAIN — `DOD-M15-SELFCHAIN-1` ───────────────────────────────────────────────
  *
  * Every message carries two links and the relay checks both, so a rig that hands a fixed value to
- * either one can only build first messages. This tracks what a client tracks:
+ * either can build first messages and nothing else. These keep what a real client keeps.
  *
- *   - **own** — the content hash of this sender's previous message, seeded to the session genesis;
- *   - **seen** — the content hash of the last message this sender RECEIVED, also seeded to genesis,
- *     which for a two-party test is simply the other participant's last send.
+ * ⚠️ THE TWO LINKS ARE READ DIFFERENTLY, and a first pass here got it wrong in a way that passes
+ * most of the time:
  *
- * ⚠️ ADVANCE IT ONLY FOR MESSAGES THAT WERE ACTUALLY WITNESSED. A test that advances over a submit
- * the relay refused builds a chain the relay never saw, and every later assertion in that test is
- * about a conversation that does not exist. `advance` is separate from `next` for exactly that
- * reason: the test decides when a message counted.
+ *   - `last_seen_hash` is **POSITIONAL**. The relay compares it against the leaf at
+ *     `last_seen_seq`, so the rig must name the content at THAT position.
+ *   - `prev_own_hash` is **per sender** — the last message this sender wrote, wherever it landed.
+ *
+ * Reading both as "the last thing the other party sent" is the same value only while the two
+ * parties strictly alternate, which is most tests and not all of them.
+ *
+ * Both fall back to the session GENESIS, which is what a first message legitimately carries.
+ *
+ * ⚠️ ADVANCE ONLY FOR MESSAGES THAT WERE ACTUALLY BUILT AND WITNESSED. A rig that advances over a
+ * submit the relay refused builds a chain the relay never saw, and every later assertion in that
+ * test is about a conversation that does not exist.
+ *
+ * Module-level and shared across test files, which is safe because every session id is random.
  */
-export class TestChain {
-  readonly #own = new Map<string, Uint8Array>();
-  readonly #seen = new Map<string, Uint8Array>();
-  readonly #genesis: Uint8Array;
+const CHAIN_GENESIS = new Map<string, Uint8Array>();
+const CHAIN_LOG = new Map<string, Array<{ sender: string; hash: Uint8Array }>>();
 
-  constructor(genesis: Uint8Array) {
-    this.#genesis = genesis;
-  }
+export function seedChain(sessionId: Uint8Array, pubA: Uint8Array, pubB: Uint8Array, ts: number): void {
+  const sidHex = Buffer.from(sessionId).toString("hex");
+  CHAIN_GENESIS.set(sidHex, computeGenesisPrevRoot(pubA, pubB, sessionId, ts));
+  CHAIN_LOG.set(sidHex, []);
+}
 
-  /** The links a message from `senderHex` should carry right now. */
-  next(senderHex: string): { lastSeenHash: Uint8Array; prevOwnHash: Uint8Array } {
-    return {
-      lastSeenHash: this.#seen.get(senderHex) ?? this.#genesis,
-      prevOwnHash: this.#own.get(senderHex) ?? this.#genesis,
-    };
-  }
+export function chainLinks(
+  sessionId: Uint8Array,
+  pubkey: Uint8Array,
+  lastSeenSeq: number,
+): { lastSeenHash: Uint8Array; prevOwnHash: Uint8Array } {
+  const sidHex = Buffer.from(sessionId).toString("hex");
+  const me = Buffer.from(pubkey).toString("hex");
+  const genesis = CHAIN_GENESIS.get(sidHex) ?? new Uint8Array(32);
+  const log = CHAIN_LOG.get(sidHex) ?? [];
+  // The relay numbers from 1 and `log` is in append order, so position N is `log[N - 1]`.
+  const seen = lastSeenSeq >= 1 ? (log[lastSeenSeq - 1]?.hash ?? genesis) : genesis;
+  let own = genesis;
+  for (const e of log) if (e.sender === me) own = e.hash;
+  return { lastSeenHash: seen, prevOwnHash: own };
+}
 
-  /**
-   * Record that `senderHex` sent `contentHash` and it was witnessed: it becomes their own previous
-   * message, and the last thing every OTHER participant has seen.
-   */
-  advance(senderHex: string, contentHash: Uint8Array, otherHexes: readonly string[]): void {
-    this.#own.set(senderHex, contentHash);
-    for (const other of otherHexes) this.#seen.set(other, contentHash);
-  }
+export function chainAdvance(sessionId: Uint8Array, pubkey: Uint8Array, contentHash: Uint8Array): void {
+  const log = CHAIN_LOG.get(Buffer.from(sessionId).toString("hex"));
+  if (log) log.push({ sender: Buffer.from(pubkey).toString("hex"), hash: contentHash });
+}
+
+/**
+ * Build the one Structure 1 layout with both links filled from the chain, and advance it.
+ *
+ * The single place a relay test should build a claim: a local copy in each file is how the layout
+ * and the rig drift apart, which is the same argument the production code makes for having one
+ * encoder.
+ */
+export async function chainedS1(opts: {
+  sessionId: Uint8Array;
+  kp: ReturnType<typeof generateKeypair>;
+  contentHash: Uint8Array;
+  lastSeenSeq: number;
+  timestamp?: number;
+}): Promise<{ structure1_cbor: Uint8Array; sender_signature: Uint8Array }> {
+  const pubkey = await opts.kp.getPublicKey();
+  const { lastSeenHash, prevOwnHash } = chainLinks(opts.sessionId, pubkey, opts.lastSeenSeq);
+  const tbs = CBOR_ENC.encode([
+    3, opts.contentHash, pubkey, opts.sessionId, opts.lastSeenSeq,
+    opts.timestamp ?? Date.now(), lastSeenHash, prevOwnHash,
+  ]) as Uint8Array;
+  chainAdvance(opts.sessionId, pubkey, opts.contentHash);
+  return { structure1_cbor: tbs, sender_signature: await opts.kp.sign(tbs) };
 }

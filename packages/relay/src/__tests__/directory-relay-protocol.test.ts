@@ -40,6 +40,7 @@ import { generateKeypair } from "@cello-protocol/crypto";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID, DIRECTORY_RELAY_PROTOCOL_ID } from "../relay-node.js";
+import { seedChain, chainLinks, chainAdvance } from "./helpers/relay-submit-harness.js";
 import type { SessionAssignment } from "../relay-types.js";
 import { testOnlineToken } from "./helpers/online-token.js";
 
@@ -112,6 +113,7 @@ async function makeAssignment(
     pubB,
     session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
   ]) as Uint8Array;
+  seedChain(sessionId, pubA, pubB, session_timestamp);
   const directory_signature = await dirKp.sign(tbs);
   return { session_id: sessionId, participant_a: pubA, participant_b: pubB, session_timestamp, directory_signature };
 }
@@ -185,7 +187,9 @@ async function makeStructure1(
 ): Promise<{ structure1_cbor: Uint8Array; sender_signature: Uint8Array }> {
   const pubkey = await kp.getPublicKey();
   const ts = Date.now();
-  const tbs = CBOR_ENC.encode([1, contentHash, pubkey, sessionId, lastSeenSeq, ts]) as Uint8Array;
+  const { lastSeenHash, prevOwnHash } = chainLinks(sessionId, pubkey, lastSeenSeq);
+  const tbs = CBOR_ENC.encode([3, contentHash, pubkey, sessionId, lastSeenSeq, ts, lastSeenHash, prevOwnHash]) as Uint8Array;
+  chainAdvance(sessionId, pubkey, contentHash);
   const sender_signature = await kp.sign(tbs);
   return { structure1_cbor: tbs, sender_signature };
 }
@@ -459,6 +463,9 @@ async function makeClientRecordAssignmentFrame(
   const tsEncoded = sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp;
   const assignmentTbs = CBOR_ENC.encode([sessionId, pubA, pubB, tsEncoded]) as Uint8Array;
   const assignment_signature = await signerKp.sign(assignmentTbs);
+  // The client-presented path records a session too, so the rig's chain has to be seeded here as
+  // well — otherwise the first submit on it carries links anchored to a genesis nobody agreed.
+  seedChain(sessionId, pubA, pubB, sessionTimestamp);
   return CBOR_ENC.encode({
     type: "client_record_assignment",
     session_id: sessionId,

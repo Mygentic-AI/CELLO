@@ -31,6 +31,7 @@ import { generateKeypair } from "@cello-protocol/crypto";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
+import { seedChain, chainLinks, chainAdvance } from "./helpers/relay-submit-harness.js";
 import { testOnlineToken } from "./helpers/online-token.js";
 
 setupV3Tests();
@@ -109,7 +110,9 @@ async function makeStructure1(
   lastSeenSeq: number,
 ): Promise<{ structure1_cbor: Uint8Array; sender_signature: Uint8Array }> {
   const pubkey = await kp.getPublicKey();
-  const tbs = CBOR_ENC.encode([1, contentHash, pubkey, sessionId, lastSeenSeq, Date.now()]) as Uint8Array;
+  const { lastSeenHash, prevOwnHash } = chainLinks(sessionId, pubkey, lastSeenSeq);
+  const tbs = CBOR_ENC.encode([3, contentHash, pubkey, sessionId, lastSeenSeq, Date.now(), lastSeenHash, prevOwnHash]) as Uint8Array;
+  chainAdvance(sessionId, pubkey, contentHash);
   return { structure1_cbor: tbs, sender_signature: await kp.sign(tbs) };
 }
 
@@ -138,6 +141,7 @@ describe("DOD-M15-RELAYAUTH-1: a reservation proof refreshes the reservation wit
       sessionId, pubAgent, pubOther,
       sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
     ]) as Uint8Array;
+    seedChain(sessionId, pubAgent, pubOther, sessionTimestamp);
     relay.recordAssignment({
       session_id: sessionId,
       participant_a: pubAgent,

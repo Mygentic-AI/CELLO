@@ -30,6 +30,7 @@ import { encodeCbor } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
 import type { Logger } from "@cello-protocol/interfaces";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
+import { seedChain, chainLinks, chainAdvance } from "./helpers/relay-submit-harness.js";
 import { testOnlineToken } from "./helpers/online-token.js";
 
 setupV3Tests();
@@ -69,15 +70,28 @@ function send(stream: Stream, bytes: Uint8Array): void {
   stream.send(lp.encode.single(bytes));
 }
 
-/** Structure 1 as the client builds it: [1, content_hash, sender_pubkey, session_id, last_seen, ts]. */
+/**
+ * Structure 1 as the client builds it — the one layout, both chain links filled from the rig's
+ * chain (`DOD-M15-SELFCHAIN-1`).
+ *
+ * ⚠️ `claimedSender` AND `signer` ARE DELIBERATELY SEPARATE, and the links follow the CLAIMED
+ * sender. That is the whole subject of this file: a leaf that NAMES one participant and is signed
+ * by someone else must reach the signature check and be refused there. Filling the links from the
+ * signer instead would make the frame refuse earlier, for a different reason, and the test would
+ * pass while proving nothing about authorship.
+ */
 async function makeLeaf(
   sessionId: Uint8Array,
   claimedSender: Keypair,
   signer: Keypair,
 ): Promise<{ structure1_cbor: Uint8Array; sender_signature: Uint8Array }> {
+  const claimedPub = await claimedSender.getPublicKey();
+  const contentHash = new Uint8Array(randomBytes(32));
+  const { lastSeenHash, prevOwnHash } = chainLinks(sessionId, claimedPub, 0);
   const structure1_cbor = CBOR.encode([
-    1, new Uint8Array(randomBytes(32)), await claimedSender.getPublicKey(), sessionId, 0, Date.now(),
+    3, contentHash, claimedPub, sessionId, 0, Date.now(), lastSeenHash, prevOwnHash,
   ]) as Uint8Array;
+  chainAdvance(sessionId, claimedPub, contentHash);
   return { structure1_cbor, sender_signature: await signer.sign(structure1_cbor) };
 }
 
@@ -115,7 +129,8 @@ describe("DOD-M15-CORROBORATE-1: the relay verifies each hash at arrival and ale
     // a BigInt above 0xffffffff to match recordAssignment's own TBS — every Date.now() is.
     const ts = Date.now();
     const assignmentTbs = CBOR.encode([sessionId, pubA, pubB, ts > 0xffffffff ? BigInt(ts) : ts]) as Uint8Array;
-    expect(relay.recordAssignment({
+    expect(seedChain(sessionId, pubA, pubB, ts);
+relay.recordAssignment({
       session_id: sessionId, participant_a: pubA, participant_b: pubB, session_timestamp: ts,
       directory_signature: await dirKp.sign(assignmentTbs),
     }).ok, "precondition: the session must be recorded, or every submit answers session_not_found").toBe(true);
@@ -442,7 +457,8 @@ describe("DOD-M15-CORROBORATE-1: the relay verifies each hash at arrival and ale
     const pubB = await kpB.getPublicKey();
     const sessionId = new Uint8Array(randomBytes(16));
     const ts = Date.now();
-    expect(relay.recordAssignment({
+    expect(seedChain(sessionId, pubA, pubB, ts);
+relay.recordAssignment({
       session_id: sessionId, participant_a: pubA, participant_b: pubB, session_timestamp: ts,
       directory_signature: await dirKp.sign(CBOR.encode([sessionId, pubA, pubB, ts > 0xffffffff ? BigInt(ts) : ts]) as Uint8Array),
     }).ok).toBe(true);

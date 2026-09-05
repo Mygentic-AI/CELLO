@@ -28,6 +28,7 @@ import { generateKeypair } from "@cello-protocol/crypto";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
+import { seedChain, chainLinks, chainAdvance } from "./helpers/relay-submit-harness.js";
 import { testOnlineToken } from "./helpers/online-token.js";
 
 setupV3Tests();
@@ -126,7 +127,9 @@ async function makeStructure1(
 ): Promise<{ structure1_cbor: Uint8Array; sender_signature: Uint8Array }> {
   const pubkey = await kp.getPublicKey();
   const ts = Date.now();
-  const tbs = CBOR_ENC.encode([1, contentHash, pubkey, sessionId, lastSeenSeq, ts]) as Uint8Array;
+  const { lastSeenHash, prevOwnHash } = chainLinks(sessionId, pubkey, lastSeenSeq);
+  const tbs = CBOR_ENC.encode([3, contentHash, pubkey, sessionId, lastSeenSeq, ts, lastSeenHash, prevOwnHash]) as Uint8Array;
+  chainAdvance(sessionId, pubkey, contentHash);
   const sender_signature = await kp.sign(tbs);
   return { structure1_cbor: tbs, sender_signature };
 }
@@ -345,6 +348,7 @@ describe("DOD-M15-RELAYABUSE-1 — hash_submit is rate limited, per peer AND per
       sessionTimestamp > 0xffffffff ? BigInt(sessionTimestamp) : sessionTimestamp,
     ]) as Uint8Array;
     const directory_signature = await dirKp.sign(tbs);
+    seedChain(sessionId, pubkey, otherPubkey, sessionTimestamp);
     relay.recordAssignment({ session_id: sessionId, participant_a: pubkey, participant_b: otherPubkey, session_timestamp: sessionTimestamp, directory_signature });
 
     const clientNode = await createNode({ keyProvider: clientKp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
@@ -394,6 +398,7 @@ describe("DOD-M15-RELAYABUSE-1 — hash_submit is rate limited, per peer AND per
     // BigInt in that case (relay-node.ts), so the signature TBS here must match or verification
     // fails and the session is never recorded (the exemplar-value trap this milestone names).
     const tbs1 = CBOR_ENC.encode([sessionId1, pubA, pubB, ts1 > 0xffffffff ? BigInt(ts1) : ts1]) as Uint8Array;
+    seedChain(sessionId1, pubA, pubB, ts1);
     relay.recordAssignment({ session_id: sessionId1, participant_a: pubA, participant_b: pubB, session_timestamp: ts1, directory_signature: await dirKp.sign(tbs1) });
 
     const nodeA = await createNode({ keyProvider: kpA, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
@@ -418,6 +423,7 @@ describe("DOD-M15-RELAYABUSE-1 — hash_submit is rate limited, per peer AND per
     const sessionId2 = new Uint8Array(randomBytes(16));
     const ts2 = Date.now();
     const tbs2 = CBOR_ENC.encode([sessionId2, pubC, pubD, ts2 > 0xffffffff ? BigInt(ts2) : ts2]) as Uint8Array;
+    seedChain(sessionId2, pubC, pubD, ts2);
     relay.recordAssignment({ session_id: sessionId2, participant_a: pubC, participant_b: pubD, session_timestamp: ts2, directory_signature: await dirKp.sign(tbs2) });
 
     const nodeC = await createNode({ keyProvider: kpC, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
@@ -463,6 +469,7 @@ describe("DOD-M15-RELAYABUSE-1 — hash_submit is rate limited, per peer AND per
       const other = await generateKeypair().getPublicKey();
       const ts = Date.now();
       const tbs = CBOR_ENC.encode([sid, pub, other, ts > 0xffffffff ? BigInt(ts) : ts]) as Uint8Array;
+      seedChain(sid, pub, other, ts);
       relay.recordAssignment({ session_id: sid, participant_a: pub, participant_b: other, session_timestamp: ts, directory_signature: await dirKp.sign(tbs) });
       sessions.push(sid);
     }
@@ -506,6 +513,7 @@ describe("DOD-M15-RELAYABUSE-1 — hash_submit is rate limited, per peer AND per
     const sessionId = new Uint8Array(randomBytes(16));
     const ts = Date.now();
     const tbs = CBOR_ENC.encode([sessionId, senderPub, otherPub, ts > 0xffffffff ? BigInt(ts) : ts]) as Uint8Array;
+    seedChain(sessionId, senderPub, otherPub, ts);
     relay.recordAssignment({ session_id: sessionId, participant_a: senderPub, participant_b: otherPub, session_timestamp: ts, directory_signature: await dirKp.sign(tbs) });
 
     // TWO transport nodes with distinct transport keys, both authenticating as the SAME agent —
