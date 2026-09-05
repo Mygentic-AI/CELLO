@@ -152,17 +152,36 @@ async function makeAssignment(opts: {
 }
 
 /** A relay, a resume assignment recorded on it, and an authenticated submitter stream. */
-async function harness(scope: ReturnType<typeof createTestScope>, opts?: { priorRelayId?: string | null }) {
+async function harness(
+  scope: ReturnType<typeof createTestScope>,
+  opts?: { priorRelayId?: string | null; withDirectory?: boolean },
+) {
   const dirKp = generateKeypair();
   const dirPub = await dirKp.getPublicKey();
   const store = new InMemoryRelayStore();
   const relayIdKp = generateKeypair();
+  /**
+   * A directory that records what it was asked to adjudicate. Review H4: the seal trigger lives on
+   * the `hash_submit` path, and adoption is the OTHER write to `leaf_log` — so the only way to
+   * prove an inherited closing ceremony is acted on is to watch for the call.
+   */
+  const sealSubmissions: Array<{ leafCount: number }> = [];
   const { relay, node, stop } = await createRelayNode({
     directoryPubkey: dirPub,
     directoryPubkeys: [dirPub],
     store,
     ackSigningKeyProvider: relayIdKp,
     relayId: Buffer.from(await relayIdKp.getPublicKey()).toString("hex"),
+    ...(opts?.withDirectory
+      ? {
+          directory: {
+            processSeal: async (_sessionId: Uint8Array, sealData: { leaves: unknown[] }) => {
+              sealSubmissions.push({ leafCount: sealData.leaves.length });
+              return { ok: true as const };
+            },
+          },
+        }
+      : {}),
   });
   scope.addCleanup(async () => { await stop(); });
 
@@ -194,7 +213,7 @@ async function harness(scope: ReturnType<typeof createTestScope>, opts?: { prior
   };
 
   return {
-    relay, store, sessionId, sessionTimestamp, submitter, counterparty, priorRelay, priorRelayId,
+    relay, store, sessionId, sessionTimestamp, submitter, counterparty, priorRelay, priorRelayId, sealSubmissions,
     subPub, cpPub, dirKp, recorded, connect,
     sessionKey: Buffer.from(sessionId).toString("hex"),
     validBatch: () => buildValidReplay({ sessionId, sessionTimestamp, submitter, counterparty, priorRelay, leafCount: LEAF_COUNT }),
@@ -809,6 +828,60 @@ describe("031-RELAYREPLAY: an inherited session is not an empty one", () => {
     expect(h.store.getSession(h.sessionKey)!.status).toBe("diverged");
     expect(h.relay.submitForSeal(h.sessionId)).toEqual({ ok: false, reason: "session_diverged" });
     expect(h.relay.getSealLeaves(h.sessionId)).toEqual({ ok: false, reason: "session_diverged" });
+  });
+});
+
+describe("031-RELAYREPLAY: an inherited conversation that was already closed still gets its receipt", () => {
+  let scope = createTestScope();
+  beforeEach(() => { scope = createTestScope(); });
+  afterEach(() => scope.run(async () => {}));
+
+  it("adopting a chain that already contains BOTH closing leaves adjudicates the seal — review H4", async () => {
+    /**
+     * ⚠️ THE SYMPTOM THIS WHOLE DoD LINE EXISTS TO REMOVE, ARRIVING THROUGH THE NEW PATH.
+     *
+     * The bilateral seal is triggered by two ctrl leaves from distinct senders, and that trigger
+     * lived on the `hash_submit` path alone. Adoption is the OTHER write to `leaf_log`.
+     *
+     * So: both agents close. Both SEAL leaves reach the old relay. The old relay dies before
+     * submitting the seal. One party replays here — and the new relay adopted a chain containing a
+     * complete closing ceremony, left the session `active`, and never adjudicated it. The
+     * conversation is over, the receipt never arrives, and nothing anywhere is waiting on anything.
+     */
+    const h = await harness(scope, { withDirectory: true });
+    const batch = await buildValidReplay({
+      sessionId: h.sessionId, sessionTimestamp: h.sessionTimestamp,
+      submitter: h.submitter, counterparty: h.counterparty, priorRelay: h.priorRelay,
+      leafCount: LEAF_COUNT, closeBothAtEnd: true,
+    });
+    const conn = await h.connect(h.submitter);
+    const res = await h.replay(conn, {
+      reported_root: batch.reported_root, leaves: batch.leaves, counterparty_tip: batch.counterparty_tip,
+    });
+    expect(res["ok"], `refused: ${String(res["reason"])}`).toBe(true);
+    expect(res["adopted_leaf_count"]).toBe(LEAF_COUNT + 2);
+
+    // Name the artifact, not its shadow: the directory was ASKED to notarize, with the whole chain.
+    expect(h.sealSubmissions.length, "the closing ceremony was adjudicated, not stranded").toBe(1);
+    expect(h.sealSubmissions[0]!.leafCount).toBe(LEAF_COUNT + 2);
+    // The directory said yes, so `confirmSeal` released the session — the strongest available
+    // statement that the ceremony finished rather than merely started. (Asserting `"sealing"` here
+    // was wrong about the code, not about the fix: that status is the in-flight state, and this
+    // seal is not in flight, it is done.)
+    expect(h.store.getSession(h.sessionKey), "a confirmed seal destroys the relay's session state").toBeUndefined();
+  });
+
+  it("an ordinary mid-conversation handover does NOT trigger a seal — the trigger is the ceremony, not the adoption", async () => {
+    // The control. Without it the fix could call processSeal on every adoption and the test above
+    // would be just as green.
+    const h = await harness(scope, { withDirectory: true });
+    const batch = await h.validBatch();
+    const conn = await h.connect(h.submitter);
+    expect((await h.replay(conn, {
+      reported_root: batch.reported_root, leaves: batch.leaves, counterparty_tip: batch.counterparty_tip,
+    }))["ok"]).toBe(true);
+    expect(h.sealSubmissions.length, "no closing leaves in this chain, so nothing to adjudicate").toBe(0);
+    expect(h.store.getSession(h.sessionKey)!.status).toBe("active");
   });
 });
 

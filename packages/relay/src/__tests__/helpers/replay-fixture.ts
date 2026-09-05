@@ -27,6 +27,15 @@ import { RELAY_LEAF_KINDS } from "../../relay-types.js";
 
 const CBOR = new Encoder({ tagUint8Array: false });
 export const MSG_LEAF_KIND = 0x00;
+export const CTRL_LEAF_KIND = 0x02;
+
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+  return a.length === b.length && Buffer.from(a).equals(Buffer.from(b));
+}
+/** The sender pubkey a leaf committed to, read out of its Structure 2 (index 1). */
+function senderOf(leaf: SealUnilateralLeaf): Uint8Array {
+  return (CBOR.decode(leaf.structure2_cbor) as unknown[])[1] as Uint8Array;
+}
 
 type Kp = ReturnType<typeof generateKeypair>;
 
@@ -72,6 +81,11 @@ export function structure2Root(leaves: SealUnilateralLeaf[], count: number): Uin
 }
 
 export interface BuildOpts {
+  /**
+   * Give BOTH parties a closing SEAL (`ctrl`) leaf at the end of the chain — the shape of a
+   * conversation that was already over when its relay died. Review H4.
+   */
+  closeBothAtEnd?: boolean;
   /**
    * Give the counterparty two CONSECUTIVE leaves instead of strict alternation.
    *
@@ -148,6 +162,45 @@ export async function buildValidReplay(opts: BuildOpts): Promise<ReplayBatch> {
     CONTENT_HASHES.set(leaf, contentHash);
     leaves.push(leaf);
     prevRoot = structure2Root(leaves, leaves.length);
+  }
+
+  /**
+   * Two ctrl leaves, one per party, appended after the message leaves — a completed closing
+   * ceremony inside the inherited chain. See `closeBothAtEnd`.
+   */
+  if (opts.closeBothAtEnd) {
+    for (const fromSubmitter of [true, false]) {
+      const kp = fromSubmitter ? opts.submitter : opts.counterparty;
+      const pub = fromSubmitter ? subPub : cpPub;
+      const seq = leaves.length + 1;
+      let lastSeenSeq = 0;
+      for (let j = 0; j < leaves.length; j++) {
+        if (!bytesEqual(senderOf(leaves[j]!), pub)) lastSeenSeq = j + 1;
+      }
+      const contentHash = new Uint8Array(randomBytes(32));
+      const structure1_cbor = CBOR.encode([
+        1, contentHash, pub, opts.sessionId, lastSeenSeq, opts.sessionTimestamp + 500 + seq,
+      ]) as Uint8Array;
+      const sender_signature = await kp.sign(structure1_cbor);
+      const structure2_cbor = encodeStructure2({
+        sequence_number: seq,
+        sender_pubkey: pub,
+        content_hash: contentHash,
+        sender_signature,
+        scan_result: SCAN_RESULT_SENTINEL,
+        prev_root: prevRoot,
+      });
+      const leaf: SealUnilateralLeaf = { sequence_number: seq, leaf_kind: CTRL_LEAF_KIND, structure2_cbor, structure1_cbor };
+      if (fromSubmitter) {
+        const relay_timestamp = opts.sessionTimestamp + 2000 + seq;
+        leaf.relay_id = priorPubHex;
+        leaf.relay_timestamp = relay_timestamp;
+        leaf.relay_signature = await opts.priorRelay.sign(buildRelayAckTbs(contentHash, seq, relay_timestamp));
+      }
+      CONTENT_HASHES.set(leaf, contentHash);
+      leaves.push(leaf);
+      prevRoot = structure2Root(leaves, leaves.length);
+    }
   }
 
   const reported_root = contentRoot(leaves, leaves.length);

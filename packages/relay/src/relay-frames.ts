@@ -32,9 +32,15 @@ const ENC = new Encoder({ tagUint8Array: false });
  *
  * ⚠️ THIS COMMENT SAID **O(N log N)** AND THE CODE WAS **O(N²)**, which is how the cost survived
  * being looked at. The prev_root walk rebuilt the entire partial tree per leaf, so the bound it was
- * protecting was quadratic, and MEASURED at this cap it was **32.9 seconds of synchronous,
- * event-loop-blocking CPU for one frame** — every other session on the relay frozen for the
- * duration, repeatable for free because a refused batch costs the sender nothing.
+ * protecting was quadratic: seconds of synchronous, event-loop-blocking CPU for ONE frame, with
+ * every other session on the relay frozen for the duration, repeatable for free because a refused
+ * batch costs the sender nothing.
+ *
+ * Two measurements at this cap, and they are different measurements rather than a disagreement.
+ * Review measured the whole walk — Merkle rebuild plus the N²/2 `encodeStructure2` calls — at
+ * **32.9 s**. Re-measured here over the Merkle work alone, excluding the encodes: **18.4 s before,
+ * 27 ms after**, a 683× reduction. Both numbers are of the same thing from different starting
+ * lines; the smaller one is the floor.
  *
  * `verifySealLeafChain` now folds the running root incrementally (RFC 6962, the same fold the
  * `hash_submit` path already used), so the walk is genuinely O(N log N) and 4096 leaves cost
