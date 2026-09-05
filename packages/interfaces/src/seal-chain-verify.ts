@@ -22,7 +22,7 @@
 import { decode as cborDecode } from "cbor-x";
 import { verify, buildRelayAckTbs, buildMerkleTree, merkleRoot } from "@cello-protocol/crypto";
 import type { LeafInput } from "@cello-protocol/crypto";
-import { SCAN_RESULT_SENTINEL, encodeStructure2 } from "@cello-protocol/protocol-types";
+import { SCAN_RESULT_SENTINEL, encodeStructure2, encodeCbor } from "@cello-protocol/protocol-types";
 import type { Structure2 } from "@cello-protocol/protocol-types";
 import type { SealUnilateralLeaf, RelaySealData, RelaySealLeaf } from "./seal-leaf-types.js";
 
@@ -232,10 +232,23 @@ export type SealFinalRootReason =
  * re-encoding Structure2 is byte-faithful — the canonical scan-result sentinel is rebuilt by encodeStructure2
  * — so the downstream merkle/chain checks hold.
  *
+ * ⚠️ `receiptRelayHex` DECIDES WHOSE RECEIPTS COUNT, AND IT IS NEVER READ OFF THE FRAME —
+ * `031-RELAYREPLAY` Part 3.
+ *
+ * On the directory's seal path the answer is "whichever relay signed it", which is what `undefined`
+ * selects: each own leaf's own `relay_id` is used, and the receipt signature is what makes that
+ * non-arbitrary — a wrong id yields a key the signature does not verify under.
+ *
+ * On a relay's REPLAY path that is not enough. The party assembling the batch is a participant, and
+ * a batch that could name its own witness would be choosing whose signatures it is judged against —
+ * grading its own homework, the exact property `LEAFPARTIES-1` and `CORROBORATE-1` spent themselves
+ * establishing. So the new relay passes the `prior_relay_id` from the DIRECTORY-SIGNED assignment,
+ * and a leaf whose receipt names any other relay is refused by name.
  */
 export function reconstructCarriedSealLeaves(
   sealLeaves: SealUnilateralLeaf[] | undefined,
   presentHex: string,
+  receiptRelayHex?: string,
 ): { ok: true; leaves: RelaySealData["leaves"] } | { ok: false; reason: string } {
   if (!sealLeaves || sealLeaves.length === 0) return { ok: false, reason: "unilateral_leaves_unavailable" };
   const leaves: RelaySealData["leaves"] = [];
@@ -271,6 +284,10 @@ export function reconstructCarriedSealLeaves(
     if (Buffer.from(sender_pubkey).toString("hex") === presentHex) {
       if (!w.relay_id || w.relay_timestamp === undefined || !w.relay_signature) return { ok: false, reason: "unilateral_own_leaf_unwitnessed" };
       if (!/^[0-9a-fA-F]{64}$/.test(w.relay_id)) return { ok: false, reason: "unilateral_receipt_bad_relay_id" };
+      // See the header: when the CALLER names the witness, the leaf's own claim must match it.
+      if (receiptRelayHex !== undefined && w.relay_id.toLowerCase() !== receiptRelayHex.toLowerCase()) {
+        return { ok: false, reason: "unilateral_receipt_wrong_relay" };
+      }
       const relayPubkey = new Uint8Array(Buffer.from(w.relay_id, "hex"));
       if (!verify(relayPubkey, buildRelayAckTbs(content_hash, sequence_number, w.relay_timestamp), w.relay_signature)) {
         return { ok: false, reason: "unilateral_receipt_invalid" };
@@ -509,4 +526,129 @@ export function verifySealCtrlLeaf(
     return { ok: false, reason: "unilateral_seal_leaf_invalid" };
   }
   return { ok: true };
+}
+
+// ─── The counterparty's tip attestation ───────────────────────────────────────
+
+/**
+ * 🚨 CONTIGUITY DOES NOT PROVE COMPLETENESS, AND THIS IS THE ONLY THING THAT COVERS THE GAP —
+ * `031-RELAYREPLAY` Trap 3.
+ *
+ * `reconstructCarriedSealLeaves` checks the sequences are exactly `1..N`, which catches a leaf
+ * omitted in the MIDDLE. It cannot tell you that `N` is the true end: a tail can always be cut at a
+ * clean boundary and still look perfectly contiguous. The party assembling a replay batch is also
+ * the party who would benefit from the cut — drop your counterparty's last three messages and the
+ * inherited record no longer contains what you would rather it did not.
+ *
+ * The counterparty is the one witness to its own tip, and this is its signed statement of it: "at
+ * sequence `last_seq`, in session X, the content-hash root was R." A new relay compares that
+ * against the batch it was handed and refuses one that cannot produce what the other side attests
+ * to.
+ *
+ * ⚠️ NOTHING SENDS ONE YET — the exchange is unit 3 — AND THE ABSENCE IS REFUSED ANYWAY. That is
+ * deliberate and it is the same discipline `020-ACKHASH` shipped: the reader lands before the
+ * writer, and a MISSING proof takes exactly the same path as a wrong one. An "accept the replay,
+ * the attestation is optional for now" branch is the fail-open this milestone exists to remove, and
+ * it would be `DOD-M15-AUTHORSHIP-ABSENT-1` a third time, one layer down.
+ */
+export interface SessionTipAttestation {
+  /** The ATTESTING party — must be the counterparty of whoever submitted the batch. */
+  pubkey: Uint8Array;
+  /** How many leaves that party holds. 1-based, and `0` is refused — see `verifySessionTipAttestation`. */
+  last_seq: number;
+  /** The content-hash root over leaves `1..last_seq`, as that party computed it. */
+  root: Uint8Array;
+  /** Ed25519 over `buildSessionTipTbs(session_id, last_seq, root)`, RFC 8032. */
+  signature: Uint8Array;
+}
+
+/** Domain separator. Distinct from every other TBS so a tip claim can never be replayed as one. */
+export const SESSION_TIP_DOMAIN = "cello-session-tip-v1";
+
+/**
+ * The bytes a tip attestation signs.
+ *
+ * Lives here, beside the verifier, for the reason Part 1 of this order exists: `017-TBS` and
+ * `020-ACKHASH` each cost this milestone a TBS builder that had drifted from the bytes actually
+ * being signed. Unit 3's client signs with THIS function or the relay refuses it.
+ *
+ * `session_id` is in the bytes so a tip from one conversation cannot be presented for another;
+ * `last_seq` and `root` together are the claim.
+ */
+export function buildSessionTipTbs(sessionId: Uint8Array, lastSeq: number, root: Uint8Array): Uint8Array {
+  // `encodeCbor` — the ONE encoder (protocol-types/cbor.ts). A locally constructed one is a
+  // second wire format written into the same signed bytes, and unit 3 signs with this function.
+  // An ARRAY with the domain tag in slot 0, because this encoder is not deterministic for MAPS.
+  return encodeCbor([SESSION_TIP_DOMAIN, sessionId, lastSeq, root]);
+}
+
+/**
+ * The content-hash root over the first `count` leaves — the same root the CLIENT's own SessionTree
+ * produces, which is why the attestation can be checked against a batch at all.
+ *
+ * Exported so a test can state the rule independently of the code applying it; computing an
+ * expected value with the private helper under test is the circularity `seal-final-root.ts` was
+ * written to remove, reproduced one level down.
+ */
+export function contentRootOverPrefix(leaves: RelaySealData["leaves"], count: number): Uint8Array {
+  const inputs: LeafInput[] = leaves.slice(0, count).map((l) => ({ kind: "hash" as const, data: l.s2.content_hash }));
+  return merkleRoot(buildMerkleTree(inputs));
+}
+
+/**
+ * Check a replay batch against the counterparty's signed tip. See `SessionTipAttestation`.
+ *
+ * The five outcomes, and which of the order's settled reconciliation rules each one is:
+ *
+ *   - **absent / malformed / not the counterparty / bad signature** → refused by name. Missing and
+ *     wrong take the same path (M15 invariant 2, requirement 3).
+ *   - **`last_seq === leaves.length`, roots agree** → D4a, the happy path.
+ *   - **`last_seq < leaves.length`, roots agree at that prefix** → D4b. The batch EXTENDS the
+ *     attested tip: those are the in-flight messages, already signed, and the shorter side cannot
+ *     refuse a validly signed leaf without lying. **This counts as a match** — it is NOT truncated
+ *     to the shorter length (D4c), because those messages exist in both operators' transcripts and
+ *     cutting the witness record means the receipt permanently covers less than was said.
+ *   - **`last_seq > leaves.length`** → D6. A side that attests to N leaves and cannot supply them
+ *     made a false attestation. Refused; never silently accepted at the shorter length.
+ *   - **roots differ at a position both sides hold** → D5. Not a reconciliation case: it is the
+ *     attack the witness exists to prevent. The caller marks the session diverged and unsealable.
+ *
+ * ⚠️ `last_seq === 0` IS REFUSED, and it is the case worth naming. A counterparty attesting to zero
+ * leaves says nothing about where the tail ends, so accepting it would satisfy the "an attestation
+ * was present" test while covering nothing — an attestation-shaped hole in exactly the guard that
+ * exists because contiguity has one.
+ */
+export function verifySessionTipAttestation(
+  attestation: SessionTipAttestation | undefined,
+  leaves: RelaySealData["leaves"],
+  sessionId: Uint8Array,
+  expectedAttestorHex: string,
+): { ok: true; coversThrough: number } | { ok: false; reason: string; diverged?: true } {
+  if (attestation === undefined) return { ok: false, reason: "replay_tip_attestation_absent" };
+  if (
+    !(attestation.pubkey instanceof Uint8Array) || attestation.pubkey.length !== 32 ||
+    !(attestation.root instanceof Uint8Array) || attestation.root.length !== 32 ||
+    !(attestation.signature instanceof Uint8Array) || attestation.signature.length !== 64 ||
+    !Number.isInteger(attestation.last_seq) || attestation.last_seq < 1
+  ) {
+    return { ok: false, reason: "replay_tip_attestation_malformed" };
+  }
+  if (Buffer.from(attestation.pubkey).toString("hex") !== expectedAttestorHex) {
+    return { ok: false, reason: "replay_tip_attestation_wrong_party" };
+  }
+  if (!verify(attestation.pubkey, buildSessionTipTbs(sessionId, attestation.last_seq, attestation.root), attestation.signature)) {
+    return { ok: false, reason: "replay_tip_attestation_invalid" };
+  }
+  // D6 — a tip claim that cannot be produced is a rejected handover, never a quiet downgrade to the
+  // shorter chain. This is the check that makes a truncated tail visible at all.
+  if (attestation.last_seq > leaves.length) {
+    return { ok: false, reason: "replay_tip_unsupplied" };
+  }
+  // D5 — different content at a position both sides already hold.
+  if (!bufEqual(contentRootOverPrefix(leaves, attestation.last_seq), attestation.root)) {
+    return { ok: false, reason: "replay_chain_diverged", diverged: true };
+  }
+  // D4a and D4b both land here: equal length, or a batch that EXTENDS the attested tip with signed
+  // leaves the shorter side cannot honestly refuse.
+  return { ok: true, coversThrough: attestation.last_seq };
 }

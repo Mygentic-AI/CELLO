@@ -20,9 +20,27 @@ import type {
   SessionLivenessResponse,
   SessionWitnessAlert,
   ClientRecordAssignment,
+  SessionReplay,
+  SessionReplayResult,
 } from "./relay-types.js";
+import type { SealUnilateralLeaf, SessionTipAttestation } from "@cello-protocol/interfaces";
 
 const ENC = new Encoder({ tagUint8Array: false });
+
+/**
+ * 031-RELAYREPLAY — ceiling on a replayed conversation, applied BEFORE any signature is checked.
+ *
+ * Verification is O(N log N) in the leaf count (a Merkle rebuild per leaf for the prev_root chain),
+ * and every byte of it is attacker-chosen: a `session_replay` arrives from an authenticated
+ * participant, but "authenticated" is not "honest", and nothing in the batch is trustworthy until
+ * the walk that this bound protects has finished. Without it one frame buys unbounded relay CPU.
+ *
+ * 4096 is far above any real conversation and far below the point where the walk is expensive. A
+ * batch over it is refused as malformed rather than truncated — truncating a chain to fit a limit
+ * is D4c, which this order rules out for the reason it rules it out everywhere: those messages
+ * exist in both operators' transcripts.
+ */
+const MAX_REPLAY_LEAVES = 4096;
 
 /**
  * The ctrl leaf kind — the ONLY kind whose content may reach a relay. See `HashSubmit.content_bytes`.
@@ -182,7 +200,7 @@ export function encodeSessionLivenessResponse(frame: SessionLivenessResponse): U
 
 // ─── Decode ───────────────────────────────────────────────────────────────────
 
-export type InboundRelayFrame = RelayAuthResponse | HashSubmit | SessionLivenessQuery | ClientRecordAssignment;
+export type InboundRelayFrame = RelayAuthResponse | HashSubmit | SessionLivenessQuery | ClientRecordAssignment | SessionReplay;
 
 function toUint8Array(v: unknown): Uint8Array | null {
   if (v instanceof Uint8Array) return v;
@@ -320,6 +338,17 @@ export function decodeInboundFrame(bytes: Uint8Array): InboundRelayFrame | null 
       typeof o["counterparty_session_peer_id"] === "string" && o["counterparty_session_peer_id"] !== ""
         ? (o["counterparty_session_peer_id"] as string)
         : undefined;
+    /**
+     * 031-RELAYREPLAY. Read by TYPE, and `""` is kept rather than folded into `undefined`.
+     *
+     * They mean the same thing to `recordAssignment` — both produce the fresh (pre-031) TBS layout
+     * — but a non-string is NOT quietly dropped to absent: it is refused with the rest of the
+     * frame, because a client sending `prior_relay_id: 7` is not a client with an empty value, and
+     * silently reading it as "fresh" would let a malformed resume through as an ordinary session.
+     */
+    const priorRaw = o["prior_relay_id"];
+    if (priorRaw !== undefined && typeof priorRaw !== "string") return null;
+    const prior_relay_id = priorRaw as string | undefined;
     return {
       type: "client_record_assignment",
       session_id,
@@ -329,8 +358,94 @@ export function decodeInboundFrame(bytes: Uint8Array): InboundRelayFrame | null 
       initiator_session_peer_id,
       counterparty_session_peer_id,
       assignment_signature,
+      ...(prior_relay_id !== undefined ? { prior_relay_id } : {}),
+    };
+  }
+
+  // ─── 031-RELAYREPLAY: the replay batch ──────────────────────────────────────
+  //
+  // SHAPE ONLY. Nothing here is a trust decision — every field below is re-derived and verified in
+  // `#processSessionReplay` against the directory-signed assignment. What this does is refuse a
+  // frame whose bytes cannot be read at all, so a malformed batch is a named refusal rather than a
+  // throw escaping into the stream handler.
+  //
+  // ⚠️ `counterparty_tip` IS DECODED LENIENTLY AND REFUSED STRICTLY, and the split is deliberate.
+  // A missing or misshapen tip decodes to `undefined` and is then refused BY NAME by
+  // `verifySessionTipAttestation` — rather than voiding the frame here, where the sender would get
+  // "could not decode" and no idea which of six fields was wrong. Absent and wrong take the same
+  // path either way; the difference is only whether the operator is told which one they sent.
+  if (o["type"] === "session_replay") {
+    const session_id = toUint8Array(o["session_id"]);
+    const reported_root = toUint8Array(o["reported_root"]);
+    if (!session_id || session_id.length !== 16) return null;
+    if (!reported_root || reported_root.length !== 32) return null;
+    const rawLeaves = o["leaves"];
+    if (!Array.isArray(rawLeaves) || rawLeaves.length === 0 || rawLeaves.length > MAX_REPLAY_LEAVES) return null;
+    const leaves: SealUnilateralLeaf[] = [];
+    for (const entry of rawLeaves) {
+      if (typeof entry !== "object" || entry === null) return null;
+      const e = entry as Record<string, unknown>;
+      const structure2_cbor = toUint8Array(e["structure2_cbor"]);
+      const structure1_cbor = toUint8Array(e["structure1_cbor"]);
+      const sequence_number = typeof e["sequence_number"] === "number" ? e["sequence_number"] : null;
+      const leaf_kind = typeof e["leaf_kind"] === "number" ? e["leaf_kind"] : null;
+      if (!structure2_cbor || structure2_cbor.length === 0) return null;
+      if (!structure1_cbor || structure1_cbor.length === 0) return null;
+      if (sequence_number === null || !Number.isInteger(sequence_number)) return null;
+      if (leaf_kind === null) return null;
+      const relay_id = typeof e["relay_id"] === "string" ? e["relay_id"] : undefined;
+      const relay_timestamp = typeof e["relay_timestamp"] === "number" ? e["relay_timestamp"] : undefined;
+      const relay_signature = e["relay_signature"] !== undefined ? toUint8Array(e["relay_signature"]) ?? undefined : undefined;
+      /**
+       * 🚨 NO `content_bytes` ON A REPLAY, ON ANY KIND. The relay's own submit path admits it for a
+       * ctrl leaf because a SEAL payload is four values it already holds; a REPLAY carries a whole
+       * conversation, and admitting leaf content here would hand a forwarding relay exactly what
+       * INV-3 keeps from it. Refused rather than dropped, for the reason `hash_submit` refuses it:
+       * a client offering the relay content it must never hold is not a tidy-up.
+       */
+      if (e["content_bytes"] !== undefined) return null;
+      leaves.push({
+        sequence_number,
+        leaf_kind,
+        structure2_cbor,
+        structure1_cbor,
+        ...(relay_id !== undefined ? { relay_id } : {}),
+        ...(relay_timestamp !== undefined ? { relay_timestamp } : {}),
+        ...(relay_signature !== undefined ? { relay_signature } : {}),
+      });
+    }
+    let counterparty_tip: SessionTipAttestation | undefined;
+    const rawTip = o["counterparty_tip"];
+    if (typeof rawTip === "object" && rawTip !== null) {
+      const t = rawTip as Record<string, unknown>;
+      const pubkey = toUint8Array(t["pubkey"]);
+      const root = toUint8Array(t["root"]);
+      const signature = toUint8Array(t["signature"]);
+      const last_seq = typeof t["last_seq"] === "number" ? t["last_seq"] : null;
+      if (pubkey && root && signature && last_seq !== null) {
+        counterparty_tip = { pubkey, last_seq, root, signature };
+      }
+    }
+    return {
+      type: "session_replay",
+      session_id,
+      reported_root,
+      leaves,
+      ...(counterparty_tip ? { counterparty_tip } : {}),
     };
   }
 
   return null;
+}
+
+/** The relay's answer to a replay batch. */
+export function encodeSessionReplayResult(frame: SessionReplayResult): Uint8Array {
+  return ENC.encode({
+    type: "session_replay_result",
+    session_id: frame.session_id,
+    ok: frame.ok,
+    ...(frame.reason !== undefined ? { reason: frame.reason } : {}),
+    ...(frame.adopted_leaf_count !== undefined ? { adopted_leaf_count: frame.adopted_leaf_count } : {}),
+    ...(frame.guidance !== undefined ? { guidance: frame.guidance } : {}),
+  }) as Uint8Array;
 }

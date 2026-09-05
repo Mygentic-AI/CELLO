@@ -4464,6 +4464,30 @@ export class CelloDirectoryNode {
         if (initiatorSessionPeerId && counterpartySessionPeerId) {
           relayTbsFields.push(initiatorSessionPeerId, counterpartySessionPeerId);
         }
+        /**
+         * 031-RELAYREPLAY — the RESUME layout. The PRODUCER half of `recordAssignment`'s verifier;
+         * the two gates are byte-identical and must stay that way.
+         *
+         * A relay holds no relay roster, so a directory-signed assignment is the only place it can
+         * learn another relay's identity — and `prior_relay_id` decides whose ACK receipts a
+         * replayed chain will be judged against. Outside these bytes it is a value the client
+         * chooses, which would let a party pick its own auditor.
+         *
+         * ⚠️ APPENDED ONLY WHEN NON-EMPTY, unlike the client-facing TBS where `""` is a signed
+         * VALUE. Here the field GROWS the layout, so a fresh session must produce exactly the bytes
+         * it produced before this order existed — otherwise every currently-shipping client, which
+         * forwards no `prior_relay_id`, would have its assignment refused by the relay. Absent and
+         * `""` are the same case and both take the short layout.
+         *
+         * ⚠️ NO CALLER SETS THIS YET. `#issueAssignment` writes `prior_relay_id: ""` on the
+         * client-facing assignment and there is no resume path to write anything else — the client
+         * that asks for one is unit 3. The producer lands with the verifier so the two cannot be
+         * written from different readings of the layout months apart.
+         */
+        const priorRelayId = (assignment as { prior_relay_id?: string }).prior_relay_id;
+        if (priorRelayId) {
+          relayTbsFields.push(priorRelayId);
+        }
         const relayTbs = CBOR_ENC.encode(relayTbsFields) as Uint8Array;
         const relayDirSig = new Uint8Array(await this.#keyProvider.sign(relayTbs));
         // FED-OPTIONB-SETUP-001 (Option B): the directory NO LONGER dials the relay to record the

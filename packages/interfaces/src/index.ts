@@ -47,14 +47,18 @@ export {
 // inherits a conversation, and a second copy of a seal verifier drifts into one witness accepting
 // what the other refuses.
 export type { SealUnilateralLeaf, RelaySealLeaf, RelaySealLeafKind, RelaySealData } from "./seal-leaf-types.js";
-export type { Structure1Fields, SealFinalRootReason } from "./seal-chain-verify.js";
+export type { Structure1Fields, SealFinalRootReason, SessionTipAttestation } from "./seal-chain-verify.js";
 export {
   LEAF_KINDS,
   SEAL_FINAL_ROOT_REASONS,
+  SESSION_TIP_DOMAIN,
+  buildSessionTipTbs,
+  contentRootOverPrefix,
   decodeStructure1Fields,
   decodeStructure1Signed,
   reconstructCarriedSealLeaves,
   verifyLeafProvenance,
   verifySealLeafChain,
   verifySealCtrlLeaf,
+  verifySessionTipAttestation,
 } from "./seal-chain-verify.js";
