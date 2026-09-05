@@ -506,7 +506,9 @@ behind trusting the relay, and outside `029b`'s stated scope. Recorded because `
 that read everywhere else and this is the one place it did not reach. **Classification:
 POST-LAUNCH** — it needs a hostile relay, and the position it corrupts is soft by design.
 **Andre, 2026-09-05: explicitly EXCLUDED** from the 029c batch — *"fix all but the one that needs a
-hostile relay."* It stays open, and it is the only one of the four that does.
+hostile relay."* It stays open, and it is the only one of the four that does. **Carried into the
+DoD's POST-LAUNCH BACKLOG as `DOD-M15-RELAYLEAF-SESSION-BIND-1`** on his instruction, so it has a
+home and a trigger rather than living only in this order's footnotes.
 
 **5. What the park path passes** (not a defect — the order asked for this explicitly). `recordOrderingRecord`
 (`source: "park"`) calls `#recordFrameOrdering` only when the envelope carries BOTH

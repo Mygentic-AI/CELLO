@@ -1637,6 +1637,44 @@ and, for the made-true rows, the units that make them true.
 
 # POST-LAUNCH BACKLOG
 
+### `DOD-M15-RELAYLEAF-SESSION-BIND-1` — ❌ OPEN · 🅿️ POST-LAUNCH. A relay-delivered leaf sets a position without checking which conversation it belongs to
+> **RULED BY ANDRE 2026-09-05: POST-LAUNCH.** He had the list of four items 029-AUTHORSHIP produced
+> and said *"fix all but the one that needs a hostile relay."* Items 1, 2 and 3 shipped (`029b`,
+> `029c`); this is the one excluded, and it is deferred rather than dropped.
+
+**Found 2026-09-05 by the `029b` review, while binding the authorship claim to its session.**
+
+**What happens to you:** a relay you are routed through — or one that has been taken over — sends
+your daemon a leaf belonging to a *different* conversation, and your daemon files the position it
+carries against *this* one. Your transcript can then order a message wrongly. It cannot forge who
+wrote anything: authorship is proven separately, by the sender's own signature over their own bytes,
+and `029b` binds that claim to the conversation. What is corruptible here is only WHERE a message
+sits.
+
+**Why it survived `029b`.** That unit established "read the signed `session_id` and compare it"
+everywhere the receive path checks a claim. `session-node-manager.ts`'s relay leaf handler decodes a
+counterparty Structure 1 and calls `recordWitnessedSequence` on it **without** that comparison — the
+one place the new read did not reach. Pre-existing, not introduced.
+
+**Why POST-LAUNCH and not the gate:**
+- **It needs a hostile or confused relay.** Every other item in the 029 family is reachable by an
+  ordinary counterparty or by a version skew; this one is not reachable by either.
+- **What it corrupts is soft by design.** Position falls back to the witness stream, and the relay
+  is already the ordering authority — a relay that lies about ordering is inside its own remit. The
+  seal's integrity does not rest on it: the certified root covers content hashes, and every leaf
+  carries the sender's signature.
+- **The fix is the same three lines `029b` already wrote**, applied at one more call site, so
+  nothing about deferring it makes it more expensive later.
+
+**Trigger:** do it with the next unit that touches the relay leaf handler, or the moment relay
+abuse controls make a misbehaving relay a modelled adversary rather than a trusted intermediary —
+whichever comes first. **Not closed by anything in M15.**
+
+**Where:** `cello-client/core/daemon/src/session-node-manager.ts`, the relay leaf handler's
+`decodeStructure1` → `recordWitnessedSequence` path. Compare `s1.fields.sessionId` against the
+session's own bytes exactly as `#verifyAuthorshipClaim` does.
+
+
 ### `DOD-M15-CHECKPOINT-COUNTERSIGN-1` — ❌ OPEN · 🅿️ POST-LAUNCH. The LOG ANCHOR is unsigned (the receipt itself is fine)
 > **RULED BY ANDRE 2026-09-03: SHIP IT, FIX AFTER LAUNCH. This requirement stays OPEN — it is
 > deferred, not dropped, and it is not closed by anything in M15.**
