@@ -381,7 +381,9 @@ provable) is now held by a verify rather than a null check.
 ## Newly discovered
 
 *Found and NOT acted on, per rule 3. **The §0z.2 spawn trip-wire is TRIPPED — three items**, and
-Andre ruled on the third the same day: item 3 was built as `029b`, items 1, 2 and 5 stand. The vein
+Andre ruled on all of them: item 3 shipped as `029b`, items 1 and 2 as `029c`, and item 4 — the
+only one needing a hostile relay — stays open by his explicit exclusion. Item 5 is a note, not a
+defect. The vein
 is producing PRODUCTION DEFECTS, not test hygiene: all of these are live behaviours an operator or a
 counterparty can reach.*
 
@@ -396,6 +398,38 @@ above the one this unit added. **Classification: POST-LAUNCH** under §0z.4 — 
 on an existing correct refusal, not a security hole a customer reaches, and the forensic record is
 intact.
 
+> ### ✅ **RULED IN AND BUILT — Andre, 2026-09-05: *"Fix all but the one that needs a hostile relay."*** (branch `m15/029c-silent-refusals`, merged)
+>
+> All three now file a refusal notice as well as the ERROR, through one `#refuseInboundContent` doing
+> both surfaces. Five of the six new tests are RED against `main`, so the notice genuinely reached
+> nobody before. The forensic ERROR is asserted too — a "fix" that moved the sentence out of the log
+> into the notice would satisfy the operator and destroy the record.
+>
+> **What the review caught, and it is the part worth keeping.** The new wording told the operator a
+> refused message may still arrive through the relay mailbox. Opening a mailbox copy needs
+> `KeyProvider.openContentSeal`, which is OPTIONAL — a threshold or signing-only provider does not
+> implement it, an agent loaded without a provider has none, and `content-park.ts` refuses both. That
+> is the SAME condition `no_local_identity` reports. So on the one refusal that names a missing local
+> identity, **both routes are shut by one cause, permanently**, and the operator was told to wait for
+> a delivery that could never run — `DOD-M15-AUTHORSHIP-ABSENT-1`'s own H1 defect, one refusal up the
+> same function. The sentence is chosen from `#mailboxRouteAvailable` now, and the alternative says
+> so plainly. **The test that let it through asserted the sentence was PRESENT, never that it was
+> true.**
+>
+> Also fixed from that review: the promise is closed by a reconciliation the two sibling refusals
+> already had (`content.recover.refusal_reconciled`, widened from the authorship-only one); the
+> receive path had been showing SEND-path guidance, so an operator who could not open an incoming
+> message read advice about their own outbound mail; and a content-key fault reported itself as
+> `direct_send`, sending the operator to inspect a connection that was working.
+>
+> **And it turned up a live defect on `main` that had nothing to do with this item.** The
+> `DOD-M15-AUTHORSHIP-ABSENT-1` refusal notice — the one this order quotes verbatim as its DoD 3
+> evidence — was reaching operators beginning `NaNcopy in the relay mailbox…`. Splitting that
+> guidance in two dropped a string literal and left the `+` that had joined it, which is a UNARY PLUS
+> on the next string: `+"REACH YOU BY…"` is `NaN`. The only assertion on it was `/upgrade/i`, and
+> "tell them to upgrade" survives at the tail — so a substring match stayed green on a sentence that
+> had lost its head. It now pins what the notice OPENS with.
+
 **2. The send path reads the session key, then seals the body several `await`s later.**
 `#contentEncryptionState` is read once; `#openContentStream` (and now the signing) run between that
 read and `sealSessionContent`. A content key agreed with the counterparty inside that window leaves
@@ -405,6 +439,22 @@ about: it is what reddened four live-libp2p fixtures here, and both daemons logg
 `session.key.agreed` before the refusal. Signing was moved above the key read so this unit does not
 widen the window, but the window is pre-existing and still open. **Classification: POST-LAUNCH** —
 it needs a real re-key mid-send to fire, which today happens only in the first seconds of a session.
+
+> ### ✅ **RULED IN AND BUILT with item 1** (same branch, merged)
+>
+> The key is read in the statement immediately before `sealSessionContent`, with nothing between
+> them. The pre-stream check stays as a fail-fast preflight — failing before a stream is opened is
+> worth one extra read — and a key that vanishes between the two throws with its own named cause, so
+> a log reader can tell "never had one" from "had one and lost it mid-send".
+>
+> The test drives the re-key from INSIDE `newStream`, which is where the `await` sits and the only
+> place a test can stand to see this (a non-breaking `onNewStream` hook on the fixture's `FakeNode`).
+> It asserts what the counterparty experiences: the body opens under the key that was current when it
+> was sealed, and not under the one the send started with. RED against the previous commit.
+>
+> ⚠️ **IT CLOSES THE LOCAL WINDOW, NOT THE CLASS.** The sender still seals at T and the receiver
+> decrypts at T+flight, so a re-key landing in THAT interval produces the same false tamper report.
+> What is removed is the half this side controls; the rest is a property of there being two machines.
 
 **3. The authorship claim is bound to the content and the signer, and NOT to the session** (review
 M4). `decodeStructure1` yields `fields.sessionId` and nothing compares it to the session the frame
@@ -448,15 +498,17 @@ the field is unread.
 > bytes.** They sign the real id now, which is what production signs. Eleven mutants, eleven caught.
 > Gate: 4,881 tests, lint, typecheck.
 
-**5. The relay leaf handler reads a counterparty Structure 1 without binding the session** (found by
+**4. The relay leaf handler reads a counterparty Structure 1 without binding the session** (found by
 the `029b` review). `session-node-manager.ts` decodes a relay-delivered counterparty leaf and calls
 `recordWitnessedSequence` on it without comparing `session_id` — so a malicious or confused relay
 could set a witnessed position from a leaf belonging to another conversation. Pre-existing, gated
 behind trusting the relay, and outside `029b`'s stated scope. Recorded because `029b` established
 that read everywhere else and this is the one place it did not reach. **Classification:
 POST-LAUNCH** — it needs a hostile relay, and the position it corrupts is soft by design.
+**Andre, 2026-09-05: explicitly EXCLUDED** from the 029c batch — *"fix all but the one that needs a
+hostile relay."* It stays open, and it is the only one of the four that does.
 
-**4. What the park path passes** — the order asked for this explicitly. `recordOrderingRecord`
+**5. What the park path passes** (not a defect — the order asked for this explicitly). `recordOrderingRecord`
 (`source: "park"`) calls `#recordFrameOrdering` only when the envelope carries BOTH
 `structure1Cbor` and `structure2Cbor`, and consumes `.seq` alone; it never read the authorship
 fields, which is what made removing them a clean deletion. The park envelope has no
