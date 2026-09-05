@@ -605,7 +605,23 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
      * itself was a different string.
      */
     const msgBytes = Buffer.from(`${msg} [[OVER]]`);
-    expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: msg, signal: "over" })) as { ok?: boolean }).ok).toBe(true);
+    /**
+     * ⚠️ **READ THE WHOLE RESPONSE, NOT JUST `ok`.** This assertion was `….ok).toBe(true)` and it
+     * failed on 2026-09-05 as a bare `expected false to be true` — a send that did not happen, with
+     * the reason and the affordance the daemon had already computed thrown away one character
+     * before they could be printed. It is the same hole that let three refused deposits in this
+     * file read as three successes.
+     */
+    const sent = (await connA.call("cello_send", { cello_session_id: sessionId, content: msg, signal: "over" })) as {
+      ok?: boolean; reason?: string; guidance?: string; delivered?: boolean; witnessed?: boolean;
+    };
+    expect(
+      sent.ok,
+      `A's direct send must succeed — this is the copy the parked duplicate has to dedup against. ` +
+      `Send said: ${JSON.stringify(sent)}\n  A's send/relay lines:\n${
+        daemonA.output.split("\n").filter((l) => /session\.content|relay|park|witness/.test(l)).slice(-12).join("\n") || "    (none)"
+      }`,
+    ).toBe(true);
 
     /**
      * ⚠️ THE HASH IS READ FROM THE DAEMON, NOT COMPUTED HERE — and computing it is why this test failed.
