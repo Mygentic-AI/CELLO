@@ -625,6 +625,11 @@ export interface SessionReplay {
    * relay must then say so by name — NOT because absence is tolerated. See
    * `verifySessionTipAttestation`: contiguity cannot see a cut tail, and this is the only thing
    * that can.
+   *
+   * ⚠️ `undefined` HERE MEANS THE FIELD WAS NOT SENT, and nothing else — review H7. A tip that WAS
+   * sent and is unreadable arrives with whatever decoded and is refused as MALFORMED. Reporting a
+   * mangled attestation as an absent one sent an operator to ask their counterparty for a fresh
+   * attestation when the fault was in their own encoder.
    */
   counterparty_tip?: SessionTipAttestation;
 }

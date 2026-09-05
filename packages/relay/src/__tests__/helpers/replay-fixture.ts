@@ -34,6 +34,8 @@ export interface ReplayBatch {
   leaves: SealUnilateralLeaf[];
   reported_root: Uint8Array;
   counterparty_tip: SessionTipAttestation;
+  /** The chain's starting prev_root, so a test can re-derive the chain for a reordered array. */
+  genesis: Uint8Array;
 }
 
 /** The content-hash root over the first `count` leaves — what a client's own SessionTree produces. */
@@ -70,6 +72,15 @@ export function structure2Root(leaves: SealUnilateralLeaf[], count: number): Uin
 }
 
 export interface BuildOpts {
+  /**
+   * Give the counterparty two CONSECUTIVE leaves instead of strict alternation.
+   *
+   * Review H1: a run of two same-sender leaves is the shape that exposed the ordering gap, and the
+   * strictly alternating fixture could never produce one. `effectiveSeen` is identical at both
+   * positions, so the causal check is satisfied either way round — nothing but the senders' own
+   * signed clocks distinguishes them.
+   */
+  counterpartyRunAt?: number;
   sessionId: Uint8Array;
   sessionTimestamp: number;
   /** The party that will SUBMIT the batch. Its leaves carry the prior relay's receipts. */
@@ -96,13 +107,19 @@ export async function buildValidReplay(opts: BuildOpts): Promise<ReplayBatch> {
   let prevRoot = computeGenesisPrevRoot(subPub, cpPub, opts.sessionId, opts.sessionTimestamp);
 
   for (let i = 0; i < opts.leafCount; i++) {
-    const fromSubmitter = i % 2 === 0;
+    // Strict alternation, except that `counterpartyRunAt` makes THAT index the counterparty's too,
+    // producing a run of two consecutive counterparty leaves. See `counterpartyRunAt`.
+    const fromSubmitter = opts.counterpartyRunAt === i ? false : i % 2 === 0;
     const kp = fromSubmitter ? opts.submitter : opts.counterparty;
     const pub = fromSubmitter ? subPub : cpPub;
     const seq = i + 1;
     // The highest sequence this sender could legitimately have seen: the last leaf from the OTHER
-    // party. Alternating, so it is simply the previous leaf's sequence (0 for the first).
-    const lastSeenSeq = i === 0 ? 0 : i;
+    // party before this one. Computed rather than assumed, so a same-sender run stays legal.
+    let lastSeenSeq = 0;
+    for (let j = 0; j < i; j++) {
+      const jFromSubmitter = opts.counterpartyRunAt === j ? false : j % 2 === 0;
+      if (jFromSubmitter !== fromSubmitter) lastSeenSeq = j + 1;
+    }
     const contentHash = new Uint8Array(randomBytes(32));
     const structure1_cbor = CBOR.encode([
       1, contentHash, pub, opts.sessionId, lastSeenSeq, opts.sessionTimestamp + seq,
@@ -137,6 +154,7 @@ export async function buildValidReplay(opts: BuildOpts): Promise<ReplayBatch> {
   return {
     leaves,
     reported_root,
+    genesis: computeGenesisPrevRoot(subPub, cpPub, opts.sessionId, opts.sessionTimestamp),
     counterparty_tip: await signTip(opts.counterparty, cpPub, opts.sessionId, leaves.length, reported_root),
   };
 }
@@ -177,6 +195,57 @@ export function restampSequence(leaf: SealUnilateralLeaf, newSeq: number): SealU
   };
   CONTENT_HASHES.set(restamped, contentHash);
   return restamped;
+}
+
+/**
+ * Swap two ADJACENT leaves from the SAME sender, re-stamping their sequence numbers so the array
+ * still reads 1..N — review H1.
+ *
+ * Every check above the tip attestation still passes on the result, which is the point: Structure 1
+ * carries no sequence, `effectiveSeen` is identical at both positions, and neither leaf has a relay
+ * receipt (they are the counterparty's). Only the senders' own signed timestamps run backwards.
+ */
+export function swapAdjacent(leaves: SealUnilateralLeaf[], i: number, genesis: Uint8Array): SealUnilateralLeaf[] {
+  const out = [...leaves];
+  out[i] = restampSequence(leaves[i + 1]!, i + 1);
+  out[i + 1] = restampSequence(leaves[i]!, i + 2);
+  return rechainPrevRoots(out, genesis);
+}
+
+/**
+ * Recompute every leaf's `prev_root` for the order it is now in.
+ *
+ * ⚠️ THIS IS WHAT MAKES THE ATTACK FAITHFUL, AND THE FIRST VERSION OF THE TEST WITHOUT IT WAS
+ * MEASURING THE WRONG GUARD. A naive swap breaks the `prev_root` chain and is refused as
+ * `seal_chain_prev_root_break` — which reads like the chain caught the reordering. It did not: the
+ * `prev_root` chain lives in Structure 2, which is entirely assembled by the party sending the
+ * batch, so a real attacker simply recomputes it and the break never appears.
+ *
+ * Sender pubkey, content hash, sender signature and sequence number are preserved, so every
+ * signature still verifies — the only thing that changes is the field the attacker owns.
+ */
+export function rechainPrevRoots(leaves: SealUnilateralLeaf[], genesis: Uint8Array): SealUnilateralLeaf[] {
+  const out: SealUnilateralLeaf[] = [];
+  let prevRoot = genesis;
+  for (const leaf of leaves) {
+    const contentHash = contentHashOf(leaf);
+    const s2 = CBOR.decode(leaf.structure2_cbor) as unknown[];
+    const rebuilt: SealUnilateralLeaf = {
+      ...leaf,
+      structure2_cbor: encodeStructure2({
+        sequence_number: leaf.sequence_number,
+        sender_pubkey: s2[1] as Uint8Array,
+        content_hash: contentHash,
+        sender_signature: s2[3] as Uint8Array,
+        scan_result: SCAN_RESULT_SENTINEL,
+        prev_root: prevRoot,
+      }),
+    };
+    CONTENT_HASHES.set(rebuilt, contentHash);
+    out.push(rebuilt);
+    prevRoot = structure2Root(out, out.length);
+  }
+  return out;
 }
 
 /** Replace a leaf's sender signature with one from another key, leaving `sender_pubkey` alone —

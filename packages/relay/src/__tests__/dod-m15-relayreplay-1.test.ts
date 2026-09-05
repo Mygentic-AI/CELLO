@@ -62,6 +62,7 @@ import {
   restampSequence,
   signTip,
   structure2Root,
+  swapAdjacent,
 } from "./helpers/replay-fixture.js";
 
 setupV3Tests();
@@ -238,6 +239,59 @@ describe("031-RELAYREPLAY: a relay recognises a resume assignment", () => {
     const state = h.store.getSession(h.sessionKey);
     expect(state?.prior_relay_id).toBeUndefined();
     expect(state?.awaiting_replay).toBeFalsy();
+
+    // The name promised a submit and the body did not make one — review, test-teeth gap 2. A
+    // passing test that implies proof it never gave is the same defect as a hollow assertion, one
+    // level up, and this is the half that matters: a fresh session must still WORK.
+    const conn = await h.connect(h.submitter);
+    const s1 = CBOR.encode([1, new Uint8Array(randomBytes(32)), h.subPub, h.sessionId, 0, Date.now()]) as Uint8Array;
+    sendFrame(conn.stream, CBOR.encode({
+      type: "hash_submit", session_id: h.sessionId, leaf_kind: 0x00,
+      structure1_cbor: s1, sender_signature: await h.submitter.sign(s1),
+    }) as Uint8Array);
+    const ack = await conn.reader.readUntil("hash_submit_ack");
+    expect(ack["sequence_number"], "a fresh session is unaffected by this order").toBe(1);
+  });
+
+  it("`prior_relay_id: \"\"` is a FRESH session, not a resume — the value every current directory actually sends", async () => {
+    /**
+     * ⚠️ THE MOST LIKELY PRODUCTION INPUT, AND IT WAS THE ONE CASE UNTESTED — review, test-teeth
+     * gap 1. `017-TBS` made `""` the value every non-handover session carries, and unit 3's client
+     * will forward it; the harness only ever exercised the field being absent.
+     *
+     * The whole clause-3 design rests on absent and `""` producing the SAME short TBS layout. A
+     * `!== undefined` gate here — which is the correct gate on the CLIENT-facing assignment, and
+     * therefore the one a reader is likely to copy — would append `""` to the signed bytes on this
+     * side and refuse every ordinary session on the network. Nothing else in the suite would have
+     * noticed.
+     */
+    const h = await harness(scope, { priorRelayId: null });
+    const fresh = await makeAssignment({
+      sessionId: new Uint8Array(randomBytes(16)),
+      pubA: h.subPub, pubB: h.cpPub, dir: h.dirKp, sessionTimestamp: h.sessionTimestamp,
+      priorRelayId: "",
+    });
+    expect(fresh.prior_relay_id, "the field IS present on the assignment, and empty").toBe("");
+    expect(h.relay.recordAssignment(fresh), "and it verifies against the four-field TBS").toEqual({ ok: true });
+    const state = h.store.getSession(Buffer.from(fresh.session_id).toString("hex"));
+    expect(state?.awaiting_replay, "empty is not a resume").toBeFalsy();
+  });
+
+  it("a prior_relay_id that is not 64-hex is refused at RECORD time, not discovered at replay time", async () => {
+    /**
+     * Review H10. `reconstructCarriedSealLeaves` requires every receipt's relay id to be 64-hex AND
+     * to equal this value, so a malformed prior id matches nothing that can ever be sent: every
+     * replay refused, every submit refused, forever, with both reasons pointing at the batch. A
+     * directory misconfiguration would read as a client that cannot assemble its own history.
+     */
+    const h = await harness(scope, { priorRelayId: null });
+    const bad = await makeAssignment({
+      sessionId: new Uint8Array(randomBytes(16)),
+      pubA: h.subPub, pubB: h.cpPub, dir: h.dirKp, sessionTimestamp: h.sessionTimestamp,
+      priorRelayId: "not-a-key",
+    });
+    expect(h.relay.recordAssignment(bad)).toEqual({ ok: false, reason: "prior_relay_id_malformed" });
+    expect(h.store.getSession(Buffer.from(bad.session_id).toString("hex")), "and no session is left behind").toBeUndefined();
   });
 
   it("a CLIENT-SUPPLIED prior relay id is refused — a party cannot name the witness it will be judged against", async () => {
@@ -422,6 +476,11 @@ describe("031-RELAYREPLAY: four tampered batches, four different catchers", () =
      * is the only thing left that can refuse it. Index 3 is the counterparty's, whose leaves carry
      * no relay receipt by design — pinned by signature and contiguity alone, which is exactly the
      * property under test. `sender_pubkey` still names them, so provenance passes too.
+     *
+     * ⚠️ AND THE REASON IS NOW SPECIFIC, WHICH IS THE REAL FIX — review H6. Position made this test
+     * unambiguous; splitting the five-into-one label is what makes it correct. `tsc` and the
+     * assertion below now disagree with the neighbouring clauses by NAME, so adding a leaf to the
+     * fixture can no longer make it quietly pass for someone else's reason.
      */
     const forged = [...batch.leaves];
     forged[LEAF_COUNT - 1] = await forgeSenderSignature(batch.leaves[LEAF_COUNT - 1]!, generateKeypair());
@@ -431,7 +490,8 @@ describe("031-RELAYREPLAY: four tampered batches, four different catchers", () =
       counterparty_tip: batch.counterparty_tip,
     });
     expect(res["ok"]).toBe(false);
-    expect(res["reason"]).toBe("unilateral_root_unverifiable");
+    expect(res["reason"], "the clause that fired, by name — not the five-into-one label it used to share").toBe("seal_chain_sender_signature_invalid");
+    expect(String(res["guidance"]), "and the guidance sends them out of band, not back to their own arithmetic").toContain("confirm out of band");
   });
 
   it("an INTERNAL GAP is caught by CONTIGUITY — a leaf removed from the middle leaves sequences that are not 1..N", async () => {
@@ -579,6 +639,176 @@ describe("031-RELAYREPLAY: the tip attestation is required, and absence takes th
     }) as Uint8Array);
     const err = await conn.reader.readUntil("hash_submit_error");
     expect(err["reason"]).toBe("session_diverged");
+  });
+});
+
+describe("031-RELAYREPLAY: a participant cannot manufacture a divergence against the other", () => {
+  let scope = createTestScope();
+  beforeEach(() => { scope = createTestScope(); });
+  afterEach(() => scope.run(async () => {}));
+
+  it("swapping the counterparty's two consecutive messages is caught by their OWN SIGNED CLOCK, not read as a divergence", async () => {
+    /**
+     * ⚠️ REVIEW H1 — THE DENIAL OF SERVICE, AND WHY IT WAS INVISIBLE.
+     *
+     * A counterparty leaf's position is asserted only by the UNSIGNED Structure 2. Contiguity fixes
+     * the set of positions but not who sits where; the causal check `last_seen_seq > effectiveSeen`
+     * is an UPPER BOUND, and for two ADJACENT leaves from one sender `effectiveSeen` is identical at
+     * both — so it is satisfied either way round. Their leaves carry no relay receipt by design.
+     * Every check above the tip attestation therefore passed on a swapped pair.
+     *
+     * What that bought: B sends two messages in a row (routine). The relay dies. A gets the resume
+     * assignment, swaps B's two messages, replays. The chain verifies — and B's honest tip
+     * attestation now disagrees, so the relay reads a DIVERGENCE and marks B's conversation
+     * permanently unsealable. A fabricated contradiction, one frame, against a party who did
+     * nothing, and B cannot repair it because a non-active session refuses their own replay.
+     *
+     * The sender's `timestamp` is inside their signed bytes — anchored to something the assembler
+     * does not control — so a swap makes one sender's own clock run backwards. Per sender only:
+     * two parties' clocks are unrelated and comparing them would refuse honest conversations.
+     *
+     * ⚠️ THE BATCH IS RE-CHAINED, and leaving that out is how this test first measured the wrong
+     * guard. A naive swap breaks `prev_root` and is refused as `seal_chain_prev_root_break`, which
+     * READS like the chain catching the reorder. It is not: `prev_root` lives in Structure 2, which
+     * the submitter assembles in full, so a real attacker recomputes it and the break never happens.
+     */
+    const h = await harness(scope);
+    const batch = await buildValidReplay({
+      sessionId: h.sessionId, sessionTimestamp: h.sessionTimestamp,
+      submitter: h.submitter, counterparty: h.counterparty, priorRelay: h.priorRelay,
+      leafCount: LEAF_COUNT, counterpartyRunAt: 2,   // leaves 2 and 3 are both the counterparty's
+    });
+    const swapped = swapAdjacent(batch.leaves, 1, batch.genesis);
+    const conn = await h.connect(h.submitter);
+    const res = await h.replay(conn, {
+      reported_root: contentRoot(swapped, swapped.length),
+      leaves: swapped,
+      counterparty_tip: batch.counterparty_tip,
+    });
+
+    expect(res["ok"]).toBe(false);
+    expect(res["reason"], "caught as a reordering, NOT as a disagreement between the two parties")
+      .toBe("seal_chain_sender_clock_reversed");
+
+    // The whole point: the victim's conversation is untouched and still sealable.
+    const after = h.store.getSession(h.sessionKey)!;
+    expect(after.status, "a batch one party controls must not be able to end the other's conversation").toBe("active");
+    expect(after.awaiting_replay, "and an honest replay is still possible").toBe(true);
+    expect(h.store.drainWitnessAlerts(Buffer.from(h.cpPub).toString("hex")).length, "no accusation was made").toBe(0);
+  });
+
+  it("a run of two consecutive same-sender leaves is otherwise ORDINARY and verifies", async () => {
+    // The control for the test above: the shape itself is legitimate and must still be adopted.
+    // Without this, the guard could refuse every same-sender run and the test above would not care.
+    const h = await harness(scope);
+    const batch = await buildValidReplay({
+      sessionId: h.sessionId, sessionTimestamp: h.sessionTimestamp,
+      submitter: h.submitter, counterparty: h.counterparty, priorRelay: h.priorRelay,
+      leafCount: LEAF_COUNT, counterpartyRunAt: 2,
+    });
+    const conn = await h.connect(h.submitter);
+    const res = await h.replay(conn, {
+      reported_root: batch.reported_root, leaves: batch.leaves, counterparty_tip: batch.counterparty_tip,
+    });
+    expect(res["ok"], `refused: ${String(res["reason"])}`).toBe(true);
+    expect(res["adopted_leaf_count"]).toBe(LEAF_COUNT);
+  });
+});
+
+describe("031-RELAYREPLAY: every refusal reaches the submitter, including the ones before the handler", () => {
+  let scope = createTestScope();
+  beforeEach(() => { scope = createTestScope(); });
+  afterEach(() => scope.run(async () => {}));
+
+  it("a MALFORMED batch gets a typed answer, not silence — review H8", async () => {
+    /**
+     * Silence here is not merely unhelpful. The shipping client races its answer against a
+     * ten-second timeout and then RESETS THE STREAM, which every conversation that agent holds on
+     * this relay shares — so one undecodable frame stalls a send for ten seconds, drops every other
+     * session, and prints a transport word for a policy decision taken on a different machine.
+     * That analysis is already written above the `hash_submit` branch; the replay frame was landing
+     * in exactly the silence it describes.
+     */
+    const h = await harness(scope);
+    const conn = await h.connect(h.submitter);
+    sendFrame(conn.stream, CBOR.encode({
+      type: "session_replay",
+      session_id: h.sessionId,
+      reported_root: new Uint8Array(7),   // not 32 — fails the strict decode
+      leaves: [],
+    }) as Uint8Array);
+    const res = await conn.reader.readUntil("session_replay_result");
+    expect(res["ok"]).toBe(false);
+    expect(res["reason"]).toBe("replay_malformed");
+    expect(String(res["guidance"])).toContain("reported_root");
+  });
+
+  it("a batch carrying leaf CONTENT is refused by its own name — the one thing INV-3 exists to prevent", async () => {
+    const h = await harness(scope);
+    const batch = await h.validBatch();
+    const conn = await h.connect(h.submitter);
+    const withContent = batch.leaves.map((l, i) => (i === 0 ? { ...l, content_bytes: new Uint8Array([1, 2, 3]) } : l));
+    sendFrame(conn.stream, CBOR.encode({
+      type: "session_replay",
+      session_id: h.sessionId,
+      reported_root: batch.reported_root,
+      leaves: withContent,
+      counterparty_tip: batch.counterparty_tip,
+    }) as Uint8Array);
+    const res = await conn.reader.readUntil("session_replay_result");
+    expect(res["ok"]).toBe(false);
+    expect(res["reason"], "named, so an operator learns WHY rather than that something was wrong").toBe("replay_content_not_permitted");
+    expect(h.store.getSession(h.sessionKey)!.leaf_log.length).toBe(0);
+  });
+
+  it("a tip attestation that was SENT but is misshapen is refused as MALFORMED, never as absent — review H7", async () => {
+    /**
+     * The operator sent one. Telling them it is missing sends them to ask their counterparty for a
+     * fresh attestation when the fault is in their own encoder — the wrong person, the wrong
+     * machine, and the wrong subsystem.
+     */
+    const h = await harness(scope);
+    const batch = await h.validBatch();
+    const conn = await h.connect(h.submitter);
+    const res = await h.replay(conn, {
+      reported_root: batch.reported_root,
+      leaves: batch.leaves,
+      counterparty_tip: { ...batch.counterparty_tip, root: new Uint8Array(31) },  // one byte short
+    });
+    expect(res["ok"]).toBe(false);
+    expect(res["reason"]).toBe("replay_tip_attestation_malformed");
+  });
+});
+
+describe("031-RELAYREPLAY: an inherited session is not an empty one", () => {
+  let scope = createTestScope();
+  beforeEach(() => { scope = createTestScope(); });
+  afterEach(() => scope.run(async () => {}));
+
+  it("the seal path refuses a resume whose history never arrived, instead of reporting a conversation with no messages — review H9", async () => {
+    /**
+     * `awaiting_replay` sessions are `active`, so `submitForSeal` returned a chain of ZERO leaves
+     * and a root over nothing — as if the two agents had never said anything. Downstream refuses
+     * the empty array, so no false receipt was reachable; what the operator got was "your leaf
+     * array is malformed" when the truth is that this relay was never given the conversation.
+     */
+    const h = await harness(scope);
+    expect(h.relay.submitForSeal(h.sessionId)).toEqual({ ok: false, reason: "session_awaiting_replay" });
+    expect(h.relay.getSealLeaves(h.sessionId)).toEqual({ ok: false, reason: "session_awaiting_replay" });
+  });
+
+  it("a DIVERGED session is named as such by the seal path too, not reported as merely not active", async () => {
+    const h = await harness(scope);
+    const batch = await h.validBatch();
+    const conn = await h.connect(h.submitter);
+    await h.replay(conn, {
+      reported_root: batch.reported_root,
+      leaves: batch.leaves,
+      counterparty_tip: await signTip(h.counterparty, h.cpPub, h.sessionId, 3, new Uint8Array(32).fill(0xab)),
+    });
+    expect(h.store.getSession(h.sessionKey)!.status).toBe("diverged");
+    expect(h.relay.submitForSeal(h.sessionId)).toEqual({ ok: false, reason: "session_diverged" });
+    expect(h.relay.getSealLeaves(h.sessionId)).toEqual({ ok: false, reason: "session_diverged" });
   });
 });
 

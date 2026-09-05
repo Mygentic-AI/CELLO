@@ -20,11 +20,14 @@
  */
 
 import { decode as cborDecode } from "cbor-x";
-import { verify, buildRelayAckTbs, buildMerkleTree, merkleRoot } from "@cello-protocol/crypto";
+import {
+  verify, buildRelayAckTbs, buildMerkleTree, merkleRoot, nodeHash,
+  msgLeafHash, ctrlLeafHash, docLeafHash, rejectLeafHash,
+} from "@cello-protocol/crypto";
 import type { LeafInput } from "@cello-protocol/crypto";
 import { SCAN_RESULT_SENTINEL, encodeStructure2, encodeCbor } from "@cello-protocol/protocol-types";
 import type { Structure2 } from "@cello-protocol/protocol-types";
-import type { SealUnilateralLeaf, RelaySealData, RelaySealLeaf } from "./seal-leaf-types.js";
+import type { SealUnilateralLeaf, RelaySealData, RelaySealLeaf, RelaySealLeafKind } from "./seal-leaf-types.js";
 
 // ─── Shared primitives ────────────────────────────────────────────────────────
 
@@ -52,6 +55,81 @@ export const LEAF_KINDS: Readonly<Record<number, "msg" | "ctrl" | "doc" | "rejec
   0x04: "doc",
   0x05: "reject",
 };
+
+/**
+ * Domain → leaf-hash function, for the incremental fold in `verifySealLeafChain`.
+ *
+ * The same mapping `buildMerkleTree` applies internally and the same one the relay keeps as
+ * `RELAY_LEAF_HASHERS`. It is here rather than imported from the relay because this package cannot
+ * depend on that one — and it is exhaustive over `RelaySealLeafKind` by TYPE, so a new domain is a
+ * build error rather than a silent `undefined` fed into hash math.
+ */
+const LEAF_HASHERS: Readonly<Record<RelaySealLeafKind, (d: Uint8Array) => Uint8Array>> = {
+  msg: msgLeafHash,
+  ctrl: ctrlLeafHash,
+  doc: docLeafHash,
+  reject: rejectLeafHash,
+};
+function leafHashFor(kind: RelaySealLeafKind, data: Uint8Array): Uint8Array {
+  return LEAF_HASHERS[kind](data);
+}
+
+/**
+ * Why a seal-leaf chain did not verify — 031-RELAYREPLAY review H6.
+ *
+ * ⚠️ FIVE OF THESE USED TO BE ONE STRING. `unilateral_root_unverifiable` was returned for a root
+ * mismatch, a forged sender signature, an undecodable Structure 1, a broken `prev_root` chain and a
+ * causal-order violation alike. That was survivable while the label was internal to the directory's
+ * seal path. It is not survivable now that a relay hands it to an operator: the guidance for a root
+ * mismatch is "re-derive your root", and telling someone whose counterparty forged a leaf to
+ * recompute their own arithmetic sends them to the wrong subsystem entirely.
+ *
+ * The cost is not hypothetical and it is recorded inside this unit: the forged-leaf test was GREEN
+ * with the signature check deleted, because a different clause returned the same string and the
+ * assertion could not tell them apart.
+ *
+ * A CLOSED set with a total guidance map, so a new reason cannot be added without something
+ * actionable for the reader — the same construction `SEAL_FINAL_ROOT_REASONS` uses.
+ */
+export const SEAL_CHAIN_REASONS = {
+  /** The rebuilt content-hash root is not the root the submitter reported. */
+  ROOT_MISMATCH: "seal_chain_root_mismatch",
+  /** A leaf's signature does not verify under the key the leaf itself names. A forged leaf. */
+  SENDER_SIGNATURE_INVALID: "seal_chain_sender_signature_invalid",
+  /** A leaf's signed bytes will not decode as any Structure 1 layout this build can name. */
+  STRUCTURE1_UNDECODABLE: "seal_chain_structure1_undecodable",
+  /** The sender-signed content hash and the relay-assigned one disagree. */
+  CONTENT_HASH_MISMATCH: "unilateral_content_hash_mismatch",
+  /** A leaf's `prev_root` is not the running root of everything before it. Leaves out of order. */
+  PREV_ROOT_BREAK: "seal_chain_prev_root_break",
+  /** A leaf claims to have seen a counterparty leaf that does not exist yet. */
+  CAUSAL_ORDER_VIOLATION: "seal_chain_causal_order_violation",
+  /** One sender's own signed timestamps run backwards — their leaves were reordered. Review H1. */
+  SENDER_CLOCK_REVERSED: "seal_chain_sender_clock_reversed",
+} as const;
+
+export type SealChainReason = (typeof SEAL_CHAIN_REASONS)[keyof typeof SEAL_CHAIN_REASONS];
+
+/**
+ * ⚠️ THE DIRECTORY'S FIVE-INTO-ONE COLLAPSE, KEPT DELIBERATELY AND NAMED HERE.
+ *
+ * `unilateral_root_unverifiable` is a refusal code the directory already puts on the wire, and
+ * widening it is a behaviour change to the seal path that this order must not make — clause 2 is
+ * that the directory's existing seal tests pass UNCHANGED. So the directory maps these back and the
+ * RELAY uses them as they are.
+ *
+ * This is error substitution, preserved rather than introduced, and it is recorded as a thing to
+ * remove rather than left to be rediscovered. The directory's own refusal deserves the same five
+ * names; that is a seal-path change with its own tests.
+ */
+export const DIRECTORY_COLLAPSED_CHAIN_REASONS: ReadonlySet<string> = new Set([
+  SEAL_CHAIN_REASONS.ROOT_MISMATCH,
+  SEAL_CHAIN_REASONS.SENDER_SIGNATURE_INVALID,
+  SEAL_CHAIN_REASONS.STRUCTURE1_UNDECODABLE,
+  SEAL_CHAIN_REASONS.PREV_ROOT_BREAK,
+  SEAL_CHAIN_REASONS.CAUSAL_ORDER_VIOLATION,
+  SEAL_CHAIN_REASONS.SENDER_CLOCK_REVERSED,
+]);
 
 // ─── Structure 1 decoding ─────────────────────────────────────────────────────
 
@@ -448,26 +526,65 @@ export function verifySealLeafChain(
   const contentInputs: LeafInput[] = leaves.map((l) => ({ kind: "hash" as const, data: l.s2.content_hash }));
   const recomputedRoot = merkleRoot(buildMerkleTree(contentInputs));
   if (!bufEqual(recomputedRoot, reportedRoot)) {
-    return { ok: false, reason: "unilateral_root_unverifiable" };
+    return { ok: false, reason: SEAL_CHAIN_REASONS.ROOT_MISMATCH };
   }
 
-  // (b–d) Per-leaf Structure 1 signature, prev_root chain, and causal-chain verification.
+  /**
+   * (b–d) Per-leaf Structure 1 signature, prev_root chain, and causal order.
+   *
+   * ⚠️ THE RUNNING ROOT IS FOLDED INCREMENTALLY, AND THE PREVIOUS SHAPE WAS QUADRATIC. This loop
+   * used to rebuild the whole partial tree per leaf —
+   * `leaves.slice(0, i + 1).map(encodeStructure2)` then a full `buildMerkleTree` — which is O(N)
+   * work inside an O(N) loop, so N²/2 CBOR encodes and N²/2 hashes. Measured at the relay's 4096
+   * leaf cap: **32.9 seconds of synchronous, event-loop-blocking CPU for ONE frame**, on a path
+   * whose input is entirely attacker-chosen and where a refusal costs the sender nothing.
+   *
+   * The RFC 6962 incremental stack is the same fold the relay already runs on every `hash_submit`
+   * (relay-node.ts) — each entry is the root of a complete 2^height subtree, so an append is
+   * O(log N) and the running root is the right-to-left fold of the stack. Same roots, same order,
+   * same reason codes; it is the arithmetic that changed, not the verdict.
+   */
+  const stack: Array<{ hash: Uint8Array; height: number }> = [];
   let runningRoot = leaves.length > 0 ? leaves[0].s2.prev_root : new Uint8Array(32);
+  /**
+   * 031-RELAYREPLAY review H1 — the per-sender clock, and why the causal check needed it.
+   *
+   * `last_seen_seq > effectiveSeen` is an UPPER BOUND, and for two ADJACENT leaves from the same
+   * sender `effectiveSeen` is identical at both positions — so the bound is satisfied either way
+   * round and the two can be swapped freely. Structure 1 carries no sequence number, so nothing
+   * else pinned them: a counterparty leaf's position is asserted only by the unsigned Structure 2.
+   *
+   * What that bought an attacker is worse than a reordering. Swap two of your counterparty's
+   * consecutive messages, replay, and the chain verifies — but their honest tip attestation now
+   * disagrees, so the relay reads a DIVERGENCE and marks their conversation permanently unsealable.
+   * A fabricated contradiction, from one frame, against a party that did nothing.
+   *
+   * The sender's own `timestamp` is inside their signed bytes, so it is anchored to something the
+   * assembler does not control. Non-decreasing PER SENDER — never across senders, whose clocks are
+   * unrelated and must not be compared.
+   *
+   * ⚠️ NON-DECREASING, NOT STRICTLY INCREASING, AND THE RESIDUE IS NAMED RATHER THAN HIDDEN: two
+   * messages from one sender in the same millisecond are legitimate and must not be refused, so a
+   * swap of two same-millisecond adjacent leaves still passes this. That residue is narrow and it
+   * is real; what closes it completely is not letting one batch write a terminal state, which is a
+   * design question recorded in the work order rather than decided here.
+   */
+  const lastTimestampBySender = new Map<string, bigint>();
   for (let i = 0; i < leaves.length; i++) {
     const leaf = leaves[i];
     if (!verify(leaf.s2.sender_pubkey, leaf.structure1_cbor, leaf.s2.sender_signature)) {
-      return { ok: false, reason: "unilateral_root_unverifiable" };
+      return { ok: false, reason: SEAL_CHAIN_REASONS.SENDER_SIGNATURE_INVALID };
     }
     const s1Fields = decodeStructure1Fields(leaf.structure1_cbor);
-    if (!s1Fields) return { ok: false, reason: "unilateral_root_unverifiable" };
+    if (!s1Fields) return { ok: false, reason: SEAL_CHAIN_REASONS.STRUCTURE1_UNDECODABLE };
     // Defense-in-depth: the sender-signed content_hash (Structure1) must match the relay-assigned
     // content_hash (Structure2). A compromised relay could deliver divergent values; the prev_root
     // chain catches this downstream but an explicit check fails FAST with a clear reason.
     if (!bufEqual(s1Fields.content_hash, leaf.s2.content_hash)) {
-      return { ok: false, reason: "unilateral_content_hash_mismatch" };
+      return { ok: false, reason: SEAL_CHAIN_REASONS.CONTENT_HASH_MISMATCH };
     }
     if (!bufEqual(leaf.s2.prev_root, runningRoot)) {
-      return { ok: false, reason: "unilateral_root_unverifiable" };
+      return { ok: false, reason: SEAL_CHAIN_REASONS.PREV_ROOT_BREAK };
     }
     const senderHex = Buffer.from(leaf.s2.sender_pubkey).toString("hex");
     let effectiveSeen = 0;
@@ -478,10 +595,26 @@ export function verifySealLeafChain(
       }
     }
     if (s1Fields.last_seen_seq > effectiveSeen) {
-      return { ok: false, reason: "unilateral_root_unverifiable" };
+      return { ok: false, reason: SEAL_CHAIN_REASONS.CAUSAL_ORDER_VIOLATION };
     }
-    const partialInputs: LeafInput[] = leaves.slice(0, i + 1).map((l) => ({ kind: l.kind, data: encodeStructure2(l.s2) }));
-    runningRoot = merkleRoot(buildMerkleTree(partialInputs));
+    // See the block above: the sender's OWN signed clock, per sender, never across them.
+    const ts = BigInt(s1Fields.timestamp);
+    const prevTs = lastTimestampBySender.get(senderHex);
+    if (prevTs !== undefined && ts < prevTs) {
+      return { ok: false, reason: SEAL_CHAIN_REASONS.SENDER_CLOCK_REVERSED };
+    }
+    lastTimestampBySender.set(senderHex, ts);
+
+    // RFC 6962 incremental append — see the block above the loop.
+    let node = leafHashFor(leaf.kind, encodeStructure2(leaf.s2));
+    let height = 0;
+    while (stack.length > 0 && stack[stack.length - 1]!.height === height) {
+      node = nodeHash(stack.pop()!.hash, node);
+      height++;
+    }
+    stack.push({ hash: node, height });
+    runningRoot = stack[stack.length - 1]!.hash;
+    for (let k = stack.length - 2; k >= 0; k--) runningRoot = nodeHash(stack[k]!.hash, runningRoot);
   }
 
   /**

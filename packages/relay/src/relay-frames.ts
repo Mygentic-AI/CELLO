@@ -30,15 +30,25 @@ const ENC = new Encoder({ tagUint8Array: false });
 /**
  * 031-RELAYREPLAY — ceiling on a replayed conversation, applied BEFORE any signature is checked.
  *
- * Verification is O(N log N) in the leaf count (a Merkle rebuild per leaf for the prev_root chain),
- * and every byte of it is attacker-chosen: a `session_replay` arrives from an authenticated
- * participant, but "authenticated" is not "honest", and nothing in the batch is trustworthy until
- * the walk that this bound protects has finished. Without it one frame buys unbounded relay CPU.
+ * ⚠️ THIS COMMENT SAID **O(N log N)** AND THE CODE WAS **O(N²)**, which is how the cost survived
+ * being looked at. The prev_root walk rebuilt the entire partial tree per leaf, so the bound it was
+ * protecting was quadratic, and MEASURED at this cap it was **32.9 seconds of synchronous,
+ * event-loop-blocking CPU for one frame** — every other session on the relay frozen for the
+ * duration, repeatable for free because a refused batch costs the sender nothing.
  *
- * 4096 is far above any real conversation and far below the point where the walk is expensive. A
- * batch over it is refused as malformed rather than truncated — truncating a chain to fit a limit
- * is D4c, which this order rules out for the reason it rules it out everywhere: those messages
- * exist in both operators' transcripts.
+ * `verifySealLeafChain` now folds the running root incrementally (RFC 6962, the same fold the
+ * `hash_submit` path already used), so the walk is genuinely O(N log N) and 4096 leaves cost
+ * milliseconds. A comment asserting a complexity the code does not have is exactly the shape M15
+ * exists to remove; it is corrected here rather than deleted, so the measurement is not lost.
+ *
+ * The bound still earns its place. Every byte is attacker-chosen — a `session_replay` arrives from
+ * an authenticated participant, and "authenticated" is not "honest" — and nothing in the batch is
+ * trustworthy until the walk this bound protects has finished. The dispatch also rate-limits the
+ * frame, which is the other half; a bound without a rate limit only fixes the cost of one frame.
+ *
+ * 4096 is far above any real conversation. A batch over it is refused as malformed rather than
+ * truncated — truncating a chain to fit a limit is D4c, which this order rules out for the reason
+ * it rules it out everywhere: those messages exist in both operators' transcripts.
  */
 const MAX_REPLAY_LEAVES = 4096;
 
@@ -369,11 +379,18 @@ export function decodeInboundFrame(bytes: Uint8Array): InboundRelayFrame | null 
   // frame whose bytes cannot be read at all, so a malformed batch is a named refusal rather than a
   // throw escaping into the stream handler.
   //
-  // ⚠️ `counterparty_tip` IS DECODED LENIENTLY AND REFUSED STRICTLY, and the split is deliberate.
-  // A missing or misshapen tip decodes to `undefined` and is then refused BY NAME by
-  // `verifySessionTipAttestation` — rather than voiding the frame here, where the sender would get
-  // "could not decode" and no idea which of six fields was wrong. Absent and wrong take the same
-  // path either way; the difference is only whether the operator is told which one they sent.
+  // ⚠️ `counterparty_tip` IS DECODED LENIENTLY AND REFUSED STRICTLY — but a tip that is PRESENT and
+  // unreadable must not be reported as ABSENT (review H7).
+  //
+  // The first version dropped any misshapen tip to `undefined`, so an operator who DID send one was
+  // told `replay_tip_attestation_absent` and advised to go and ask their counterparty for a fresh
+  // attestation — when the real fault was in their own encoding, on their own machine. The comment
+  // here claimed the leniency spared them a "could not decode" with no idea which field was wrong;
+  // what it actually did was name the wrong field entirely.
+  //
+  // So the fields are carried through as they arrived and the SHAPE CHECK lives in one place, in
+  // `verifySessionTipAttestation`, which already has `replay_tip_attestation_malformed` and already
+  // tests it. Absent and malformed are both refused; they are now told apart.
   if (o["type"] === "session_replay") {
     const session_id = toUint8Array(o["session_id"]);
     const reported_root = toUint8Array(o["reported_root"]);
@@ -416,15 +433,18 @@ export function decodeInboundFrame(bytes: Uint8Array): InboundRelayFrame | null 
     }
     let counterparty_tip: SessionTipAttestation | undefined;
     const rawTip = o["counterparty_tip"];
-    if (typeof rawTip === "object" && rawTip !== null) {
+    if (rawTip !== undefined) {
+      if (typeof rawTip !== "object" || rawTip === null) return null;
       const t = rawTip as Record<string, unknown>;
-      const pubkey = toUint8Array(t["pubkey"]);
-      const root = toUint8Array(t["root"]);
-      const signature = toUint8Array(t["signature"]);
-      const last_seq = typeof t["last_seq"] === "number" ? t["last_seq"] : null;
-      if (pubkey && root && signature && last_seq !== null) {
-        counterparty_tip = { pubkey, last_seq, root, signature };
-      }
+      // Deliberately NOT length-checked here — that is `verifySessionTipAttestation`'s job, and a
+      // wrong length must come back as `replay_tip_attestation_malformed`, not as absent. Anything
+      // that is not bytes at all becomes an empty array, which that check refuses by the same name.
+      counterparty_tip = {
+        pubkey: toUint8Array(t["pubkey"]) ?? new Uint8Array(0),
+        last_seq: typeof t["last_seq"] === "number" ? t["last_seq"] : -1,
+        root: toUint8Array(t["root"]) ?? new Uint8Array(0),
+        signature: toUint8Array(t["signature"]) ?? new Uint8Array(0),
+      };
     }
     return {
       type: "session_replay",

@@ -120,7 +120,7 @@ import { computeDkgTopology } from "./dkg-topology.js";
 import { reconstructCarriedSealLeaves, validateSealSubmissionLeaves } from "./seal-unilateral-verify.js";
 // 031-RELAYREPLAY: the seal-chain verifier now lives in the one package the directory and the relay
 // share. `decodeStructure1Fields` is re-exported because 020-ACKHASH's tests import it from here.
-import { verifySealLeafChain, verifySealCtrlLeaf, decodeStructure1Fields } from "@cello-protocol/interfaces";
+import { verifySealLeafChain, verifySealCtrlLeaf, decodeStructure1Fields, DIRECTORY_COLLAPSED_CHAIN_REASONS } from "@cello-protocol/interfaces";
 export { decodeStructure1Fields };
 export type { Structure1Fields } from "@cello-protocol/interfaces";
 import type { AgentProfile } from "@cello-protocol/protocol-types";
@@ -5096,7 +5096,27 @@ export class CelloDirectoryNode {
     roster: readonly [Uint8Array, Uint8Array],
   ): { ok: true; recomputedRoot: Uint8Array } | { ok: false; reason: string } {
     const chain = verifySealLeafChain(leaves, reportedRoot, sessionId, roster);
-    if (!chain.ok) return chain;
+    if (!chain.ok) {
+      /**
+       * ⚠️ FIVE CAUSES BACK INTO ONE WIRE REASON — 031-RELAYREPLAY review H6, and this collapse is
+       * PRESERVED, not introduced.
+       *
+       * `verifySealLeafChain` now names its cause (a forged signature, a broken prev_root chain, a
+       * causal-order violation, an undecodable Structure 1, a root mismatch) because a RELAY hands
+       * that string to an operator. The directory has been answering `unilateral_root_unverifiable`
+       * for all of them since SESSION-002; widening it is a change to the seal path's published
+       * refusal code, and this order's second clause is that the directory's existing seal tests
+       * pass unchanged.
+       *
+       * So it is mapped back here, in one visible place, rather than left implicit. The specific
+       * cause is worth having on the seal path too — that is a seal-path change with its own tests,
+       * and it is recorded rather than silently deferred.
+       */
+      return {
+        ok: false,
+        reason: DIRECTORY_COLLAPSED_CHAIN_REASONS.has(chain.reason) ? "unilateral_root_unverifiable" : chain.reason,
+      };
+    }
     const ctrl = verifySealCtrlLeaf(leaves, presentHex);
     if (!ctrl.ok) return ctrl;
     return { ok: true, recomputedRoot: chain.recomputedRoot };
