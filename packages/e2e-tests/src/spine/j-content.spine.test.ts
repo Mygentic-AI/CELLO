@@ -605,7 +605,23 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
      * itself was a different string.
      */
     const msgBytes = Buffer.from(`${msg} [[OVER]]`);
-    expect(((await connA.call("cello_send", { cello_session_id: sessionId, content: msg, signal: "over" })) as { ok?: boolean }).ok).toBe(true);
+    /**
+     * ⚠️ **READ THE WHOLE RESPONSE, NOT JUST `ok`.** This assertion was `….ok).toBe(true)` and it
+     * failed on 2026-09-05 as a bare `expected false to be true` — a send that did not happen, with
+     * the reason and the affordance the daemon had already computed thrown away one character
+     * before they could be printed. It is the same hole that let three refused deposits in this
+     * file read as three successes.
+     */
+    const sent = (await connA.call("cello_send", { cello_session_id: sessionId, content: msg, signal: "over" })) as {
+      ok?: boolean; reason?: string; guidance?: string; delivered?: boolean; witnessed?: boolean;
+    };
+    expect(
+      sent.ok,
+      `A's direct send must succeed — this is the copy the parked duplicate has to dedup against. ` +
+      `Send said: ${JSON.stringify(sent)}\n  A's send/relay lines:\n${
+        daemonA.output.split("\n").filter((l) => /session\.content|relay|park|witness/.test(l)).slice(-12).join("\n") || "    (none)"
+      }`,
+    ).toBe(true);
 
     /**
      * ⚠️ THE HASH IS READ FROM THE DAEMON, NOT COMPUTED HERE — and computing it is why this test failed.
@@ -1175,19 +1191,40 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // it is a tool that does not exist — which reads as a product regression in the failure.
     const tx = (await connB.call("cello_transcript", { cello_session_id: sessionId })) as {
       ok?: boolean;
-      messages?: Array<{ content?: string }>;
-      post_seal_annex?: Array<{ content?: string }>;
+      /**
+       * ⚠️ **`text`, NOT `content` — BOTH READS HERE NAMED A FIELD THAT DOES NOT EXIST.**
+       *
+       * `TranscriptEntry` and the annex row both carry `text` (`session-node-manager.ts`), so
+       * `a.content` was `undefined` on every row and both derived strings were always `""`. That
+       * made the two assertions below fail in opposite ways, and the second is the dangerous one:
+       *
+       *  - the POSITIVE one (`annex must contain the straggler`) could never pass, whatever the
+       *    daemon did — and it duly failed, naming a behaviour the daemon was performing correctly;
+       *  - the NEGATIVE one (`the straggler must never appear among the sealed messages`) could
+       *    never FAIL. `"".not.toContain(x)` is green for any code at all, including code that
+       *    merged the annex straight into the sealed transcript — the exact boundary it exists to
+       *    guard.
+       *
+       * Found by 030-RELAYSILENT only because the connection defect was cleared first: until then
+       * the test never reached this line.
+       */
+      messages?: Array<{ text?: string }>;
+      post_seal_annex?: Array<{ text?: string }>;
     };
     expect(tx.ok, `B reads its transcript:${diag}`).toBe(true);
-    const annexText = (tx.post_seal_annex ?? []).map((a) => a.content ?? "").join("\n");
+    const annexText = (tx.post_seal_annex ?? []).map((a) => a.text ?? "").join("\n");
     expect(
       annexText,
       `the straggler must be KEPT and READABLE in the post-seal annex, not merely refused. ` +
       `Annex was: ${JSON.stringify(tx.post_seal_annex)}${diag}`,
     ).toContain(straggler.toString("utf8"));
     // And it must NOT have entered the sealed transcript — the boundary the annex exists to hold.
+    const sealedText = (tx.messages ?? []).map((m) => m.text ?? "").join("\n");
+    // The negative assertion is only worth anything if the string it searches is non-empty — it was
+    // empty for the life of this test. Prove the search can SEE before believing what it does not find.
+    expect(sealedText, "positive control: the sealed transcript is readable at all").toContain("msg1");
     expect(
-      (tx.messages ?? []).map((m) => m.content ?? "").join("\n"),
+      sealedText,
       "a post-seal straggler must never appear among the sealed messages",
     ).not.toContain(straggler.toString("utf8"));
 
