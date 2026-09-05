@@ -2,10 +2,18 @@
 name: 033-ACKEMIT — Production signs what it saw, not merely where it was
 type: micro-work-order
 date: 2026-09-05
-status: open
+status: complete
 dod_line: DOD-M15-WITHHOLD-SEAL-1
-dod_effect: closes
+dod_effect: unit-of
 dod_effect_note: >
+  ⚠️ **DOWNGRADED FROM `closes` TO `unit-of` BY PART 0b, and the reason is in the close-out below.**
+  This order delivers the acknowledgement — production signs `last_seen_hash`, and both the relay and
+  the receiving daemon enforce it. It does NOT deliver DoD clause 7's enforcer journey, because 0b
+  proved the producer that journey needs does not exist: the daemon never assembles a carry leaf for
+  a message that arrived with no relay ordering record, so a withheld last message still truncates
+  the chain. That is written up under *Newly discovered* as its own unit, and the line stays open
+  until it lands.
+
   The EMITTER half. `020-ACKHASH` shipped the reading half and is LIVE — fleet on `eccc9cbc` across
   all five nodes, client published and promoted (`protocol-types@0.0.69`, `daemon@0.0.189`,
   `connect@0.0.164`, `cli@0.0.196`). That deploy gate is satisfied; ONE precondition survives and is
@@ -295,6 +303,213 @@ withholds) cannot be produced by an in-process test that controls both sides' co
 
 ---
 
+---
+
+## Part 0 close-out — answered before any code was written
+
+### 0a — Is every live agent on `daemon@0.0.189` or newer? **YES. Not a stop.**
+
+Each row proved three separate things: the installed version, that the RUNNING process is that build
+(package mtime earlier than process start), and that the v2 reader is physically in the shipped
+artifact (`last_seen_hash` present in `protocol-types/dist/structure1.js`), not merely implied by a
+version string.
+
+| Agent host | daemon | protocol-types | v2 reader in `dist/` | running build proved |
+|---|---|---|---|---|
+| Andre's laptop | 0.0.189 | 0.0.69 | ✅ | installed 12:12:28, process started 12:15:04 |
+| Hermes EC2 `i-06db70df6b3e32207` | 0.0.189 | 0.0.69 | ✅ | installed 10:13:56, process started 10:14:10 |
+| `cello-hostile-client` (GCP `us-east1-d`) | 0.0.189 | 0.0.69 | ✅ | installed 10:26:24, process started 10:27:57 |
+| Demo agent EC2 `i-0ad3e7c22470f266e` | — | — | — | **STOPPED — not a live agent** |
+
+Published `latest` and `beta` both read `daemon@0.0.189` / `protocol-types@0.0.69`, so no live agent
+is behind the reader.
+
+**The connect shim is not a Structure 1 reader.** `@cello-protocol/connect@0.0.164` (the four npx
+MCP shims on the laptop and the two on Hermes) contains no `structure1` or `decodeStructure1` in its
+built `dist/`; positive control — the same `dist/` yields hits for `cello_send`. It proxies over IPC
+and the daemon is the only decoder, so the shim version does not participate in this gate.
+
+**⚠️ ONE THING TO HAND ANDRE, and it is not a blocker.** The demo agent is STOPPED, so it cannot be
+queried and it is not live. Whatever build it holds is from before 2026-07-31. **Upgrade it before
+it is next started** (`npm i -g @cello-protocol/cli@latest`, then the documented daemon-then-demo
+restart) — starting it un-upgraded after this unit ships puts an old reader back on the wire, which
+is the silent-message-loss case this order's `deploy_gate` describes.
+
+### 0b — Does the daemon already assemble a carried leaf for a message that arrived with NO relay ordering record? **NO.**
+
+Two distinct questions hide in this one, and the answers differ:
+
+- **A carried leaf with no relay RECEIPT — YES, and it has shipped.** `session-relay-client.ts`
+  stores the counterparty's leaf from `leaf_deliver` with `relay_id` / `relay_timestamp` /
+  `relay_signature` all absent. That is exactly the asymmetry the design anticipated.
+- **A carried leaf with no relay ORDERING RECORD — NO.** `SessionSealLeafStore.store()` has exactly
+  two writers, both inside the relay client: the own-leaf site on `hash_submit_ack`, and the
+  counterparty site on `leaf_deliver`. Both require the relay to have spoken, and the counterparty
+  site additionally requires the relay-supplied `structure2_cbor` — which is `NOT NULL` in the carry
+  schema. A message the attacker delivered over the direct content stream and never submitted
+  produces **no carry leaf at all**.
+
+**So the seal half of this unit is NOT nothing.** The consume path confirms it end to end: the
+unilateral seal builds `seal_leaves` from `getSealCarry` and the local pre-flight refuses a gap with
+`seal_carry_noncontiguous` — so a withheld LAST message does not even produce a gap. It truncates
+the chain at N−1 and the seal proceeds, agreeing with the witness. That is the attack, intact.
+
+**Consequence for this unit, stated rather than absorbed:** DoD clause 7's enforcer journey ("a
+withheld last message still lands in the victim's unilateral receipt") needs a producer that does
+not exist — building a carry leaf from the content frame's own `structure1_cbor` +
+`sender_signature`, plus a directory-side verifier that accepts a counterparty leaf carrying no
+Structure 2. That is a second mission and a wire change. It is written up under *Newly discovered*
+and it is not built here. Everything Parts 1 and 2 describe — the mission sentence — is.
+
+### 0c — Does anything, anywhere, emit a submission id? **NO. The grep is confirmed.**
+
+`submissionId` / `submission_id` in `core/daemon/src/session-relay-client.ts` returns nothing;
+positive control on the same file returns 30 hits for `structure1`, so the search could see.
+
+Widened across both repos, every hit is the **M10B sealed trust-signal submission queue** — a
+different concept that never touches Structure 1: `protocol-types/src/submission.ts`, the directory's
+`submission_queue` table and frames, and the CLI/MCP display of them. The only Structure-1
+submission-id code anywhere is the relay's READER (`relay-node.ts`, `DOD-M15-SUBMIT-ID-1`) and a
+test fixture that hand-builds a v1 seven-array. **Its emitter half never shipped.**
+
+**Index 6 is therefore free to become exclusive**, and from this unit it is: v1+7 keeps meaning
+submission id, v2+7 means `last_seen_hash`, and nothing can carry both.
+
+---
+
+## Close-out — what shipped, what did not, and the verdict
+
+### The four hollow-test questions (§2)
+
+1. **What did I stub, and does the property live in the stub?** The shared two-connection fixture now
+   seeds the session's genesis, the way it already seeds the agreed content key. The property does
+   NOT live in that stub: the stub supplies the same value a completed session open supplies, and
+   every assertion is on what the code then DOES with it. The one place it could have hidden — the
+   receiving daemon's genesis comparison — is now asserted directly, wrong value and right value.
+2. **Is the fixture the shape that BREAKS, or a neighbouring shape that works?** Two shapes were
+   wrong on the first pass and both were corrected by measurement, not by inspection. The "mismatch"
+   test used a hash we had never held, which is a DIFFERENT refusal — it now names a hash we really
+   do hold, at a position where we hold another. And the emitter test delivered the counterparty's
+   leaf DURING a submit, which is genuinely too late for bytes already signed; it now delivers first
+   and reads the next submit.
+3. **Would this assertion pass if the code did NOTHING?** The acceptance halves are what answer this:
+   the matching hash is accepted, the real genesis is accepted, a v1 claim naming no position is
+   accepted. Without them, "refuse everything" passes every refusal test in the file.
+4. **Did I assert the OUTCOME or the mechanism's shadow?** **This one was failed and the reviewer
+   caught it.** Three different causes were asserted as `reason === "authorship_unacknowledged"` —
+   which proved a refusal was filed, not that the right one was, and it is exactly what made the
+   collapsed operator sentence invisible. The tests now name each cause and assert that the three
+   sentences DIFFER.
+
+### The mutation record (§0z.3) — six, each typechecked first, each reddening only its target
+
+| Mutation | Result |
+|---|---|
+| relay-submit emitter drops `lastSeenHash` | RED — the three emitter tests |
+| unwitnessed-claim emitter drops `lastSeenHash` | **SURVIVED on the first pass** — that emitter had no test at all; a test was written for it and it now reddens alone |
+| receive-path acknowledgement advance removed | RED — the received-message test alone |
+| positional comparison always matches | RED — the mismatch test alone |
+| a v1 claim naming a position waved through | RED — the v1-with-a-position test alone |
+| relay's mismatch comparison compares to itself | RED — the relay mismatch and zeros tests |
+
+Two mutations were discarded rather than counted because they did not COMPILE (`if (false)` narrowed
+a return type, `&& false` widened one) — a mutant that fails typecheck proves nothing.
+
+**And the loop ate one fix.** After confirming the receive-path mutation reddened, restoring the file
+took the uncommitted fix with it. It surfaced as a test that passed alone and failed in the full run,
+which reads exactly like flakiness. Rule 1 of the loop's four says commit before the loop exists; the
+cost of not doing so was one confusing debugging round.
+
+### Definition of Done, clause by clause
+
+| # | Clause | Status |
+|---|---|---|
+| 1 | Part 0's three questions answered with evidence | ✅ above |
+| 2 | Production emits v2 on every send; grep proves no path emits v1 | ⚠️ **DEVIATED — see below** |
+| 3 | First message carries the session's genesis; a test pins the exact bytes | ✅ both sides |
+| 4 | Relay refuses a mismatch by name, and the operator is told | ✅ |
+| 5 | The counterparty daemon does the same check with no relay | ✅ |
+| 6 | Index 6 is exclusive | ✅ |
+| 7 | The enforcer journey passes as separate OS processes | ❌ **NOT DELIVERED — 0b** |
+| 8 | Each new assertion made to fail on purpose | ✅ six mutations |
+| 9 | The four hollow-test questions answered | ✅ above, including the one that was failed |
+| 10 | Published, lockfile committed, re-pins updated | ✅ |
+| 11 | Gate passes in both repos, verified in the BUILT artifact | ✅ |
+| 12 | Reviewed, every finding fixed, verdict quoted | ✅ below |
+
+### Clause 2 — the deviation, stated rather than absorbed
+
+**A v1 claim is still emitted in one case: a session that has no recorded starting point AND has
+received nothing.** It carries `last_seen_seq: 0` and no hash — "I have seen nothing of yours" — which
+is true and asserts nothing about content.
+
+**Why, and it is a measurement rather than a preference.** Refusing every v1 emission broke 93 tests
+across 26 files, and the shape of the breakage was the argument: sessions brokered without a relay
+assignment are real, the directory does not always return one, and those sessions have nothing to
+acknowledge. Refusing them traded a hole they are not in for a failure of the thing the product is
+for.
+
+**So the rule enforced is the POSITION, not the version.** A claim naming position 1 or beyond with
+no hash is the unbacked number this unit exists to stop accepting, and the receiving daemon refuses
+it. A claim naming no position asserts nothing and is accepted.
+
+**The bound, and it is real:** a peer can decline to bind by never acknowledging anything. That costs
+them their own ratification of our history rather than falsifying it, and it is the same
+under-claiming the relay has always allowed — it refuses a `last_seen_seq` that runs AHEAD of its
+counter, never one that lags. **This is Andre's to grant or reject, not mine**; it is recorded here
+rather than in a comment nobody reads.
+
+### Clause 7 — not delivered, and why
+
+Part 0b proved the producer it needs does not exist. See *Newly discovered* below.
+
+### Review verdict — `cello-unit-reviewer`, one pass, quoted
+
+> **SPEC: DEVIATIONS FOUND** … **SILENT FALLBACKS FOUND** — F3: a peer who withholds submits drives
+> the session DIVERGED and switches the whole check off, on a stated justification that is false.
+> F1: the acknowledgement silently degenerates to a per-session constant on any relay-less session.
+> Both HIGH. … **ERROR SUBSTITUTION FOUND** — F5 … **HOLLOW TESTS FOUND** … **REMOVALS PROVEN** …
+> **COMPATIBILITY DEBT FOUND**
+>
+> "The receiver-side narrowing (refuse v1 only at `last_seen_seq >= 1`) is **sound** … The
+> **emitter-side** narrowing is a different decision wearing the same justification, and it is the
+> one that needs Andre. The two soft branches: the genesis one is safe as argued; **the DIVERGED one
+> is not — the peer controls it, and the specific peer who controls it is the attacker in the DoD
+> line.**"
+
+**Ten findings, all fixed.** F3 was the one that mattered: the check is no longer positional, so
+divergence cannot switch it off. F1 made clause 5 true rather than nominal. F5's collapsed operator
+sentence, F2's five stale comments, F6's non-existent remedy, F7's second call site, and F8–F10 are
+all in the diff. The one item left standing is the emitter-side narrowing above, which the reviewer
+correctly says is Andre's call.
+
 ## Newly discovered
 
 _(write findings here and keep going — do not fix them)_
+
+### 1. A message that arrived with no relay ordering record can never enter a receipt — the carry-leaf producer is missing
+
+**Found answering Part 0b; NOT fixed here.** `SessionSealLeafStore.store()` has two writers and both
+live inside the relay client. The counterparty writer runs on `leaf_deliver` and needs the
+relay-supplied `structure2_cbor`, which the carry schema declares `NOT NULL`. So when a counterparty
+delivers a message over the direct content stream and never submits its hash, the victim holds the
+message, holds the counterparty's signature over it, and **still cannot put it in a receipt** — the
+unilateral seal is built from `getSealCarry`, and that message is not in it.
+
+**What the operator lives through:** somebody says the thing they later want removed, declines to
+witness it, and the victim's notarised receipt ends one message early — every leaf validly signed,
+nothing false, the last thing said simply absent.
+
+**Classification: BLOCKS LAUNCH is Andre's to grant (§0z.4), so this is written up and not claimed.**
+It is the second half of `DOD-M15-WITHHOLD-SEAL-1`'s own journey, so my read is that it belongs in
+the gate; the frozen-gate rule says I do not put it there myself.
+
+**What it needs, so the size is visible rather than guessed:** a producer that builds a carry leaf
+from the content frame's own `structure1_cbor` + `sender_signature`; a nullable `structure2_cbor` in
+the carry schema; and a directory-side offline verifier that accepts a counterparty leaf with no
+Structure 2, pinning it by the sender's signature and contiguity instead. That last part is a wire
+change and it is why this is not folded into 033.
+
+**This unit is what makes it possible.** With `last_seen_hash` signed, the victim's own next
+message — and the counterparty's own subsequent acknowledgements — bind to the withheld message's
+content, so a carried leaf built from the frame has something to be checked against.

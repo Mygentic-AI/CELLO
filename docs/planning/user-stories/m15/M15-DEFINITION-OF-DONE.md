@@ -950,7 +950,24 @@ match, I'm blocked. But if I arrive at immigration with no passport, they let me
 > trip-wire is tripped and item 3 (the claim is not bound to the session id) needs Andre's call.**
 > → order `micro/029-AUTHORSHIP-no-passport-no-entry.md` (Review + Newly discovered)
 
-### `DOD-M15-WITHHOLD-SEAL-1` — ❌ A counterparty cannot hide their last message and seal without it
+### `DOD-M15-WITHHOLD-SEAL-1` — 🟠 A counterparty cannot hide their last message and seal without it
+
+> **THE ACKNOWLEDGEMENT HALF IS DONE (`033-ACKEMIT`, 2026-09-05). THE SEAL HALF IS NOT, and the line
+> stays open for it.** Production now signs `last_seen_hash` on every claim it can make one for; the
+> relay refuses a submit whose acknowledgement contradicts its record, and the receiving daemon runs
+> the same check against its own tree with no relay involved. So an acknowledgement binds to content
+> instead of to a bare number.
+>
+> **What is still owed, and it is the journey clause:** `033`'s Part 0b measured that the daemon
+> never assembles a carry leaf for a message that arrived with NO relay ordering record — both
+> writers of `SessionSealLeafStore` sit inside the relay client. So a withheld last message still
+> truncates the chain and the seal still agrees with the witness. That producer, plus a directory
+> verifier that accepts a counterparty leaf carrying no Structure 2, is the remaining unit.
+>
+> **One deviation needs Andre's ruling** — a session with no starting point and nothing received
+> still emits a v1 claim (position 0, no hash, asserting nothing). Refusing it broke 93 tests across
+> 26 files because sessions brokered without a relay assignment are real. Full reasoning in the
+> order's close-out.
 **Found 2026-09-03, [[2026-09-03_1158_relay-overload-and-the-four-things-underneath-it]]. Ruled BLOCKS by Andre 2026-09-03.** *"The receipt is the product. A path that
 lets the guilty party remove themselves from it is not a papercut."*
 

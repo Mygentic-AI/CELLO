@@ -233,6 +233,28 @@ export type HashSubmitErrorReason =
   | "sender_mismatch"
   | "last_seen_seq_ahead"
   /**
+   * 033-ACKEMIT — the claim's `last_seen_hash` names content this relay did not record at the
+   * position the claim names.
+   *
+   * SEPARATE FROM `signature_invalid`, and the distinction is the point: the signature verified, the
+   * signer is a participant, and the leaf is well formed. What is wrong is the sender's account of
+   * what they had SEEN — which is the one thing a position-only acknowledgement could never express
+   * and therefore could never contradict.
+   *
+   * Carries a `detail` naming what was OBSERVED ("the acknowledged hash does not match the message
+   * at that position") and never an inferred conclusion about the sender.
+   */
+  | "ack_hash_mismatch"
+  /**
+   * 033-ACKEMIT — this relay's sequence counter reaches the acknowledged position and its leaf log
+   * does not, so it cannot check the claim.
+   *
+   * A FAULT ON THE RELAY, named apart from a mismatch so nobody is sent to ask their counterparty
+   * about it. Unreachable while the counter and the log are advanced together; named because an
+   * event that lies about its cause is worse the day it does fire.
+   */
+  | "ack_hash_unverifiable"
+  /**
    * DOD-M15-TERMINAL-REASON-1 — three answers where there was one, because the one was wrong.
    *
    * `session_sealed` was returned for EVERY non-active status, and it was never true of either of

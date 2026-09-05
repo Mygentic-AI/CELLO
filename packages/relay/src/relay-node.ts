@@ -2779,6 +2779,85 @@ export class CelloRelayNode {
     }
 
     /**
+     * ─── THE ACKNOWLEDGEMENT MUST NAME CONTENT THIS RELAY ACTUALLY HOLDS — 033-ACKEMIT ───────────
+     *
+     * `last_seen_seq` is a NUMBER: "I saw position 7" attests to a POSITION and never to CONTENT.
+     * Until an emitter existed, the only thing binding a signed acknowledgement to a message was
+     * this relay's own receipt over `content_hash ‖ seq ‖ timestamp` — so withholding a submit left
+     * the acknowledgement an unbacked number, which is how a counterparty seals one message short.
+     * The claim now carries the hash, and this is where the witness checks it against its own record.
+     *
+     * **NO NEW FRAME AND NO NEW WIRE FIELD.** A `hash_submit` already carries `structure1_cbor`
+     * verbatim — the identical signed claim minus the plaintext body — so the witness enforces the
+     * chain live, the way `DOD-M15-CORROBORATE-1` verifies every hash on arrival rather than on
+     * request.
+     *
+     * **A v1 CLAIM IS NOT CHECKED HERE, AND THAT IS DELIBERATE — not the fail-open it resembles.**
+     * §2c's rule is that the witness tolerates a shape before any client depends on it, and the
+     * inverse breaks every message in flight: a relay that refused v1 would stop witnessing for
+     * every client that has not yet taken the emitter, including ones nobody has upgraded. The
+     * *receiving daemon* is where a v1 claim is refused, because that is the side that can afford to
+     * — it refuses one message from one peer, not the whole fleet's ordering. Enforcing here as well
+     * is a later step, once nothing on the wire emits v1.
+     *
+     * ⚠️ `last_seen_seq` 0 IS A REAL POSITION WITH A REAL VALUE. The first message of a session has
+     * seen nothing, and that case is the session's `genesis_prev_root` — a value derived from both
+     * participant keys, the session id and the session timestamp, which this relay already computed
+     * and stored when it recorded the session. Not 32 zero bytes: a constant identical across every
+     * session would be presentable for any of them, leaving the one position most exposed to a
+     * forged acknowledgement as the only one nobody could check.
+     */
+    if (s1.last_seen_hash) {
+      const expectedAck = s1.last_seen_seq === 0
+        ? state.genesis_prev_root
+        // 1-BASED → 0-BASED. The relay numbers the first leaf of a session 1 (`seq_counter + 1`
+        // below) and `leaf_log` is a 0-indexed array, so position N is `leaf_log[N - 1]`.
+        : state.leaf_log[s1.last_seen_seq - 1]?.s2.content_hash;
+      /**
+       * The position was proved to exist by `last_seen_seq_ahead` above, so an absent leaf here is
+       * this relay's own record being inconsistent with its own counter — never something the
+       * sender did. It is named apart from a mismatch for exactly that reason: sending an operator
+       * to ask their counterparty about a fault on the witness wastes the one thing a refusal is
+       * supposed to buy them.
+       */
+      if (!expectedAck) {
+        this.#logger.error("relay.submit.ack_hash.record_incomplete", {
+          sessionId: sessionKey,
+          lastSeenSeq: s1.last_seen_seq,
+          seqCounter: state.seq_counter,
+          impact:
+            "this relay holds a sequence counter that reaches this position and no leaf at it, so " +
+            "it cannot check what the sender says they saw. The submit was refused; the fault is " +
+            "on this relay, not on either participant.",
+        });
+        await reply("ack_hash_unverifiable"); return;
+      }
+      if (Buffer.from(s1.last_seen_hash).compare(Buffer.from(expectedAck)) !== 0) {
+        /**
+         * ⚠️ **NAMES WHAT WAS OBSERVED, NEVER AN INFERRED CONCLUSION** (`DOD-M15-ERRSTRING-1`).
+         * "the acknowledged hash does not match the message at that position" — not "the peer is
+         * malicious". The same signal is what a genuine software fault on the sender's side looks
+         * like, and an error that names a party the code did not check is this milestone's founding
+         * error-fidelity defect.
+         *
+         * The hashes themselves are NOT logged. They are content hashes for a conversation this
+         * relay is not entitled to read anything about (INV-3), and the position plus the session
+         * are what an investigation needs.
+         */
+        this.#logger.warn("relay.submit.ack_hash.mismatch", {
+          sessionId: sessionKey,
+          submitter: truncHex(senderPubkeyHex),
+          lastSeenSeq: s1.last_seen_seq,
+          impact:
+            "the submitter signed an acknowledgement of the message at this position, and it names " +
+            "content different from what this relay recorded there. The submit was REFUSED, so the " +
+            "leaf was not sequenced and no position was consumed.",
+        });
+        await reply("ack_hash_mismatch", "the acknowledged hash does not match the message at that position"); return;
+      }
+    }
+
+    /**
      * A DECLARED RETRY IS ANSWERED FROM THE RECORD — `DOD-M15-SUBMIT-ID-1`.
      *
      * Before allocating anything. The sender said "this is submission X again", and the signature
