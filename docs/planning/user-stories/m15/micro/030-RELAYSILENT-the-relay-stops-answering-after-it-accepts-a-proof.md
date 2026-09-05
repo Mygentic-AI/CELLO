@@ -215,14 +215,201 @@ load `/worktree-permissions` before creating one.
 ## Review
 
 ### Where this work lives
-*(worktree paths, branch, and the `COMPOSE_PROJECT_NAME` / `CELLO_PG_HOST_PORT` you used)*
 
-### Who closes the connection, verbatim
-*(DoD 1 — required whether or not Part 2's stop rule fired.)*
+| | |
+|---|---|
+| branch (both repos) | `m15/030-relaysilent` |
+| daemon | `/Users/andrep/Documents/code/m15-030/cello-client` |
+| spine | `/Users/andrep/Documents/code/m15-030/trustless-cello` |
+| Postgres isolation | `COMPOSE_PROJECT_NAME=m15030`, `CELLO_PG_HOST_PORT=5438` |
 
-### The rest
-*(the three consecutive runs, the mutation proof, the reviewer's verdict)*
+### Who closes the connection, verbatim (DoD 1) — ESTABLISHED
+
+**It is the relay, and it is not CELLO code. It is libp2p's connection manager refusing inbound
+connections at FIVE PER SECOND PER SOURCE IP, below every layer CELLO logs.**
+
+Quoted from the relay, with `DEBUG=libp2p:connection-manager*` on and nothing else changed:
+
+```
+connection from /ip4/127.0.0.1/tcp/64907 refused - inboundConnectionThreshold exceeded by host 127.0.0.1
+connection from /ip4/127.0.0.1/tcp/64909 refused - inboundConnectionThreshold exceeded by host 127.0.0.1
+connection from /ip4/127.0.0.1/tcp/64912 refused - inboundConnectionThreshold exceeded by host 127.0.0.1
+connection from /ip4/127.0.0.1/tcp/64915 refused - inboundConnectionThreshold exceeded by host 127.0.0.1
+connection from /ip4/127.0.0.1/tcp/64918 refused - inboundConnectionThreshold exceeded by host 127.0.0.1
+connection from /ip4/127.0.0.1/tcp/64928 refused - inboundConnectionThreshold exceeded by host 127.0.0.1
+```
+
+**Read from the installed dependency, not from memory** — `libp2p@3.3.2`
+(`connection-manager/index.js`):
+
+```js
+this.inboundConnectionRateLimiter = new RateLimiter({
+    points: init.inboundConnectionThreshold ?? defaultOptions.inboundConnectionThreshold,  // 5
+    duration: 1                                                                            // per second
+});
+```
+
+and in `upgrader.js`, `acceptIncomingConnection` is called **first**, before anything else:
+
+```js
+accepted = this.components.connectionManager.acceptIncomingConnection(maConn);
+if (!accepted) { throw new ConnectionDeniedError('Connection denied'); }
+await raceSignal(this.shouldBlockConnection('denyInboundConnection', maConn), signal);
+```
+
+**That ordering is why the relay's log goes silent.** The refusal happens before the connection
+gater, before Noise, before `connection:open` — so `Peer connected`, the CELLO gater and every
+CELLO event are all downstream of a decision none of them can see. The relay is not quiet; it is
+**structurally unable to say it refused you.**
+
+**The counter is `DECLARED_INBOUND_CONNECTION_THRESHOLD = 5` in `core/transport/src/node.ts`**, and
+the relay inherits it — `packages/relay/src/relay-node.ts` passes no `connectionLimits` override.
+`DOD-M15-IDLE-CONNS-1` adopted these four values from libp2p deliberately and said so in writing:
+*"the change here is authorship, not tuning: pin what runs today, make it visible, and let
+`getConnectionLimits()` supply the number a later tuning pass needs."* **This is that tuning pass,
+and it now has the measurement that unit said it lacked.**
+
+### The measurement
+
+| | |
+|---|---|
+| inbound attempts from one host in the failing second | **11** |
+| admitted (the threshold) | **5** |
+| refused | **6** |
+| relay connections open at that moment | **4** (`checking max connections limit 4/300`) |
+
+So `maxConnections` was at **1.3% of capacity** while the relay refused more than half the
+connections offered to it. The binding constraint is the per-second IP rate and nothing else.
+
+### Causation, proven both ways
+
+**One value changed on the relay — `inboundConnectionThreshold: 1000` — and nothing else:**
+
+| | `DOD-MSG-5` | `DOD-MSG-7` | `DOD-MSG-8` | whole file |
+|---|---|---|---|---|
+| stock (5) — control, run after the fact | ❌ | ❌ | ❌ | 7 failed / 7 passed |
+| raised — run 1 | ✅ | ✅ | ✅ | 2 failed / 12 passed |
+| raised — run 2 | ✅ | ✅ | ✅ | 2 failed / 12 passed |
+| raised — run 3 | ✅ | ✅ | ✅ | 2 failed / 12 passed |
+
+**Three consecutive green runs, as separate OS processes**, against the real three-node consortium
+and the real relay binary. The two remaining failures are unrelated and recorded under *Newly
+discovered*. **The stock threshold breaks seven of the fourteen tests in this file, not three.**
+
+---
+
+## The three items Andre asked about — are they really issues, and how are they fixed
+
+### 1. "The listening post proves itself and the relay accepts the proof" — **NOT AN ISSUE.**
+
+Working exactly as designed, and both sides agree in writing. Nothing to fix. It was worth checking
+because the earlier hand-back had read a peer-id difference as evidence the wrong peer was proving;
+that reading is withdrawn.
+
+### 2. "The relay's log stops; every later dial dies in the encryption handshake" — **REAL, and it is TWO issues, not one.**
+
+**2a. The cap is wrong for a relay. FIX: raise `inboundConnectionThreshold` on the relay only.**
+
+A relay's entire job is accepting client connections. Five per second per source IP is a limit
+inherited from libp2p's defaults, which are sized for a public DHT where relaying is a courtesy —
+the same reasoning `DOD-NAT-REACHABILITY-1` already applied to `maxReservations`, and this is the
+identical mistake one field over.
+
+**It bites in production, not only on localhost.** Every agent behind one office NAT, one home
+router, or one cloud egress IP shares the same five. And a single daemon bursts several connections
+at once at session start and at seal — prove, two reservation attempts, then the park dials — so one
+operator alone can spend the budget. *(Stated as inference from the daemon's event sequence within
+~250 ms; localhost aggregates three processes into one host, so I could NOT isolate a single
+daemon's own per-second count. That distinction is real and I am not asserting past it.)*
+
+**Weakening this specific control is not a security regression, and the reasoning is the
+milestone's own:** it is keyed on source IP, so an attacker with several IPs pays nothing, and one
+who simply dials at five per second pays nothing either. It costs an honest NAT'd operator their
+relay. That is precisely *"a guard that costs an honest party something and costs the attacker
+nothing."* The controls that actually bound relay abuse are all still in place and were nowhere near
+binding: `maxConnections` (300, observed peak **4**), the per-agent reservation slot cap (4096,
+measured never to have fired), reservation authentication, and `DOD-M15-RELAYABUSE-1`'s limiter.
+
+**Recommended value: 256, on the relay only.** Below `maxConnections` so the connection ceiling stays
+the binding control rather than an IP-keyed rate, and high enough that a NAT'd population is not
+rationed. **The daemon's own value stays at 5** — a daemon should not be accepting bursts of inbound
+connections from one host, and there the low number is correct.
+
+**⚠️ THIS IS THE ONE DECISION I DID NOT TAKE.** It is a cap on a fleet-deployed node, it is exactly
+what this order's own stop rule names ("a change to libp2p's transport configuration on either
+side"), and a number chosen for a security control is Andre's. Everything needed to rule on it is
+above.
+
+**2b. CELLO cannot see its own relay refusing people. FIX: no clean one exists today — recorded, not guessed.**
+
+`acceptIncomingConnection` emits **no event**. It increments a metrics counter and writes a `debug`
+line, and it runs before the connection gater, so CELLO has no hook at any layer it controls. An
+operator whose relay is turning agents away sees nothing in the relay log, nothing in
+`cello_status`, and nothing on the client beyond `ECONNRESET`.
+
+That is Invariant 2 in its purest form — a refusal whose only consumer is a file nobody opens — and
+it is the reason this defect survived from before 2026-08-23. **The honest options are: wire a
+libp2p metrics implementation on the relay and read `inboundErrors{ConnectionDeniedError}`, or log
+the resolved limits at relay startup so at least the ceiling is visible.** The second is cheap and
+partial; the first is a new surface. **Recorded rather than chosen**, because picking one is a
+design decision that belongs with 2a's ruling.
+
+### 3. "Everything the client does next is correct handling of a relay that has gone quiet" — **CORRECT, with ONE defect.**
+
+The fallback, the `reservation.none`, the abandoned candidate and the failed dials are all right.
+The defect is the label: the client reports **`relay_unreachable`**, and the relay is reachable —
+it is answering other connections in the same second and refusing this one for rate. That is the
+exit-point-not-the-cause pattern again.
+
+**FIX: it cannot be fixed on the client alone, and that is the finding.** The refusal arrives as a
+closed socket with no protocol payload, so the client has nothing to read. Naming it correctly
+requires 2b — the relay being able to say "I refused you for rate" — and until then
+`relay_unreachable` is the most the client can honestly claim. **`028-PARKCONN` already fixed the
+half that was fixable**: the reason and the per-address dial errors now reach the operator instead
+of `internal_error`.
+
+---
+
+## What was fixed in this order
+
+**`DOD-MSG-8` read a transcript field that does not exist — both ways, and one of them could never
+fail.** `TranscriptEntry` and the annex row both carry `text`; the test declared `content`. The
+positive assertion (*the straggler must be kept and readable in the annex*) could never pass, and
+duly failed while naming a behaviour the daemon was performing correctly. The negative one (*the
+straggler must never appear among the sealed messages*) could never **fail** — `"".not.toContain(x)`
+is green for any code at all, including code that merged the annex straight into the sealed
+transcript, which is the exact boundary it exists to guard. Both now read `text`, and the negative
+one carries a positive control asserting the transcript is readable before believing what it does
+not contain.
+
+Found only because the connection defect was cleared first; until then the test never reached the
+line.
 
 ## Newly discovered
 
 *(anything found and NOT acted on, per rule 3)*
+
+### 1. `DOD-MSG-2` (startup-flush park) fails for a different reason, and the threshold is not it
+
+`[daemon-flushA-restart] timed out after 20000ms waiting for "content.park.deposited"
+"source":"startup_flush"`. It fails identically with the inbound threshold raised, so it is not this
+defect. A sender that crashed with un-acked content is supposed to re-park it on restart, and on
+this evidence it does not — which is the crash-backstop for exactly the message this whole line is
+about. **Classification: BLOCKS if it reproduces — but that is Andre's to grant (§0z.4), so it is
+written here.** Not investigated, per rule 3.
+
+### 2. `024-ORPHANTRIAGE` fails on guidance wording, not behaviour
+
+`an unsigned message must name no way to answer it: matched /\bnew conversation\b/i`. The notice it
+matched is the SIGNED-message notice, which is supposed to say "open a NEW conversation" — so the
+assertion appears to be catching the wrong branch's text rather than a regression in the refusal.
+Another lane's test, another lane's assertion. **Classification: POST-LAUNCH** — it is a test
+selecting the wrong notice, and no operator-visible behaviour is implicated. Not investigated,
+per rule 3.
+
+### 3. The stock inbound threshold breaks SEVEN of this file's fourteen tests, not three
+
+The control run with the stock value failed 7 of 14; with the threshold raised, 2 of 14 (the two
+above). So `DOD-M15-PARKCONN-1`'s three tests are the ones that were noticed, not the extent of it.
+**Recorded rather than chased** — the other four are expected to clear with 2a's fix, and re-listing
+them as separate items before that ruling would inflate the gate for one cause.
