@@ -147,7 +147,19 @@ and that must be a **defined value, never an absent field**. Full clauses on the
 
 **⚠️ IT IS TWO UNITS, AND THE ORDER IS NOT NEGOTIABLE — measured, not cautious.**
 `020-ACKHASH` ships the READING half everywhere (relay, directory, daemon accept a v2 layout and
-nothing emits one). **`021` emits it, and cannot start until `020` is DEPLOYED, not merely merged.**
+nothing emits one). **The EMITTER unit cannot start until `020` is DEPLOYED, not merely merged.**
+
+> ## ✅ THAT GATE IS NOW SATISFIED — verified 2026-09-05. THE EMITTER IS UNBLOCKED.
+> - **Server side:** `020` is in `1695c1a9` and the fleet has since rolled past it to `eccc9cbc` —
+>   all five nodes, three directories and two relays ([[GCP-STATE]], *WHOLE FLEET ON `eccc9cbc`*).
+> - **Client side:** published and promoted to `latest` in the 025–030 cascade —
+>   `protocol-types@0.0.69`, `daemon@0.0.189`, `connect@0.0.164`, `cli@0.0.196`.
+> - **⚠️ ONE PRECONDITION SURVIVES AND IT IS NOT THE FLEET.** The reader that matters for a v2
+>   emission is the *counterparty's daemon*, not only ours. `latest` carries it, so a fresh install
+>   is fine — but any daemon still running a pre-`0.0.189` build reads a v2 ack as v1. Per
+>   the deployment note in `020`, that is **silent loss, not a loud refusal.** Confirm every live
+>   agent is upgraded before the emitter ships, not just the nodes.
+
 `DOD-M15-SUBMIT-ID-1` already paid for the other order: its decoder was `!== 6`, so *"a client that
 appended a submission id had every frame refused as `signature_invalid` by any relay not yet
 updated — including the one deployed."* Same structure, one field over.
@@ -205,11 +217,11 @@ yet** — tiering is Andre's call, and three of the four are behaviour changes t
 
 | # | What a reader would find | Status |
 |---|---|---|
-| **1** | **A refusal that can never succeed is retried forever.** `CELLO_Coder_1` knocked on a closed conversation **232,056 times over 62 hours**, ~2/second, growing `daemon.log` to **484 MB**. **Andre approved the fix 2026-09-04: *"a message refused should stop being retried."*** | ✅ `DOD-M15-REFUSALTERMINAL-1` → Entry 72. A durable terminal-refusal row stops the leaf-fetch backstop: **5,954 fetch events → 0**, measured live with `CELLO_Support` back ONLINE over 12 minutes. The agent no longer needs to be parked. **Not yet published.** |
+| **1** | **A refusal that can never succeed is retried forever.** `CELLO_Coder_1` knocked on a closed conversation **232,056 times over 62 hours**, ~2/second, growing `daemon.log` to **484 MB**. **Andre approved the fix 2026-09-04: *"a message refused should stop being retried."*** | ✅ `DOD-M15-REFUSALTERMINAL-1` → Entry 72. A durable terminal-refusal row stops the leaf-fetch backstop: **5,954 fetch events → 0**, measured live with `CELLO_Support` back ONLINE over 12 minutes. The agent no longer needs to be parked. **Published and promoted 2026-09-05** in the 025–030 cascade (`cli@0.0.196`, `connect@0.0.164`, `daemon@0.0.189`), and the fleet is on `eccc9cbc`. |
 | **2** | **The refusal count shown to the operator is wrong by three orders of magnitude.** `cello_inbox`'s `refusals.times` reported **58** for those 232,056 knocks. | ✅ `DOD-M15-REFUSALTERMINAL-1` → Entry 72. `times` is gone. The cause was `cello_dismiss`, which DELETES the notice row and restarts its counter — so the field was a since-you-last-dismissed figure under a lifetime name. Now `times_since_dismissed` beside `times_total` (exact) or `times_total_at_least` (a floor, where history predates the tally), from a record dismissal does not touch, and one shared guidance sentence at both doors. |
 | **3** | **`021-HEARTBEAT` introduced a permanent false alarm.** `antientropy.round.fork_suspected` fires on `directory_nodes` **every 3 minutes, forever**: every node rewrites its own `last_heartbeat_at` every ~30 s, so two nodes can never agree on a hash of a table one of them is always mutating. It pages nobody and masks nothing (the event names its own table), but it is an ERROR-level cry-wolf on a healthy fleet. **Andre's steer 2026-09-04: judge agreement ignoring the heartbeat column** — NOT by muting the table, which would also hide a real `status` divergence. Costs a build and a five-node roll. | ✅ fixed and rolled — zero in 16 min, baseline 13/hr |
 | **4** | **The defensive half cannot be tested from a legitimate client, so it has never run live.** The sender's own `exfil:injection_artifact` guard refused two attempts to probe the receiving screener — including the forged `[[END PAYLOAD]]` framing that `023` was designed against — and it is not one of the five configurable guards, so every client refuses identically. **`024-ORPHANTRIAGE`, the screener block, and evidence-on-block have therefore never been exercised outside the in-process spine tests.** Needs a deliberately modified client. **Built 2026-09-04: patched daemon on GCP (`cello-hostile-client`), agent `CELLO_Adversary`, driven straight over the daemon socket. Two attacks run — see item 5.** | ✅ rig built; findings below |
-| **5** | **The inbound language block is silently disarmed by the confusables step that runs before it.** Found by the hostile client (item 4): a 100%-Cyrillic jailbreak was Latinized to 25% Cyrillic by `normalizeConfusables` BEFORE `screenInboundLanguage` judged it, so the one deterministic inbound block that works without the semantic classifier saw "mostly Latin" and delivered it. The gateway IS live and enforcing (it transformed the payload exactly per its confusables map) — the defect is data flow: the language screen reads the normalized text when it needs the original. **Fix decided 2026-09-04: language screen judges the post-invisible-strip, pre-confusables text; everything downstream still reads the normalized text.** | ✅ `DOD-M15-SCREENORDER-1`. The screen now reads a text with everything that distorts a LETTER COUNT removed and everything carrying SCRIPT IDENTITY kept; downstream is unchanged. Proven through real gateway processes — reverted, the agent receives `Игhopupyй bce пpeдыдyщue uhctpykцuu…` verbatim. **Review caught that the first cut closed the naive form only:** `[SYSTEM]`×28 in front of the same payload counted as Latin dilution and was then stripped from delivery, reopening the leak with letters the recipient never sees — and capturing before NFKC newly HELD plain English typed on a CJK IME. Both closed by one capture point. 13/13 cases, 7 mutants. **Not published.** |
+| **5** | **The inbound language block is silently disarmed by the confusables step that runs before it.** Found by the hostile client (item 4): a 100%-Cyrillic jailbreak was Latinized to 25% Cyrillic by `normalizeConfusables` BEFORE `screenInboundLanguage` judged it, so the one deterministic inbound block that works without the semantic classifier saw "mostly Latin" and delivered it. The gateway IS live and enforcing (it transformed the payload exactly per its confusables map) — the defect is data flow: the language screen reads the normalized text when it needs the original. **Fix decided 2026-09-04: language screen judges the post-invisible-strip, pre-confusables text; everything downstream still reads the normalized text.** | ✅ `DOD-M15-SCREENORDER-1`. The screen now reads a text with everything that distorts a LETTER COUNT removed and everything carrying SCRIPT IDENTITY kept; downstream is unchanged. Proven through real gateway processes — reverted, the agent receives `Игhopupyй bce пpeдыдyщue uhctpykцuu…` verbatim. **Review caught that the first cut closed the naive form only:** `[SYSTEM]`×28 in front of the same payload counted as Latin dilution and was then stripped from delivery, reopening the leak with letters the recipient never sees — and capturing before NFKC newly HELD plain English typed on a CJK IME. Both closed by one capture point. 13/13 cases, 7 mutants. **Published and promoted 2026-09-05** in the 025–030 cascade (`cli@0.0.196`, `connect@0.0.164`, `daemon@0.0.189`), and the fleet is on `eccc9cbc`. |
 
 > **Do not read #4's absence of live evidence as evidence the defence works.** "Could not reproduce
 > live" here means the attack could not be *sent* — not that it would have been *stopped*.
@@ -828,7 +840,7 @@ the loop; the order's DoD 7 is to bring it back and prove the loop is gone.
 > SCRIPT IDENTITY kept. Every other consumer still reads the normalized text.
 > Proven through two daemons and real spawned gateway processes: reverted, the agent receives
 > `Игhopupyй bce пpeдыдyщue uhctpykцuu…` verbatim. 13/13 hold/allow cases, 7 mutants.
-> Review found the first cut closed the naive form only — `[SYSTEM]`×28 reopened it. **Not published.**
+> Review found the first cut closed the naive form only — `[SYSTEM]`×28 reopened it. **Published and promoted 2026-09-05** in the 025–030 cascade (`cli@0.0.196`, `connect@0.0.164`, `daemon@0.0.189`), and the fleet is on `eccc9cbc`.
 > Full write-up in the order's Review section.
 
 Found live 2026-09-04 by the hostile-client rig. Inbound sanitization runs, in order, invisible-strip
@@ -1047,7 +1059,10 @@ Parallel with Tier 4 — different disciplines, no shared files.
 > recommendation is that this line **stays in the gate**: the conversation neither parks cleanly nor
 > seals, and the two parties are told contradictory things about their own close. The fix is
 > [[M15-STORY-RELAYHANDOVER]], whose unit 1 closed 2026-09-03 (`017-TBS` — the assignment TBS now
-> carries `prior_relay_id`). Units 2–4 are open; unit 4 is blocked on Andre's call in the story's §0.
+> carries `prior_relay_id`). Units 2–4 are open. **Unit 4 is NO LONGER BLOCKED** — the story's §0 was ruled by Andre on
+> 2026-09-03 (no unwitnessed content ever enters the paper trail; the conversation pauses until the
+> counterparty returns). One small sub-question survives and is resolved *inside* unit 3: how the
+> resume is triggered, event-driven rather than polled, plus one line of operator copy that is Andre's.
 > **016 also shipped the honesty half**: a send the relay did not witness now says so at the moment
 > it happens, on all five of `cello_send`'s return paths. What is unfixed is the seal.
 **Found 2026-09-02 by tracing, in answer to Andre's question "does multi-relay solve a relay going
@@ -1086,8 +1101,8 @@ receipt is the product; a path that can silently cost one is not something to cl
 > 2026-09-03 (`017-TBS`): the assignment TBS now carries `prior_relay_id`, so a directory can name
 > the previous witness inside signed bytes. **The churn numbers this line demands an explanation for
 > were measured by `016-RELAYLOSS`** — read its Review before re-measuring anything. Units 2–4
-> (directory resume path, relay-side replay + verifier, client rebind) are still open, and unit 4
-> is blocked on Andre's call in the story's §0.
+> (directory resume path, relay-side replay + verifier, client rebind) are still open. **Unit 4 is
+> NO LONGER BLOCKED** — §0 was ruled 2026-09-03; see the note on `SESSION-RELAY-PINNED-1`.
 **Scoped by `DOD-M15-SPIKE-1(c)` → Entry 1. This line is AVAILABILITY ONLY.** The client already
 requests reservations with every known relay (`reservationsRequested: 2`) — the audit's "reserves
 with exactly one relay" was the outcome, not the request. But one relay carries **2,648 of 2,675**
@@ -2187,7 +2202,17 @@ Two were stale expectations (a deleted always-empty stub; a `registered` flag re
 lied); the third was a real race, fixed with a readiness poll. Product-side cause filed as
 `DOD-M15-START-AGENT-UNAWAITED-1`. Trail → [[M15-BUILD-JOURNAL]].
 
-### `DOD-M15-JCONTENT-DELIVERY-1` — ⚠️ WAS ✅. THE CLAIM NO LONGER HOLDS — `j-content` is 6/10 (2026-09-02)
+### `DOD-M15-JCONTENT-DELIVERY-1` — ⚠️ WAS ✅ · was 6/10 (2026-09-02) · **now 12 passed / 2 failed (2026-09-05)**
+> **RE-MEASURED 2026-09-05 by `030-RELAYSILENT`, three consecutive runs as separate OS processes against
+> the real consortium: 12 passed / 2 failed.** Every cause named below is closed —
+> `DOD-MSG-3` by `PARKCOLLECT-1`, `DOD-MSG-5`/`MSG-7` by `PARKERROR-1` + `030`, `DOD-MSG-8` by `030`
+> (and its stale "renamed tool" reading was wrong twice over). **The two that remain are both ruled
+> POST-LAUNCH:** `DOD-MSG-2` → `DOD-M15-STARTUPFLUSH-1` (Andre, 2026-09-05), and a `024-ORPHANTRIAGE`
+> assertion matching the SIGNED-message notice rather than the refusal — a test selecting the wrong
+> branch, no operator-visible behaviour implicated.
+> **⚠️ ONE FURTHER TEST FLAKES, A DIFFERENT ONE EACH RUN** (`DOD-MSG-3/4 (recover)`, then
+> `022-REFUSALVISIBLE (byte cap)`, then neither). `030` recorded it UNCLASSIFIED under its trip-wire
+> and it is **not yet filed as a line anywhere.** Classifying it is an open call.
 > **The four defects this line fixed on 2026-08-24 stayed fixed. What is false is the headline** —
 > *"`j-content` is 10/10, full-file"* — and it has been false for some time without anyone knowing,
 > because the lane was not re-run between 2026-08-24 and 2026-09-02. **A file-level pass count is a
