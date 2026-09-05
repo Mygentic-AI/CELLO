@@ -273,46 +273,47 @@ interface Structure1Fields {
   last_seen_seq: number;
   timestamp: number | bigint;
   /**
-   * DOD-M15-SUBMIT-ID-1 — the sender's own id for THIS SEND, stable across its retransmissions.
-   *
-   * Optional, because every client in the field today sends six elements and must keep working.
-   * When present, the relay answers a repeat with the ORIGINAL position instead of allocating a new
-   * one.
-   *
-   * MINTED BY THE SENDER, and it has to be: Structure 1 carries a timestamp, so a retry is
-   * byte-different and unrecognisable; and `content_hash` cannot stand in for it, because sending
-   * identical content twice in one conversation is two messages, not a duplicate.
+   * The content the sender is ACKNOWLEDGING — the last message they received from the counterparty.
+   * `last_seen_seq` is a NUMBER, so it attests to a POSITION and never to content; this binds the
+   * acknowledgement to what was actually received.
    */
-  submission_id?: Uint8Array;
+  last_seen_hash: Uint8Array;
   /**
-   * 020-ACKHASH — the content the sender is ACKNOWLEDGING, on a v2 claim only.
-   *
-   * `last_seen_seq` is a NUMBER, so it attests to a POSITION and never to content. This binds the
-   * acknowledgement to what was actually received. Present only when `protocol_version` is 2; a v1
-   * claim carries none, and that is a layout fact, not a missing value.
-   *
-   * The relay does not yet check it against anything — this unit ships READING only, so that an
-   * emitter can follow without every frame in flight being refused by a relay that predates it.
-   */
-  last_seen_hash?: Uint8Array;
-  /**
-   * 035-SELFCHAIN — the sender's link to their OWN previous message, on a v3 claim only.
+   * The sender's link to their OWN previous message — `DOD-M15-SELFCHAIN-1`.
    *
    * ⚠️ THIS IS THE FIELD THAT MAKES A CONVERSATION A CHAIN. `last_seen_hash` above links a sender
    * to their counterparty and NOT to themselves, so two messages one party sends back to back carry
-   * identical acknowledgements. Nothing in the signed bytes tells them apart, and the relay-assigned
-   * position cannot help — it is assigned after the sender signs, so a sender can never sign their
-   * own position.
-   *
-   * Present only when `protocol_version` is 3; a v1 or v2 claim carries none, and that is a layout
-   * fact rather than a missing value. Read here, enforced once the fleet carries it.
+   * identical acknowledgements. Nothing else in the signed bytes tells them apart, and the
+   * relay-assigned position cannot help — it is assigned after the sender signs, so a sender can
+   * never sign their own position.
    */
-  prev_own_hash?: Uint8Array;
+  prev_own_hash: Uint8Array;
 }
 
-// Exported for 020-ACKHASH unit coverage of the version branch — in particular the v1 seven-array
-// (submission id) regression, which is the shape the deployed fleet already tolerates and the one a
-// length-only reader misreads as an ack hash. Pure function; no state.
+/**
+ * ONE LAYOUT, and every field required:
+ *
+ * ```
+ * [3, content_hash(32), sender_pubkey(32), session_id(16), last_seen_seq, timestamp,
+ *     last_seen_hash(32), prev_own_hash(32)]
+ * ```
+ *
+ * ⚠️ THREE TOLERANCES WERE DELETED HERE, not carried. CELLO is alpha with no users, so backward
+ * compatibility is an anti-requirement (Andre, 2026-09-05):
+ *
+ *   - the six-field claim with no acknowledgement;
+ *   - the seven-field claim carrying `last_seen_hash` at index 6;
+ *   - the seven-field claim whose index 6 was a sender-minted SUBMISSION ID
+ *     (`DOD-M15-SUBMIT-ID-1`). This relay tolerated it and no client ever emitted one — it was dead
+ *     code waiting for a caller. See `#processHashSubmitLocked` for what replaced the retry dedup
+ *     it was for: the SIGNED chain link, which every message now carries.
+ *
+ * The version tag still decides, together with the arity — but there is one of each, so a shape
+ * this build cannot name is refused rather than being read as the nearest known layout. Accepting
+ * an unnamed shape would mean verifying a signature over bytes whose meaning is not agreed.
+ *
+ * Exported for unit coverage of the refusals, which are the load-bearing half. Pure; no state.
+ */
 export function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
   let arr: unknown;
   try {
@@ -320,94 +321,35 @@ export function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
   } catch {
     return null;
   }
-  /**
-   * SIX OR SEVEN — `DOD-M15-SUBMIT-ID-1`, and this relaxation is the whole "tolerate first" half.
-   *
-   * It was `!== 6`, so a client that appended a submission id had every frame refused as
-   * `signature_invalid` by any relay not yet updated — including the one deployed. The relay
-   * therefore has to accept the new shape BEFORE any client emits it; a client-first rollout breaks
-   * every message in flight.
-   *
-   * Still a fixed set of lengths rather than `>= 6`: an arbitrarily long array is a frame this
-   * version does not understand, and accepting it would mean verifying a signature over bytes whose
-   * meaning is not agreed.
-   *
-   * ⚠️ 020-ACKHASH — THE VERSION DECIDES INDEX 6, AND A LENGTH CHECK CANNOT.
-   *
-   * `last_seen_hash` also lands at index 6, so a seven-field array now has TWO meanings. This code
-   * previously accepted any `protocol_version` and validated index 6 only as a submission id — and
-   * a 32-byte ack hash passes that validation, so a v2 claim would have been silently ingested with
-   * its hash filed as a submission id. Both slots are the same bytes; only `arr[0]` separates them.
-   *
-   *   v1 + 6 fields  ⇒  the original layout
-   *   v1 + 7 fields  ⇒  submission id at index 6 (unchanged — this is what the deployed fleet emits)
-   *   v2 + 7 fields  ⇒  last_seen_hash at index 6
-   *   v3 + 8 fields  ⇒  last_seen_hash at 6, prev_own_hash at 7  ← `DOD-M15-SELFCHAIN-1`
-   *   anything else  ⇒  refused; the caller answers `submit_malformed`
-   *
-   * ⚠️ 035-SELFCHAIN — `prev_own_hash` IS THE OTHER HALF OF THE CHAIN. `last_seen_hash` links a
-   * sender to their counterparty; it does not link them to themselves, so two messages one party
-   * sends back to back carry identical acknowledgements and nothing in the signed bytes tells them
-   * apart. This relay ACCEPTS the field now and enforces it once the fleet carries it — the same
-   * tolerate-first order 020-ACKHASH's own comment above explains, for the same reason.
-   */
   if (!Array.isArray(arr)) return null;
+  if (arr[0] !== 3 || arr.length !== 8) return null;
 
-  const [_pv, _ch, _spk, _sid, _lss, _ts, _tail] = arr;
-
-  const isV1 = _pv === 1 && (arr.length === 6 || arr.length === 7);
-  const isV2 = _pv === 2 && arr.length === 7;
-  const isV3 = _pv === 3 && arr.length === 8;
-  if (!isV1 && !isV2 && !isV3) return null;
-  const chBytes = _ch instanceof Uint8Array ? _ch : Buffer.isBuffer(_ch) ? new Uint8Array(_ch as Buffer) : null;
-  const spkBytes = _spk instanceof Uint8Array ? _spk : Buffer.isBuffer(_spk) ? new Uint8Array(_spk as Buffer) : null;
-  const sidBytes = _sid instanceof Uint8Array ? _sid : Buffer.isBuffer(_sid) ? new Uint8Array(_sid as Buffer) : null;
-  if (!chBytes || chBytes.length !== 32) return null;
-  if (!spkBytes || spkBytes.length !== 32) return null;
-  if (!sidBytes || sidBytes.length !== 16) return null;
+  const [, _ch, _spk, _sid, _lss, _ts, _ack, _own] = arr;
+  const bytes = (v: unknown, len: number): Uint8Array | null => {
+    const b = v instanceof Uint8Array ? v : Buffer.isBuffer(v) ? new Uint8Array(v as Buffer) : null;
+    return b !== null && b.length === len ? b : null;
+  };
+  const chBytes = bytes(_ch, 32);
+  const spkBytes = bytes(_spk, 32);
+  const sidBytes = bytes(_sid, 16);
+  // Present-but-malformed is REFUSED for both links, never dropped: a link nobody can read is a
+  // chain nobody can check, and admitting it with the field dropped would let a sender downgrade to
+  // an unchecked claim by sending junk.
+  const ackBytes = bytes(_ack, 32);
+  const ownBytes = bytes(_own, 32);
+  if (!chBytes || !spkBytes || !sidBytes || !ackBytes || !ownBytes) return null;
   if (typeof _lss !== "number") return null;
   if (typeof _ts !== "number" && typeof _ts !== "bigint") return null;
 
-  // Index 6, read as whatever the VERSION says it is — never as both, and never as neither.
-  let subIdBytes: Uint8Array | undefined;
-  let lastSeenHashBytes: Uint8Array | undefined;
-  if (arr.length === 7 || isV3) {
-    const b = _tail instanceof Uint8Array ? _tail : Buffer.isBuffer(_tail) ? new Uint8Array(_tail as Buffer) : null;
-    if (isV2 || isV3) {
-      // A SHA-256 root, so exactly 32 — not "at most 32". Present-but-malformed is REFUSED: a v2
-      // whose hash we cannot read is a content acknowledgement we cannot check, and admitting it
-      // with the field dropped would let the sender downgrade to an unchecked ack by sending junk.
-      if (!b || b.length !== 32) return null;
-      lastSeenHashBytes = b;
-    } else {
-      // Present-but-malformed is REFUSED, not ignored. Silently dropping it would give the sender a
-      // fresh position for what they declared a retry — the exact defect, wearing a valid ack.
-      if (!b || b.length === 0 || b.length > 32) return null;
-      subIdBytes = b;
-    }
-  }
-
-  // Index 7 — the sender's link to their OWN previous message. Same refusal rule as index 6 and the
-  // same reason: a v3 whose self link is unreadable is a chain nobody can check, and dropping the
-  // field would make it indistinguishable from an honest v2 that never claimed one.
-  let prevOwnHashBytes: Uint8Array | undefined;
-  if (isV3) {
-    const p = arr[7];
-    const b = p instanceof Uint8Array ? p : Buffer.isBuffer(p) ? new Uint8Array(p as Buffer) : null;
-    if (!b || b.length !== 32) return null;
-    prevOwnHashBytes = b;
-  }
-
   return {
-    protocol_version: _pv,
+    protocol_version: 3,
     content_hash: chBytes,
     sender_pubkey: spkBytes,
     session_id: sidBytes,
     last_seen_seq: _lss,
     timestamp: _ts,
-    ...(subIdBytes ? { submission_id: subIdBytes } : {}),
-    ...(lastSeenHashBytes ? { last_seen_hash: lastSeenHashBytes } : {}),
-    ...(prevOwnHashBytes ? { prev_own_hash: prevOwnHashBytes } : {}),
+    last_seen_hash: ackBytes,
+    prev_own_hash: ownBytes,
   };
 }
 
@@ -2210,27 +2152,73 @@ export class CelloRelayNode {
    * two callers with different recipients and different reasons is a change with its own risk. What
    * the two DO share is the thing that could drift — `buildWitnessAlertTbs`, the signed bytes.
    */
+  /**
+   * Tell the OTHER participant that this relay refused a message whose chain link did not match —
+   * `DOD-M15-SELFCHAIN-1`.
+   *
+   * ⚠️ THEY ARE THE ONE WHO MUST HEAR IT, and they would otherwise hear it only from the party the
+   * observation is about. That is the whole argument `DOD-M15-CORROBORATE-1` made for witness
+   * alerts: an accusation routed through the accused is not evidence.
+   *
+   * A refused submit is not silent to the sender either — they get `self_chain_mismatch` on the
+   * response they are already waiting for. This is the half that reaches the person who would
+   * otherwise never know their conversation's record was being rewritten.
+   */
+  async #emitSelfChainAlert(
+    sessionId: Uint8Array,
+    sessionKey: string,
+    submitterHex: string,
+    state: RelaySessionState,
+  ): Promise<void> {
+    const aHex = Buffer.from(state.assignment.participant_a).toString("hex");
+    const bHex = Buffer.from(state.assignment.participant_b).toString("hex");
+    for (const recipientHex of [aHex, bHex]) {
+      if (recipientHex === submitterHex) continue;
+      await this.#deliverWitnessAlert(sessionId, sessionKey, recipientHex, "self_chain_broken");
+    }
+  }
+
   async #emitDivergenceAlert(sessionId: Uint8Array, sessionKey: string, recipientHex: string): Promise<void> {
+    await this.#deliverWitnessAlert(sessionId, sessionKey, recipientHex, "replay_chain_diverged");
+  }
+
+  /**
+   * Sign one observation and get it to one recipient — delivered now, or HELD for their next
+   * authenticated connection.
+   *
+   * `relay_id` rides if and only if the signature does, and that coupling is the point of the pair:
+   * a client throws away an alert that declares an identity without proving it, so a relay that
+   * names itself and cannot sign would lose the warning as well as its transferability. Naming no
+   * identity is the honest degradation — the observation still reaches a person, marked as
+   * something they cannot show anyone.
+   */
+  async #deliverWitnessAlert(
+    sessionId: Uint8Array,
+    sessionKey: string,
+    recipientHex: string,
+    reason: import("./relay-types.js").SessionWitnessAlert["reason"],
+  ): Promise<void> {
     const observedAt = Date.now();
     let witnessSignature: Uint8Array | undefined;
     if (this.#relayId !== null && this.#ackSigningKeyProvider !== null) {
       try {
         witnessSignature = await this.#ackSigningKeyProvider.sign(
-          buildWitnessAlertTbs(sessionId, "replay_chain_diverged", observedAt, true),
+          buildWitnessAlertTbs(sessionId, reason, observedAt, true),
         );
       } catch (err: unknown) {
         this.#logger.error("relay.witness.sign.failed", {
           sessionId: sessionKey,
           error: err instanceof Error ? err.message : String(err),
-          impact: "the divergence alert is sent WITHOUT this relay's identity, so it still reaches " +
-            "the participant but they cannot show it to anyone. The observation is in this log either way.",
+          reason,
+          impact: "the alert is sent WITHOUT this relay's identity, so it still reaches the " +
+            "participant but they cannot show it to anyone. The observation is in this log either way.",
         });
       }
     }
     const alert: import("./relay-types.js").SessionWitnessAlert = {
       type: "session_witness_alert",
       session_id: sessionId,
-      reason: "replay_chain_diverged",
+      reason,
       ...(witnessSignature !== undefined && this.#relayId !== null
         ? { relay_id: this.#relayId, witness_signature: witnessSignature }
         : {}),
@@ -2245,7 +2233,7 @@ export class CelloRelayNode {
     try {
       await this.#sendFrame(recipientStream, encodeSessionWitnessAlert(alert));
       this.#logger.info("relay.witness.alert.delivered", {
-        sessionId: sessionKey, recipientPubkey: recipientHex, reason: "replay_chain_diverged",
+        sessionId: sessionKey, recipientPubkey: recipientHex, reason,
       });
     } catch (err: unknown) {
       this.#streams.delete(recipientHex);
@@ -2891,6 +2879,74 @@ export class CelloRelayNode {
     }
 
     /**
+     * ─── THE SELF LINK, CHECKED AS THE MESSAGE PASSES — `DOD-M15-SELFCHAIN-1` ────────────────────
+     *
+     * The block above checks what the sender says about THEIR COUNTERPARTY. This one checks what
+     * they say about THEMSELVES, and it is the check that makes the order of a conversation
+     * provable at all.
+     *
+     * `last_seen_hash` cannot do this job: two messages one party sends back to back acknowledge
+     * the same message from the other side, so their acknowledgements are identical and nothing
+     * distinguishes them. The relay-assigned position cannot either — it is assigned after the
+     * sender signs, so a sender can never sign their own position. `prev_own_hash` is the only
+     * field in the signed bytes that says which of this sender's messages came first.
+     *
+     * ⚠️ CHECKED HERE, IN THE MOMENT, RATHER THAN ONLY AT SEAL TIME. This is where an attempt to
+     * tamper meets a witness first, and refusing it here means the broken chain never enters the
+     * record — so the conversation stays sealable instead of becoming a dispute discovered at close.
+     *
+     * The expected value comes from this relay's OWN log: the last leaf this sender wrote, or the
+     * session genesis when they have not spoken yet. Never from anything on the frame.
+     */
+    if (s1.prev_own_hash) {
+      let expectedOwn: Uint8Array | undefined;
+      for (let i = state.leaf_log.length - 1; i >= 0; i--) {
+        const leaf = state.leaf_log[i]!;
+        if (Buffer.from(leaf.s2.sender_pubkey).toString("hex") === senderPubkeyHex) {
+          expectedOwn = leaf.s2.content_hash;
+          break;
+        }
+      }
+      // Nothing from this sender yet ⇒ their first message here, whose link is the session genesis.
+      // A VALUE, for the same reason the acknowledgement's is: 32 zero bytes would be a constant
+      // presentable for any session.
+      expectedOwn ??= state.genesis_prev_root;
+      if (Buffer.from(s1.prev_own_hash).compare(Buffer.from(expectedOwn)) !== 0) {
+        /**
+         * ⚠️ NAMES WHAT WAS OBSERVED, NEVER A CONCLUSION. The same signal is produced by a peer
+         * reordering a conversation and by this daemon's own chain record having gone out of step
+         * after a restart — and an error that names a party the code did not check is this
+         * milestone's founding error-fidelity defect. No hashes are logged: they are content hashes
+         * for a conversation this relay is not entitled to read anything about (INV-3).
+         */
+        this.#logger.warn("relay.submit.self_chain.mismatch", {
+          sessionId: sessionKey,
+          submitter: truncHex(senderPubkeyHex),
+          ownLeavesSeen: state.leaf_log.filter((l) => Buffer.from(l.s2.sender_pubkey).toString("hex") === senderPubkeyHex).length,
+          impact:
+            "the submitter signed a link to their own previous message, and it names content " +
+            "different from what this relay recorded as their last one. The submit was REFUSED, so " +
+            "the leaf was not sequenced and no position was consumed. This is what an attempt to " +
+            "reorder a conversation looks like from the witness; it is also what a client whose " +
+            "own chain record went out of step looks like, and this relay cannot tell them apart.",
+        });
+        /**
+         * ESCALATION — the counterparty is told by the WITNESS, not through the party the
+         * observation is about. Same argument as `DOD-M15-CORROBORATE-1`: an accusation routed
+         * through the accused is not evidence, and a conversation where one side knows the record
+         * was altered and the other does not is the failure mode.
+         */
+        await this.#emitSelfChainAlert(frame.session_id, sessionKey, senderPubkeyHex, state);
+        await reply(
+          "self_chain_mismatch",
+          "the link to your own previous message does not match what this relay recorded. Your " +
+          "counterparty has been told. Confirm the conversation with them out of band before continuing.",
+        );
+        return;
+      }
+    }
+
+    /**
      * A DECLARED RETRY IS ANSWERED FROM THE RECORD — `DOD-M15-SUBMIT-ID-1`.
      *
      * Before allocating anything. The sender said "this is submission X again", and the signature
@@ -2904,10 +2960,26 @@ export class CelloRelayNode {
      * what this relay has is a client that has diverged, and that is worth refusing loudly rather
      * than answering from cache.
      */
-    const submissionKey = s1.submission_id
-      ? `${senderPubkeyHex}:${Buffer.from(s1.submission_id).toString("hex")}`
-      : null;
-    if (submissionKey) {
+    /**
+     * ⚠️ THE RETRY KEY IS NOW SIGNED — `DOD-M15-SELFCHAIN-1` replaces `DOD-M15-SUBMIT-ID-1`.
+     *
+     * That unit had the sender MINT an id so a retransmission could be answered with its original
+     * position instead of consuming a second one. The problem it solved is real and was measured in
+     * the field: one message took 49 positions, because Structure 1 carries a timestamp, so a retry
+     * produces different bytes and a different signature and the relay could not tell it from a new
+     * message.
+     *
+     * The id was never emitted by any client, and it had a flaw the self link does not: it was a
+     * value the SENDER chose, unbound to anything, deciding whether a message got a fresh position.
+     *
+     * `(prev_own_hash, content_hash)` answers the same question from bytes the sender SIGNED. Two
+     * genuinely different messages from one sender have different `prev_own_hash` — the second
+     * chains to the first — while a retransmission of one message has the same pair, because it IS
+     * the same message. No new field, nothing to mint, and nothing unsigned in the decision.
+     */
+    const submissionKey =
+      `${senderPubkeyHex}:${Buffer.from(s1.prev_own_hash).toString("hex")}:${Buffer.from(s1.content_hash).toString("hex")}`;
+    {
       const already = state.issued_acks?.get(submissionKey);
       if (already) {
         this.#logger.info("relay.submit.retransmission", {

@@ -150,6 +150,71 @@ async function performAuth(
   expect(ack["type"]).toBe("relay_auth_ok");
 }
 
+/**
+ * ─── THE TEST-SIDE CHAIN — `DOD-M15-SELFCHAIN-1` ───────────────────────────────────────────────
+ *
+ * Every message carries two links and the relay checks both, so a rig that hands a fixed value to
+ * either one can build first messages and nothing else. This keeps what a real client keeps, per
+ * session and per sender:
+ *
+ *   - the sender's OWN previous message, and
+ *   - the last message that sender RECEIVED (in a two-party session, the other one's last send).
+ *
+ * Both are seeded to the session GENESIS, which is what a first message legitimately carries.
+ * `makeAssignment` seeds it, because that is the one place every test in this file goes through.
+ *
+ * ⚠️ ADVANCED ONLY BY `makeStructure1`, i.e. only for messages a test actually builds. A rig that
+ * advanced on its own would build a chain the relay never saw, and every later assertion in that
+ * test would be about a conversation that does not exist.
+ */
+const CHAIN_GENESIS = new Map<string, Uint8Array>();
+/** Per session, the messages this rig has built, in order: who sent it and what it was. */
+const CHAIN_LOG = new Map<string, Array<{ sender: string; hash: Uint8Array }>>();
+
+function seedChain(sessionId: Uint8Array, pubA: Uint8Array, pubB: Uint8Array, ts: number): void {
+  const sidHex = Buffer.from(sessionId).toString("hex");
+  CHAIN_GENESIS.set(sidHex, computeGenesisPrevRoot(pubA, pubB, sessionId, ts));
+  CHAIN_LOG.set(sidHex, []);
+}
+
+/**
+ * The two links a message from this sender should carry right now, read off the log the way a real
+ * client reads its own state: my previous message, and the last one I received.
+ */
+function chainLinks(
+  sessionId: Uint8Array,
+  pubkey: Uint8Array,
+  lastSeenSeq: number,
+): { lastSeenHash: Uint8Array; prevOwnHash: Uint8Array } {
+  const sidHex = Buffer.from(sessionId).toString("hex");
+  const me = Buffer.from(pubkey).toString("hex");
+  const genesis = CHAIN_GENESIS.get(sidHex) ?? new Uint8Array(32);
+  const log = CHAIN_LOG.get(sidHex) ?? [];
+  /**
+   * ⚠️ THE TWO LINKS ARE READ DIFFERENTLY, and getting that wrong is what a first pass here did.
+   *
+   * `last_seen_hash` is POSITIONAL: the relay checks it against the leaf at `last_seen_seq`, so the
+   * rig must name the content at THAT position — not "the last thing the other party sent", which
+   * is only the same value when the parties strictly alternate.
+   *
+   * `prev_own_hash` is per SENDER: the last message this sender wrote, wherever it landed.
+   *
+   * Both fall back to the session genesis, which is what a first message legitimately carries.
+   * `log` is in append order, and the relay numbers from 1, so position N is `log[N - 1]`.
+   */
+  const seen = lastSeenSeq >= 1 ? (log[lastSeenSeq - 1]?.hash ?? genesis) : genesis;
+  let own = genesis;
+  for (const e of log) if (e.sender === me) own = e.hash;
+  return { lastSeenHash: seen, prevOwnHash: own };
+}
+
+/** Record a message this rig built. Only built messages, so the rig's chain matches the relay's. */
+function chainAdvance(sessionId: Uint8Array, pubkey: Uint8Array, contentHash: Uint8Array): void {
+  const sidHex = Buffer.from(sessionId).toString("hex");
+  const log = CHAIN_LOG.get(sidHex);
+  if (log) log.push({ sender: Buffer.from(pubkey).toString("hex"), hash: contentHash });
+}
+
 async function makeStructure1(
   sessionId: Uint8Array,
   contentHash: Uint8Array,
@@ -158,8 +223,12 @@ async function makeStructure1(
 ): Promise<{ structure1_cbor: Uint8Array; sender_signature: Uint8Array }> {
   const pubkey = await kp.getPublicKey();
   const ts = Date.now();
-  const tbs = CBOR_ENC.encode([1, contentHash, pubkey, sessionId, lastSeenSeq, ts]) as Uint8Array;
+  const { lastSeenHash, prevOwnHash } = chainLinks(sessionId, pubkey, lastSeenSeq);
+  const tbs = CBOR_ENC.encode([
+    3, contentHash, pubkey, sessionId, lastSeenSeq, ts, lastSeenHash, prevOwnHash,
+  ]) as Uint8Array;
   const sender_signature = await kp.sign(tbs);
+  chainAdvance(sessionId, pubkey, contentHash);
   return { structure1_cbor: tbs, sender_signature };
 }
 
@@ -212,6 +281,9 @@ async function makeAssignment(
   }
   const tbs = CBOR_ENC.encode(tbsFields) as Uint8Array;
   const directory_signature = await dirKp.sign(tbs);
+  // Seed the rig's chain for this session — `makeAssignment` is the one place every test here goes
+  // through, so seeding it means no test has to know the chain exists.
+  seedChain(sessionId, pubA, pubB, session_timestamp);
   return {
     session_id: sessionId,
     participant_a: pubA,
@@ -535,7 +607,10 @@ describe("AC-003: a leaf signed by a key that is in no part of this session", ()
     const kX = generateKeypair();
     const pubX = await kX.getPublicKey();
     const contentHash = new Uint8Array(randomBytes(32));
-    const tbs = CBOR_ENC.encode([1, contentHash, pubX, sessionId, 0, Date.now()]) as Uint8Array;
+    // A stranger's leaf: the layout must be VALID so the refusal comes from the signature check
+    // rather than from the decoder — a malformed frame would prove nothing about authorship.
+    const strangerLinks = chainLinks(sessionId, pubX, 0);
+    const tbs = CBOR_ENC.encode([3, contentHash, pubX, sessionId, 0, Date.now(), strangerLinks.lastSeenHash, strangerLinks.prevOwnHash]) as Uint8Array;
     const sigX = await kX.sign(tbs);
 
     sendFrame(sA, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: 0x00, structure1_cbor: tbs, sender_signature: sigX }));
@@ -1105,7 +1180,9 @@ describe("SI-003: a forged Structure 1 signature is refused", () => {
     // Build TBS with A's pubkey, sign with forge key
     const kForge = generateKeypair();
     const pubA = cA.pubkey;
-    const tbs = CBOR_ENC.encode([1, new Uint8Array(randomBytes(32)), pubA, sessionId, 0, Date.now()]) as Uint8Array;
+    // Valid layout, wrong signature — the point of the test is which check refuses it.
+    const forgedLinks = chainLinks(sessionId, pubA, 0);
+    const tbs = CBOR_ENC.encode([3, new Uint8Array(randomBytes(32)), pubA, sessionId, 0, Date.now(), forgedLinks.lastSeenHash, forgedLinks.prevOwnHash]) as Uint8Array;
     const forgedSig = await kForge.sign(tbs);
 
     sendFrame(sA, CBOR_ENC.encode({ type: "hash_submit", session_id: sessionId, leaf_kind: 0x00, structure1_cbor: tbs, sender_signature: forgedSig }));

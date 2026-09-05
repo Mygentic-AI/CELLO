@@ -19,6 +19,7 @@ import { generateKeypair } from "@cello-protocol/crypto";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "../../relay-node.js";
+import { computeGenesisPrevRoot } from "@cello-protocol/protocol-types";
 import type { SessionAssignment } from "../../relay-types.js";
 import { testOnlineToken } from "./online-token.js";
 
@@ -78,10 +79,15 @@ export async function performRelayAuth(
  * `contentHash` is a parameter so a test can re-send the SAME content — the submission-id subject —
  * and `timestamp` is too, so a retry carries a different one exactly as a real retry would.
  *
- * ⚠️ INDEX 6 HAS TWO MEANINGS AND THE VERSION IS WHAT SEPARATES THEM (033-ACKEMIT). `submissionId`
- * writes a v1 seven-array; `lastSeenHash` writes a v2 one. Passing both is a caller error, because
- * it is a frame that cannot exist on the wire — the two are mutually exclusive by construction and
- * a rig that let a test build one would be testing a shape nothing can emit.
+ * ⚠️ BOTH CHAIN LINKS ARE REQUIRED — `DOD-M15-SELFCHAIN-1`. There is one Structure 1 layout and it
+ * carries both: `lastSeenHash` (the last message received from the counterparty) and `prevOwnHash`
+ * (this sender's own previous message). A claim with one link does not exist on the wire, so this
+ * rig cannot build one — a rig that could would be testing a shape nothing can emit.
+ *
+ * The submission-id layout this helper used to build is gone with the rest of the tolerances: no
+ * client ever emitted one, and the retry dedup it served now keys on the SIGNED pair
+ * `(prev_own_hash, content_hash)` instead. A test exercising a retransmission re-sends the same
+ * content with the same `prevOwnHash` and a fresh timestamp, exactly as a real retry does.
  */
 export async function makeS1(opts: {
   sessionId: Uint8Array;
@@ -89,19 +95,19 @@ export async function makeS1(opts: {
   lastSeenSeq: number;
   contentHash: Uint8Array;
   timestamp: number;
-  submissionId?: Uint8Array;
-  lastSeenHash?: Uint8Array;
+  lastSeenHash: Uint8Array;
+  prevOwnHash: Uint8Array;
 }): Promise<{ structure1_cbor: Uint8Array; sender_signature: Uint8Array }> {
-  if (opts.submissionId && opts.lastSeenHash) {
-    throw new Error("makeS1: index 6 is a submission id (v1) OR an ack hash (v2), never both");
-  }
-  const version = opts.lastSeenHash ? 2 : 1;
-  const fields: unknown[] = [
-    version, opts.contentHash, await opts.kp.getPublicKey(), opts.sessionId, opts.lastSeenSeq, opts.timestamp,
-  ];
-  if (opts.submissionId) fields.push(opts.submissionId);
-  if (opts.lastSeenHash) fields.push(opts.lastSeenHash);
-  const tbs = CBOR_ENC.encode(fields) as Uint8Array;
+  const tbs = CBOR_ENC.encode([
+    3,
+    opts.contentHash,
+    await opts.kp.getPublicKey(),
+    opts.sessionId,
+    opts.lastSeenSeq,
+    opts.timestamp,
+    opts.lastSeenHash,
+    opts.prevOwnHash,
+  ]) as Uint8Array;
   return { structure1_cbor: tbs, sender_signature: await opts.kp.sign(tbs) };
 }
 
@@ -129,8 +135,16 @@ export interface SubmitOpts {
   contentHash: Uint8Array;
   lastSeenSeq: number;
   timestamp: number;
-  submissionId?: Uint8Array;
-  lastSeenHash?: Uint8Array;
+  lastSeenHash: Uint8Array;
+  /**
+   * `DOD-M15-SELFCHAIN-1` — this sender's own previous message. Required, because the layout is.
+   *
+   * A test sending its FIRST message on the session passes the session genesis, which `genesis()`
+   * below derives the way both parties do. A test sending a SECOND passes the content hash of its
+   * first, which is what makes the relay's chain check pass — and what a test of a BROKEN chain
+   * deliberately gets wrong.
+   */
+  prevOwnHash: Uint8Array;
 }
 
 export type Submit = (o: SubmitOpts) => Promise<Record<string, unknown>>;
@@ -147,6 +161,12 @@ export interface SubmitHarness {
   pubA: Uint8Array;
   pubB: Uint8Array;
   sessionTimestamp: number;
+  /**
+   * The session's agreed starting point — what BOTH chain links carry before anything has been
+   * said. Derived here the way the relay derives it, so a test never hard-codes a value the relay
+   * would disagree with.
+   */
+  genesis: Uint8Array;
 }
 
 /** A relay plus BOTH authenticated participants on one recorded session. */
@@ -170,8 +190,8 @@ export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>)
   )).toEqual({ ok: true });
 
   /**
-   * BOTH participants get a stream. The second one is not decoration: the submission-id key is
-   * SENDER-SCOPED, and the only way to test that is to have the other party try to use an id.
+   * BOTH participants get a stream. The second one is not decoration: every chain check is
+   * PER SENDER, so a conversation with one voice in it cannot exercise any of them.
    */
   const connect = async (kp: ReturnType<typeof generateKeypair>): Promise<Submit> => {
     const cn = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
@@ -199,5 +219,48 @@ export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>)
     submit: await connect(clientA),
     submitAsB: await connect(clientB),
     sessionId, pubA, pubB, sessionTimestamp,
+    genesis: computeGenesisPrevRoot(pubA, pubB, sessionId, sessionTimestamp),
   };
+}
+
+/**
+ * A test-side chain, kept the way a real client keeps one — `DOD-M15-SELFCHAIN-1`.
+ *
+ * Every message carries two links and the relay checks both, so a rig that hands a fixed value to
+ * either one can only build first messages. This tracks what a client tracks:
+ *
+ *   - **own** — the content hash of this sender's previous message, seeded to the session genesis;
+ *   - **seen** — the content hash of the last message this sender RECEIVED, also seeded to genesis,
+ *     which for a two-party test is simply the other participant's last send.
+ *
+ * ⚠️ ADVANCE IT ONLY FOR MESSAGES THAT WERE ACTUALLY WITNESSED. A test that advances over a submit
+ * the relay refused builds a chain the relay never saw, and every later assertion in that test is
+ * about a conversation that does not exist. `advance` is separate from `next` for exactly that
+ * reason: the test decides when a message counted.
+ */
+export class TestChain {
+  readonly #own = new Map<string, Uint8Array>();
+  readonly #seen = new Map<string, Uint8Array>();
+  readonly #genesis: Uint8Array;
+
+  constructor(genesis: Uint8Array) {
+    this.#genesis = genesis;
+  }
+
+  /** The links a message from `senderHex` should carry right now. */
+  next(senderHex: string): { lastSeenHash: Uint8Array; prevOwnHash: Uint8Array } {
+    return {
+      lastSeenHash: this.#seen.get(senderHex) ?? this.#genesis,
+      prevOwnHash: this.#own.get(senderHex) ?? this.#genesis,
+    };
+  }
+
+  /**
+   * Record that `senderHex` sent `contentHash` and it was witnessed: it becomes their own previous
+   * message, and the last thing every OTHER participant has seen.
+   */
+  advance(senderHex: string, contentHash: Uint8Array, otherHexes: readonly string[]): void {
+    this.#own.set(senderHex, contentHash);
+    for (const other of otherHexes) this.#seen.set(other, contentHash);
+  }
 }

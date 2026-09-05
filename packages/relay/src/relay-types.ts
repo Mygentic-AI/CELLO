@@ -299,6 +299,16 @@ export type HashSubmitErrorReason =
    */
   | "session_diverged"
   /**
+   * `DOD-M15-SELFCHAIN-1` — the submitter's link to their OWN previous message does not match what
+   * this relay recorded as their last one.
+   *
+   * ⚠️ NAMES WHAT WAS OBSERVED, NEVER A CONCLUSION. The same signal is produced by a peer
+   * reordering a conversation and by a client whose own chain record went out of step after a
+   * restart, and this relay cannot tell them apart. The refusal escalates — the counterparty is
+   * told by the witness — but the wording never attributes intent.
+   */
+  | "self_chain_mismatch"
+  /**
    * `DOD-M15-SEALWIRE-1` — the frame carried leaf content this relay will not hold.
    *
    * ⚠️ THIS EXISTS BECAUSE THE REFUSAL WAS OTHERWISE INVISIBLE TO THE CLIENT, and what filled the
@@ -566,7 +576,7 @@ export interface SessionWitnessAlert {
    * sides hold (reconciliation rule D5). Sent to the party that did NOT submit the batch, because
    * they are the one who would otherwise hear it only from the party it accuses.
    */
-  reason: "leaf_signed_by_neither_participant" | "replay_chain_diverged";
+  reason: "leaf_signed_by_neither_participant" | "replay_chain_diverged" | "self_chain_broken";
   /** WHICH witness. Absent when this relay runs without a signing identity. */
   relay_id?: string;
   /** Unix ms at which this relay observed the submission. */
