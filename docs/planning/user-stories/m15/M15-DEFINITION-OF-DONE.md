@@ -970,14 +970,19 @@ match, I'm blocked. But if I arrive at immigration with no passport, they let me
 > operator guidance that stops short of a verdict: once is a relay hiccup, repeatedly is the shape
 > of someone keeping their words out of the receipt.
 >
-> **Two bounds, both pinned by their own tests rather than left implied:**
-> - A peer whose build predates the `leaf_kind` field on the content frame is NOT witnessed on a
->   guess — a leaf kind selects a hash domain, and a wrong statement in the record is worse than a
->   gap the seal can name. So the direct path is closed **between two peers on this build**.
-> - v2/v3 park envelopes are still accepted, because refusing them would destroy store-and-forward
->   mail already in every relay mailbox. So the **mailbox route is closed against a stock client**
->   and open to one that deliberately emits an older envelope. Requiring v4 is the enforcement step,
->   and it waits on nothing in the field emitting the older shapes.
+> **The direct path has no remaining shape to exploit.** A content frame that does not name its leaf
+> domain is REFUSED, not delivered-and-unwitnessable. The earlier leniency there was an inherited
+> compatibility argument — Andre, 2026-09-05: *"We are an alpha. We have no users."* There is no
+> older peer, and what the leniency bought was an opt-out from the fix by choosing a wire shape.
+>
+> **One route remains, and the blocker is OUR OWN path rather than an older peer's.** A message
+> parked with no ordering record AND no signature over its ordering claim is readable and can never
+> enter a receipt. Refusing it was implemented and reverted: `SEC-1` AC5 makes the crash-backstop
+> shape — signed by the sender, no ordering record — explicitly legal, and from the recipient's side
+> it is indistinguishable from an attacker's stripped envelope. **What closes it:** the crash
+> backstop signs an ordering claim at enqueue time, which `#signOwnContentClaim` already produces and
+> whose two retry-queue columns (`structure1_sig`, `leaf_kind`) shipped with this work. Then the
+> unsignable shape is one only a modified client emits.
 >
 > **Handover composes safely, checked not assumed:** a relay that inherits a session refuses submits
 > until it is replayed, and the replay rebuilds its leaf log WITH `structure1_cbor` — so the
