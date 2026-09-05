@@ -295,6 +295,105 @@ withholds) cannot be produced by an in-process test that controls both sides' co
 
 ---
 
+---
+
+## Part 0 close-out — answered before any code was written
+
+### 0a — Is every live agent on `daemon@0.0.189` or newer? **YES. Not a stop.**
+
+Each row proved three separate things: the installed version, that the RUNNING process is that build
+(package mtime earlier than process start), and that the v2 reader is physically in the shipped
+artifact (`last_seen_hash` present in `protocol-types/dist/structure1.js`), not merely implied by a
+version string.
+
+| Agent host | daemon | protocol-types | v2 reader in `dist/` | running build proved |
+|---|---|---|---|---|
+| Andre's laptop | 0.0.189 | 0.0.69 | ✅ | installed 12:12:28, process started 12:15:04 |
+| Hermes EC2 `i-06db70df6b3e32207` | 0.0.189 | 0.0.69 | ✅ | installed 10:13:56, process started 10:14:10 |
+| `cello-hostile-client` (GCP `us-east1-d`) | 0.0.189 | 0.0.69 | ✅ | installed 10:26:24, process started 10:27:57 |
+| Demo agent EC2 `i-0ad3e7c22470f266e` | — | — | — | **STOPPED — not a live agent** |
+
+Published `latest` and `beta` both read `daemon@0.0.189` / `protocol-types@0.0.69`, so no live agent
+is behind the reader.
+
+**The connect shim is not a Structure 1 reader.** `@cello-protocol/connect@0.0.164` (the four npx
+MCP shims on the laptop and the two on Hermes) contains no `structure1` or `decodeStructure1` in its
+built `dist/`; positive control — the same `dist/` yields hits for `cello_send`. It proxies over IPC
+and the daemon is the only decoder, so the shim version does not participate in this gate.
+
+**⚠️ ONE THING TO HAND ANDRE, and it is not a blocker.** The demo agent is STOPPED, so it cannot be
+queried and it is not live. Whatever build it holds is from before 2026-07-31. **Upgrade it before
+it is next started** (`npm i -g @cello-protocol/cli@latest`, then the documented daemon-then-demo
+restart) — starting it un-upgraded after this unit ships puts an old reader back on the wire, which
+is the silent-message-loss case this order's `deploy_gate` describes.
+
+### 0b — Does the daemon already assemble a carried leaf for a message that arrived with NO relay ordering record? **NO.**
+
+Two distinct questions hide in this one, and the answers differ:
+
+- **A carried leaf with no relay RECEIPT — YES, and it has shipped.** `session-relay-client.ts`
+  stores the counterparty's leaf from `leaf_deliver` with `relay_id` / `relay_timestamp` /
+  `relay_signature` all absent. That is exactly the asymmetry the design anticipated.
+- **A carried leaf with no relay ORDERING RECORD — NO.** `SessionSealLeafStore.store()` has exactly
+  two writers, both inside the relay client: the own-leaf site on `hash_submit_ack`, and the
+  counterparty site on `leaf_deliver`. Both require the relay to have spoken, and the counterparty
+  site additionally requires the relay-supplied `structure2_cbor` — which is `NOT NULL` in the carry
+  schema. A message the attacker delivered over the direct content stream and never submitted
+  produces **no carry leaf at all**.
+
+**So the seal half of this unit is NOT nothing.** The consume path confirms it end to end: the
+unilateral seal builds `seal_leaves` from `getSealCarry` and the local pre-flight refuses a gap with
+`seal_carry_noncontiguous` — so a withheld LAST message does not even produce a gap. It truncates
+the chain at N−1 and the seal proceeds, agreeing with the witness. That is the attack, intact.
+
+**Consequence for this unit, stated rather than absorbed:** DoD clause 7's enforcer journey ("a
+withheld last message still lands in the victim's unilateral receipt") needs a producer that does
+not exist — building a carry leaf from the content frame's own `structure1_cbor` +
+`sender_signature`, plus a directory-side verifier that accepts a counterparty leaf carrying no
+Structure 2. That is a second mission and a wire change. It is written up under *Newly discovered*
+and it is not built here. Everything Parts 1 and 2 describe — the mission sentence — is.
+
+### 0c — Does anything, anywhere, emit a submission id? **NO. The grep is confirmed.**
+
+`submissionId` / `submission_id` in `core/daemon/src/session-relay-client.ts` returns nothing;
+positive control on the same file returns 30 hits for `structure1`, so the search could see.
+
+Widened across both repos, every hit is the **M10B sealed trust-signal submission queue** — a
+different concept that never touches Structure 1: `protocol-types/src/submission.ts`, the directory's
+`submission_queue` table and frames, and the CLI/MCP display of them. The only Structure-1
+submission-id code anywhere is the relay's READER (`relay-node.ts`, `DOD-M15-SUBMIT-ID-1`) and a
+test fixture that hand-builds a v1 seven-array. **Its emitter half never shipped.**
+
+**Index 6 is therefore free to become exclusive**, and from this unit it is: v1+7 keeps meaning
+submission id, v2+7 means `last_seen_hash`, and nothing can carry both.
+
 ## Newly discovered
 
 _(write findings here and keep going — do not fix them)_
+
+### 1. A message that arrived with no relay ordering record can never enter a receipt — the carry-leaf producer is missing
+
+**Found answering Part 0b; NOT fixed here.** `SessionSealLeafStore.store()` has two writers and both
+live inside the relay client. The counterparty writer runs on `leaf_deliver` and needs the
+relay-supplied `structure2_cbor`, which the carry schema declares `NOT NULL`. So when a counterparty
+delivers a message over the direct content stream and never submits its hash, the victim holds the
+message, holds the counterparty's signature over it, and **still cannot put it in a receipt** — the
+unilateral seal is built from `getSealCarry`, and that message is not in it.
+
+**What the operator lives through:** somebody says the thing they later want removed, declines to
+witness it, and the victim's notarised receipt ends one message early — every leaf validly signed,
+nothing false, the last thing said simply absent.
+
+**Classification: BLOCKS LAUNCH is Andre's to grant (§0z.4), so this is written up and not claimed.**
+It is the second half of `DOD-M15-WITHHOLD-SEAL-1`'s own journey, so my read is that it belongs in
+the gate; the frozen-gate rule says I do not put it there myself.
+
+**What it needs, so the size is visible rather than guessed:** a producer that builds a carry leaf
+from the content frame's own `structure1_cbor` + `sender_signature`; a nullable `structure2_cbor` in
+the carry schema; and a directory-side offline verifier that accepts a counterparty leaf with no
+Structure 2, pinning it by the sender's signature and contiguity instead. That last part is a wire
+change and it is why this is not folded into 033.
+
+**This unit is what makes it possible.** With `last_seen_hash` signed, the victim's own next
+message — and the counterparty's own subsequent acknowledgements — bind to the withheld message's
+content, so a carried leaf built from the frame has something to be checked against.
