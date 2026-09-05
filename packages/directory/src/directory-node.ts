@@ -7403,6 +7403,25 @@ export interface CreateDirectoryNodeOptions {
   aeSync?: CelloDirectoryNodeOptionsAeSync;
 }
 
+/**
+ * DOD-M15-RELAYSILENT-1 review HIGH-1 — **A DIRECTORY IS A SERVICE NODE TOO, AND IT WAS RUNNING AT FIVE.**
+ *
+ * The relay's five-per-source-IP-per-second inbound limit broke the messaging journey; this node
+ * passed no `connectionLimits` either, so it inherited the identical libp2p default. Every client
+ * dials **all three** directories during registration and again at session setup, and the argument
+ * for raising it on the relay applies here verbatim: agents behind one office NAT, one home router
+ * or one cloud egress IP share a single source address.
+ *
+ * The failure mode is the same and just as invisible — libp2p refuses in
+ * `acceptIncomingConnection`, before the connection gater, before Noise, emitting no event — so a
+ * registration or session-setup failure would appear in no directory log at all.
+ *
+ * **Its own constant, not the relay's, and deliberately so.** The two nodes have different jobs and
+ * no reason to agree; sharing one number would make a change for one of them a silent change for
+ * the other. What they share is the reasoning, not the value.
+ */
+export const DIRECTORY_INBOUND_CONNECTION_THRESHOLD = 256;
+
 export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Promise<{
   directory: CelloDirectoryNode;
   node: CelloNode;
@@ -7412,6 +7431,7 @@ export async function createDirectoryNode(opts: CreateDirectoryNodeOptions): Pro
     keyProvider: opts.keyProvider,
     listenAddresses: opts.listenAddresses ?? ["/ip4/127.0.0.1/tcp/0"],
     transportPrivateKey: opts.transportPrivateKey,
+    connectionLimits: { inboundConnectionThreshold: DIRECTORY_INBOUND_CONNECTION_THRESHOLD },
   });
   await node.start();
 

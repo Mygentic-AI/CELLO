@@ -9,7 +9,7 @@
  *     connection from /ip4/127.0.0.1/tcp/64907 refused - inboundConnectionThreshold
  *     exceeded by host 127.0.0.1                                                    (×6)
  *
- * libp2p@3.3.2 rate-limits INBOUND connections at `points: 5, duration: 1` — five per second per
+ * libp2p (3.3.11 in this repo) rate-limits INBOUND connections at `points: 5, duration: 1` — five per second per
  * source IP — and `upgrader.js` calls `acceptIncomingConnection` BEFORE the connection gater,
  * before Noise, before `connection:open`. So the refusal happens beneath every layer CELLO logs:
  * the relay is not going quiet, it is structurally unable to say it refused you.
@@ -32,7 +32,8 @@
 import { describe, it, expect, afterEach } from "vitest";
 import { generateKeypair } from "@cello-protocol/crypto";
 import type { CelloNode } from "@cello-protocol/transport";
-import { createRelayNode, RELAY_INBOUND_CONNECTION_THRESHOLD } from "../relay-node.js";
+import { createNode } from "@cello-protocol/transport";
+import { createRelayNode, RELAY_INBOUND_CONNECTION_THRESHOLD_DEFAULT, resolveRelayInboundThreshold } from "../relay-node.js";
 
 const stops: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -54,21 +55,86 @@ describe("DOD-M15-RELAYSILENT-1: the relay's inbound connection budget", () => {
     const node = await startRelay();
     // Read off the live node, not off the constant: a constant nothing passes to `createNode` is a
     // number with no reader, and that is precisely how this defect existed for weeks.
-    expect(node.getConnectionLimits().inboundConnectionThreshold).toBe(RELAY_INBOUND_CONNECTION_THRESHOLD);
+    expect(node.getConnectionLimits().inboundConnectionThreshold).toBe(RELAY_INBOUND_CONNECTION_THRESHOLD_DEFAULT);
   }, 30_000);
 
-  it("the threshold is 256 and sits BELOW maxConnections, so the connection ceiling stays the real limit", async () => {
-    const node = await startRelay();
-    const limits = node.getConnectionLimits();
-    expect(RELAY_INBOUND_CONNECTION_THRESHOLD).toBe(256);
+  /**
+   * ⚠️ **THE ONE TEST THAT PROVES THE NUMBER REACHED libp2p, AND THE REASON IT EXISTS.**
+   *
+   * What stood here was `expect(RELAY_INBOUND_CONNECTION_THRESHOLD).toBe(256)` plus
+   * `256 < maxConnections` — a constant equalling itself and an inequality that `5 < 300` satisfies
+   * just as well. Deleting the `connectionLimits:` line left it green. It also asserted an ordering
+   * the code does not have (`maxIncomingPendingConnections` is checked FIRST, and is global).
+   *
+   * **The surviving mutation it could not catch is the one that has actually happened here before:**
+   * a transport that accepts `connectionLimits`, stores it, reports it from `getConnectionLimits()`
+   * and stops forwarding it to `createLibp2p`. Every number-reading test stays green, the startup
+   * log still prints 256, and the relay still refuses at five — `DOD-RELAY-KEEPALIVE-1` verbatim,
+   * an option accepted by the type and silently not applied.
+   *
+   * So this asserts the BEHAVIOUR the operator lived through: six peers on one source address, in
+   * one second, all admitted. At libp2p's default of five the sixth is refused before Noise.
+   */
+  it("SIX peers on ONE source IP all connect within a second — at libp2p's default of five, the sixth is refused", async () => {
+    const relay = await startRelay();
+    const relayAddr = relay.listenAddresses().find((a) => a.includes("/p2p/"));
+    expect(relayAddr, "positive control: the relay is listening with an addressed multiaddr").toBeTruthy();
+
+    const dialers = await Promise.all(
+      Array.from({ length: 6 }, async () => {
+        const n = await createNode({ keyProvider: generateKeypair(), listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+        await n.start();
+        stops.push(() => n.stop());
+        return n;
+      }),
+    );
+
+    // In parallel, so all six land inside ONE rate-limiter window (`duration: 1`). Sequential dials
+    // on loopback could straddle a window boundary and pass at five — the failure would then be the
+    // test's timing rather than the relay's budget.
+    const outcomes = await Promise.all(
+      dialers.map((n) => n.dial(relayAddr!).then(() => "ok" as const, (e: unknown) => String((e as Error)?.message ?? e))),
+    );
+
+    expect(
+      outcomes.filter((o) => o !== "ok"),
+      `all six peers on 127.0.0.1 must be admitted; refusals were: ${JSON.stringify(outcomes)}`,
+    ).toEqual([]);
     /**
-     * The ordering is the whole argument for the number, not decoration. A per-second IP rate ABOVE
-     * `maxConnections` would make the rate limiter unreachable and leave the relay with one control
-     * where it should have two. Below it, `maxConnections` binds first and the rate limiter stays a
-     * real backstop against a single host opening connections faster than the ceiling can prune.
+     * And the relay agrees it is holding them — a dial that resolved against a relay that dropped it
+     * would otherwise read as success.
+     *
+     * WAITED, not sampled: a dial resolves on the DIALER when its upgrade completes, and the
+     * listener registers the connection a moment later. Sampling the instant `Promise.all` resolved
+     * read 5 of 6 on the first run — the assertion's own timing, not the relay's budget. The
+     * refusal case cannot hide behind this wait, because a refused dial fails the assertion above
+     * first.
      */
-    expect(limits.inboundConnectionThreshold).toBeLessThan(limits.maxConnections);
-  }, 30_000);
+    const deadline = Date.now() + 5_000;
+    while (relay.getConnections().length < 6 && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(
+      relay.getConnections().length,
+      `the relay is holding all six after up to 5s; dial outcomes were ${JSON.stringify(outcomes)}`,
+    ).toBeGreaterThanOrEqual(6);
+  }, 60_000);
+
+  it("a malformed CELLO_RELAY_INBOUND_CONNECTION_THRESHOLD falls back and says so — zero would refuse EVERYONE", () => {
+    const invalid: string[] = [];
+    const note = (v: string) => invalid.push(v);
+    // The values the clause is about, verbatim — not a representative.
+    expect(resolveRelayInboundThreshold("0", note)).toBe(RELAY_INBOUND_CONNECTION_THRESHOLD_DEFAULT);
+    expect(resolveRelayInboundThreshold("-1", note)).toBe(RELAY_INBOUND_CONNECTION_THRESHOLD_DEFAULT);
+    expect(resolveRelayInboundThreshold("abc", note)).toBe(RELAY_INBOUND_CONNECTION_THRESHOLD_DEFAULT);
+    expect(resolveRelayInboundThreshold("2.5", note)).toBe(RELAY_INBOUND_CONNECTION_THRESHOLD_DEFAULT);
+    expect(invalid, "every rejected value is reported, never silently swallowed").toEqual(["0", "-1", "abc", "2.5"]);
+    // And a good one is honoured, or the override is decoration.
+    expect(resolveRelayInboundThreshold("64", note)).toBe(64);
+    expect(resolveRelayInboundThreshold(undefined, note)).toBe(RELAY_INBOUND_CONNECTION_THRESHOLD_DEFAULT);
+    expect(invalid, "a valid value reports nothing").toEqual(["0", "-1", "abc", "2.5"]);
+  });
+
 
   /**
    * ⚠️ **A PRESERVATION GUARD, NOT COVERAGE — it passes on the tree before this unit too.** Named so
@@ -117,9 +183,12 @@ describe("DOD-M15-RELAYSILENT-1: the relay's inbound connection budget", () => {
 
     const line = events.find((e) => e.event === "relay.config.connection_limits");
     expect(line, "the relay says what its connection budget is").toBeDefined();
-    expect(line!.ctx["inboundConnectionThreshold"]).toBe(256);
+    expect(line!.ctx["inboundConnectionThreshold"]).toBe(RELAY_INBOUND_CONNECTION_THRESHOLD_DEFAULT);
     expect(line!.ctx["maxConnections"]).toBe(300);
-    // The line has to say what it CANNOT tell you, or it reads as a refusal counter.
-    expect(String(line!.ctx["impact"])).toContain("refus");
+    // The line has to say what it CANNOT tell you, or it reads as a refusal counter — AND where the
+    // evidence really does live. The first version claimed refusals appear in no relay log; libp2p
+    // logs every one at debug, and that is how this defect was found.
+    expect(String(line!.ctx["impact"])).toContain("no CELLO event");
+    expect(String(line!.ctx["impact"])).toContain("DEBUG=libp2p:connection-manager*");
   }, 30_000);
 });
