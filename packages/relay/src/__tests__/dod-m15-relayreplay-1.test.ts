@@ -410,10 +410,21 @@ describe("031-RELAYREPLAY: four tampered batches, four different catchers", () =
     const batch = await h.validBatch();
     const conn = await h.connect(h.submitter);
 
-    // Index 1 is the counterparty's leaf. Its `sender_pubkey` still names them; only the signature
-    // is someone else's — so provenance passes and the signature check is what refuses it.
+    /**
+     * ⚠️ THE LAST LEAF, AND THE POSITION IS THE WHOLE TEST. This forged the leaf at index 1 first,
+     * and the mutation loop caught it: with the sender-signature check DELETED the test still
+     * passed. Forging a signature rewrites that leaf's `structure2_cbor`, which changes the
+     * Structure 2 root, which breaks the NEXT leaf's `prev_root` — and that failure returns the
+     * same `unilateral_root_unverifiable` string. So the assertion was green either way, and the
+     * clause it claimed to cover could be removed with nothing going red.
+     *
+     * The last leaf has no successor whose `prev_root` depends on it, so the sender's own signature
+     * is the only thing left that can refuse it. Index 3 is the counterparty's, whose leaves carry
+     * no relay receipt by design — pinned by signature and contiguity alone, which is exactly the
+     * property under test. `sender_pubkey` still names them, so provenance passes too.
+     */
     const forged = [...batch.leaves];
-    forged[1] = await forgeSenderSignature(batch.leaves[1]!, generateKeypair());
+    forged[LEAF_COUNT - 1] = await forgeSenderSignature(batch.leaves[LEAF_COUNT - 1]!, generateKeypair());
     const res = await h.replay(conn, {
       reported_root: batch.reported_root, // content hashes are untouched, so the root still matches
       leaves: forged,
