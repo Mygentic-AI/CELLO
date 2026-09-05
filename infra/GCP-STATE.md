@@ -2584,9 +2584,9 @@ terraform apply -target=google_cloud_run_v2_service.portal \
 
 | Check | Result |
 |---|---|
-| Image live | `portal:portal-61b1abf` (built manually — the trigger still does not fire, §3) |
+| Image live | `portal:portal-052b12b` (built manually — the trigger still does not fire, §3) |
 | `portal_image_tag` in `terraform.tfvars` | bumped in the same change, per the rule that a mismatch invites the next apply to roll it back |
-| Revision ready | `cello-portal-00020-hs7` (was `-00019-qdh`; rolled forward same day to `portal-61b1abf` for the post-mint UX and the corrected delivery wording), condition True |
+| Revision ready | `cello-portal-00021-z6b`. Three targeted rolls on 2026-09-05: `-00019-qdh` (X live), `-00020-hs7` (post-mint UX + corrected delivery wording), `-00021-z6b` (X row matches GitHub's, every preview panel labelled generic). Each plan was image-only: 0 added, 1 changed, 0 destroyed. |
 | Serving | `https://portal.cello.mygentic.ai/sign-in` → 200 |
 | Portal migrations | booted at `0015_x_connections_handle_only` — 0014 and 0015 applied at container start |
 | X env bound | `X_CLIENT_ID`, `X_CLIENT_SECRET` present on the live revision |
