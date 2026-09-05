@@ -50,163 +50,17 @@ import {
   beforeEach,
   afterEach,
 } from "@claude-flow/testing";
-import { createHash, randomBytes } from "node:crypto";
-import { Encoder, decode } from "cbor-x";
-import * as lp from "it-length-prefixed";
-import { generateKeypair } from "@cello-protocol/crypto";
-import { createNode } from "@cello-protocol/transport";
-import type { Stream } from "@libp2p/interface";
-import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
-import type { SessionAssignment } from "../relay-types.js";
-import { testOnlineToken } from "./helpers/online-token.js";
+import { randomBytes } from "node:crypto";
+import { submitHarness } from "./helpers/relay-submit-harness.js";
 
 setupV3Tests();
 
-const CBOR_ENC = new Encoder({ tagUint8Array: false });
-const MSG_LEAF = 0x00;
-
-function sendFrame(stream: Stream, bytes: Uint8Array): void {
-  stream.send(lp.encode.single(bytes));
-}
-
-function toU8(v: unknown): Uint8Array {
-  if (v instanceof Uint8Array) return v;
-  if (Buffer.isBuffer(v)) return new Uint8Array(v as Buffer);
-  throw new Error(`expected bytes, got ${typeof v}`);
-}
-
-class StreamReader {
-  #it: AsyncIterator<Uint8Array>;
-  constructor(stream: Stream) {
-    this.#it = (lp.decode(stream) as AsyncIterable<Uint8Array>)[Symbol.asyncIterator]();
-  }
-  async readDecoded(): Promise<Record<string, unknown>> {
-    const { value, done } = await this.#it.next();
-    if (done || !value) throw new Error("stream ended");
-    const raw = value instanceof Uint8Array ? value : (value as { slice(): Uint8Array }).slice();
-    return decode(raw) as Record<string, unknown>;
-  }
-}
-
-// DOD-M15-RELAYSLOTS-1: the relay refuses an auth carrying no directory-issued online token.
-async function performRelayAuth(
-  reader: StreamReader,
-  stream: Stream,
-  kp: ReturnType<typeof generateKeypair>,
-  dirKp: ReturnType<typeof generateKeypair>,
-): Promise<void> {
-  const challenge = await reader.readDecoded();
-  expect(challenge["type"]).toBe("relay_auth_challenge");
-  const nonce = toU8(challenge["nonce"]);
-  const pubkey = await kp.getPublicKey();
-  const authMsg = new Uint8Array(Buffer.concat([Buffer.from("CELLO-RELAY-AUTH-v1", "utf8"), nonce, pubkey]));
-  const signature = await kp.sign(new Uint8Array(createHash("sha256").update(authMsg).digest()));
-  sendFrame(stream, CBOR_ENC.encode({
-    type: "relay_auth_response",
-    pubkey,
-    signature,
-    online_token: await testOnlineToken(dirKp, kp),
-  }) as Uint8Array);
-  const ack = await reader.readDecoded();
-  if (ack["type"] === "relay_auth_failed") throw new Error(`relay_auth_failed: ${String(ack["reason"])}`);
-  expect(ack["type"]).toBe("relay_auth_ok");
-}
-
 /**
- * Build a Structure 1, optionally with the NEW seventh element.
- *
- * `contentHash` is a parameter so a test can re-send the SAME content — which is the whole subject —
- * and `timestamp` is too, so a retry can carry a different one exactly as a real retry would.
+ * The rig moved to `helpers/relay-submit-harness.ts` when 033-ACKEMIT needed the same one, for the
+ * reason `relay-client-fake.ts` moved on the client side: two hand-written relay stubs drift, and
+ * only one of them learns about the next appended field.
  */
-async function makeS1(opts: {
-  sessionId: Uint8Array;
-  kp: ReturnType<typeof generateKeypair>;
-  lastSeenSeq: number;
-  contentHash: Uint8Array;
-  timestamp: number;
-  submissionId?: Uint8Array;
-}): Promise<{ structure1_cbor: Uint8Array; sender_signature: Uint8Array }> {
-  const fields: unknown[] = [
-    1, opts.contentHash, await opts.kp.getPublicKey(), opts.sessionId, opts.lastSeenSeq, opts.timestamp,
-  ];
-  if (opts.submissionId) fields.push(opts.submissionId);
-  const tbs = CBOR_ENC.encode(fields) as Uint8Array;
-  return { structure1_cbor: tbs, sender_signature: await opts.kp.sign(tbs) };
-}
-
-async function makeAssignment(
-  sessionId: Uint8Array,
-  pubA: Uint8Array,
-  pubB: Uint8Array,
-  signingDir: ReturnType<typeof generateKeypair>,
-): Promise<SessionAssignment> {
-  const session_timestamp = Date.now();
-  const tbs = CBOR_ENC.encode([
-    sessionId, pubA, pubB,
-    session_timestamp > 0xffffffff ? BigInt(session_timestamp) : session_timestamp,
-  ]) as Uint8Array;
-  return {
-    session_id: sessionId,
-    participant_a: pubA,
-    participant_b: pubB,
-    session_timestamp,
-    directory_signature: await signingDir.sign(tbs),
-  };
-}
-
-/** A relay plus one authenticated sender on a recorded session. */
-async function harness(scope: ReturnType<typeof createTestScope>) {
-  const dirKp = generateKeypair();
-  const dirPub = await dirKp.getPublicKey();
-  const { relay, node, stop } = await createRelayNode({
-    directoryPubkey: dirPub,
-    directoryPubkeys: [dirPub],
-  });
-  scope.addCleanup(async () => { await stop(); });
-
-  const clientA = generateKeypair();
-  const clientB = generateKeypair();
-  const sessionId = new Uint8Array(randomBytes(16));
-  expect(relay.recordAssignment(
-    await makeAssignment(sessionId, await clientA.getPublicKey(), await clientB.getPublicKey(), dirKp),
-  )).toEqual({ ok: true });
-
-  /**
-   * BOTH participants get a stream. The second one is not decoration: the submission-id key is
-   * SENDER-SCOPED, and the only way to test that is to have the other party try to use an id.
-   */
-  const connect = async (kp: ReturnType<typeof generateKeypair>) => {
-    const cn = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
-    await cn.start();
-    scope.addCleanup(async () => { await cn.stop(); });
-    await cn.dial(node.listenAddresses()[0]!);
-    const stream = await cn.newStream(node.getPeerId(), RELAY_PROTOCOL_ID);
-    const reader = new StreamReader(stream);
-    await performRelayAuth(reader, stream, kp, dirKp);
-
-    return async (o: {
-      contentHash: Uint8Array;
-      lastSeenSeq: number;
-      timestamp: number;
-      submissionId?: Uint8Array;
-    }): Promise<Record<string, unknown>> => {
-      const { structure1_cbor, sender_signature } = await makeS1({ sessionId, kp, ...o });
-      sendFrame(stream, CBOR_ENC.encode({
-        type: "hash_submit", session_id: sessionId, leaf_kind: MSG_LEAF, structure1_cbor, sender_signature,
-      }) as Uint8Array);
-      let resp = await reader.readDecoded();
-      for (let i = 0; i < 6 && resp["type"] !== "hash_submit_ack" && resp["type"] !== "hash_submit_error"; i++) {
-        resp = await reader.readDecoded();
-      }
-      return resp;
-    };
-  };
-
-  const submit = await connect(clientA);
-  const submitAsB = await connect(clientB);
-
-  return { submit, submitAsB };
-}
+const harness = submitHarness;
 
 describe("DOD-M15-SUBMIT-ID-1: the relay tolerates a submission id and is idempotent on it", () => {
   let scope = createTestScope();
