@@ -1175,19 +1175,40 @@ describe("J-CONTENT — relay store-and-forward, live (DOD-MSG-3 / MSG-001-3b)",
     // it is a tool that does not exist — which reads as a product regression in the failure.
     const tx = (await connB.call("cello_transcript", { cello_session_id: sessionId })) as {
       ok?: boolean;
-      messages?: Array<{ content?: string }>;
-      post_seal_annex?: Array<{ content?: string }>;
+      /**
+       * ⚠️ **`text`, NOT `content` — BOTH READS HERE NAMED A FIELD THAT DOES NOT EXIST.**
+       *
+       * `TranscriptEntry` and the annex row both carry `text` (`session-node-manager.ts`), so
+       * `a.content` was `undefined` on every row and both derived strings were always `""`. That
+       * made the two assertions below fail in opposite ways, and the second is the dangerous one:
+       *
+       *  - the POSITIVE one (`annex must contain the straggler`) could never pass, whatever the
+       *    daemon did — and it duly failed, naming a behaviour the daemon was performing correctly;
+       *  - the NEGATIVE one (`the straggler must never appear among the sealed messages`) could
+       *    never FAIL. `"".not.toContain(x)` is green for any code at all, including code that
+       *    merged the annex straight into the sealed transcript — the exact boundary it exists to
+       *    guard.
+       *
+       * Found by 030-RELAYSILENT only because the connection defect was cleared first: until then
+       * the test never reached this line.
+       */
+      messages?: Array<{ text?: string }>;
+      post_seal_annex?: Array<{ text?: string }>;
     };
     expect(tx.ok, `B reads its transcript:${diag}`).toBe(true);
-    const annexText = (tx.post_seal_annex ?? []).map((a) => a.content ?? "").join("\n");
+    const annexText = (tx.post_seal_annex ?? []).map((a) => a.text ?? "").join("\n");
     expect(
       annexText,
       `the straggler must be KEPT and READABLE in the post-seal annex, not merely refused. ` +
       `Annex was: ${JSON.stringify(tx.post_seal_annex)}${diag}`,
     ).toContain(straggler.toString("utf8"));
     // And it must NOT have entered the sealed transcript — the boundary the annex exists to hold.
+    const sealedText = (tx.messages ?? []).map((m) => m.text ?? "").join("\n");
+    // The negative assertion is only worth anything if the string it searches is non-empty — it was
+    // empty for the life of this test. Prove the search can SEE before believing what it does not find.
+    expect(sealedText, "positive control: the sealed transcript is readable at all").toContain("msg1");
     expect(
-      (tx.messages ?? []).map((m) => m.content ?? "").join("\n"),
+      sealedText,
       "a post-seal straggler must never appear among the sealed messages",
     ).not.toContain(straggler.toString("utf8"));
 
