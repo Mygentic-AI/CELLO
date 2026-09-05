@@ -11055,3 +11055,99 @@ the originals kept at `/tmp/025-dist-backup`.
 
 Fifteen mutants, each re-run alone and typechecked first; one was discarded for failing to compile,
 which under §0z.3 proves nothing. Final gate: 4866 passed / 11 skipped, lint and typecheck clean.
+
+
+---
+
+## Entry 74 — 033-ACKEMIT: the acknowledgement now says what it acknowledged
+
+**Unit:** micro work order `033-ACKEMIT`. **Line:** `DOD-M15-WITHHOLD-SEAL-1` — moved, not closed.
+**Repos:** `cello-client` (daemon) + `trustless-cello` (relay), branch `m15/033-ackemit` in both.
+
+### The counterbalance, named before the code (§2b Invariant 1)
+
+To advance the conversation at all, a peer must put a signed Structure 1 on the wire. That claim now
+carries the content hash of what they say they received, so the enforcement points are the **relay**
+(a third party, load-bearing here deliberately) and the **honest counterparty's own daemon**
+(bilateral, needs no relay). Neither is code the adversary controls, and declining to bind costs them
+delivery — the thing they came for.
+
+### Part 0, which is the part that changed the unit's shape
+
+- **0a — every LIVE agent is on `daemon@0.0.189`**, proved three ways each: installed version,
+  package mtime earlier than process start, and `last_seen_hash` present in the shipped
+  `protocol-types/dist/structure1.js`. Andre's laptop, the Hermes EC2 box, `cello-hostile-client` on
+  GCP. **The demo agent is STOPPED** — not live, holds a pre-August build, and must be upgraded
+  before it is next started.
+- **0c — nothing emits a Structure-1 submission id.** Positive control run on the same file (30 hits
+  for `structure1`), and every `submission_id` hit across both repos is the unrelated M10B queue.
+- **0b — NO, and this is the finding.** `SessionSealLeafStore.store()` has exactly two writers and
+  both are inside the relay client; the counterparty writer needs the relay-supplied
+  `structure2_cbor`, which the carry schema declares NOT NULL. So a message delivered directly and
+  never submitted produces **no carry leaf**, the unilateral seal is built from `getSealCarry`, and
+  a withheld last message truncates the chain while agreeing with the witness. **The attack is
+  intact, and clause 7's journey cannot pass until a producer exists.** Written up as its own unit.
+
+### What shipped
+
+**Emit.** `#lastSeen` stops being a number and becomes `{seq, hash}`, written together from ONE
+decode of ONE leaf so the two can never come to mean different messages. The hash is read from index
+1 of the counterparty's own signed bytes, never from the relay-built `structure2_cbor` beside it — an
+envelope-sourced hash would let a tampering relay make us sign an acknowledgement of content the
+counterparty never sent.
+
+**Genesis.** `computeGenesisPrevRoot`, persisted as `sessions.genesis_prev_root` — derived from the
+live assignment first, read from the column only for the restart case, where the session TIMESTAMP
+the derivation needs lives nowhere else. Added to the pinned re-key DDL as well as the ALTER list,
+which the parity test caught: a column the ALTERs add and the pinned DDL omits is DROPPED on the one
+boot a legacy database upgrades.
+
+**Check, with no relay.** `#verifyAcknowledgedContent`, called last inside `#verifyAuthorshipClaim`
+for the same reason the content and session bindings run last — everything below that line answers
+`unusable` (refuse the message, session lives) and everything above answers `refuted` (freeze), so an
+earlier check would hand a peer a switch for choosing the softer outcome.
+
+**And the relay gets it for free**, on the `structure1_cbor` a `hash_submit` already carries: no new
+frame, no new wire field.
+
+### Two things the review found that I had got wrong, and they are the entry's point
+
+**The check could be switched off by the attacker it names.** It waived itself on a DIVERGED session,
+defended by: *"Who controls this absence? Not the peer."* False. Send a message direct-only and never
+submit its hash; it appends unwitnessed and our tree runs one ahead of the relay's counter; our very
+next send lands behind our own frontier and marks the session diverged. **One withheld message plus
+one reply, and every later acknowledgement was accepted unchecked — using the exact behaviour the
+guard exists to catch.** The check now asks about CONTENT rather than an index: is the hash something
+this side actually holds, placed or held pending a gap? Divergence cannot switch that off, and the
+position is used only to strengthen it where indices still mean relay positions.
+
+**The acknowledgement bound to what the relay DELIVERED, not what was RECEIVED.** `#bumpLastSeen` had
+one caller, in the `leaf_deliver` handler. On a direct session the content arrives peer-to-peer and
+the relay's copy follows separately, so this daemon signed an acknowledgement one message behind what
+it had read. The receive path advances it now. **The limit that remains is structural:** the pair is
+(position, content-at-position) and the relay refuses a `last_seen_seq` ahead of its counter, so a
+message with no ordering record cannot be acknowledged by position at all — which is the withheld
+case, and the carried-leaf unit's job.
+
+### The deviation that is Andre's, not mine
+
+A session with no recorded starting point that has received nothing still emits a **v1 claim**:
+position 0, no hash, asserting nothing. Refusing every v1 emission broke **93 tests across 26 files**,
+because sessions brokered without a relay assignment are real. So the rule enforced is the POSITION,
+not the version — a claim naming position 1 or beyond with no hash is refused; one naming no position
+is accepted. **A peer can therefore decline to bind by never acknowledging anything**, which costs
+them their own ratification rather than falsifying ours, and is the same under-claiming the relay has
+always allowed. The reviewer's own words: the receiver-side narrowing is sound, the emitter-side one
+"needs Andre."
+
+### Evidence
+
+Six mutations, each typechecked before it was trusted and each reddening only its target; two more
+discarded for failing to compile, which proves nothing. **One survived on the first pass** — the
+second production emitter had no test at all — and a test was written for it. The mutation loop then
+ate an uncommitted fix on a restore, exactly as rule 1 warns, and it surfaced as a test that passed
+alone and failed in the full run.
+
+Ten review findings, all fixed. Gate in both repos: **cello-client 4949 passed / 11 skipped**, lint,
+typecheck and build clean; **trustless-cello 2002 passed / 631 skipped**, lint and typecheck clean.
+Both changes verified present in the BUILT artifacts, not only in source.

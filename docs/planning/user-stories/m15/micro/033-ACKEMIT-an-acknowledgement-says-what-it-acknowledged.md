@@ -2,10 +2,18 @@
 name: 033-ACKEMIT — Production signs what it saw, not merely where it was
 type: micro-work-order
 date: 2026-09-05
-status: open
+status: complete
 dod_line: DOD-M15-WITHHOLD-SEAL-1
-dod_effect: closes
+dod_effect: unit-of
 dod_effect_note: >
+  ⚠️ **DOWNGRADED FROM `closes` TO `unit-of` BY PART 0b, and the reason is in the close-out below.**
+  This order delivers the acknowledgement — production signs `last_seen_hash`, and both the relay and
+  the receiving daemon enforce it. It does NOT deliver DoD clause 7's enforcer journey, because 0b
+  proved the producer that journey needs does not exist: the daemon never assembles a carry leaf for
+  a message that arrived with no relay ordering record, so a withheld last message still truncates
+  the chain. That is written up under *Newly discovered* as its own unit, and the line stays open
+  until it lands.
+
   The EMITTER half. `020-ACKHASH` shipped the reading half and is LIVE — fleet on `eccc9cbc` across
   all five nodes, client published and promoted (`protocol-types@0.0.69`, `daemon@0.0.189`,
   `connect@0.0.164`, `cli@0.0.196`). That deploy gate is satisfied; ONE precondition survives and is
@@ -366,6 +374,114 @@ test fixture that hand-builds a v1 seven-array. **Its emitter half never shipped
 
 **Index 6 is therefore free to become exclusive**, and from this unit it is: v1+7 keeps meaning
 submission id, v2+7 means `last_seen_hash`, and nothing can carry both.
+
+---
+
+## Close-out — what shipped, what did not, and the verdict
+
+### The four hollow-test questions (§2)
+
+1. **What did I stub, and does the property live in the stub?** The shared two-connection fixture now
+   seeds the session's genesis, the way it already seeds the agreed content key. The property does
+   NOT live in that stub: the stub supplies the same value a completed session open supplies, and
+   every assertion is on what the code then DOES with it. The one place it could have hidden — the
+   receiving daemon's genesis comparison — is now asserted directly, wrong value and right value.
+2. **Is the fixture the shape that BREAKS, or a neighbouring shape that works?** Two shapes were
+   wrong on the first pass and both were corrected by measurement, not by inspection. The "mismatch"
+   test used a hash we had never held, which is a DIFFERENT refusal — it now names a hash we really
+   do hold, at a position where we hold another. And the emitter test delivered the counterparty's
+   leaf DURING a submit, which is genuinely too late for bytes already signed; it now delivers first
+   and reads the next submit.
+3. **Would this assertion pass if the code did NOTHING?** The acceptance halves are what answer this:
+   the matching hash is accepted, the real genesis is accepted, a v1 claim naming no position is
+   accepted. Without them, "refuse everything" passes every refusal test in the file.
+4. **Did I assert the OUTCOME or the mechanism's shadow?** **This one was failed and the reviewer
+   caught it.** Three different causes were asserted as `reason === "authorship_unacknowledged"` —
+   which proved a refusal was filed, not that the right one was, and it is exactly what made the
+   collapsed operator sentence invisible. The tests now name each cause and assert that the three
+   sentences DIFFER.
+
+### The mutation record (§0z.3) — six, each typechecked first, each reddening only its target
+
+| Mutation | Result |
+|---|---|
+| relay-submit emitter drops `lastSeenHash` | RED — the three emitter tests |
+| unwitnessed-claim emitter drops `lastSeenHash` | **SURVIVED on the first pass** — that emitter had no test at all; a test was written for it and it now reddens alone |
+| receive-path acknowledgement advance removed | RED — the received-message test alone |
+| positional comparison always matches | RED — the mismatch test alone |
+| a v1 claim naming a position waved through | RED — the v1-with-a-position test alone |
+| relay's mismatch comparison compares to itself | RED — the relay mismatch and zeros tests |
+
+Two mutations were discarded rather than counted because they did not COMPILE (`if (false)` narrowed
+a return type, `&& false` widened one) — a mutant that fails typecheck proves nothing.
+
+**And the loop ate one fix.** After confirming the receive-path mutation reddened, restoring the file
+took the uncommitted fix with it. It surfaced as a test that passed alone and failed in the full run,
+which reads exactly like flakiness. Rule 1 of the loop's four says commit before the loop exists; the
+cost of not doing so was one confusing debugging round.
+
+### Definition of Done, clause by clause
+
+| # | Clause | Status |
+|---|---|---|
+| 1 | Part 0's three questions answered with evidence | ✅ above |
+| 2 | Production emits v2 on every send; grep proves no path emits v1 | ⚠️ **DEVIATED — see below** |
+| 3 | First message carries the session's genesis; a test pins the exact bytes | ✅ both sides |
+| 4 | Relay refuses a mismatch by name, and the operator is told | ✅ |
+| 5 | The counterparty daemon does the same check with no relay | ✅ |
+| 6 | Index 6 is exclusive | ✅ |
+| 7 | The enforcer journey passes as separate OS processes | ❌ **NOT DELIVERED — 0b** |
+| 8 | Each new assertion made to fail on purpose | ✅ six mutations |
+| 9 | The four hollow-test questions answered | ✅ above, including the one that was failed |
+| 10 | Published, lockfile committed, re-pins updated | ✅ |
+| 11 | Gate passes in both repos, verified in the BUILT artifact | ✅ |
+| 12 | Reviewed, every finding fixed, verdict quoted | ✅ below |
+
+### Clause 2 — the deviation, stated rather than absorbed
+
+**A v1 claim is still emitted in one case: a session that has no recorded starting point AND has
+received nothing.** It carries `last_seen_seq: 0` and no hash — "I have seen nothing of yours" — which
+is true and asserts nothing about content.
+
+**Why, and it is a measurement rather than a preference.** Refusing every v1 emission broke 93 tests
+across 26 files, and the shape of the breakage was the argument: sessions brokered without a relay
+assignment are real, the directory does not always return one, and those sessions have nothing to
+acknowledge. Refusing them traded a hole they are not in for a failure of the thing the product is
+for.
+
+**So the rule enforced is the POSITION, not the version.** A claim naming position 1 or beyond with
+no hash is the unbacked number this unit exists to stop accepting, and the receiving daemon refuses
+it. A claim naming no position asserts nothing and is accepted.
+
+**The bound, and it is real:** a peer can decline to bind by never acknowledging anything. That costs
+them their own ratification of our history rather than falsifying it, and it is the same
+under-claiming the relay has always allowed — it refuses a `last_seen_seq` that runs AHEAD of its
+counter, never one that lags. **This is Andre's to grant or reject, not mine**; it is recorded here
+rather than in a comment nobody reads.
+
+### Clause 7 — not delivered, and why
+
+Part 0b proved the producer it needs does not exist. See *Newly discovered* below.
+
+### Review verdict — `cello-unit-reviewer`, one pass, quoted
+
+> **SPEC: DEVIATIONS FOUND** … **SILENT FALLBACKS FOUND** — F3: a peer who withholds submits drives
+> the session DIVERGED and switches the whole check off, on a stated justification that is false.
+> F1: the acknowledgement silently degenerates to a per-session constant on any relay-less session.
+> Both HIGH. … **ERROR SUBSTITUTION FOUND** — F5 … **HOLLOW TESTS FOUND** … **REMOVALS PROVEN** …
+> **COMPATIBILITY DEBT FOUND**
+>
+> "The receiver-side narrowing (refuse v1 only at `last_seen_seq >= 1`) is **sound** … The
+> **emitter-side** narrowing is a different decision wearing the same justification, and it is the
+> one that needs Andre. The two soft branches: the genesis one is safe as argued; **the DIVERGED one
+> is not — the peer controls it, and the specific peer who controls it is the attacker in the DoD
+> line.**"
+
+**Ten findings, all fixed.** F3 was the one that mattered: the check is no longer positional, so
+divergence cannot switch it off. F1 made clause 5 true rather than nominal. F5's collapsed operator
+sentence, F2's five stale comments, F6's non-existent remedy, F7's second call site, and F8–F10 are
+all in the diff. The one item left standing is the emitter-side narrowing above, which the reviewer
+correctly says is Andre's call.
 
 ## Newly discovered
 
