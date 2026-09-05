@@ -131,6 +131,14 @@ export interface SubmitOpts {
   timestamp: number;
   submissionId?: Uint8Array;
   lastSeenHash?: Uint8Array;
+  /**
+   * 034-CARRYLEAF — sign the leaf with THIS key instead of the submitting connection's.
+   *
+   * A counter-submit: one participant hands the relay a leaf their COUNTERPARTY authored and did
+   * not witness. The leaf is signed by the author; the connection belongs to the other party. A rig
+   * that could not express that could not test the case at all.
+   */
+  authorKp?: ReturnType<typeof generateKeypair>;
 }
 
 export type Submit = (o: SubmitOpts) => Promise<Record<string, unknown>>;
@@ -138,6 +146,9 @@ export type Submit = (o: SubmitOpts) => Promise<Record<string, unknown>>;
 export interface SubmitHarness {
   submit: Submit;
   submitAsB: Submit;
+  /** The two participants' keypairs, so a test can sign a leaf as one and submit it as the other. */
+  clientA: ReturnType<typeof generateKeypair>;
+  clientB: ReturnType<typeof generateKeypair>;
   /**
    * Everything a test needs to derive the session's genesis prev_root for itself — the value a
    * `last_seen_seq` of 0 acknowledges. Exposed rather than pre-computed so a test derives it the
@@ -183,7 +194,8 @@ export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>)
     await performRelayAuth(reader, stream, kp, dirKp);
 
     return async (o: SubmitOpts): Promise<Record<string, unknown>> => {
-      const { structure1_cbor, sender_signature } = await makeS1({ sessionId, kp, ...o });
+      // The leaf is signed by its AUTHOR; the stream belongs to whoever is submitting it.
+      const { structure1_cbor, sender_signature } = await makeS1({ sessionId, kp: o.authorKp ?? kp, ...o });
       sendFrame(stream, CBOR_ENC.encode({
         type: "hash_submit", session_id: sessionId, leaf_kind: MSG_LEAF, structure1_cbor, sender_signature,
       }) as Uint8Array);
@@ -198,6 +210,7 @@ export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>)
   return {
     submit: await connect(clientA),
     submitAsB: await connect(clientB),
+    clientA, clientB,
     sessionId, pubA, pubB, sessionTimestamp,
   };
 }
