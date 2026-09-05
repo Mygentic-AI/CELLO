@@ -255,6 +255,16 @@ export type HashSubmitErrorReason =
    */
   | "ack_hash_unverifiable"
   /**
+   * 034-CARRYLEAF — a participant tried to witness a leaf their counterparty authored, and this
+   * relay already holds that leaf from that author.
+   *
+   * A counter-submit exists to catch up a leaf its author failed to witness, so one already
+   * witnessed is a replay: Structure 1 binds the author, the content and the session but NOT a
+   * position, so admitting it would let a participant consume a second canonical position with a
+   * message their counterparty really did sign, at a place they never sent it.
+   */
+  | "counter_submit_duplicate"
+  /**
    * DOD-M15-TERMINAL-REASON-1 — three answers where there was one, because the one was wrong.
    *
    * `session_sealed` was returned for EVERY non-active status, and it was never true of either of

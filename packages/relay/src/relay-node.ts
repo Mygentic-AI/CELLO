@@ -2770,8 +2770,90 @@ export class CelloRelayNode {
      */
     const signerHex = Buffer.from(witness.signer).toString("hex");
     const s1PubkeyHex = Buffer.from(s1.sender_pubkey).toString("hex");
-    if (s1PubkeyHex !== signerHex || senderPubkeyHex !== signerHex) {
+    /**
+     * THE LEAF MUST CLAIM ITS OWN SIGNER. Unconditional, and it is the binding that matters: a leaf
+     * whose named sender is not the key its signature verifies under is refused outright, whoever
+     * submitted it.
+     */
+    if (s1PubkeyHex !== signerHex) {
       await reply("sender_mismatch"); return;
+    }
+    /**
+     * ─── A PARTICIPANT MAY WITNESS WHAT THEY RECEIVED — 034-CARRYLEAF ────────────────────────────
+     *
+     * ⚠️ **THIS USED TO REQUIRE `senderPubkeyHex === signerHex` TOO, AND THAT CONJUNCT IS THE WHOLE
+     * WITHHOLDING ATTACK.** Only the AUTHOR could witness a leaf — so an author who chose not to
+     * submit left the relay's account of the conversation one message short, permanently, and the
+     * victim's unilateral seal then agreed with the witness. Every leaf validly signed, nothing
+     * false, the last thing said simply absent. That is `DOD-M15-WITHHOLD-SEAL-1`.
+     *
+     * The relay was already in a position to close it: `witnessLeafSignature` verifies the leaf
+     * against BOTH participants' keys, so it establishes who AUTHORED a leaf independently of who
+     * DELIVERED it. The author's signature is unforgeable and the recipient holds it. So the
+     * recipient can hand it over, and the relay can check it exactly as it checks the author's own.
+     *
+     * **What is still required, and it is everything that was required before:** the submitter must
+     * be a participant of this session (checked above), the leaf must be signed by a participant,
+     * and the leaf must name that same participant as its sender.
+     *
+     * ⚠️ **AND THE RELAXATION GIVES UP ONE MORE THING THAN "who may submit" — review F6, correcting
+     * a sentence that claimed otherwise.** It said the only relaxation is that the submitter and the
+     * author may differ. It is also true that a participant now influences WHERE their counterparty's
+     * leaf lands: they can hold it, send several of their own, and counter-submit afterwards, so the
+     * notarized record shows the counterparty saying it later than they did. `last_seen_seq` and
+     * `last_seen_hash` inside the author's signed bytes pin a LOWER bound and no upper one.
+     *
+     * It is bounded and it is not a stranger's to reach: only the counterparty can do it, only
+     * within one conversation, and never earlier than the author's own acknowledged position. What
+     * keeps it narrow in practice is that an honest client counter-submits the moment it ingests.
+     * Recorded rather than fixed here, because closing it needs a signed upper bound the wire does
+     * not carry.
+     */
+    const counterSubmit = senderPubkeyHex !== signerHex;
+    if (counterSubmit) {
+      /**
+       * ⚠️ **AND A COUNTER-SUBMIT MAY NOT REPLAY A LEAF THIS RELAY ALREADY HOLDS.**
+       *
+       * Structure 1 binds the author, the content and the session — it does NOT bind a position. So
+       * without this, a participant could re-submit a message their counterparty legitimately sent
+       * earlier and consume a second canonical position with it: a duplicate the author really did
+       * sign, at a place they never sent it. That is a fabrication the author cannot disown, and it
+       * would be introduced by the very relaxation above.
+       *
+       * A SELF-submit is deliberately not constrained this way: sending identical content twice in
+       * one conversation is two messages, not a duplicate, and that is the author's own business.
+       * A counter-submit has exactly one legitimate purpose — catching up a leaf its author failed
+       * to witness — so a leaf already witnessed is never one of them.
+       *
+       * **The residue, named rather than hidden:** if an author sends the SAME bytes twice and
+       * withholds the second, the recipient cannot witness it, because it is indistinguishable here
+       * from a replay of the first. That is narrow, and it is the safer side of the trade.
+       */
+      const alreadyHeld = state.leaf_log.some(
+        (l) =>
+          Buffer.from(l.s2.sender_pubkey).toString("hex") === signerHex &&
+          Buffer.from(l.s2.content_hash).equals(Buffer.from(s1.content_hash)),
+      );
+      if (alreadyHeld) {
+        this.#logger.info("relay.submit.counter_submit.duplicate", {
+          sessionId: sessionKey,
+          submitter: truncHex(senderPubkeyHex),
+          author: truncHex(signerHex),
+          impact:
+            "refused — this relay already holds this leaf from this author, so the submission is a " +
+            "replay rather than a leaf its author failed to witness. No position was consumed.",
+        });
+        await reply("counter_submit_duplicate"); return;
+      }
+      this.#logger.info("relay.submit.counter_submit", {
+        sessionId: sessionKey,
+        submitter: truncHex(senderPubkeyHex),
+        author: truncHex(signerHex),
+        impact:
+          "a participant witnessed a leaf their COUNTERPARTY authored and did not submit. The " +
+          "author's own signature is what makes it admissible; this relay verified it against the " +
+          "assignment before sequencing it, exactly as it does the author's own submissions.",
+      });
     }
 
     if (s1.last_seen_seq > state.seq_counter) {
@@ -2957,6 +3039,9 @@ export class CelloRelayNode {
     // witness is greppable as "hash_submit" (the DoD line: "relay log shows a hash_submit").
     // Content never appears here — only the signed hash leaf (INV-3).
     this.#logger.info("relay.hash.submitted", {
+      // 034-CARRYLEAF review F7 — WHO WROTE IT, not only who handed it over. On a counter-submit
+      // these differ, and the greppable witness line named the submitter as the author.
+      author: truncHex(signerHex),
       sessionId: sessionKey,
       sequenceNumber: seq,
       senderPubkey: senderPubkeyHex,

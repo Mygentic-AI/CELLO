@@ -8,7 +8,8 @@ topics: [m15, relay, handover, session, witness, assignment, frost, seal, availa
 description: >
   Move a LIVE conversation to a new witness relay when the current one goes away — planned or
   unplanned — by re-brokering the assignment and replaying the signed hash chain to the new relay.
-  Closes DOD-M15-SESSION-RELAY-PINNED-1 and the availability half of DOD-M15-MULTIRELAY-1.
+  Closes DOD-M15-SESSION-RELAY-PINNED-1. (DOD-M15-MULTIRELAY-1 was closed separately on 2026-09-05
+  by the micro order 032-RELAYSPREAD and is no longer this story's to close.)
   Design settled with Andre 2026-09-02; this document carries the decisions so no unit re-opens them.
 ---
 
@@ -81,8 +82,12 @@ Measured, not inferred: `016-RELAYLOSS`, two real daemons, relay killed mid-conv
 After this story: **the conversation moves to another relay and carries on.** The receipt spans the
 whole conversation with a recorded seam at the handover.
 
-**Closes:** `DOD-M15-SESSION-RELAY-PINNED-1` (whole line) and `DOD-M15-MULTIRELAY-1` (availability
-half — the reachability half already works; see §2).
+**Closes:** `DOD-M15-SESSION-RELAY-PINNED-1` (whole line).
+
+**`DOD-M15-MULTIRELAY-1` IS NO LONGER THIS STORY'S TO CLOSE — it was closed on 2026-09-05 by the
+micro order `032-RELAYSPREAD`,** which spread the standing receiver's reservations across every
+relay that grants one. Left as a live claim it reads as work this story still owes, which is how a
+closed line gets re-scoped from scratch by the next session. None of the four units below touch it.
 
 ---
 
