@@ -49,7 +49,7 @@ importers:
         version: 3.1051.0
       '@cello-protocol/crypto':
         specifier: latest
-        version: 0.0.64
+        version: 0.0.65
       '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
@@ -113,7 +113,7 @@ importers:
         version: 0.0.163
       '@cello-protocol/crypto':
         specifier: latest
-        version: 0.0.64
+        version: 0.0.65
       '@cello-protocol/directory':
         specifier: workspace:*
         version: link:../directory
@@ -153,12 +153,18 @@ importers:
 
   packages/interfaces:
     dependencies:
+      '@cello-protocol/crypto':
+        specifier: latest
+        version: 0.0.65
       '@cello-protocol/protocol-types':
         specifier: latest
         version: 0.0.68
       '@noble/curves':
         specifier: 2.2.0
         version: 2.2.0
+      cbor-x:
+        specifier: ^1.6.4
+        version: 1.6.4
     devDependencies:
       '@types/node':
         specifier: 25.6.2
@@ -190,7 +196,7 @@ importers:
     dependencies:
       '@cello-protocol/crypto':
         specifier: latest
-        version: 0.0.64
+        version: 0.0.65
       '@cello-protocol/interfaces':
         specifier: workspace:*
         version: link:../interfaces
@@ -546,6 +552,10 @@ packages:
 
   '@cello-protocol/crypto@0.0.64':
     resolution: {integrity: sha512-bK0vd+TdZGKfoLYBBRE7KhFYKgcbaRJkEgIWeoYz2AXWcXd/PdrvflfJwcoSsaWz4bqR7W09/NL7N0SZCf7Jhg==}
+    engines: {node: '>=24'}
+
+  '@cello-protocol/crypto@0.0.65':
+    resolution: {integrity: sha512-++CRO56w2QxptKmvxCuAZLiECthmo0Rs4fmxOZeeMlAduDco4wb1K2aGACpX4nY7VFcSVwxIwZCS4A4kyM7sPQ==}
     engines: {node: '>=24'}
 
   '@cello-protocol/daemon@0.0.188':
@@ -3111,8 +3121,8 @@ packages:
     resolution: {integrity: sha512-jN0ZewiNAWSe5khM3EyCmBb250+b40wWbwNILNfEvq84VREWwOIkuUsFONk/3i3nqkz7Oe1PcpM2mwQEK2L9Kg==}
     engines: {node: '>=16.9.0'}
 
-  hono@4.13.5:
-    resolution: {integrity: sha512-O6+/eCYRkzzzy0rPWwKLiGBR1nFuUPZynnwjxN1MBA62NNqbT0wQEzQyK2gSO5yDIDB336sXQleAhOHrzlYyKw==}
+  hono@4.13.7:
+    resolution: {integrity: sha512-c8/gF9ac8Y78/agExVocyLevgR+JlpNB444Py0FSX8pJoPdYUfUzRcXtYEYGwt6l19qIlVZPN5Mfsw9jFShmQQ==}
     engines: {node: '>=16.9.0'}
 
   html-entities@2.6.0:
@@ -3338,8 +3348,8 @@ packages:
   jackspeak@3.4.3:
     resolution: {integrity: sha512-OGlZQpz2yfahA/Rd1Y8Cd9SIEsqvXkLVoSw/cgwhnhFMDbsQFeZYoJJ7bIZBS9BcamUW96asq/npPWugM+RQBw==}
 
-  jose@6.2.10:
-    resolution: {integrity: sha512-iiW7J9qRFlGxvCOIBDBDxFePQSn7ZMAnrYGhrrOo6siO/MIqwfyilLR27pkfDgUk+raLuzADS8A3S/KLBisc0g==}
+  jose@6.2.12:
+    resolution: {integrity: sha512-9NiFmJEex0sy2Dk58j2UGBSHgUs2ypF9eZSu4L6vjOX3Dp96Sw1F3uL+H+D1sx02jZZdzUT0HgvCy59CuvXcWw==}
 
   jose@6.2.3:
     resolution: {integrity: sha512-YYVDInQKFJfR/xa3ojUTl8c2KoTwiL1R5Wg9YCydwH0x0B9grbzlg5HC7mMjCtUJjbQ/YnGEZIhI5tCgfTb4Hw==}
@@ -5158,6 +5168,12 @@ snapshots:
       '@noble/hashes': 2.2.0
       '@oqs/liboqs-js': 0.15.1
 
+  '@cello-protocol/crypto@0.0.65':
+    dependencies:
+      '@noble/curves': 2.2.0
+      '@noble/hashes': 2.2.0
+      '@oqs/liboqs-js': 0.15.1
+
   '@cello-protocol/daemon@0.0.188':
     dependencies:
       '@cello-protocol/crypto': 0.0.64
@@ -5563,9 +5579,9 @@ snapshots:
     dependencies:
       hono: 4.12.16
 
-  '@hono/node-server@2.1.1(hono@4.13.5)':
+  '@hono/node-server@2.1.1(hono@4.13.7)':
     dependencies:
-      hono: 4.13.5
+      hono: 4.13.7
 
   '@huggingface/jinja@0.5.10':
     optional: true
@@ -6145,7 +6161,7 @@ snapshots:
 
   '@modelcontextprotocol/sdk@1.30.0(zod@4.4.2)':
     dependencies:
-      '@hono/node-server': 2.1.1(hono@4.13.5)
+      '@hono/node-server': 2.1.1(hono@4.13.7)
       ajv: 8.20.0
       ajv-formats: 3.0.1(ajv@8.20.0)
       content-type: 1.0.5
@@ -6155,8 +6171,8 @@ snapshots:
       eventsource-parser: 3.1.1
       express: 5.2.1
       express-rate-limit: 8.7.0(express@5.2.1)
-      hono: 4.13.5
-      jose: 6.2.10
+      hono: 4.13.7
+      jose: 6.2.12
       json-schema-typed: 8.0.2
       pkce-challenge: 5.0.1
       raw-body: 3.0.2
@@ -8112,7 +8128,7 @@ snapshots:
 
   hono@4.12.16: {}
 
-  hono@4.13.5: {}
+  hono@4.13.7: {}
 
   html-entities@2.6.0: {}
 
@@ -8376,7 +8392,7 @@ snapshots:
     optionalDependencies:
       '@pkgjs/parseargs': 0.11.0
 
-  jose@6.2.10: {}
+  jose@6.2.12: {}
 
   jose@6.2.3: {}
 

@@ -1059,7 +1059,9 @@ Parallel with Tier 4 — different disciplines, no shared files.
 > recommendation is that this line **stays in the gate**: the conversation neither parks cleanly nor
 > seals, and the two parties are told contradictory things about their own close. The fix is
 > [[M15-STORY-RELAYHANDOVER]], whose unit 1 closed 2026-09-03 (`017-TBS` — the assignment TBS now
-> carries `prior_relay_id`). Units 2–4 are open. **Unit 4 is NO LONGER BLOCKED** — the story's §0 was ruled by Andre on
+> carries `prior_relay_id`) and whose **unit 2 closed 2026-09-05 (`031-RELAYREPLAY` — a relay can now
+> be handed a conversation that began on another relay and proves it from signatures, or refuses it
+> by name; NOTHING SENDS ONE, the client half is unit 3).** Units 3–4 are open. **Unit 4 is NO LONGER BLOCKED** — the story's §0 was ruled by Andre on
 > 2026-09-03 (no unwitnessed content ever enters the paper trail; the conversation pauses until the
 > counterparty returns). One small sub-question survives and is resolved *inside* unit 3: how the
 > resume is triggered, event-driven rather than polled, plus one line of operator copy that is Andre's.
@@ -2278,6 +2280,26 @@ uses it to decide whether an arriving message is a REDELIVERY or genuinely NEW.
 - **Do not fix by signing the position.** That is a wire change and it belongs with
   `SEALWIRE-1`'s bullets 3+4, where the root and chain verification already live. The narrow fix
   here is to stop treating an unsigned position as authority for an append decision.
+
+> **⚙️ THE RELAY HALF IS RESOLVED — `031-RELAYREPLAY`, 2026-09-05. The client half below is NOT, and
+> stays POST-LAUNCH.** Handover renumbers by design, on the happy path, with honest software — so
+> the case parked here as *"only reachable if a relay lies"* became reachable in ordinary operation
+> the moment a conversation could move between relays, and was resolved inside that unit rather than
+> deferred. A relay adopting an inherited chain derives its frontier from the PRIOR relay's signed
+> ACK receipts (which bind `content_hash → seq`) and the signed `last_seen_seq`, and never from its
+> own `seq_counter`; a test seeds that counter to 99, adopts a four-leaf chain, and asserts the
+> frontier is 4 and the next leaf lands at 5. The position is still not signed, per the bullet above.
+>
+> **The same unit also closed a gap this entry did not know about**, found by review: `last_seen_seq`
+> is an UPPER bound, so for two ADJACENT leaves from one sender it is satisfied either way round —
+> and `prev_root` does not pin them either, because the party assembling a batch writes Structure 2
+> in full and simply recomputes it. Two of a counterparty's consecutive messages could therefore be
+> swapped, which made their honest tip attestation disagree and marked THEIR conversation
+> permanently unsealable. Closed with the sender's own signed timestamp, non-decreasing per sender.
+>
+> **Still open here:** `ingestReceivedContent` on the CLIENT still takes `canonicalSeqIn` from a
+> relay-supplied record to decide redelivery-versus-new, which is the duplication direction described
+> above. Untouched, and post-launch. → `031-RELAYREPLAY`
 - **Related and NOT the same:** `DOD-M15-CORROBORATE-1` (the relay's independent copy) and
   `SEALWIRE-1` bullet 3 (the directory verifying the SEAL leaf's `final_root`).
 

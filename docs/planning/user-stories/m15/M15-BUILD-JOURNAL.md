@@ -11055,3 +11055,103 @@ the originals kept at `/tmp/025-dist-backup`.
 
 Fifteen mutants, each re-run alone and typechecked first; one was discarded for failing to compile,
 which under §0z.3 proves nothing. Final gate: 4866 passed / 11 skipped, lint and typecheck clean.
+
+## Entry 104 — `031-RELAYREPLAY`: a new witness can prove the conversation it inherits (unit 2 of 4)
+
+**Line:** `DOD-M15-SESSION-RELAY-PINNED-1`, which stays ❌ — this is a unit of it, not its close.
+Unit 1 (`017-TBS`) closed 2026-09-03; units 3–4 are open. **Nothing sends a replay when this unit is
+done.** Reader before writer, the same discipline `020-ACKHASH` shipped.
+
+**Branch** `m15/031-relayreplay`, worktree `/Users/andrep/Documents/code/m15-031/trustless-cello`.
+HEAD `2c2be32d` + this docs commit. One repo.
+
+### What an operator lives through today, and what changes
+
+Two agents are talking, the relay witnessing them dies, and from then on every message costs a
+ten-second stall and is not witnessed. The conversation seals neither during the outage nor after
+the relay returns, and at close the two of them are told opposite things — one gets "success, seal
+pending" with a root, the other "refused, the seal leaf could not reach the witness". The refused
+side follows its own guidance and is then told the counterparty has not closed, pointing at the
+person who did close and was told it worked. Nothing recovers on its own.
+
+A relay can now be handed a conversation that began somewhere else and prove it from signatures
+alone before agreeing to witness the rest of it — or refuse it by name. No client produces one yet.
+
+### Part 1 — the extraction (`c69a27f0`), committed alone
+
+`#verifyUnilateralChain` spanned 85 lines with **zero** `this.` references, checked line by line
+before it moved: already a pure function wearing a method's clothes. It plus
+`reconstructCarriedSealLeaves`, `verifyLeafProvenance`, both Structure 1 decoders, `LEAF_KINDS`,
+`SEAL_FINAL_ROOT_REASONS` and four seal-leaf types now live in `@cello-protocol/interfaces` — the
+package `relay-online-token.ts` already lives in, for the same stated reason. Every original site
+re-exports the moved name, so no directory call site and no directory test changed shape.
+
+It came out as TWO functions, not one with a flag. `verifySealLeafChain` asks *is this chain real?*;
+`verifySealCtrlLeaf` asks *is this a closing ceremony?*, which is true only at seal time. A
+`{ requireCtrl: false }` parameter would have hidden the caller that switches a check off.
+
+### The three things that were wrong, and how each was found
+
+**A test of mine was green for the wrong reason — the mutation loop found it.** Deleting the sender
+signature check left the forged-leaf test passing, because forging a signature also rewrites that
+leaf's Structure 2 and breaks the NEXT leaf's `prev_root`, and both clauses returned the same
+`unilateral_root_unverifiable` string. The assertion could not tell them apart. Fixed twice: the
+test now forges the LAST leaf, and review H6 split the five-into-one label so the name is what makes
+it correct rather than the position.
+
+**The loop itself produced a false survival before it produced any true results.** The relay resolves
+`@cello-protocol/interfaces` to that package's **`dist/`**, so the first mutation of its source was
+invisible to the test. Rebuilding between mutations fixed it. Eleven mutants ran in the end, two of
+which failed to compile and were widened rather than recorded as caught.
+
+**Review found a one-frame denial of service against the other party.** A counterparty leaf's
+position is asserted only by the unsigned Structure 2; contiguity fixes which positions exist, not
+who sits where; `last_seen_seq > effectiveSeen` is an upper bound, identical at both positions for
+two ADJACENT leaves from one sender. And `prev_root` does not pin them either — the party assembling
+a batch writes Structure 2 in full and simply recomputes it. So: B sends two messages in a row, the
+relay dies, A takes the resume assignment, swaps B's two messages, replays. The chain verifies, B's
+honest tip attestation disagrees, and B's conversation is marked permanently unsealable. Closed with
+the sender's own signed timestamp, non-decreasing per sender. The residue — two same-millisecond
+adjacent leaves — is named in the code and put to Andre as a design question rather than hidden.
+
+**And a 33-second relay freeze, per frame, for free.** The `MAX_REPLAY_LEAVES` comment claimed
+O(N log N); the code rebuilt the whole partial tree per leaf, so it was O(N²), and `session_replay`
+had no rate limiter at all. Measured at the 4096 cap: review measured 32.9 s for the full walk;
+re-measured here over the Merkle work alone, **18.4 s before, 27 ms after — 683×**. Now folded with
+the same RFC 6962 stack the `hash_submit` path already used, and rate-limited on peer and pubkey.
+The comment is corrected rather than deleted, so the measurement survives.
+
+### Reviewer verdict, quoted
+
+> **SPEC: FAITHFUL** · **SILENT FALLBACKS FOUND** · **ERROR SUBSTITUTION FOUND** · **TESTS HAVE
+> TEETH** · **REMOVALS PROVEN** · **COMPATIBILITY DEBT FOUND**
+> *"Blocking before this unit closes: H1, H2, H3, H6."*
+
+Thirteen findings. Eleven fixed with tests (H1, H2, H4, H5, H6, H7, H8, H9, H10, H11, H12). H13 was
+a claim in my own close-out and is corrected there. **H3 is not fixable in this repo** — see below.
+
+### 🛑 THE SPAWN TRIP-WIRE FIRED (§0z.2) — three items, none started
+
+1. **The divergence alert reaches its only listener as "your relay is broken."** `[BLOCKS UNIT 3]`
+   The shipping client gates witness alerts on an exact equality, not a membership test, so a
+   `replay_chain_diverged` alert is rejected as `field_shape` and surfaced as a relay fault. The
+   innocent party is sent to the transport subsystem. It cannot fire until a client produces a
+   replay — which is why the gate must be widened BEFORE unit 3 ships. Fix is in `cello-client`.
+2. **May ONE batch, from ONE party, write a terminal state?** `[DESIGN — ANDRE'S]` D5 is right about
+   a genuine contradiction; the question is reachability. See the order's *Newly discovered*.
+3. **The directory's own seal refusal still collapses five causes into one.** `[POST-LAUNCH]`
+
+**Is the vein still producing production defects, or has it turned into test hygiene?** Production
+defects, and not marginal ones: a remotely-triggerable denial of service against a third party, and
+a remotely-triggerable relay freeze. Neither is test hygiene. But all three items above leave this
+unit, which is what the count is for.
+
+### Gate
+
+`pnpm run test` **2622 passed, exit 0** (`CELLO_ENV=local`, fresh Postgres) · `lint` exit 0 ·
+`typecheck` exit 0. Nine mutants caught for the expected reason, one survivor fixed, two widened.
+
+⚠️ **The local Postgres volume was polluted before this run** — `user_accounts` chain broken at row
+157, `conversation_seals` at row 1, `authorized_issuers` non-empty — and nine unrelated tests failed
+on it. `docker compose down -v && docker compose up -d` cleared it. Nothing in this diff touches
+that code, and the pollution predates the branch.

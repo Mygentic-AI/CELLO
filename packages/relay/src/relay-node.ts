@@ -81,6 +81,15 @@ import type { CelloNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import type { Logger, SessionWal, ContentStore } from "@cello-protocol/interfaces";
 import { verifyOnlineToken } from "@cello-protocol/interfaces";
+// 031-RELAYREPLAY: the ONE seal-chain verifier, shared with the directory. Never a relay-local copy
+// — a second copy drifts, and a drifted seal verifier means one witness accepts what the other
+// refuses. See `packages/interfaces/src/seal-chain-verify.ts`.
+import {
+  reconstructCarriedSealLeaves,
+  verifySealLeafChain,
+  verifySessionTipAttestation,
+  SEAL_CHAIN_REASONS,
+} from "@cello-protocol/interfaces";
 import { DepositRateLimiter, type DepositRateLimitConfig } from "./deposit-rate-limiter.js";
 import { ContentParkHandler } from "./content-park.js";
 import { RelayConnectionGater, DEFAULT_SLOT_CEILING } from "./relay-connection-gater.js";
@@ -96,6 +105,7 @@ import type {
   ClientRecordAssignment,
   RelayAuthResponse,
   AuthFailedReason,
+  SessionReplay,
 } from "./relay-types.js";
 import type { RelayStore } from "./relay-store.js";
 import { InMemoryRelayStore } from "./relay-store.js";
@@ -110,6 +120,7 @@ import {
   encodeSessionInterrupted,
   encodeSessionLivenessResponse,
   encodeSessionWitnessAlert,
+  encodeSessionReplayResult,
   decodeInboundFrame,
 } from "./relay-frames.js";
 import { protocolLog, truncId, truncHex } from "./protocol-log.js";
@@ -611,6 +622,72 @@ export interface RelayNodeOptions {
   sessionIdleTimeoutMs?: number;
 }
 
+/**
+ * 031-RELAYREPLAY review H12 — WHAT TO DO ABOUT EACH REPLAY REFUSAL, per reason rather than per
+ * call site.
+ *
+ * The first version carried one guidance string for every reason a whole verifier could return.
+ * That is how a refusal ends up telling an operator the wrong thing with confidence: *"re-send the
+ * full chain exactly as that relay acknowledged it"* is useless advice when the batch was witnessed
+ * by a different relay entirely, and *"re-derive reported_root"* is the wrong subsystem when what
+ * actually happened is that a leaf's signature did not verify.
+ *
+ * TOTAL over the union by construction — `tsc` refuses a new reason with nothing actionable for the
+ * reader, the same guarantee `SEAL_FINAL_ROOT_GUIDANCE` gets. `guidanceForReplayRefusal` falls back
+ * only for a reason outside the map, and says plainly that it has nothing specific rather than
+ * inventing a step.
+ */
+const REPLAY_GUIDANCE: Record<string, string> = {
+  // ─── the batch could not be rebuilt from the prior relay's receipts ───
+  unilateral_leaves_unavailable:
+    "the batch carried no leaves. A resumed conversation has a history by definition; send the chain the previous relay acknowledged.",
+  unilateral_leaf_malformed:
+    "one leaf's committed Structure 2 could not be read. Re-send it exactly as the previous relay returned it — do not re-encode it.",
+  unilateral_leaf_seq_mismatch:
+    "a leaf's own sequence and its committed Structure 2 disagree about its position. Re-send the leaves as the previous relay acknowledged them.",
+  unilateral_chain_noncontiguous:
+    "the sequences are not exactly 1..N, so a leaf is missing from the middle. Send the whole chain, in order, with no gaps.",
+  unilateral_own_leaf_unwitnessed:
+    "one of YOUR leaves carries no receipt from the previous relay. Only leaves that relay acknowledged can be inherited; a leaf it never saw cannot be replayed here.",
+  unilateral_receipt_bad_relay_id:
+    "a receipt names a relay id that is not a 64-character hex key. Re-send the receipts unmodified.",
+  unilateral_receipt_wrong_relay:
+    "these receipts are from a different relay than the one your directory-signed assignment names as this conversation's previous witness. Re-sending will not help — ask the directory for a resume assignment naming the relay that actually witnessed it.",
+  unilateral_receipt_invalid:
+    "a receipt does not verify at the position the leaf claims, so the chain has been renumbered since the previous relay signed it. Send the leaves at the positions that relay acknowledged.",
+  unilateral_leaf_kind_unknown:
+    "a leaf declares a domain byte this relay cannot name, and it will not guess. Re-sending is not the fix — this relay and your client disagree about the leaf kinds in use, so one of them needs upgrading.",
+
+  // ─── the chain itself ───
+  [SEAL_CHAIN_REASONS.ROOT_MISMATCH]:
+    "reported_root is not the root over the content hashes you supplied. Re-derive it over these leaves, in this order, and send it again.",
+  [SEAL_CHAIN_REASONS.SENDER_SIGNATURE_INVALID]:
+    "a leaf in this conversation is signed by a key that is not the participant it names. Nothing you can re-send fixes that — confirm out of band with your counterparty before continuing this conversation.",
+  [SEAL_CHAIN_REASONS.STRUCTURE1_UNDECODABLE]:
+    "a leaf's signed bytes are not in any layout this relay can read. Send them exactly as signed; re-encoding them changes the bytes the signature covers.",
+  [SEAL_CHAIN_REASONS.CONTENT_HASH_MISMATCH]:
+    "a leaf's signed content hash and its committed one disagree. Re-send the leaf as the previous relay acknowledged it.",
+  [SEAL_CHAIN_REASONS.PREV_ROOT_BREAK]:
+    "the prev_root chain breaks, so the leaves are not in the order they were witnessed in. Send them in the order the previous relay assigned.",
+  [SEAL_CHAIN_REASONS.CAUSAL_ORDER_VIOLATION]:
+    "a leaf claims to have seen a message that does not exist yet in this chain. Send the whole conversation, in order.",
+  [SEAL_CHAIN_REASONS.SENDER_CLOCK_REVERSED]:
+    "one party's own signed timestamps run backwards, so their messages are out of order in this batch. Send each party's leaves in the order they sent them.",
+
+  // ─── provenance ───
+  seal_sender_not_participant:
+    "a leaf is signed by a key that is not one of this session's two participants. Replay only this conversation's own leaves.",
+  seal_leaf_session_mismatch:
+    "a leaf's signed bytes name a different conversation. Check you are replaying the right session.",
+  seal_payload_malformed:
+    "a leaf's own account of which conversation it belongs to could not be read. Send it exactly as signed.",
+};
+
+function guidanceForReplayRefusal(reason: string): string {
+  return REPLAY_GUIDANCE[reason]
+    ?? "this relay refused the replay and has no specific next step for this reason. The conversation cannot continue here; ask the directory for a new session.";
+}
+
 export class CelloRelayNode {
   readonly #node: CelloNode;
   /** `null` when no directory key is configured — see `RelayNodeOptions.directoryPubkey`. */
@@ -983,6 +1060,9 @@ export class CelloRelayNode {
       directory_signature: frame.assignment_signature,
       initiator_session_peer_id: frame.initiator_session_peer_id,
       counterparty_session_peer_id: frame.counterparty_session_peer_id,
+      // 031-RELAYREPLAY: forwarded verbatim and NOT trusted — `recordAssignment` folds it into the
+      // TBS, so a value the directory did not sign fails verification rather than taking effect.
+      prior_relay_id: frame.prior_relay_id,
     } as SessionAssignment);
     const sidHex = Buffer.from(frame.session_id).toString("hex");
     if (result.ok || result.reason === "session_already_exists") {
@@ -1025,6 +1105,46 @@ export class CelloRelayNode {
     ];
     if (assignment.initiator_session_peer_id && assignment.counterparty_session_peer_id) {
       tbsFields.push(assignment.initiator_session_peer_id, assignment.counterparty_session_peer_id);
+    }
+    /**
+     * 031-RELAYREPLAY — the RESUME layout, and the reason the gate is "non-empty" rather than
+     * "!== undefined".
+     *
+     * `prior_relay_id` decides whose ACK receipts a replayed chain will be judged against. A client
+     * that could name its own predecessor would be choosing its own auditor, so the id is only
+     * worth anything inside bytes the DIRECTORY signed — which is what appending it here does.
+     *
+     * ⚠️ THE GATE IS DELIBERATELY UNLIKE `017-TBS`'s, and the difference is which side the field is
+     * being read on. On the CLIENT-facing assignment `prior_relay_id: ""` is a VALUE and its own
+     * gate is `!== undefined`, because the client rebuilds a fixed long layout and omitting a signed
+     * field would make it refuse a valid assignment. Here the layout is grown BY the field, so a
+     * fresh session must produce byte-identical TBS to what it produced before this order existed —
+     * otherwise every currently-shipping client, which sends no `prior_relay_id` at all, would have
+     * its assignment refused. Absent and `""` are therefore the same case and BOTH take the short
+     * layout; there is exactly one byte layout per outcome, so nothing is ambiguous under signature.
+     *
+     * What this buys, stated as the attack it refuses: a client that ADDS a `prior_relay_id` to a
+     * fresh assignment makes this relay rebuild seven fields against a signature over six →
+     * `directory_signature_invalid`. A client that STRIPS one from a genuine resume rebuilds six
+     * against a signature over seven → the same refusal. Neither downgrade nor promotion survives.
+     */
+    if (assignment.prior_relay_id) {
+      /**
+       * ⚠️ REFUSED AT RECORD TIME, NOT DISCOVERED AT REPLAY TIME — review H10.
+       *
+       * `reconstructCarriedSealLeaves` requires each receipt's `relay_id` to be 64-hex AND to equal
+       * this value. A prior id that is not 64-hex therefore matches nothing that can ever be sent:
+       * every replay is refused `unilateral_receipt_wrong_relay` and every `hash_submit` is refused
+       * `session_awaiting_replay`, permanently, with both reasons pointing at the batch. A
+       * directory misconfiguration would read as a client that cannot assemble its own history.
+       *
+       * The assignment is directory-signed, so this is not an attack surface — it is a fail-fast on
+       * a value only a directory can produce, refused where the cause is still legible.
+       */
+      if (!/^[0-9a-fA-F]{64}$/.test(assignment.prior_relay_id)) {
+        return { ok: false, reason: "prior_relay_id_malformed" };
+      }
+      tbsFields.push(assignment.prior_relay_id);
     }
     const tbs = CBOR_ENC.encode(tbsFields);
     // FED-OPTIONB-SETUP-001 (any-directory): the assignment may be signed by ANY sovereign consortium
@@ -1079,6 +1199,36 @@ export class CelloRelayNode {
     );
     const recorded = this.#store.recordSession(assignment, genesisRoot);
     if (!recorded) return { ok: false, reason: "session_already_exists" };
+
+    /**
+     * 031-RELAYREPLAY — a resume is marked HERE, at record time, and that timing is the point.
+     *
+     * The relay has to know this conversation started somewhere else BEFORE the first frame
+     * arrives. If it learned only when a replay showed up, the first replayed leaf would already
+     * have been treated as message 1 of a brand-new conversation — chained to a genesis root that
+     * is not this conversation's frontier, and numbered from a counter that means nothing here.
+     *
+     * `awaiting_replay` is what makes that true rather than merely intended: `#processHashSubmit`
+     * refuses while it is set, so there is no window in which a leaf can be appended ahead of the
+     * history it is supposed to follow.
+     */
+    if (assignment.prior_relay_id) {
+      const resumeKey = Buffer.from(assignment.session_id).toString("hex");
+      const fresh = this.#store.getSession(resumeKey);
+      if (fresh) {
+        this.#store.setSession(resumeKey, {
+          ...fresh,
+          prior_relay_id: assignment.prior_relay_id,
+          awaiting_replay: true,
+        });
+      }
+      this.#logger.info("relay.session.resume.recorded", {
+        sessionId: truncHex(resumeKey),
+        priorRelayId: truncHex(assignment.prior_relay_id),
+        impact: "this relay did not witness the start of this conversation. It will carry nothing " +
+          "for it until a replay batch verifies against the prior relay's signed receipts.",
+      });
+    }
 
     // M7-WIRE-001 AC-008: bind session Peer IDs when provided by directory.
     // Stored privately — never exposed via public API (SI-003).
@@ -1142,7 +1292,21 @@ export class CelloRelayNode {
     const key = Buffer.from(sessionId).toString("hex");
     const state = this.#store.getSession(key);
     if (!state) return { ok: false, reason: "session_not_found" };
-    if (state.status !== "active") return { ok: false, reason: "session_not_active" };
+    if (state.status !== "active") {
+      // 031-RELAYREPLAY review H9: `diverged` gets its own word here for the same reason
+      // `#processHashSubmit` gives it one — telling an operator to wait for a seal that can never
+      // come is worse than telling them nothing.
+      return { ok: false, reason: state.status === "diverged" ? "session_diverged" : "session_not_active" };
+    }
+    /**
+     * ⚠️ AN INHERITED SESSION WITH NO HISTORY IS NOT AN EMPTY CONVERSATION — review H9.
+     *
+     * `awaiting_replay` sessions are `active`, so this returned a chain of ZERO leaves and a root
+     * over nothing, as if the two agents had never said anything. Downstream refuses the empty
+     * array, so no false receipt was reachable — but the operator was told their leaf array was
+     * malformed when the truth is that this relay was never given the conversation.
+     */
+    if (state.awaiting_replay) return { ok: false, reason: "session_awaiting_replay" };
 
     const leaves = state.leaf_log.slice();
     const leafInputs: LeafInput[] = leaves.map((l) => ({
@@ -1183,8 +1347,10 @@ export class CelloRelayNode {
     // "sealing" (a bilateral attempt already in flight). Anything else (sealed/
     // rejected/destroyed) has no recoverable chain.
     if (state.status !== "active" && state.status !== "sealing") {
-      return { ok: false, reason: "session_not_active" };
+      // Review H9 — same reasoning as `submitForSeal` above.
+      return { ok: false, reason: state.status === "diverged" ? "session_diverged" : "session_not_active" };
     }
+    if (state.awaiting_replay) return { ok: false, reason: "session_awaiting_replay" };
     const leaves = state.leaf_log.slice();
     const leafInputs: LeafInput[] = leaves.map((l) => ({
       kind: l.kind,
@@ -1797,6 +1963,40 @@ export class CelloRelayNode {
               }));
             } catch { /* the stream is going away; the WARN above is the durable record */ }
           }
+          /**
+           * ⚠️ AND THE SAME ARGUMENT FOR A REPLAY — 031-RELAYREPLAY review H8.
+           *
+           * The block above answers a malformed `hash_submit` for a reason it states at length:
+           * silence made the client race a ten-second timeout, resolve `relay_submit_timeout`, and
+           * reset the stream that every one of that agent's conversations shares. A `session_replay`
+           * that fails the strict decode was landing in exactly that silence — and it already has a
+           * purpose-built answer type, so there was nothing to invent.
+           *
+           * `#processSessionReplay`'s own header says *"every exit below is a named refusal that
+           * reaches the submitter"*, which was true of the handler and not of the gate above it.
+           *
+           * The `content_bytes` case gets its own name rather than sharing the generic one: a client
+           * offering a relay a whole conversation's content is the single thing INV-3 exists to
+           * prevent, and it was being refused with total silence.
+           */
+          if (rawType === "session_replay") {
+            const carriedLeafContent = Array.isArray(peeked?.["leaves"])
+              && (peeked["leaves"] as unknown[]).some((e) => typeof e === "object" && e !== null && (e as Record<string, unknown>)["content_bytes"] !== undefined);
+            const sid = peeked !== null && peeked["session_id"] instanceof Uint8Array && (peeked["session_id"]).length === 16
+              ? peeked["session_id"] as Uint8Array
+              : new Uint8Array(16);
+            try {
+              await this.#sendFrame(stream, encodeSessionReplayResult({
+                type: "session_replay_result",
+                session_id: sid,
+                ok: false,
+                reason: carriedLeafContent ? "replay_content_not_permitted" : "replay_malformed",
+                guidance: carriedLeafContent
+                  ? "a replayed leaf carried content_bytes. This relay witnesses hashes and never holds the words of a conversation — send the leaves without their content."
+                  : "the replay batch could not be decoded — check session_id (16 bytes), a 32-byte reported_root, and that every leaf carries an integer sequence_number, a leaf_kind, structure1_cbor and structure2_cbor. A batch of more than 4096 leaves is refused.",
+              }));
+            } catch { /* the stream is going away; the WARN above is the durable record */ }
+          }
           continue;
         }
         if (parsed.type === "hash_submit") {
@@ -1816,6 +2016,46 @@ export class CelloRelayNode {
           await this.#processSessionLivenessQuery(stream, authedPubkeyHex!, parsed);
         } else if (parsed.type === "client_record_assignment") {
           await this.#processClientRecordAssignment(stream, authedPubkeyHex!, parsed);
+        } else if (parsed.type === "session_replay") {
+          /**
+           * 031-RELAYREPLAY. Like a submit, a replay is traffic on a session and marks the slot in
+           * use — recorded before processing, so a batch that is refused downstream still counts.
+           *
+           * ⚠️ AND IT RESETS THE IDLE TIMER (review H11). A handover is exactly the window in which
+           * a session looks idle and is not: the old relay is gone, nothing has been submitted here
+           * yet, and the participants are mid-reconnection. Reaping it there would destroy the
+           * session the replay exists to rescue.
+           *
+           * ⚠️ RATE-LIMITED, AND BEFORE THE HANDLER (review H2). A replay is orders of magnitude
+           * more expensive than a submit — it verifies a whole conversation — so the frame that
+           * most needs a limiter was the one frame that had none. Both limiters run here for the
+           * same reason `#processHashSubmit` runs them ahead of its own work: an unthrottled flood
+           * should not get per-call work for free, and a REFUSED replay costs the sender nothing
+           * while costing this relay the entire verification walk.
+           */
+          if (remotePeerId) this.#connectionGater?.recordActivity(remotePeerId);
+          const replayPeerLimit = this.#hashSubmitPeerLimiter.check(remotePeerId);
+          const replayPubkeyLimit = this.#hashSubmitPubkeyLimiter.check(authedPubkeyHex!);
+          if (!replayPeerLimit.allowed || !replayPubkeyLimit.allowed) {
+            const retryAfterMs = Math.max(replayPeerLimit.retryAfterMs, replayPubkeyLimit.retryAfterMs);
+            this.#logger.warn("relay.replay.rate_limited", {
+              sessionId: truncHex(Buffer.from(parsed.session_id).toString("hex")),
+              submitter: truncHex(authedPubkeyHex!),
+              retryAfterMs,
+            });
+            try {
+              await this.#sendFrame(stream, encodeSessionReplayResult({
+                type: "session_replay_result",
+                session_id: parsed.session_id,
+                ok: false,
+                reason: "rate_limited",
+                guidance: `too many replay attempts. Wait ${String(retryAfterMs)} ms and send the batch again.`,
+              }));
+            } catch { /* the WARN above is the durable record */ }
+            continue;
+          }
+          this.#resetSessionIdleTimer(Buffer.from(parsed.session_id).toString("hex"));
+          await this.#processSessionReplay(stream, authedPubkeyHex!, parsed);
         }
       }
     } catch (err: unknown) {
@@ -1919,6 +2159,335 @@ export class CelloRelayNode {
     }
   }
 
+  /**
+   * Tell the party who did NOT submit the batch that this relay marked the session diverged —
+   * 031-RELAYREPLAY, reconciliation rule D5.
+   *
+   * ⚠️ THEY ARE THE ONE WHO MUST HEAR IT, and they would otherwise hear it only from the party the
+   * verdict is about. That is the whole argument `DOD-M15-CORROBORATE-1` made for witness alerts:
+   * an accusation routed through the accused is not evidence.
+   *
+   * Signed, held if they are offline, and NAMELESS if this relay cannot sign — the same three rules
+   * the corroboration path states and for the same reasons. `relay_id` rides if and only if the
+   * signature does: a client throws away an alert that declares an identity without proving it, so
+   * a relay that names itself and cannot sign would lose the warning as well as its transferability.
+   *
+   * Kept separate from `#emitWitnessAlerts` rather than folded into it: that one loops over the
+   * participants of a submission it is refusing and owns its own logging contract, and converging
+   * two callers with different recipients and different reasons is a change with its own risk. What
+   * the two DO share is the thing that could drift — `buildWitnessAlertTbs`, the signed bytes.
+   */
+  async #emitDivergenceAlert(sessionId: Uint8Array, sessionKey: string, recipientHex: string): Promise<void> {
+    const observedAt = Date.now();
+    let witnessSignature: Uint8Array | undefined;
+    if (this.#relayId !== null && this.#ackSigningKeyProvider !== null) {
+      try {
+        witnessSignature = await this.#ackSigningKeyProvider.sign(
+          buildWitnessAlertTbs(sessionId, "replay_chain_diverged", observedAt, true),
+        );
+      } catch (err: unknown) {
+        this.#logger.error("relay.witness.sign.failed", {
+          sessionId: sessionKey,
+          error: err instanceof Error ? err.message : String(err),
+          impact: "the divergence alert is sent WITHOUT this relay's identity, so it still reaches " +
+            "the participant but they cannot show it to anyone. The observation is in this log either way.",
+        });
+      }
+    }
+    const alert: import("./relay-types.js").SessionWitnessAlert = {
+      type: "session_witness_alert",
+      session_id: sessionId,
+      reason: "replay_chain_diverged",
+      ...(witnessSignature !== undefined && this.#relayId !== null
+        ? { relay_id: this.#relayId, witness_signature: witnessSignature }
+        : {}),
+      observed_at: observedAt,
+      submitter_is_counterparty: true,
+    };
+    const recipientStream = this.#streams.get(recipientHex);
+    if (!recipientStream) {
+      this.#store.enqueueWitnessAlert(recipientHex, alert);
+      return;
+    }
+    try {
+      await this.#sendFrame(recipientStream, encodeSessionWitnessAlert(alert));
+      this.#logger.info("relay.witness.alert.delivered", {
+        sessionId: sessionKey, recipientPubkey: recipientHex, reason: "replay_chain_diverged",
+      });
+    } catch (err: unknown) {
+      this.#streams.delete(recipientHex);
+      this.#store.enqueueWitnessAlert(recipientHex, alert);
+      this.#logger.warn("relay.witness.alert.send_failed", {
+        sessionId: sessionKey, recipientPubkey: recipientHex,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * 031-RELAYREPLAY — A NEW WITNESS PROVES THE CONVERSATION IT INHERITS.
+   *
+   * ─── What the operator lives through, and why this exists ──────────────────────────────────────
+   *
+   * Two agents are talking and the relay witnessing them dies. Every message from then on costs a
+   * ten-second stall and is not witnessed; the conversation seals neither during the outage nor
+   * after the relay returns; and when they try to close, the two of them are told OPPOSITE things —
+   * one gets "success, seal pending" with a root, the other gets "refused, the seal leaf could not
+   * reach the witness". Nothing gets the receipt back on its own, and the receipt is the product.
+   *
+   * A new relay cannot simply be told "carry on from here": it did not see the beginning, so it
+   * would be attesting to a history it never observed. This handler is the alternative — the new
+   * witness REBUILDS that history from signatures and adopts it only if every one of them holds.
+   *
+   * ─── The counterbalance (M15 §2b Invariant 1), named before the code ───────────────────────────
+   *
+   * The party submitting a replay runs open-source code on its own machine and may have rewritten
+   * it. Nothing here trusts it. Every fact adopted below is anchored to a signature by someone else:
+   *
+   *   - WHICH conversation, and BETWEEN WHOM — the directory-signed assignment, verified in
+   *     `recordAssignment` against the consortium keys.
+   *   - WHOSE receipts count — `prior_relay_id`, from inside those same signed bytes. A relay holds
+   *     no relay roster, so this is the only unforgeable source, and it is what stops the submitter
+   *     naming a witness it controls.
+   *   - WHERE each of its own leaves sits — the PRIOR relay's ACK receipt over
+   *     `(content_hash, seq, timestamp)`. The submitter cannot renumber its own history.
+   *   - WHAT the counterparty said — the counterparty's own Ed25519 signature over Structure 1.
+   *   - WHERE THE TAIL ENDS — the counterparty's signed tip attestation, the one fact the submitter
+   *     cannot supply about itself, and the only thing that catches a cut tail.
+   *
+   * Declining to play costs the submitter the thing it came for: without a verified chain this relay
+   * carries nothing for the session, so the conversation cannot continue and cannot seal.
+   *
+   * ─── The rule this handler will not bend ───────────────────────────────────────────────────────
+   *
+   * **A partially-verifying chain is a refused chain.** No coercion, no silent truncation to the
+   * part that did verify. Every exit below is a named refusal that reaches the submitter, and the
+   * only mutation on any failing path is the divergence mark, which is itself a refusal.
+   */
+  async #processSessionReplay(stream: Stream, authedPubkeyHex: string, frame: SessionReplay): Promise<void> {
+    const sessionKey = Buffer.from(frame.session_id).toString("hex");
+    const refuse = async (reason: string, guidance: string): Promise<void> => {
+      this.#logger.warn("relay.replay.refused", { sessionId: truncHex(sessionKey), reason, submitter: truncHex(authedPubkeyHex) });
+      try {
+        await this.#sendFrame(stream, encodeSessionReplayResult({
+          type: "session_replay_result", session_id: frame.session_id, ok: false, reason, guidance,
+        }));
+      } catch (err) {
+        // The log line above is the durable forensic record; this one says the CONTROL never landed,
+        // which is a different fact and the one that explains a submitter who saw nothing at all.
+        this.#logger.error("relay.send.failed", {
+          event: "session_replay_result", reason, sessionId: sessionKey,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    };
+
+    const state = this.#store.getSession(sessionKey);
+    if (!state) {
+      await refuse("session_not_found", "record the resume assignment on this relay first (client_record_assignment), then replay.");
+      return;
+    }
+
+    // A replay is a claim about a conversation, so only its participants may make one. Checked
+    // against the DIRECTORY-SIGNED roster, never against anything on the frame.
+    const aHex = Buffer.from(state.assignment.participant_a).toString("hex");
+    const bHex = Buffer.from(state.assignment.participant_b).toString("hex");
+    if (authedPubkeyHex !== aHex && authedPubkeyHex !== bHex) {
+      await refuse("not_a_participant", "only the two agents named in this session's directory-signed assignment can replay it.");
+      return;
+    }
+    const counterpartyHex = authedPubkeyHex === aHex ? bHex : aHex;
+
+    /**
+     * ⚠️ A RESUME IS THE ONLY THING A REPLAY MAY LAND ON, and `prior_relay_id` is what says so.
+     *
+     * It is read from SESSION STATE, which `recordAssignment` set from bytes a directory signed —
+     * never from this frame. A batch offered for an ordinary session is refused: there is no prior
+     * witness whose receipts could pin it, so there would be nothing to check it against and
+     * "accept it anyway" is the fail-open this order exists to remove.
+     */
+    const priorRelayHex = state.prior_relay_id;
+    if (!priorRelayHex) {
+      await refuse("session_not_a_resume", "this session's assignment names no prior relay, so this relay witnessed it from the start and has nothing to inherit. Ask the directory for a resume assignment.");
+      return;
+    }
+    if (state.status !== "active") {
+      await refuse(
+        state.status === "diverged" ? "session_diverged" : "session_not_active",
+        state.status === "diverged"
+          ? "the two accounts of this conversation disagree about a message both sides hold. This relay will not witness it. Compare transcripts with your counterparty out of band."
+          : "this session is sealing or its seal was refused; a replay cannot be adopted into it.",
+      );
+      return;
+    }
+    if (!state.awaiting_replay || state.leaf_log.length > 0) {
+      /**
+       * ONE REPLAY, AND ONLY BEFORE ANYTHING IS APPENDED. A second batch against a session that has
+       * already adopted one is not an update — it is a rewrite of a history this relay is already
+       * witnessing, offered by the party it constrains.
+       */
+      await refuse("replay_already_adopted", "this relay has already adopted a history for this session; it will not replace one. Continue the conversation, or ask the directory for a new session.");
+      return;
+    }
+
+    /**
+     * (1) EVERY PRESENT-PARTY LEAF CARRIES THE PRIOR RELAY'S SIGNED RECEIPT, plus (2) contiguity.
+     *
+     * `priorRelayHex` is passed so the receipts are checked against the relay the DIRECTORY named,
+     * not against whatever relay id each leaf claims for itself. Without it a submitter could
+     * witness its own fabricated history with a key it holds and every signature would verify.
+     */
+    const rebuilt = reconstructCarriedSealLeaves(frame.leaves, authedPubkeyHex, priorRelayHex);
+    if (!rebuilt.ok) {
+      await refuse(rebuilt.reason, guidanceForReplayRefusal(rebuilt.reason));
+      return;
+    }
+
+    /**
+     * (3) counterparty leaves under their own sender signature, (4) the prev_root chain and the
+     * signed `last_seen_seq` causal order, (5) the rebuilt content root equals the reported root —
+     * all in `verifySealLeafChain`, the SAME function the directory runs at seal time. Also the
+     * provenance walk: every leaf belongs to this pair and this session.
+     *
+     * The SEAL-ceremony clause (`verifySealCtrlLeaf`) is deliberately NOT run: a replayed
+     * mid-conversation chain has no ctrl leaf, and requiring one would refuse every honest handover.
+     */
+    const roster: readonly [Uint8Array, Uint8Array] = [state.assignment.participant_a, state.assignment.participant_b];
+    const chain = verifySealLeafChain(rebuilt.leaves, frame.reported_root, frame.session_id, roster);
+    if (!chain.ok) {
+      await refuse(chain.reason, guidanceForReplayRefusal(chain.reason));
+      return;
+    }
+
+    /**
+     * TRAP 3 — CONTIGUITY DOES NOT PROVE COMPLETENESS.
+     *
+     * Everything above proves the leaves present are real, in order, and unaltered. NONE of it can
+     * tell you that leaf N is the last one: a tail cut at a clean boundary is still contiguous, and
+     * the party who benefits from the cut is the party assembling the batch. The counterparty's
+     * signed tip is the only witness to its own end of the conversation.
+     *
+     * ⚠️ NOTHING SENDS ONE YET, AND THE ABSENCE IS STILL REFUSED. Deliberate. An "accept it, the
+     * attestation is optional for now" branch is precisely the fail-open this milestone exists to
+     * remove, and it would put a THIRD instance of `DOD-M15-AUTHORSHIP-ABSENT-1` one layer down.
+     * Do not read the contiguity check above as making this redundant — it cannot see a cut tail,
+     * which is the whole reason this check exists.
+     */
+    const tip = verifySessionTipAttestation(frame.counterparty_tip, rebuilt.leaves, frame.session_id, counterpartyHex);
+    if (!tip.ok) {
+      if (tip.diverged) {
+        /**
+         * D5 — the two accounts disagree about content at a position BOTH sides already hold. That
+         * is not a reconciliation case; it is the attack a witness exists to prevent. Terminal, and
+         * BOTH parties are told: the submitter in the response below, the counterparty through the
+         * witness-alert queue, which survives them being offline right now.
+         */
+        this.#store.setSession(sessionKey, {
+          ...state, status: "diverged", awaiting_replay: false,
+          diverged_reason: "the replayed chain and the counterparty's signed tip disagree about a message both sides hold",
+        });
+        this.#logger.error("relay.session.diverged", {
+          sessionId: truncHex(sessionKey),
+          attestedThrough: frame.counterparty_tip?.last_seq,
+          batchLength: rebuilt.leaves.length,
+          impact: "this conversation cannot be sealed by this relay. The two participants hold " +
+            "different content at the same position, which is what a witness exists to detect.",
+        });
+        await this.#emitDivergenceAlert(frame.session_id, sessionKey, counterpartyHex);
+      }
+      await refuse(tip.reason, tip.diverged
+        ? "your record and your counterparty's disagree about a message you both hold. This relay will not witness this session. Compare transcripts with them out of band."
+        : "the replay must carry your counterparty's signed tip attestation, covering at least one leaf and no more than you supplied. Ask them for a current one and replay again.");
+      return;
+    }
+
+    /**
+     * ADOPT — and TRAP 1: THE POSITION IS DERIVED FROM SIGNATURES, NOT FROM THIS RELAY'S NUMBERING.
+     *
+     * `DOD-M15-RELAYSEQ-UNSIGNED-1` sat in the post-launch backlog because a relay-assigned
+     * `sequence_number` is authenticated by nothing, and it only bit when a relay misbehaved.
+     * Handover renumbers on the HAPPY PATH, with honest software, so that case is now reachable in
+     * ordinary operation and is resolved here rather than deferred.
+     *
+     * Every value below comes from the verified chain: the frontier is `rebuilt.leaves.length`
+     * because the ACK receipts pinned each of those positions and contiguity proved none is
+     * missing. `state.seq_counter` is NOT consulted — this relay's own count is bookkeeping, not
+     * evidence, and if the two ever disagree the receipts win. Note what is NOT done to fix this:
+     * the position is not signed. That is a wire change and it belongs with the seal work.
+     */
+    let stack: Array<{ hash: Uint8Array; height: number }> = [];
+    let runningRoot = state.genesis_prev_root;
+    for (const leaf of rebuilt.leaves) {
+      const leafHash = RELAY_LEAF_HASHERS[leaf.kind](encodeStructure2(leaf.s2));
+      let node = leafHash;
+      let height = 0;
+      while (stack.length > 0 && stack[stack.length - 1]!.height === height) {
+        node = nodeHash(stack.pop()!.hash, node);
+        height++;
+      }
+      stack.push({ hash: node, height });
+      runningRoot = stack[stack.length - 1]!.hash;
+      for (let i = stack.length - 2; i >= 0; i--) runningRoot = nodeHash(stack[i]!.hash, runningRoot);
+    }
+
+    this.#store.setSession(sessionKey, {
+      ...state,
+      seq_counter: rebuilt.leaves.length,
+      leaf_log: rebuilt.leaves.map((l) => ({ kind: l.kind, s2: l.s2, structure1_cbor: l.structure1_cbor })),
+      tree_stack: stack,
+      running_root: runningRoot,
+      awaiting_replay: false,
+    });
+
+    /**
+     * ⚠️ AN INHERITED CONVERSATION MAY ALREADY BE CLOSED — review H4.
+     *
+     * The bilateral seal is triggered by two ctrl leaves from distinct senders in `leaf_log`, and
+     * that trigger lived on the `hash_submit` path alone. Adoption is the OTHER write to
+     * `leaf_log`, and it did not run it.
+     *
+     * What that stranded, in the operator's chair: both agents close; both SEAL leaves reach the
+     * old relay; the old relay dies before submitting the seal. One party replays here. This relay
+     * adopts a chain containing a complete closing ceremony, leaves the session `active`, and never
+     * adjudicates it. The conversation is over, the receipt never arrives, and nothing anywhere is
+     * waiting on anything — which is the exact symptom this whole line exists to remove, arriving
+     * through the new path.
+     *
+     * `#maybeProcessSeal` is idempotent and self-guarding (fewer than two ctrl leaves, or two from
+     * one sender, and it returns), so the ordinary case — a mid-conversation handover with no ctrl
+     * leaf at all — costs one filter over the adopted log.
+     */
+    if (this.#directory) {
+      await this.#maybeProcessSeal(frame.session_id, sessionKey);
+    }
+
+    this.#logger.info("relay.replay.adopted", {
+      sessionId: truncHex(sessionKey),
+      priorRelayId: truncHex(priorRelayHex),
+      leafCount: rebuilt.leaves.length,
+      attestedThrough: tip.coversThrough,
+      submitter: truncHex(authedPubkeyHex),
+    });
+    protocolLog("RELAY", `Replay adopted — session ${truncHex(sessionKey)} (${rebuilt.leaves.length} leaves inherited from ${truncHex(priorRelayHex)})`);
+
+    try {
+      await this.#sendFrame(stream, encodeSessionReplayResult({
+        type: "session_replay_result",
+        session_id: frame.session_id,
+        ok: true,
+        adopted_leaf_count: rebuilt.leaves.length,
+        guidance: "this relay now witnesses the conversation from leaf 1. Continue sending; the next leaf is " + String(rebuilt.leaves.length + 1) + ".",
+      }));
+    } catch (err) {
+      this.#logger.error("relay.send.failed", {
+        event: "session_replay_result", sessionId: sessionKey,
+        err: err instanceof Error ? err.message : String(err),
+        impact: "the chain WAS adopted; the submitter did not hear so and may replay again, which " +
+          "is refused as replay_already_adopted.",
+      });
+    }
+  }
+
   async #processHashSubmit(
     stream: Stream,
     senderPubkeyHex: string,
@@ -2011,9 +2580,34 @@ export class CelloRelayNode {
        */
       // The directory's OWN cause rides along when we have it (review F6) — `seal_refused` names
       // that a verdict happened, `detail` names what the verdict was.
+      // 031-RELAYREPLAY: `diverged` is a THIRD answer, not a shade of the other two. Folding it
+      // into `seal_in_progress` would tell an operator to wait for a seal that will never come —
+      // the same inversion `DOD-M15-TERMINAL-REASON-1` removed from the two statuses above it.
+      if (state.status === "diverged") {
+        await reply("session_diverged", state.diverged_reason);
+        return;
+      }
       await reply(
         state.status === "seal_rejected" ? "seal_refused" : "seal_in_progress",
         state.status === "seal_rejected" ? state.seal_rejected_reason : undefined,
+      );
+      return;
+    }
+    /**
+     * 031-RELAYREPLAY — NOTHING IS APPENDED BEFORE THE INHERITED HISTORY ARRIVES.
+     *
+     * This session was handed over: its earlier leaves were witnessed by another relay and have not
+     * been replayed here yet. Appending now would chain the new leaf to this relay's GENESIS root —
+     * not this conversation's frontier — and number it 1, so the leaf would be validly signed,
+     * correctly stored, and in the wrong place in a history that can never be reconciled.
+     *
+     * Refused rather than queued: a queue would make the window invisible, and the remedy is one
+     * frame away.
+     */
+    if (state.awaiting_replay) {
+      await reply(
+        "session_awaiting_replay",
+        "this relay inherited this conversation and has not been given its history yet. Send the replay batch (session_replay) for this session first.",
       );
       return;
     }

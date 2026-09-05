@@ -12,6 +12,9 @@
 
 import type { Structure2 } from "@cello-protocol/protocol-types";
 import { msgLeafHash, ctrlLeafHash, docLeafHash, rejectLeafHash } from "@cello-protocol/crypto";
+// 031-RELAYREPLAY: the leaf shape and the tip attestation are defined ONCE, in the package the
+// directory and this relay both import — never mirrored here. See `seal-chain-verify.ts`.
+import type { SealUnilateralLeaf, SessionTipAttestation } from "@cello-protocol/interfaces";
 
 // ─── Leaf kinds (DOD-DOC-LEAF-1) ─────────────────────────────────────────────
 
@@ -257,6 +260,23 @@ export type HashSubmitErrorReason =
   /** FEDERATION-003 AC-006/SI-002: predecessor relay ACK could not be verified */
   | "RELAY_PREDECESSOR_UNKNOWN"
   /**
+   * 031-RELAYREPLAY — this relay inherited the conversation and has not been given its history.
+   *
+   * A submit here would be chained to this relay's genesis root and numbered 1, producing a validly
+   * signed leaf in the wrong place. The remedy is one frame away, so this is a refusal with a next
+   * step, not a queue: send `session_replay` first.
+   */
+  | "session_awaiting_replay"
+  /**
+   * 031-RELAYREPLAY (D5) — the two accounts of this conversation disagree about a message BOTH
+   * sides hold. Terminal: this relay will not witness it, and nothing clears the state.
+   *
+   * A THIRD answer rather than a shade of `seal_in_progress`, for the reason
+   * `DOD-M15-TERMINAL-REASON-1` split the other two: telling an operator to wait for a seal that
+   * can never come is worse than telling them nothing.
+   */
+  | "session_diverged"
+  /**
    * `DOD-M15-SEALWIRE-1` — the frame carried leaf content this relay will not hold.
    *
    * ⚠️ THIS EXISTS BECAUSE THE REFUSAL WAS OTHERWISE INVISIBLE TO THE CLIENT, and what filled the
@@ -369,11 +389,37 @@ export interface SessionAssignment {
    * 'relay' — clients route all traffic through the relay.
    */
   transport_mode?: "direct" | "relay";
+  /**
+   * 031-RELAYREPLAY — the relay that witnessed this conversation up to the handover.
+   *
+   * 🚨 THIS IS THE ONLY WAY A RELAY CAN LEARN ANOTHER RELAY'S IDENTITY, and that is the whole
+   * design. A relay holds no relay roster — only `CELLO_DIRECTORY_PUBKEYS` — so the predecessor's
+   * id has to arrive somewhere unforgeable, and the directory-signed assignment TBS is the only
+   * such place. It decides whose ACK receipts a replayed chain is judged against; a client that
+   * could name its own predecessor would be choosing its own auditor.
+   *
+   * Non-empty ⇒ this is a RESUME and the relay must know it BEFORE the first frame arrives,
+   * otherwise the first replayed leaf looks like message 1 of a brand-new conversation.
+   *
+   * ⚠️ ABSENT AND `""` BOTH MEAN "fresh", AND THEY PRODUCE THE SAME TBS BYTES — see
+   * `recordAssignment`. A resume adds a SEVENTH field to the signed layout; a fresh session's
+   * layout is byte-identical to what it was before this order, so no existing client breaks and
+   * no client can promote its own session to a resume.
+   */
+  prior_relay_id?: string;
 }
 
 // ─── Internal relay session state ────────────────────────────────────────────
 
-export type SessionStatus = "active" | "sealing" | "seal_rejected";
+/**
+ * `diverged` — 031-RELAYREPLAY, reconciliation rule D5.
+ *
+ * Two accounts of the same session disagreed about content at a position BOTH sides already hold.
+ * That is not a reconciliation case; it is the attack a witness exists to prevent, so the session
+ * is unsealable and stays that way. Nothing clears it: a relay that could be talked out of a
+ * divergence verdict is a relay whose verdict is worth nothing.
+ */
+export type SessionStatus = "active" | "sealing" | "seal_rejected" | "diverged";
 
 export interface RelaySessionState {
   /**
@@ -409,6 +455,24 @@ export interface RelaySessionState {
    * refusal happened. Invariant 3: the upstream cause survives downstream.
    */
   seal_rejected_reason?: string;
+  /**
+   * 031-RELAYREPLAY — set on `recordAssignment` when the directory-signed assignment names a prior
+   * relay, and it is what makes this session a RESUME.
+   *
+   * Two consumers, and both of them refuse rather than tolerate:
+   *   - `#processSessionReplay` verifies the batch's ACK receipts against THIS id and nothing else;
+   *   - `#processHashSubmit` refuses a submit while `awaiting_replay` is true, because appending to
+   *     a session whose inherited history has not arrived would chain the new leaf to a genesis
+   *     root that is not this conversation's frontier.
+   */
+  prior_relay_id?: string;
+  /**
+   * 031-RELAYREPLAY — true from the moment a resume assignment is recorded until a replay batch has
+   * been VERIFIED and adopted. Never set on an ordinary session.
+   */
+  awaiting_replay?: boolean;
+  /** 031-RELAYREPLAY (D5) — why this session was marked diverged. Set with `status: "diverged"`. */
+  diverged_reason?: string;
   /**
    * RFC 6962 incremental stack. Each entry is the root of a complete 2^height-leaf subtree.
    * Invariant: entries are in ascending height order; no two entries share the same height.
@@ -471,7 +535,16 @@ export interface SessionLivenessResponse {
 export interface SessionWitnessAlert {
   type: "session_witness_alert";
   session_id: Uint8Array;            // 16 bytes
-  reason: "leaf_signed_by_neither_participant";
+  /**
+   * 031-RELAYREPLAY widened this from a single literal to two, and it stays a CLOSED union for the
+   * reason it was closed to begin with: a free-form reason lets a new code slip past every test in
+   * its own guard file, and the client refuses an alert whose reason it cannot name.
+   *
+   * `replay_chain_diverged` — the two accounts of one conversation disagree about a message both
+   * sides hold (reconciliation rule D5). Sent to the party that did NOT submit the batch, because
+   * they are the one who would otherwise hear it only from the party it accuses.
+   */
+  reason: "leaf_signed_by_neither_participant" | "replay_chain_diverged";
   /** WHICH witness. Absent when this relay runs without a signing identity. */
   relay_id?: string;
   /** Unix ms at which this relay observed the submission. */
@@ -515,6 +588,62 @@ export interface ClientRecordAssignment {
   initiator_session_peer_id?: string;
   counterparty_session_peer_id?: string;
   assignment_signature: Uint8Array;  // 64-byte per-node directory sig over the relay TBS (relayDirSig)
+  /**
+   * 031-RELAYREPLAY — forwarded VERBATIM from the directory-signed assignment; see
+   * `SessionAssignment.prior_relay_id`. The client is a courier for this field, not its author: a
+   * value the directory did not sign makes the relay rebuild a seven-field TBS the signature does
+   * not cover, and the assignment is refused with `directory_signature_invalid`.
+   *
+   * Nothing sends it yet — the client half is unit 3 of `M15-STORY-RELAYHANDOVER`.
+   */
+  prior_relay_id?: string;
+}
+
+// ─── 031-RELAYREPLAY: the replay batch ────────────────────────────────────────
+
+/**
+ * A conversation handed to a relay that did not witness its beginning.
+ *
+ * Accepted ONLY against a session recorded from a resume assignment (a non-empty, directory-signed
+ * `prior_relay_id`), and adopted only when every check in `#processSessionReplay` holds. There is
+ * no partial adoption: a partially-verifying chain is a refused chain, never silently truncated to
+ * the part that did verify.
+ *
+ * ⚠️ NOTHING PRODUCES ONE. This unit is the READER; the client that builds a batch is unit 3. The
+ * reader lands first on purpose — the relay must be able to refuse the new shape before any client
+ * is allowed to depend on it being read.
+ */
+export interface SessionReplay {
+  type: "session_replay";
+  session_id: Uint8Array;   // 16 bytes
+  /** The submitting party's own claimed content-hash root over all `leaves`. */
+  reported_root: Uint8Array; // 32 bytes
+  /** Both parties' signed leaves for this session, in canonical order (sequences exactly 1..N). */
+  leaves: SealUnilateralLeaf[];
+  /**
+   * The COUNTERPARTY's signed tip. Typed optional because a frame can arrive without it and this
+   * relay must then say so by name — NOT because absence is tolerated. See
+   * `verifySessionTipAttestation`: contiguity cannot see a cut tail, and this is the only thing
+   * that can.
+   *
+   * ⚠️ `undefined` HERE MEANS THE FIELD WAS NOT SENT, and nothing else — review H7. A tip that WAS
+   * sent and is unreadable arrives with whatever decoded and is refused as MALFORMED. Reporting a
+   * mangled attestation as an absent one sent an operator to ask their counterparty for a fresh
+   * attestation when the fault was in their own encoder.
+   */
+  counterparty_tip?: SessionTipAttestation;
+}
+
+/** The relay's answer to a `session_replay`. `reason` is present iff `ok` is false. */
+export interface SessionReplayResult {
+  type: "session_replay_result";
+  session_id: Uint8Array;
+  ok: boolean;
+  reason?: string;
+  /** How many leaves this relay adopted, on success. */
+  adopted_leaf_count?: number;
+  /** Invariant 4 — every failure and waiting state names what to do next. */
+  guidance?: string;
 }
 
 /**

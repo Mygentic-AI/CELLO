@@ -77,52 +77,29 @@
  */
 
 import { createHash } from "node:crypto";
-import { decode as cborDecode } from "cbor-x";
 import { buildMerkleTree, merkleRoot } from "@cello-protocol/crypto";
 import { decodeSealPayload } from "@cello-protocol/protocol-types";
+import {
+  SEAL_FINAL_ROOT_REASONS,
+  decodeStructure1Signed,
+  verifyLeafProvenance,
+} from "@cello-protocol/interfaces";
+import type { SealFinalRootReason } from "@cello-protocol/interfaces";
 import type { RelaySealLeaf } from "./directory-types.js";
 
 /** The ctrl leaf kind byte, and the domain separator inside the SEAL content hash. */
 export const LEAF_KIND_CTRL = 0x02;
 
 /**
- * Why a `final_root` verification did not conclude "verified".
- *
- * A CLOSED set with a total guidance map, for the reason `refusal-reasons.ts` records: a free-form
- * reason string let a new code slip past every test in its own guard file.
+ * 031-RELAYREPLAY: `SEAL_FINAL_ROOT_REASONS` and `SealFinalRootReason` MOVED to
+ * `@cello-protocol/interfaces`, because `verifyLeafProvenance` returns them and the relay now runs
+ * that same check on a replayed chain. Re-exported so this module's importers and tests are
+ * unchanged; `SEAL_FINAL_ROOT_GUIDANCE` below stays here and stays typed
+ * `Record<SealFinalRootReason, string>`, so `tsc` is what keeps it total across the package
+ * boundary rather than anyone remembering to.
  */
-export const SEAL_FINAL_ROOT_REASONS = {
-  /** No SEAL leaf carried its payload. A relay that predates this change — today's behaviour. */
-  NOT_CARRIED: "not_carried",
-  /** The payload does not hash to the content_hash the client SIGNED. */
-  PAYLOAD_UNBOUND: "seal_payload_unbound",
-  /** The payload bytes are not a decodable SEAL payload. */
-  PAYLOAD_MALFORMED: "seal_payload_malformed",
-  /** The payload names a different session than the one being sealed. */
-  SESSION_MISMATCH: "seal_payload_session_mismatch",
-  /** The client's signed root disagrees with the leaves the relay supplied. */
-  ROOT_DISAGREES: "seal_final_root_disagrees",
-  /** The two participants signed DIFFERENT roots — they disagree about their own transcript. */
-  PARTIES_DISAGREE: "seal_final_root_parties_disagree",
-  /** ANY leaf signed by a key that is not a participant in this session. */
-  SENDER_NOT_PARTICIPANT: "seal_sender_not_participant",
-  /** A leaf whose OWN SIGNED bytes name a different session than the one being sealed. */
-  LEAF_SESSION_MISMATCH: "seal_leaf_session_mismatch",
-  /**
-   * A BILATERAL seal where fewer than two participants carried a signed root —
-   * `DOD-M15-SEALPARTIES-1`.
-   *
-   * Raised by the caller, not by `verifySealFinalRoots`, because it is a judgement about which SEAL
-   * TYPE is being certified rather than about the leaves: `coverage: "one"` is a refusal on the
-   * bilateral path and the expected outcome on the unilateral one, where the counterparty is gone by
-   * definition. Both verdicts come from the same walk; only the bilateral caller treats one of them
-   * as a fault.
-   */
-  APPROVAL_INCOMPLETE: "seal_approval_missing",
-} as const;
-
-export type SealFinalRootReason =
-  (typeof SEAL_FINAL_ROOT_REASONS)[keyof typeof SEAL_FINAL_ROOT_REASONS];
+export { SEAL_FINAL_ROOT_REASONS };
+export type { SealFinalRootReason };
 
 /**
  * What an operator should DO about each. TOTAL over the union by construction, so a new reason
@@ -216,161 +193,20 @@ export function sealContentHash(payload: Uint8Array): Uint8Array {
   );
 }
 
-/**
- * The content hash the CLIENT SIGNED, decoded from `structure1_cbor`.
- *
- * Structure 1 TBS:
- *   v1: `[1, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]`
- *   v2: `[2, …the same five…, last_seen_hash]`          ← 020-ACKHASH
- *
- * — the exact byte string the sender's Ed25519 signature covers. Decoded here rather than taken
- * from `s2` so this module's central claim is enforced by this module (review F1). The two fields
- * read below sit at indices 1 and 3 in both layouts; the field was appended at 6 so they did not
- * move.
- *
- * A (version, length) pair this build cannot name is refused, never coerced into the nearest known
- * layout — the version tag is what separates a v1 seven-array's submission id from a v2's ack hash,
- * and they are both just bytes at index 6.
- *
- * Returns null rather than throwing: these bytes arrive off a wire, and a decode failure is a
- * refusal to report, never an exception escaping into a stream handler.
- */
-function decodeStructure1Signed(cbor: Uint8Array): { content_hash: Uint8Array; session_id: Uint8Array } | null {
-  let arr: unknown;
-  try {
-    arr = cborDecode(cbor);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(arr)) return null;
-  const version = arr[0];
-  const isV1 = version === 1 && (arr.length === 6 || arr.length === 7);
-  const isV2 = version === 2 && arr.length === 7;
-  if (!isV1 && !isV2) return null;
-  const bytesAt = (i: number, len: number): Uint8Array | null => {
-    const v = arr[i];
-    const b = v instanceof Uint8Array ? v : Buffer.isBuffer(v) ? new Uint8Array(v as Buffer) : null;
-    return b !== null && b.length === len ? b : null;
-  };
-  const content_hash = bytesAt(1, 32);
-  const session_id = bytesAt(3, 16);
-  return content_hash !== null && session_id !== null ? { content_hash, session_id } : null;
-}
+// 031-RELAYREPLAY: `decodeStructure1Signed` MOVED to `@cello-protocol/interfaces` with
+// `verifyLeafProvenance`, its only reason for being separate from `decodeStructure1Fields`.
 
 function bufEqual(a: Uint8Array, b: Uint8Array): boolean {
   return a.length === b.length && Buffer.from(a).equals(Buffer.from(b));
 }
 
 /**
- * EVERY LEAF BELONGS TO THIS PAIR AND TO THIS SESSION — `DOD-M15-LEAFPARTIES-1`.
- *
- * ─── What was checked before, and what was not ─────────────────────────────────────────────────
- *
- * Both callers verify `verify(s2.sender_pubkey, structure1_cbor, s2.sender_signature)` for every
- * leaf. That is **self-consistency**: the leaf names a key and the signature holds under that key.
- * It says nothing about whether the key is in the conversation. `verifySealLeaves` examines only the
- * closing ceremony pair, and the participant check below this used to sit behind
- * `if (leaf.kind !== "ctrl") continue` **and** behind `if (content_bytes === undefined) continue`.
- *
- * So a content leaf's sender was constrained in exactly one place in the whole system: the relay
- * refuses a `hash_submit` from a non-participant (`relay-node.ts`, `not_a_participant`). On the seal
- * path the relay is the party ASSEMBLING the array, and the bilateral entry point accepts
- * `seal_submission` from any dialer — so the only enforcement point was the party under suspicion.
- *
- * ⚠️ **What did catch it was arithmetic, and the attacker owned its off-switch.** An injected content
- * leaf changes `rootOverNonCtrlLeaves`, so a carried `final_root` stops matching → `ROOT_DISAGREES`.
- * But `content_bytes` is supplied by the same party, and omitting it yields `not_carried`, which the
- * caller deliberately tolerates during the rollout. A guard that the party it guards against can
- * switch off by sending less is not a guard. Hence: this check runs FIRST, over EVERY leaf, and it
- * does not read one relay-supplied optional field.
- *
- * ─── The two facts, and what each is anchored to ───────────────────────────────────────────────
- *
- *   1. **Membership** — the sender is one of the session's two participants. Anchored to the
- *      DIRECTORY's own session record (`#sessionParticipants`, written when the session was
- *      assigned), never to the roster derived from the array under suspicion. When that record is
- *      absent the caller falls back to the derived pair, and this check still refuses a THIRD
- *      distinct sender (three keys do not fit in a pair of two) while it cannot see a substitution —
- *      `DOD-M15-SEALROSTER-FEDERATED-1`.
- *   2. **Session** — the leaf's own signed bytes name the session being sealed. Structure 1's TBS is
- *      `[protocol_version, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]`, so
- *      the sender's Ed25519 signature (RFC 8032) already commits to which conversation the leaf was
- *      produced for. This is the stronger of the two: it is anchored to a signature the assembler
- *      cannot forge, so it holds even on the degraded-roster path.
- *
- * 🚨 **PRECONDITION, unchanged from the block above:** call this only after the per-leaf signature
- * loop. Without it `s2.sender_pubkey` is just a field the assembler filled in, and both facts become
- * the assembler agreeing with itself.
- *
- * `participants` is optional because this module cannot invent a roster; fact 2 is checked either
- * way. `RelaySealLeaf`s reach here only after their `structure1_cbor` has already decoded in the
- * caller, so a null decode is a defence rather than a live path — and it refuses, because a leaf
- * whose provenance cannot be read is exactly the case that must not pass.
+ * 031-RELAYREPLAY: `verifyLeafProvenance` MOVED to `@cello-protocol/interfaces`
+ * (`seal-chain-verify.ts`) and is re-exported here unchanged. The relay asks the same question of a
+ * REPLAYED chain — do these leaves belong to this pair and this session — and a second copy of that
+ * answer is the drift this order exists to prevent.
  */
-export function verifyLeafProvenance(
-  leaves: readonly RelaySealLeaf[],
-  sessionId: Uint8Array,
-  participants: readonly [Uint8Array, Uint8Array] | null,
-): { ok: true } | { ok: false; reason: SealFinalRootReason; detail: string } {
-  const distinctSenders = new Set<string>();
-
-  for (let i = 0; i < leaves.length; i++) {
-    const leaf = leaves[i]!;
-    const senderHex = Buffer.from(leaf.s2.sender_pubkey).toString("hex");
-    const who = `leaf ${i} (${leaf.kind}, sender ${senderHex.slice(0, 16)}…)`;
-    distinctSenders.add(senderHex);
-
-    if (participants !== null && !participants.some((p) => bufEqual(p, leaf.s2.sender_pubkey))) {
-      return {
-        ok: false,
-        reason: SEAL_FINAL_ROOT_REASONS.SENDER_NOT_PARTICIPANT,
-        detail: `${who}: signed by a key that is not a participant in this session`,
-      };
-    }
-
-    const s1 = decodeStructure1Signed(leaf.structure1_cbor);
-    if (s1 === null) {
-      return {
-        ok: false,
-        reason: SEAL_FINAL_ROOT_REASONS.PAYLOAD_MALFORMED,
-        detail: `${who}: structure1_cbor is not decodable, so this leaf's own account of which session it belongs to cannot be read`,
-      };
-    }
-    if (!bufEqual(s1.session_id, sessionId)) {
-      return {
-        ok: false,
-        reason: SEAL_FINAL_ROOT_REASONS.LEAF_SESSION_MISMATCH,
-        detail: `${who}: its signed bytes name session ${Buffer.from(s1.session_id).toString("hex").slice(0, 16)}…, not the one being sealed`,
-      };
-    }
-  }
-
-  /**
-   * ⚠️ WITH NO ROSTER, COUNT — DO NOT ACCUSE — review H2.
-   *
-   * The first version fell back to the pair DERIVED from the leaf array (its first two distinct
-   * senders) and ran the same per-leaf test against it. That refuses the right seals for the wrong
-   * stated reason: on `[A, S, A, B]` the derived pair is `[A, S]`, so the intruder S is *in* the
-   * roster and the refusal names **B — a real participant — as the key that does not belong**. The
-   * verdict was right and the sentence the operator reads was a false accusation against the one
-   * party who had done nothing.
-   *
-   * What this node actually knows without a session record is a COUNT: a session has two
-   * participants, so three distinct signers means one of them does not belong — and which one is
-   * genuinely not derivable from here. Say that, rather than picking a name.
-   */
-  if (participants === null && distinctSenders.size > 2) {
-    return {
-      ok: false,
-      reason: SEAL_FINAL_ROOT_REASONS.SENDER_NOT_PARTICIPANT,
-      detail: `the leaf array carries ${String(distinctSenders.size)} distinct signers and this node holds no session record for it, `
-        + `so one of them does not belong and WHICH ONE CANNOT BE NAMED FROM HERE — every candidate roster is drawn from the same suspect array. `
-        + `Ask the node that assigned this session who its two participants are.`,
-    };
-  }
-
-  return { ok: true };
-}
+export { verifyLeafProvenance };
 
 /**
  * Verify every carried SEAL payload against the leaf set the relay supplied — and, first, that every

@@ -118,6 +118,11 @@ import type { KeyProvider, LeafInput, IThresholdSigner, RefreshContribution } fr
 import { encodeStructure2, computeGenesisPrevRoot, buildSealTbs, buildPrimaryTransferTbs, buildSessionEstablishmentTbs } from "@cello-protocol/protocol-types";
 import { computeDkgTopology } from "./dkg-topology.js";
 import { reconstructCarriedSealLeaves, validateSealSubmissionLeaves } from "./seal-unilateral-verify.js";
+// 031-RELAYREPLAY: the seal-chain verifier now lives in the one package the directory and the relay
+// share. `decodeStructure1Fields` is re-exported because 020-ACKHASH's tests import it from here.
+import { verifySealLeafChain, verifySealCtrlLeaf, decodeStructure1Fields, DIRECTORY_COLLAPSED_CHAIN_REASONS } from "@cello-protocol/interfaces";
+export { decodeStructure1Fields };
+export type { Structure1Fields } from "@cello-protocol/interfaces";
 import type { AgentProfile } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
 import type { CelloNode } from "@cello-protocol/transport";
@@ -139,7 +144,7 @@ import type {
   SealLegibility,
 } from "./directory-types.js";
 import { buildSealLegibility, bindLegibilityToTbs, findSealCeremonyPair, countersignedThroughSeq } from "./seal-legibility.js";
-import { verifySealFinalRoots, verifyLeafProvenance, SEAL_FINAL_ROOT_REASONS, SEAL_FINAL_ROOT_GUIDANCE, type SealFinalRootReason } from "./seal-final-root.js";
+import { verifySealFinalRoots, SEAL_FINAL_ROOT_REASONS, SEAL_FINAL_ROOT_GUIDANCE, type SealFinalRootReason } from "./seal-final-root.js";
 import type { SealRejectionWireReason } from "./directory-types.js";
 import {
   isSealFramedMessage,
@@ -4459,6 +4464,30 @@ export class CelloDirectoryNode {
         if (initiatorSessionPeerId && counterpartySessionPeerId) {
           relayTbsFields.push(initiatorSessionPeerId, counterpartySessionPeerId);
         }
+        /**
+         * 031-RELAYREPLAY — the RESUME layout. The PRODUCER half of `recordAssignment`'s verifier;
+         * the two gates are byte-identical and must stay that way.
+         *
+         * A relay holds no relay roster, so a directory-signed assignment is the only place it can
+         * learn another relay's identity — and `prior_relay_id` decides whose ACK receipts a
+         * replayed chain will be judged against. Outside these bytes it is a value the client
+         * chooses, which would let a party pick its own auditor.
+         *
+         * ⚠️ APPENDED ONLY WHEN NON-EMPTY, unlike the client-facing TBS where `""` is a signed
+         * VALUE. Here the field GROWS the layout, so a fresh session must produce exactly the bytes
+         * it produced before this order existed — otherwise every currently-shipping client, which
+         * forwards no `prior_relay_id`, would have its assignment refused by the relay. Absent and
+         * `""` are the same case and both take the short layout.
+         *
+         * ⚠️ NO CALLER SETS THIS YET. `#issueAssignment` writes `prior_relay_id: ""` on the
+         * client-facing assignment and there is no resume path to write anything else — the client
+         * that asks for one is unit 3. The producer lands with the verifier so the two cannot be
+         * written from different readings of the layout months apart.
+         */
+        const priorRelayId = (assignment as { prior_relay_id?: string }).prior_relay_id;
+        if (priorRelayId) {
+          relayTbsFields.push(priorRelayId);
+        }
         const relayTbs = CBOR_ENC.encode(relayTbsFields) as Uint8Array;
         const relayDirSig = new Uint8Array(await this.#keyProvider.sign(relayTbs));
         // FED-OPTIONB-SETUP-001 (Option B): the directory NO LONGER dials the relay to record the
@@ -5050,6 +5079,14 @@ export class CelloDirectoryNode {
    * the present party's reported_root, mirroring the bilateral processSeal machinery but
    * requiring EXACTLY ONE SEAL control leaf (kind "ctrl") from the present party (the absent
    * party has none). Read-only; no state mutation.
+   *
+   * ⚠️ THE BODY MOVED TO `@cello-protocol/interfaces` — `031-RELAYREPLAY` Part 1. It read no
+   * `this`, so it was already a pure function wearing a method's clothes, and a relay that inherits
+   * a conversation needs the same walk over a chain it did not witness. What stays here is the
+   * COMPOSITION: chain first, then the SEAL-ceremony clause. The relay calls only the first,
+   * because a replayed mid-conversation chain has no ctrl leaf.
+   *
+   * The order of the two calls and every reason code below is unchanged from the inlined version.
    */
   #verifyUnilateralChain(
     leaves: RelaySealData["leaves"],
@@ -5058,83 +5095,31 @@ export class CelloDirectoryNode {
     sessionId: Uint8Array,
     roster: readonly [Uint8Array, Uint8Array],
   ): { ok: true; recomputedRoot: Uint8Array } | { ok: false; reason: string } {
-    // (a) Rebuild the CLIENT-VERIFIABLE root and compare to the reported root. The client's
-    // local SessionTree hashes each leaf as its content_hash (kind "hash"), NOT as
-    // encodeStructure2(s2) — the latter is the relay/directory internal integrity root the
-    // client cannot reproduce (it lacks the relay-assigned Structure 2 fields). So the root the
-    // directory signs + the present party verifies is the content-hash root, rebuilt here from
-    // each leaf's authenticated s2.content_hash. The encodeStructure2 chain below proves those
-    // content_hashes are authentic + correctly ordered; this root is what the cert binds.
-    const contentInputs: LeafInput[] = leaves.map((l) => ({ kind: "hash" as const, data: l.s2.content_hash }));
-    const recomputedRoot = merkleRoot(buildMerkleTree(contentInputs));
-    if (!bufEqual(recomputedRoot, reportedRoot)) {
-      return { ok: false, reason: "unilateral_root_unverifiable" };
+    const chain = verifySealLeafChain(leaves, reportedRoot, sessionId, roster);
+    if (!chain.ok) {
+      /**
+       * ⚠️ FIVE CAUSES BACK INTO ONE WIRE REASON — 031-RELAYREPLAY review H6, and this collapse is
+       * PRESERVED, not introduced.
+       *
+       * `verifySealLeafChain` now names its cause (a forged signature, a broken prev_root chain, a
+       * causal-order violation, an undecodable Structure 1, a root mismatch) because a RELAY hands
+       * that string to an operator. The directory has been answering `unilateral_root_unverifiable`
+       * for all of them since SESSION-002; widening it is a change to the seal path's published
+       * refusal code, and this order's second clause is that the directory's existing seal tests
+       * pass unchanged.
+       *
+       * So it is mapped back here, in one visible place, rather than left implicit. The specific
+       * cause is worth having on the seal path too — that is a seal-path change with its own tests,
+       * and it is recorded rather than silently deferred.
+       */
+      return {
+        ok: false,
+        reason: DIRECTORY_COLLAPSED_CHAIN_REASONS.has(chain.reason) ? "unilateral_root_unverifiable" : chain.reason,
+      };
     }
-
-    // (b–d) Per-leaf Structure 1 signature, prev_root chain, and causal-chain verification.
-    let runningRoot = leaves.length > 0 ? leaves[0].s2.prev_root : new Uint8Array(32);
-    for (let i = 0; i < leaves.length; i++) {
-      const leaf = leaves[i];
-      if (!verify(leaf.s2.sender_pubkey, leaf.structure1_cbor, leaf.s2.sender_signature)) {
-        return { ok: false, reason: "unilateral_root_unverifiable" };
-      }
-      const s1Fields = decodeStructure1Fields(leaf.structure1_cbor);
-      if (!s1Fields) return { ok: false, reason: "unilateral_root_unverifiable" };
-      // Defense-in-depth: the sender-signed content_hash (Structure1) must match the relay-assigned
-      // content_hash (Structure2). A compromised relay could deliver divergent values; the prev_root
-      // chain catches this downstream but an explicit check fails FAST with a clear reason.
-      if (!bufEqual(s1Fields.content_hash, leaf.s2.content_hash)) {
-        return { ok: false, reason: "unilateral_content_hash_mismatch" };
-      }
-      if (!bufEqual(leaf.s2.prev_root, runningRoot)) {
-        return { ok: false, reason: "unilateral_root_unverifiable" };
-      }
-      const senderHex = Buffer.from(leaf.s2.sender_pubkey).toString("hex");
-      let effectiveSeen = 0;
-      for (let j = 0; j < i; j++) {
-        const otherHex = Buffer.from(leaves[j].s2.sender_pubkey).toString("hex");
-        if (otherHex !== senderHex && leaves[j].s2.sequence_number > effectiveSeen) {
-          effectiveSeen = leaves[j].s2.sequence_number;
-        }
-      }
-      if (s1Fields.last_seen_seq > effectiveSeen) {
-        return { ok: false, reason: "unilateral_root_unverifiable" };
-      }
-      const partialInputs: LeafInput[] = leaves.slice(0, i + 1).map((l) => ({ kind: l.kind, data: encodeStructure2(l.s2) }));
-      runningRoot = merkleRoot(buildMerkleTree(partialInputs));
-    }
-
-    /**
-     * EVERY LEAF BELONGS TO THIS PAIR AND THIS SESSION — `DOD-M15-LEAFPARTIES-1`.
-     *
-     * The same check the bilateral path runs, from the same module, because it is the same question.
-     * The adversary differs: here the chain is CARRIED BY THE PRESENT PARTY, so the party assembling
-     * the array is a participant rather than the relay. That does not weaken the case — a present
-     * party can hold a genuinely-signed leaf from a third key it once talked to, or one of its own
-     * from another conversation, and neither belongs in this receipt.
-     *
-     * ⚠️ PLACED AFTER THE LOOP ABOVE, AND THE POSITION IS THE PRECONDITION — the same one
-     * `seal-final-root.ts`'s header states. Until `verify(s2.sender_pubkey, structure1_cbor,
-     * s2.sender_signature)` has run for every leaf, `sender_pubkey` is a field the assembler filled
-     * in, and asking whether it is a participant is asking the assembler about itself.
-     *
-     * The roster is not degraded on this path: `#processSealUnilateral` REFUSES outright when the
-     * session participants are unknown, so both facts are anchored to the directory's own record.
-     */
-    const provenance = verifyLeafProvenance(leaves, sessionId, roster);
-    if (!provenance.ok) return { ok: false, reason: provenance.reason };
-
-    // (e) Exactly ONE SEAL control leaf (kind "ctrl"), from the present (submitting) party.
-    const ctrlLeaves = leaves.filter((l) => l.kind === "ctrl");
-    if (ctrlLeaves.length !== 1) {
-      return { ok: false, reason: "unilateral_seal_leaf_invalid" };
-    }
-    const sealLeafSender = Buffer.from(ctrlLeaves[0].s2.sender_pubkey).toString("hex");
-    if (sealLeafSender !== presentHex) {
-      return { ok: false, reason: "unilateral_seal_leaf_invalid" };
-    }
-
-    return { ok: true, recomputedRoot };
+    const ctrl = verifySealCtrlLeaf(leaves, presentHex);
+    if (!ctrl.ok) return ctrl;
+    return { ok: true, recomputedRoot: chain.recomputedRoot };
   }
 
   /**
@@ -6980,71 +6965,11 @@ function bufEqual(a: Uint8Array, b: Uint8Array): boolean {
   return true;
 }
 
-interface Structure1Fields {
-  content_hash: Uint8Array;
-  session_id: Uint8Array;
-  last_seen_seq: number;
-  timestamp: number | bigint;
-  /** 020-ACKHASH: the acknowledged content, on a v2 claim only. Read, not yet checked. */
-  last_seen_hash?: Uint8Array;
-}
-
-/**
- * Structure 1 TBS:
- *   v1: [1, content_hash(32), sender_pubkey(32), session_id(16), last_seen_seq, timestamp]
- *   v2: [2, …the same five…, last_seen_hash(32)]        ← 020-ACKHASH
- *
- * ⚠️ THIS REFUSED EVERY SEVEN-FIELD ARRAY UNTIL 020-ACKHASH, and that is the load-bearing change.
- * `DOD-M15-SUBMIT-ID-1` widened the RELAY to accept a seven-field claim carrying a submission id
- * but never widened the directory, so a leaf the relay accepts and orders could not be verified at
- * seal time here. Two shapes now land at index 6 and the VERSION is what tells them apart — a
- * length check cannot, because a submission id and an ack hash are both just bytes.
- *
- * Every index this function already read is unchanged, which is why the field was appended rather
- * than inserted: `content_hash` is still 1, `last_seen_seq` still 4, `timestamp` still 5.
- */
-// Exported for 020-ACKHASH unit coverage: this refused EVERY seven-field claim before that unit, so
-// the tolerance it gained is the thing most worth pinning. Pure function; no state.
-export function decodeStructure1Fields(cbor: Uint8Array): Structure1Fields | null {
-  let arr: unknown;
-  try {
-    arr = cborDecode(cbor);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(arr)) return null;
-  const [_pv, _ch, , _sid, _lss, _ts, _tail] = arr;
-  const isV1 = _pv === 1 && (arr.length === 6 || arr.length === 7);
-  const isV2 = _pv === 2 && arr.length === 7;
-  // An unnamed (version, length) pair is REFUSED, never coerced into the nearest known layout —
-  // this would otherwise be a signature verified over bytes whose meaning is not agreed.
-  if (!isV1 && !isV2) return null;
-  const chBytes = _ch instanceof Uint8Array ? _ch : Buffer.isBuffer(_ch) ? new Uint8Array(_ch as Buffer) : null;
-  if (!chBytes || chBytes.length !== 32) return null;
-  const sidBytes = _sid instanceof Uint8Array ? _sid : Buffer.isBuffer(_sid) ? new Uint8Array(_sid as Buffer) : null;
-  if (!sidBytes || sidBytes.length !== 16) return null;
-  if (typeof _lss !== "number") return null;
-  if (typeof _ts !== "number" && typeof _ts !== "bigint") return null;
-  let lastSeenHash: Uint8Array | undefined;
-  if (isV2) {
-    const b = _tail instanceof Uint8Array ? _tail : Buffer.isBuffer(_tail) ? new Uint8Array(_tail as Buffer) : null;
-    // Exactly 32 — a SHA-256 root. Present-but-malformed is refused rather than dropped: a v2 whose
-    // hash is unreadable is an acknowledgement nobody can check, and admitting it without the field
-    // would make a corrupt ack indistinguishable from an honest v1 that never claimed one.
-    if (!b || b.length !== 32) return null;
-    lastSeenHash = b;
-  }
-  // A v1 seven-array's index 6 is a SUBMISSION ID (`DOD-M15-SUBMIT-ID-1`) and is deliberately not
-  // read here — the directory has no use for it, and reading it as an ack hash is the confusion the
-  // version tag exists to prevent.
-  return {
-    content_hash: chBytes,
-    session_id: sidBytes,
-    last_seen_seq: _lss,
-    timestamp: _ts,
-    ...(lastSeenHash ? { last_seen_hash: lastSeenHash } : {}),
-  };
-}
+// 031-RELAYREPLAY: `Structure1Fields` and `decodeStructure1Fields` MOVED to
+// `@cello-protocol/interfaces`. The relay reads the same signed bytes when it verifies a replayed
+// chain, and this decoder's `last_seen_seq` is half of what makes the causal order checkable
+// without trusting a relay-assigned position. Imported and re-exported at the top of this file, so
+// `../directory-node.js` remains the import path 020-ACKHASH's tests use.
 
 /**
  * SESSION-002: reconstruct a full unilateral-seal certificate frame from a persisted
