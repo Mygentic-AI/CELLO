@@ -350,12 +350,39 @@ committed topology).**
 | | |
 |---|---|
 | Instance | `cello-hostile-client`, zone `us-east1-d`, `e2-small`, subnet `cello-us-east1` (internal 10.10.0.44) | 
-| State | **STOPPED (TERMINATED)** — kept ready, not torn down. `gcloud compute instances start cello-hostile-client --zone us-east1-d` to resume. Its external IP is ephemeral and will change on start. |
+| State | **RUNNING as of 2026-09-05** (started to take the 0.0.196 upgrade; stop it again when idle). Previously STOPPED — kept ready, not torn down. `gcloud compute instances start cello-hostile-client --zone us-east1-d` to resume. Its external IP is ephemeral and will change on start. |
 | Firewall | `hostile-client-ssh` (global, on `cello-vpc`) — allows tcp:22 to tag `hostile-client` from **one /32, Andre's current laptop IP**. That IP rotates; refresh with `gcloud compute firewall-rules update hostile-client-ssh --source-ranges "$(curl -s https://checkip.amazonaws.com)/32"` before an SSH that times out. |
-| What makes it "hostile" | The published daemon (`cli@0.0.195` / `daemon@0.0.188`) with **one line patched** in the installed gateway: `core/.../@cello-protocol/gateway/dist/detect/exfil.js`, the injection-artifact branch changed from `disposition: "block"` to `"allow"` (marked `HOSTILE-CLIENT`). That is the ONLY modification — it lets the client SEND injection payloads a normal client refuses to emit, so the RECEIVER's screening can be tested. |
+| What makes it "hostile" | The published daemon (`cli@0.0.196` / `daemon@0.0.189` / `gateway@0.0.49` — upgraded and re-patched 2026-09-05) with **one line patched** in the installed gateway: `core/.../@cello-protocol/gateway/dist/detect/exfil.js`, the injection-artifact branch changed from `disposition: "block"` to `"allow"` (marked `HOSTILE-CLIENT`). That is the ONLY modification — it lets the client SEND injection payloads a normal client refuses to emit, so the RECEIVER's screening can be tested. |
 | Identity | agent **`CELLO_Adversary`**, registered, pubkey `9e6fe7c0d2e6189eeef8a49f3047a3e74064f7c203df2bb1707d95471c5472a1` (registration primary key `9fa579541a644f42a84f68303990370c34690b7a245e462fc1cb71ba3f8c8e68`). A real directory registration — it counts as an agent. |
 | How it is driven | No Claude/MCP session on the box. Two small node scripts in `~` (`drive.mjs`, `battery.mjs`) speak the daemon IPC directly over `~/.cello/daemon.sock` — newline-delimited `{id,method,params}` JSON, handshake `ipc.connect {clientType:"mcp"}` → `cello_use_agent` → `cello_send` (note: raw IPC uses `session_id`, not the MCP alias `cello_session_id`). |
 | Why it exists | The defensive half of the gateway cannot be exercised from a legitimate client — a well-behaved client's own outbound guard refuses to send the attack. Built 2026-09-04; findings recorded against M15 items 4/5 and orders 025–027. Kept for re-testing once the semantic injection classifier is chosen and installed. |
+
+> ### ⚠️ EVERY CLIENT UPGRADE WIPES WHAT MAKES THIS BOX HOSTILE — RE-PATCH, OR IT SILENTLY STOPS ATTACKING
+>
+> The patch lives in **installed `node_modules`**, so `npm i -g @cello-protocol/cli@latest` overwrites
+> it. Measured on the 2026-09-05 upgrade: the `HOSTILE-CLIENT` marker count went **1 → 0** on the new
+> gateway. A rig in that state looks completely healthy and passes every adversarial test, because it
+> can no longer emit the attack — a false GREEN on the security work it exists to exercise.
+>
+> **The procedure, after any upgrade on this box:**
+> ```bash
+> C=$(npm prefix -g); F=$C/lib/node_modules/@cello-protocol/cli/node_modules/@cello-protocol/gateway/dist/detect/exfil.js
+> cp "$F" "$F.pristine"                       # so the diff can be checked
+> # line 46, the INJECTION-ARTIFACT branch only — never the line-67 catch-all:
+> #   return { disposition: "block", text, events };
+> # becomes
+> #   return { disposition: "allow", text, events }; /* HOSTILE-CLIENT: … */
+> diff "$F.pristine" "$F"                      # MUST be exactly one line
+> grep -c HOSTILE-CLIENT "$F"                  # MUST be exactly 1
+> $C/bin/cello logout && $C/bin/cello login
+> ```
+> **Then verify against the RUNNING sidecar, not the file on disk** — resolve the path out of
+> `pgrep -af cello-gateway` and grep THAT for the marker. A patched file that is not the one the
+> process resolved proves nothing. (`cello` is not on the non-interactive PATH over `gcloud compute
+> ssh`; use `$(npm prefix -g)/bin/cello`.)
+>
+> Confirmed correct after the 2026-09-05 upgrade: one line changed, marker present in the loaded
+> sidecar, `CELLO_Adversary` online with directory signaling connected.
 
 **To fully retire it** (if ever): `gcloud compute instances delete cello-hostile-client --zone us-east1-d`, `gcloud compute firewall-rules delete hostile-client-ssh`, and retire the `CELLO_Adversary` registration.
 
@@ -641,7 +668,77 @@ probe.
 The relay logs the redial and the seal still fails, and `relay.directory.dial.failed` has **never**
 appeared — so the dial does not throw, yet nothing is repaired. That is the gap `7838bbeb` measures.
 
-## 🟢 CURRENT — DIRECTORIES ON `12c493ff` (026-FORKQUIET), 3 OF 3 ROLLED; RELAYS UNTOUCHED (2026-09-04)
+## 🟢 CURRENT — WHOLE FLEET ON `eccc9cbc` (030-RELAYSILENT + M15 025–029), ALL 5 ROLLED (2026-09-05)
+
+**Every node confirmed by reading the RUNNING instance's metadata, not the template or the tag.**
+
+| node | instance NOW | replaced | zone | machine type | image |
+|---|---|---|---|---|---|
+| `gcp-use1` | `cello-gcp-use1-gsq9` | `cello-gcp-use1-7kb6` | `us-east1-d` | `n2-standard-2` | `directory:eccc9cbc` |
+| `gcp-usc1` | `cello-gcp-usc1-hvdb` | `cello-gcp-usc1-pzxw` | `us-central1-a` | `e2-standard-2` | `directory:eccc9cbc` |
+| `gcp-euw1` | `cello-gcp-euw1-tfns` | `cello-gcp-euw1-8103` | `europe-west1-c` | `e2-standard-2` | `directory:eccc9cbc` |
+| `gcp-relay-use1` | `cello-gcp-relay-use1-qb26` | `cello-gcp-relay-use1-6mts` | `us-east1-d` | `n2-standard-2` | `relay:eccc9cbc` |
+| `gcp-relay-euw1` | `cello-gcp-relay-euw1-gwrs` | `cello-gcp-relay-euw1-5rdx` | `europe-west1-c` | `e2-small` | `relay:eccc9cbc` |
+
+Moved off `directory:12c493ff` and `relay:1695c1a9`. **Relays first, directories second**, one node at
+a time with `-target`, each gated on the health signal before the next.
+
+**Capacity probed BEFORE any MIG deleted anything** — all five (zone, machine-type) pairs, ✅ every
+one: `us-east1-d`/`n2-standard-2`, `us-central1-a`/`e2-standard-2`, `europe-west1-c`/`e2-standard-2`,
+`europe-west1-c`/`e2-small`.
+
+**Health signals used.** Relays — `relay.health.check.passed`, both `relayId`s present at 17 and 18
+per 3 minutes (baseline before the roll: 17 and 17). Directories — `antientropy.round.*`, all three
+zones present in a 4-minute window after each node, checked between every roll.
+
+### What shipped, and the proof it is RUNNING rather than merely deployed
+
+**`030-RELAYSILENT` — the relay was refusing five inbound connections per second per source IP.**
+libp2p's inherited `inboundConnectionThreshold: 5`, and `acceptIncomingConnection` runs BEFORE the
+connection gater, before Noise, before `connection:open` — so the refusal happened beneath every layer
+CELLO logs and the relay's log simply stopped. Measured on the live spine: **11 inbound attempts from
+one host in one second, 5 admitted, 6 refused, while 4 connections were open against a ceiling of
+300.** It is what broke `DOD-M15-PARKCONN-1` — parked mail could neither be deposited nor drained
+after a standing-receiver rebuild.
+
+Raised to **256 on the relay AND the directory** (which was inheriting the same 5, and is dialled by
+every client three times at registration). Andre ruled the value 2026-09-05 on the measurement:
+the control is keyed on source IP, so it is optional for an attacker with a few addresses and
+expensive for an honest NAT'd operator, while `maxConnections`, the per-agent slot cap, reservation
+auth and RELAYABUSE-1's limiter are untouched and were nowhere near binding.
+
+**⚠️ `maxIncomingPendingConnections` (10) is checked BEFORE the per-IP rate and is GLOBAL, not per
+host.** So the real inbound admission ceiling is ten concurrent handshakes — that, not
+`maxConnections`, is the next number to look at.
+
+**Proof it is live, from the relays' own logs** (`relay.config.connection_limits`, a new event this
+release adds precisely because libp2p emits nothing observable when it refuses):
+
+```
+europe-west1-c   inboundConnectionThreshold=256  maxConnections=300  maxIncomingPendingConnections=10
+us-east1-d       inboundConnectionThreshold=256  maxConnections=300  maxIncomingPendingConnections=10
+```
+
+**⚠️ THE REFUSALS THEMSELVES ARE STILL INVISIBLE TO CELLO.** Raising the number makes them rare, not
+observable — `acceptIncomingConnection` emits no event and runs before anything we own. **libp2p logs
+each one at debug**, and that is how the defect was found:
+`DEBUG=libp2p:connection-manager*` on the relay, then grep `inboundConnectionThreshold exceeded`.
+Reading libp2p's `inboundErrors{ConnectionDeniedError}` metric is the real fix and is still owed.
+
+Also in this image: **025-REFUSALTERMINAL, 026-FORKQUIET, 027-SCREENORDER, 028-PARKCONN, 029a/b/c.**
+
+### npm shipped in the same session
+
+`cli@0.0.196`, `connect@0.0.164`, `daemon@0.0.189`, `gateway@0.0.49`, `crypto@0.0.65`,
+`transport@0.0.71`, `protocol-types@0.0.69` — published from tag `v0.0.271` and promoted to `latest`
+via `npm-promote-latest.yml`.
+
+**⚠️ CI REPORTED THAT PUBLISH AS FAILED AND IT HAD NOT.** Six packages verified, then `daemon` read as
+stale for ~60s of npm CDN propagation and the verify step gave up, which also skipped `smoke-tag`. The
+registry had `daemon@0.0.189` all along. **Verify against the registry and the tarball, never the CI
+status** — the smoke assertions were re-run by hand and passed.
+
+## SUPERSEDED — DIRECTORIES ON `12c493ff` (026-FORKQUIET), 3 OF 3 ROLLED; RELAYS UNTOUCHED (2026-09-04)
 
 **Every node confirmed by reading the RUNNING instance's metadata, not the template or the tag.**
 
