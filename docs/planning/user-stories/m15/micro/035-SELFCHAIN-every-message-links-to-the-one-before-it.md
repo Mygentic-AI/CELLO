@@ -149,9 +149,23 @@ until the fleet catches up. So the work is sequenced. It is still one deliverabl
    layout. Nothing emits it yet.
 2. Publish, promote, and roll the fleet node by node. **The next step does not begin until this is
    live everywhere, not merely merged.**
-3. Production emits it, and every verifier ENFORCES it: the relay against its record of that
-   sender's previous leaf, the receiving daemon against its own tree with no relay involved, the
-   directory at seal time, and the shared seal-chain verifier on a replayed chain.
+3. Production emits it, and **every verifier ENFORCES it. Four places, named, none optional**
+   (Andre, 2026-09-05 — *"it's going to touch what comes through the relays, because the relays
+   should be checking this"*):
+
+   - **The relay, on every message as it passes through.** `hash_submit` compares the claim against
+     the relay's own record of that sender's previous leaf in this session. This is the check that
+     catches tampering IN THE MOMENT rather than at seal time, and it is the one an attacker meets
+     first.
+   - **The receiving daemon, on inbound.** The same check against its OWN tree, with no relay
+     involved — so a compromised or colluding relay cannot wave a broken chain through. **And it
+     surfaces: the operator is TOLD, in the response they are reading, not in a log file.** See the
+     escalation section.
+   - **The directory, at seal time.** A chain that does not hold is not notarized.
+   - **The relay, on a HANDOVER.** `031-RELAYREPLAY`'s replay path enforces the self link on the
+     inherited chain. **This is what the self link was for** — it is the reason the reordering gap
+     existed at all, and enforcing it here is what makes the timestamp workaround deletable in
+     step 5. A replayed conversation is verified exactly as a live one is.
 4. Publish, promote, roll again.
 5. **Delete the workaround.** `031-RELAYREPLAY`'s `seal_chain_sender_clock_reversed` check is dead
    once the self-link is enforced. Remove it and the comment describing the gap it covered.

@@ -295,6 +295,19 @@ interface Structure1Fields {
    * emitter can follow without every frame in flight being refused by a relay that predates it.
    */
   last_seen_hash?: Uint8Array;
+  /**
+   * 035-SELFCHAIN — the sender's link to their OWN previous message, on a v3 claim only.
+   *
+   * ⚠️ THIS IS THE FIELD THAT MAKES A CONVERSATION A CHAIN. `last_seen_hash` above links a sender
+   * to their counterparty and NOT to themselves, so two messages one party sends back to back carry
+   * identical acknowledgements. Nothing in the signed bytes tells them apart, and the relay-assigned
+   * position cannot help — it is assigned after the sender signs, so a sender can never sign their
+   * own position.
+   *
+   * Present only when `protocol_version` is 3; a v1 or v2 claim carries none, and that is a layout
+   * fact rather than a missing value. Read here, enforced once the fleet carries it.
+   */
+  prev_own_hash?: Uint8Array;
 }
 
 // Exported for 020-ACKHASH unit coverage of the version branch — in particular the v1 seven-array
@@ -329,7 +342,14 @@ export function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
    *   v1 + 6 fields  ⇒  the original layout
    *   v1 + 7 fields  ⇒  submission id at index 6 (unchanged — this is what the deployed fleet emits)
    *   v2 + 7 fields  ⇒  last_seen_hash at index 6
+   *   v3 + 8 fields  ⇒  last_seen_hash at 6, prev_own_hash at 7  ← `DOD-M15-SELFCHAIN-1`
    *   anything else  ⇒  refused; the caller answers `submit_malformed`
+   *
+   * ⚠️ 035-SELFCHAIN — `prev_own_hash` IS THE OTHER HALF OF THE CHAIN. `last_seen_hash` links a
+   * sender to their counterparty; it does not link them to themselves, so two messages one party
+   * sends back to back carry identical acknowledgements and nothing in the signed bytes tells them
+   * apart. This relay ACCEPTS the field now and enforces it once the fleet carries it — the same
+   * tolerate-first order 020-ACKHASH's own comment above explains, for the same reason.
    */
   if (!Array.isArray(arr)) return null;
 
@@ -337,7 +357,8 @@ export function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
 
   const isV1 = _pv === 1 && (arr.length === 6 || arr.length === 7);
   const isV2 = _pv === 2 && arr.length === 7;
-  if (!isV1 && !isV2) return null;
+  const isV3 = _pv === 3 && arr.length === 8;
+  if (!isV1 && !isV2 && !isV3) return null;
   const chBytes = _ch instanceof Uint8Array ? _ch : Buffer.isBuffer(_ch) ? new Uint8Array(_ch as Buffer) : null;
   const spkBytes = _spk instanceof Uint8Array ? _spk : Buffer.isBuffer(_spk) ? new Uint8Array(_spk as Buffer) : null;
   const sidBytes = _sid instanceof Uint8Array ? _sid : Buffer.isBuffer(_sid) ? new Uint8Array(_sid as Buffer) : null;
@@ -350,9 +371,9 @@ export function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
   // Index 6, read as whatever the VERSION says it is — never as both, and never as neither.
   let subIdBytes: Uint8Array | undefined;
   let lastSeenHashBytes: Uint8Array | undefined;
-  if (arr.length === 7) {
+  if (arr.length === 7 || isV3) {
     const b = _tail instanceof Uint8Array ? _tail : Buffer.isBuffer(_tail) ? new Uint8Array(_tail as Buffer) : null;
-    if (isV2) {
+    if (isV2 || isV3) {
       // A SHA-256 root, so exactly 32 — not "at most 32". Present-but-malformed is REFUSED: a v2
       // whose hash we cannot read is a content acknowledgement we cannot check, and admitting it
       // with the field dropped would let the sender downgrade to an unchecked ack by sending junk.
@@ -366,6 +387,17 @@ export function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
     }
   }
 
+  // Index 7 — the sender's link to their OWN previous message. Same refusal rule as index 6 and the
+  // same reason: a v3 whose self link is unreadable is a chain nobody can check, and dropping the
+  // field would make it indistinguishable from an honest v2 that never claimed one.
+  let prevOwnHashBytes: Uint8Array | undefined;
+  if (isV3) {
+    const p = arr[7];
+    const b = p instanceof Uint8Array ? p : Buffer.isBuffer(p) ? new Uint8Array(p as Buffer) : null;
+    if (!b || b.length !== 32) return null;
+    prevOwnHashBytes = b;
+  }
+
   return {
     protocol_version: _pv,
     content_hash: chBytes,
@@ -375,6 +407,7 @@ export function decodeStructure1(cbor: Uint8Array): Structure1Fields | null {
     timestamp: _ts,
     ...(subIdBytes ? { submission_id: subIdBytes } : {}),
     ...(lastSeenHashBytes ? { last_seen_hash: lastSeenHashBytes } : {}),
+    ...(prevOwnHashBytes ? { prev_own_hash: prevOwnHashBytes } : {}),
   };
 }
 

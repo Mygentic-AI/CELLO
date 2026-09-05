@@ -140,6 +140,8 @@ export interface Structure1Fields {
   timestamp: number | bigint;
   /** 020-ACKHASH: the acknowledged content, on a v2 claim only. Read, not yet checked. */
   last_seen_hash?: Uint8Array;
+  /** 035-SELFCHAIN: the sender's OWN previous message, on a v3 claim only. */
+  prev_own_hash?: Uint8Array;
 }
 
 /**
@@ -169,9 +171,13 @@ export function decodeStructure1Fields(cbor: Uint8Array): Structure1Fields | nul
   const [_pv, _ch, , _sid, _lss, _ts, _tail] = arr;
   const isV1 = _pv === 1 && (arr.length === 6 || arr.length === 7);
   const isV2 = _pv === 2 && arr.length === 7;
+  // 035-SELFCHAIN: v3 appends `prev_own_hash` at index 7 — the sender's link to their OWN previous
+  // message, which is what makes the order provable. Accepted here now, enforced once the fleet
+  // carries it; every index this function reads is unchanged.
+  const isV3 = _pv === 3 && arr.length === 8;
   // An unnamed (version, length) pair is REFUSED, never coerced into the nearest known layout —
   // this would otherwise be a signature verified over bytes whose meaning is not agreed.
-  if (!isV1 && !isV2) return null;
+  if (!isV1 && !isV2 && !isV3) return null;
   const chBytes = _ch instanceof Uint8Array ? _ch : Buffer.isBuffer(_ch) ? new Uint8Array(_ch as Buffer) : null;
   if (!chBytes || chBytes.length !== 32) return null;
   const sidBytes = _sid instanceof Uint8Array ? _sid : Buffer.isBuffer(_sid) ? new Uint8Array(_sid as Buffer) : null;
@@ -179,7 +185,7 @@ export function decodeStructure1Fields(cbor: Uint8Array): Structure1Fields | nul
   if (typeof _lss !== "number") return null;
   if (typeof _ts !== "number" && typeof _ts !== "bigint") return null;
   let lastSeenHash: Uint8Array | undefined;
-  if (isV2) {
+  if (isV2 || isV3) {
     const b = _tail instanceof Uint8Array ? _tail : Buffer.isBuffer(_tail) ? new Uint8Array(_tail as Buffer) : null;
     // Exactly 32 — a SHA-256 root. Present-but-malformed is refused rather than dropped: a v2 whose
     // hash is unreadable is an acknowledgement nobody can check, and admitting it without the field
@@ -190,12 +196,23 @@ export function decodeStructure1Fields(cbor: Uint8Array): Structure1Fields | nul
   // A v1 seven-array's index 6 is a SUBMISSION ID (`DOD-M15-SUBMIT-ID-1`) and is deliberately not
   // read here — the directory has no use for it, and reading it as an ack hash is the confusion the
   // version tag exists to prevent.
+  let prevOwnHash: Uint8Array | undefined;
+  if (isV3) {
+    const p = arr[7];
+    const b = p instanceof Uint8Array ? p : Buffer.isBuffer(p) ? new Uint8Array(p as Buffer) : null;
+    // Present-but-malformed is refused for the same reason the ack hash is: a self link nobody can
+    // read is a chain nobody can check, and dropping it would make a corrupt link look like an
+    // honest v2 that never claimed one.
+    if (!b || b.length !== 32) return null;
+    prevOwnHash = b;
+  }
   return {
     content_hash: chBytes,
     session_id: sidBytes,
     last_seen_seq: _lss,
     timestamp: _ts,
     ...(lastSeenHash ? { last_seen_hash: lastSeenHash } : {}),
+    ...(prevOwnHash ? { prev_own_hash: prevOwnHash } : {}),
   };
 }
 
@@ -229,7 +246,8 @@ export function decodeStructure1Signed(cbor: Uint8Array): { content_hash: Uint8A
   const version = arr[0];
   const isV1 = version === 1 && (arr.length === 6 || arr.length === 7);
   const isV2 = version === 2 && arr.length === 7;
-  if (!isV1 && !isV2) return null;
+  const isV3 = version === 3 && arr.length === 8;   // 035-SELFCHAIN
+  if (!isV1 && !isV2 && !isV3) return null;
   const bytesAt = (i: number, len: number): Uint8Array | null => {
     const v = arr[i];
     const b = v instanceof Uint8Array ? v : Buffer.isBuffer(v) ? new Uint8Array(v as Buffer) : null;

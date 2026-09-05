@@ -71,7 +71,8 @@ function decodeSignedLastSeenSeq(cbor: Uint8Array): number | null {
   const version = arr[0];
   const isV1 = version === 1 && (arr.length === 6 || arr.length === 7);
   const isV2 = version === 2 && arr.length === 7;
-  if (!isV1 && !isV2) return null;
+  const isV3 = version === 3 && arr.length === 8;   // 035-SELFCHAIN — appends prev_own_hash at 7
+  if (!isV1 && !isV2 && !isV3) return null;
   const lss = arr[4];
   if (typeof lss === "number") return lss;
   if (typeof lss === "bigint") return Number(lss);
