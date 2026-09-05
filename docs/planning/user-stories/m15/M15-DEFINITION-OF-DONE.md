@@ -1661,6 +1661,51 @@ and, for the made-true rows, the units that make them true.
 
 # POST-LAUNCH BACKLOG
 
+### `DOD-M15-STARTUPFLUSH-1` — ❌ OPEN · 🅿️ POST-LAUNCH. A sender that crashed with an un-acked message does not re-park it on restart
+> **RULED BY ANDRE 2026-09-05: POST-LAUNCH.** Surfaced by `030-RELAYSILENT` *Newly discovered* #1,
+> where it was recorded as "BLOCKS if it reproduces" pending his call. It reproduces; the ruling is
+> POST-LAUNCH.
+
+**Found 2026-09-05 by `030-RELAYSILENT`, and it is NOT the defect that unit fixed.** It fails
+identically with the relay's inbound connection threshold raised, so the connection budget is not the
+cause. It has been failing every run.
+
+**What happens to you:** you send a message to someone whose agent is offline. Your own daemon dies
+before the relay confirms it — you quit it, the machine sleeps, it crashes. On restart your daemon is
+supposed to notice the un-confirmed message and put it back in the recipient's relay mailbox. It does
+not. The message is still in your local database, so nothing is lost from your transcript, and you
+have no way to know the other side will never receive it. From their chair the conversation simply
+has a gap in it.
+
+**The evidence, verbatim** — `j-content.spine.test.ts`, `DOD-MSG-2 (startup-flush park)`:
+
+```
+[daemon-flushA-restart] timed out after 20000ms waiting for
+  /"event":"content\.park\.deposited"[^\n]*"source":"startup_flush"/
+```
+
+The restarted daemon never emits the startup-flush deposit at all, so the question is whether
+`flushAwaitingContent` runs, whether it finds the row, or whether it runs before the owning agent's
+standing receiver exists. **Not investigated** — `030` was already over §0z.2's trip-wire when this
+was found, and the reviewer's note stands: what was proven is *"raising the relay's threshold does not
+fix it"*, which is narrower than *"it is not that defect."*
+
+**Why POST-LAUNCH and not the gate (the launch-triage test):**
+- **It needs a crash in a specific window** — after a send, before the relay's confirmation, to an
+  offline recipient. The ordinary offline path does not touch it; that one is `DOD-M15-PARKCONN-1`
+  and it is closed.
+- **Nothing is lost or corrupted.** The content stays in the sender's own database and the transcript
+  is intact. This is a delivery backstop that does not fire, not data loss — and there are four other
+  triggers that re-drive a park (boot, agent start, the drain hook, signaling reconnect).
+- **A prospective customer forgives it.** They can send the message again. What they cannot forgive
+  is the core journey being a coin flip, and that is what shipped.
+
+**⚠️ The honest counterweight, recorded because it is the argument for pulling this forward:** this is
+the crash backstop for exactly the parked mail `DOD-M15-PARKCONN-1` is about, and that line was
+flipped ✅ over it. If a real operator ever reports a message that never arrived after a restart, this
+is the first thing to look at, and its classification should be revisited rather than re-derived.
+
+
 ### `DOD-M15-RELAYLEAF-SESSION-BIND-1` — ❌ OPEN · 🅿️ POST-LAUNCH. A relay-delivered leaf sets a position without checking which conversation it belongs to
 > **RULED BY ANDRE 2026-09-05: POST-LAUNCH.** He had the list of four items 029-AUTHORSHIP produced
 > and said *"fix all but the one that needs a hostile relay."* Items 1, 2 and 3 shipped (`029b`,

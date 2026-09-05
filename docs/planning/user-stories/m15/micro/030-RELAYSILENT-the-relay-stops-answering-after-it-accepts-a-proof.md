@@ -519,8 +519,10 @@ Full gate green in `trustless-cello`: 1,997 tests, lint, typecheck. Nothing publ
 "source":"startup_flush"`. It fails identically with the inbound threshold raised, so it is not this
 defect. A sender that crashed with un-acked content is supposed to re-park it on restart, and on
 this evidence it does not — which is the crash-backstop for exactly the message this whole line is
-about. **Classification: BLOCKS if it reproduces — but that is Andre's to grant (§0z.4), so it is
-written here.** Not investigated, per rule 3.
+about. **RULED BY ANDRE 2026-09-05: POST-LAUNCH**, and carried in the DoD's POST-LAUNCH BACKLOG as
+`DOD-M15-STARTUPFLUSH-1`. It reproduces every run; nothing is lost or corrupted (the content stays in
+the sender's own database and four other triggers re-drive a park), and it needs a crash in the narrow
+window between a send and the relay's confirmation. Not investigated here, per rule 3.
 
 ### 2. `024-ORPHANTRIAGE` fails on guidance wording, not behaviour
 
