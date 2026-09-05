@@ -389,6 +389,49 @@ line.
 
 *(anything found and NOT acted on, per rule 3)*
 
+---
+
+## THE FIX — ruled by Andre 2026-09-05, and the enforcer is green
+
+**`RELAY_INBOUND_CONNECTION_THRESHOLD = 256`, on the relay only.** The daemon stays at libp2p's 5:
+a daemon has no business accepting bursts of inbound connections from one host, and there the low
+number is right.
+
+**The enforcer (DoD 4) — three consecutive FULL-FILE runs, separate OS processes, real three-node
+consortium and real relay binary:**
+
+| run | `DOD-MSG-5` | `DOD-MSG-7` | `DOD-MSG-8` |
+|---|---|---|---|
+| 1 | ✅ | ✅ | ✅ |
+| 2 | ✅ | ✅ | ✅ |
+| 3 | ✅ | ✅ | ✅ |
+
+**⚠️ THE FIRST ATTEMPT AT THIS STREAK BROKE ON RUN 2, AND THAT IS THE ARGUMENT FOR THREE.** `MSG-5`
+failed with a bare `expected false to be true` — `cello_send` returned `ok: false` and the test threw
+the reason away one character before printing it, the same hole this file had for its deposits. The
+assertion now carries the whole response and the sender's own lines. `MSG-5` then passed 4/4 alone
+and 3/3 in the file. **A single green run would have shipped over that.**
+
+Two tests in the file still fail in every run — `DOD-MSG-2` and `024-ORPHANTRIAGE` — recorded under
+*Newly discovered* as separate defects, unchanged by the threshold.
+
+### What shipped
+
+1. **The threshold**, passed through `connectionLimits` so `resolveConnectionLimits` spreads the
+   declared block first and the other three limits keep the values `DOD-M15-IDLE-CONNS-1` authored.
+2. **`relay.config.connection_limits` at relay startup**, read off the LIVE node rather than the
+   constant — a number that failed to reach libp2p cannot be reported as if it had. Its `impact`
+   line says explicitly that it does **not** report refusals, because it cannot.
+3. **Four relay unit tests**, one labelled a preservation GUARD that passes pre-fix.
+4. **Two spine assertions that could not do their job** (see above and *What was fixed*).
+
+### Still owed, and named rather than left implied
+
+- **The refusal is still invisible.** Raising the number makes refusals rare; it does not make them
+  observable. Reading libp2p's `inboundErrors{ConnectionDeniedError}` metric is the real fix.
+- **DEPLOYMENT.** This is a relay change and it is not live until the GCP fleet is rolled per node
+  (`infra/CLAUDE.md`, `/cello-deploy-gcp`). **Not done, and not started without being asked.**
+
 ### 1. `DOD-MSG-2` (startup-flush park) fails for a different reason, and the threshold is not it
 
 `[daemon-flushA-restart] timed out after 20000ms waiting for "content.park.deposited"
