@@ -2,7 +2,7 @@
 name: 031-RELAYREPLAY — A new witness can prove the conversation it inherits
 type: micro-work-order
 date: 2026-09-05
-status: open
+status: complete
 dod_line: DOD-M15-SESSION-RELAY-PINNED-1
 dod_effect: unit-of. Unit 2 of 4 of [[M15-STORY-RELAYHANDOVER]]. Unit 1 (`017-TBS`) closed
   2026-09-03. This unit builds the RELAY-SIDE half — a relay that can be handed a conversation
@@ -284,6 +284,80 @@ working around it.
 
 ---
 
+## Close-out — 2026-09-05
+
+**The extraction touched no directory state, and that was checked before it moved.**
+`#verifyUnilateralChain` spanned 85 lines and contained **zero** `this.` references — it was already
+a pure function wearing a method's clothes. It came out as TWO functions rather than one with a
+flag: `verifySealLeafChain` (root, sender signatures, `prev_root` chain, causal order, provenance)
+and `verifySealCtrlLeaf` (the exactly-one-SEAL-ctrl clause, which is true only at seal time). A
+`{ requireCtrl: false }` parameter would have hidden the caller that switches a check off; two
+functions put it in a grep. No directory test file was edited — `git diff --name-only main..HEAD`
+carries nothing under `packages/directory/src/__tests__`.
+
+**Definition of Done — every clause.**
+
+1. ✅ ONE definition, in `@cello-protocol/interfaces`, imported by both. Grep with a positive control.
+2. ✅ The directory's seal tests pass untouched.
+3. ✅ Resume recognised only by a non-empty **directory-signed** `prior_relay_id`. Four
+   cross-promotions tested and refused; `""` and absent produce one layout, non-empty another.
+4. ✅ A batch is accepted only against a verified resume, and adopted only on all five checks.
+5. ✅ A replay with no tip attestation is refused **by name**, and there is no tolerance branch.
+6. ✅ Four tampered batches, four different catchers, each asserting its **specific** reason.
+7. ✅ Order derived from signatures. `seq_counter` seeded to 99, frontier comes out 4, next leaf 5.
+   `DOD-M15-RELAYSEQ-UNSIGNED-1`'s entry is updated — the relay half resolved, the client half
+   explicitly still post-launch.
+8. ✅ Nothing emits a replay. Zero production callers in either repo.
+9. ✅ `pnpm run test` 2622 passed, exit 0 (`CELLO_ENV=local`, fresh Postgres) · `lint` · `typecheck`.
+10. ✅ Reviewed by `cello-unit-reviewer`; every finding fixed. Verdict below.
+
+**Reviewer verdict, quoted:** *"SPEC: FAITHFUL · SILENT FALLBACKS FOUND · ERROR SUBSTITUTION FOUND ·
+TESTS HAVE TEETH · REMOVALS PROVEN · COMPATIBILITY DEBT FOUND"*, with *"Blocking before this unit
+closes: H1, H2, H3, H6"* and thirteen findings in all. H1, H2, H4, H5, H6, H7, H8, H9, H10, H11,
+H12 fixed with tests. H13 was a claim in my own close-out, corrected below. **H3 is not fixable in
+this repo** and is recorded under *Newly discovered*.
+
+**The mutation loop ran eleven mutants**, clean precondition, printed baseline, each re-run alone.
+Two did not compile and were widened rather than recorded as caught. One SURVIVED and the fault was
+in the test, not the code — the forged-leaf case was green with the signature check deleted, because
+a neighbouring clause returned the same string; that is what forced the H6 reason split.
+
+**A correction to something I wrote in this unit.** I said `bufEqual` "already had two copies in the
+tree"; there were **three** (`seal-final-root.ts`, `directory-node.ts`, `seal-cosign-evidence.ts`)
+and this adds a fourth. Leaving it is still the right call — two lines, no protocol semantics, not
+the drift class this order is about — but the count was wrong and the next reader will use it as
+precedent.
+
+---
+
 ## Newly discovered
 
-_(write findings here and keep going — do not fix them)_
+_(written down, NOT started — the spawn trip-wire fired at three)_
+
+1. **The divergence alert reaches its only listener as "your relay is broken."** `[BLOCKS UNIT 3]`
+   The shipping client gates witness alerts on an exact equality — `reason === "leaf_signed_by_neither_participant"`
+   — not a membership test. A `replay_chain_diverged` alert is therefore rejected as `field_shape`
+   and surfaced to the operator as a relay fault or version skew. The innocent counterparty, whose
+   conversation just became unsealable, is sent to the transport subsystem. It cannot fire today
+   because nothing sends a replay, which is exactly why it is a trap rather than a live defect: the
+   gate must be widened **before** anything can produce a divergence. The fix is in `cello-client`,
+   which this unit may not edit. **This belongs as a blocking AC on unit 3.**
+
+2. **May ONE batch, from ONE party, write a terminal state?** `[DESIGN — ANDRE'S]`
+   D5 says mark a divergence unsealable, and D5 is right about a genuine contradiction. What review
+   surfaced is that a FABRICATED one was constructible, and the enabler is now closed — but the
+   residue is real: two same-millisecond adjacent leaves from one sender can still be swapped, and
+   the timestamp check is non-decreasing (it must be, or two messages sent in the same millisecond
+   would be refused). The complete answer is to refuse with `replay_chain_diverged` and alert the
+   counterparty while leaving `awaiting_replay: true`, so an honest party can still replay a correct
+   chain. The end state for a genuinely diverged session is identical; it just stops being reachable
+   from one frame by one party. That changes what "mark the session diverged" means operationally,
+   which is why it is not mine to decide.
+
+3. **The directory's own seal refusal still collapses five causes into one.** `[POST-LAUNCH]`
+   `unilateral_root_unverifiable` covers a root mismatch, a forged sender signature, an undecodable
+   Structure 1, a broken `prev_root` chain and a causal-order violation. The relay now names each;
+   the directory maps them back, in one visible place, because widening its published wire reason is
+   a seal-path behaviour change and this order's clause 2 forbids it. An operator whose counterparty
+   forged a leaf is still told, on the seal path, to re-derive their own root. Not launch-blocking —
+   it is a diagnostic loss on a path that refuses correctly — but it should not be rediscovered.
