@@ -2178,12 +2178,30 @@ export class CelloRelayNode {
    * the two DO share is the thing that could drift — `buildWitnessAlertTbs`, the signed bytes.
    */
   async #emitDivergenceAlert(sessionId: Uint8Array, sessionKey: string, recipientHex: string): Promise<void> {
+    await this.#emitWitnessAlertTo(sessionId, sessionKey, recipientHex, "replay_chain_diverged", true);
+  }
+
+  /**
+   * Send ONE signed witness alert to ONE participant — 034-CARRYLEAF.
+   *
+   * Extracted from `#emitDivergenceAlert`, which was the only sender of a single-recipient alert and
+   * now delegates to this. Extracted rather than copied for the reason its own header already gives:
+   * what two alert senders share is `buildWitnessAlertTbs`, the signed bytes, and that is exactly
+   * the thing that drifts when there are two of them.
+   */
+  async #emitWitnessAlertTo(
+    sessionId: Uint8Array,
+    sessionKey: string,
+    recipientHex: string,
+    reason: import("./relay-types.js").SessionWitnessAlert["reason"],
+    submitterIsCounterparty: boolean,
+  ): Promise<void> {
     const observedAt = Date.now();
     let witnessSignature: Uint8Array | undefined;
     if (this.#relayId !== null && this.#ackSigningKeyProvider !== null) {
       try {
         witnessSignature = await this.#ackSigningKeyProvider.sign(
-          buildWitnessAlertTbs(sessionId, "replay_chain_diverged", observedAt, true),
+          buildWitnessAlertTbs(sessionId, reason, observedAt, submitterIsCounterparty),
         );
       } catch (err: unknown) {
         this.#logger.error("relay.witness.sign.failed", {
@@ -2197,12 +2215,12 @@ export class CelloRelayNode {
     const alert: import("./relay-types.js").SessionWitnessAlert = {
       type: "session_witness_alert",
       session_id: sessionId,
-      reason: "replay_chain_diverged",
+      reason,
       ...(witnessSignature !== undefined && this.#relayId !== null
         ? { relay_id: this.#relayId, witness_signature: witnessSignature }
         : {}),
       observed_at: observedAt,
-      submitter_is_counterparty: true,
+      submitter_is_counterparty: submitterIsCounterparty,
     };
     const recipientStream = this.#streams.get(recipientHex);
     if (!recipientStream) {
@@ -2212,7 +2230,7 @@ export class CelloRelayNode {
     try {
       await this.#sendFrame(recipientStream, encodeSessionWitnessAlert(alert));
       this.#logger.info("relay.witness.alert.delivered", {
-        sessionId: sessionKey, recipientPubkey: recipientHex, reason: "replay_chain_diverged",
+        sessionId: sessionKey, recipientPubkey: recipientHex, reason,
       });
     } catch (err: unknown) {
       this.#streams.delete(recipientHex);
@@ -2854,6 +2872,36 @@ export class CelloRelayNode {
           "author's own signature is what makes it admissible; this relay verified it against the " +
           "assignment before sequencing it, exactly as it does the author's own submissions.",
       });
+      /**
+       * ⚠️ **AND BOTH PARTICIPANTS ARE TOLD — a detection that only reaches this log is not a
+       * control.**
+       *
+       * This relay is the only party positioned to state it: it knows the author never asked for
+       * the leaf to be witnessed, and it is not a party to the conversation. The alert is signed,
+       * so what each side holds is transferable rather than this relay's unsupported word, and it is
+       * queued if they are offline.
+       *
+       * The same observation means opposite things to the two of them, which is why the sentence is
+       * composed at the daemon from `submitter_is_counterparty` rather than here: to the WITNESS it
+       * says their counterparty is not putting their own words in the record, and to the AUTHOR it
+       * says their own submits are not arriving.
+       *
+       * Fired after the duplicate check, so a replay attempt — which is refused and sequences
+       * nothing — never generates one. An alert on a refusal would let either party manufacture
+       * noise about the other for free.
+       */
+      const witnessRecipients = [aHex, bHex];
+      for (const recipientHex of witnessRecipients) {
+        await this.#emitWitnessAlertTo(
+          frame.session_id,
+          sessionKey,
+          recipientHex,
+          "leaf_witnessed_by_counterparty",
+          // TRUE for the author — from their seat, the submitter IS their counterparty. FALSE for
+          // the submitter, who is reading about their own action.
+          recipientHex === signerHex,
+        );
+      }
     }
 
     if (s1.last_seen_seq > state.seq_counter) {

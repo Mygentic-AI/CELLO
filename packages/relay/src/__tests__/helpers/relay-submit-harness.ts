@@ -160,9 +160,24 @@ export interface SubmitOpts {
 
 export type Submit = (o: SubmitOpts) => Promise<Record<string, unknown>>;
 
+/** One `session_witness_alert` the relay pushed, with the participant it was pushed to. */
+export interface CapturedWitnessAlert {
+  recipient: string;
+  reason: string;
+  submitterIsCounterparty: boolean;
+}
+
 export interface SubmitHarness {
   submit: Submit;
   submitAsB: Submit;
+  /**
+   * Every witness alert the relay pushed to either participant — 034-CARRYLEAF.
+   *
+   * The relay sends these unsolicited on the participants' own streams, so a rig that only reads
+   * replies to its own submits cannot see them, and a guard whose only consumer is the relay's log
+   * would look tested when nothing had checked it reached anyone.
+   */
+  witnessAlerts: CapturedWitnessAlert[];
   /** The two participants' keypairs, so a test can sign a leaf as one and submit it as the other. */
   clientA: ReturnType<typeof generateKeypair>;
   clientB: ReturnType<typeof generateKeypair>;
@@ -201,6 +216,7 @@ export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>)
    * BOTH participants get a stream. The second one is not decoration: the submission-id key is
    * SENDER-SCOPED, and the only way to test that is to have the other party try to use an id.
    */
+  const witnessAlerts: CapturedWitnessAlert[] = [];
   const connect = async (kp: ReturnType<typeof generateKeypair>): Promise<Submit> => {
     const cn = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await cn.start();
@@ -217,7 +233,16 @@ export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>)
         type: "hash_submit", session_id: sessionId, leaf_kind: MSG_LEAF, structure1_cbor, sender_signature,
       }) as Uint8Array);
       let resp = await reader.readDecoded();
-      for (let i = 0; i < 6 && resp["type"] !== "hash_submit_ack" && resp["type"] !== "hash_submit_error"; i++) {
+      for (let i = 0; i < 8 && resp["type"] !== "hash_submit_ack" && resp["type"] !== "hash_submit_error"; i++) {
+        // Unsolicited frames arrive on the same stream. Witness alerts are captured rather than
+        // skipped — they are the only evidence that a guard reached a person.
+        if (resp["type"] === "session_witness_alert") {
+          witnessAlerts.push({
+            recipient: Buffer.from(await kp.getPublicKey()).toString("hex"),
+            reason: String(resp["reason"]),
+            submitterIsCounterparty: resp["submitter_is_counterparty"] === true,
+          });
+        }
         resp = await reader.readDecoded();
       }
       return resp;
@@ -228,6 +253,7 @@ export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>)
     submit: await connect(clientA),
     submitAsB: await connect(clientB),
     clientA, clientB,
+    witnessAlerts,
     sessionId, pubA, pubB, sessionTimestamp,
   };
 }

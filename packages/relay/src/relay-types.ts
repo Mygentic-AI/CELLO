@@ -576,7 +576,26 @@ export interface SessionWitnessAlert {
    * sides hold (reconciliation rule D5). Sent to the party that did NOT submit the batch, because
    * they are the one who would otherwise hear it only from the party it accuses.
    */
-  reason: "leaf_signed_by_neither_participant" | "replay_chain_diverged";
+  reason:
+    | "leaf_signed_by_neither_participant"
+    | "replay_chain_diverged"
+    /**
+     * 034-CARRYLEAF — a participant witnessed a leaf their COUNTERPARTY authored and did not submit.
+     *
+     * The relay is the only party positioned to state this: it is the one that knows the author
+     * never asked for the leaf to be witnessed, and it is not a party to the conversation. **Both
+     * participants are told**, and the same observation means different things to each — which is
+     * why the message is composed at the daemon, from `submitter_is_counterparty`, rather than here:
+     *
+     *  - to the WITNESS: your counterparty did not put this message in the record; you did it for
+     *    them. Once is a relay hiccup. Repeatedly is someone keeping their words out of the receipt.
+     *  - to the AUTHOR: a message of yours was witnessed by your counterparty because your own
+     *    submit never arrived — worth knowing, because it is usually your relay path failing.
+     *
+     * Signed like every other witness alert, so the recipient holds something transferable rather
+     * than this relay's unsupported word.
+     */
+    | "leaf_witnessed_by_counterparty";
   /** WHICH witness. Absent when this relay runs without a signing identity. */
   relay_id?: string;
   /** Unix ms at which this relay observed the submission. */

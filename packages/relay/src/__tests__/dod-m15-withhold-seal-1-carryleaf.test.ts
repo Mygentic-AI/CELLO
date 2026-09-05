@@ -172,6 +172,54 @@ describe("034-CARRYLEAF: a withheld message can be witnessed by the party who re
     expect(next["sequence_number"], "the refused replay must not have eaten position 2").toBe(2);
   });
 
+  it("★★ BOTH PARTICIPANTS ARE TOLD — a counter-submit is reported, not just logged", async () => {
+    /**
+     * ⚠️ **THE RELAY IS THE ONLY PARTY POSITIONED TO SAY THIS**, and a detection that reaches only
+     * its own log is not a control.
+     *
+     * It knows the author never asked for the leaf to be witnessed, and it is not a party to the
+     * conversation. So it says so, signed, to both — and the same observation means opposite things
+     * to each, which is why `submitter_is_counterparty` is per-recipient rather than fixed.
+     *
+     * A REFUSED counter-submit must NOT generate one: an alert on a refusal would let either party
+     * manufacture noise about the other for free. That half is asserted too.
+     */
+    const h = await submitHarness(scope);
+    const genesis = genesisOf(h);
+    const alerts = h.witnessAlerts;
+
+    await h.submit({ contentHash: new Uint8Array(randomBytes(32)), lastSeenSeq: 0, timestamp: Date.now(), lastSeenHash: genesis });
+    expect(alerts.length, "an ordinary self-submit reports nothing").toBe(0);
+
+    await h.submitAsB({
+      contentHash: new Uint8Array(randomBytes(32)),
+      lastSeenSeq: 0,
+      timestamp: Date.now(),
+      lastSeenHash: genesis,
+      authorKp: h.clientA,
+    });
+
+    /**
+     * ⚠️ THE AUTHOR'S ALERT IS PUSHED TO THEIR STREAM AND READ WHEN THEY NEXT USE IT — so the rig
+     * drains A's side before counting. That is the real delivery model, not a workaround: the relay
+     * sends unsolicited, and an offline participant's alert is queued rather than lost.
+     */
+    await h.submit({ contentHash: new Uint8Array(randomBytes(32)), lastSeenSeq: 0, timestamp: Date.now(), lastSeenHash: genesis });
+
+    const forCounterSubmit = alerts.filter((a) => a.reason === "leaf_witnessed_by_counterparty");
+    expect(forCounterSubmit.length, "both participants hear about it, not just the log").toBe(2);
+    /**
+     * THE PER-RECIPIENT MEANING. For the AUTHOR the submitter really was their counterparty; for the
+     * SUBMITTER it was themselves. A fixed value here would tell one of them the opposite of what
+     * happened.
+     */
+    const authorHex = Buffer.from(h.pubA).toString("hex");
+    const toAuthor = forCounterSubmit.find((a) => a.recipient === authorHex);
+    const toWitness = forCounterSubmit.find((a) => a.recipient === Buffer.from(h.pubB).toString("hex"));
+    expect(toAuthor?.submitterIsCounterparty, "the author is told their counterparty did it").toBe(true);
+    expect(toWitness?.submitterIsCounterparty, "the witness is told it was their own action").toBe(false);
+  });
+
   it("★ a SELF-submit of identical content is still two messages, not a duplicate", async () => {
     /**
      * The guard above must not leak into the author's own path. Sending the same words twice in one
