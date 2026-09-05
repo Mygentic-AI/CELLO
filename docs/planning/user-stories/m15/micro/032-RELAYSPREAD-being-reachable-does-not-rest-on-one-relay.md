@@ -2,7 +2,7 @@
 name: 032-RELAYSPREAD — Being reachable does not rest on whichever relay answered first
 type: micro-work-order
 date: 2026-09-05
-status: open
+status: complete
 dod_line: DOD-M15-MULTIRELAY-1
 dod_effect: closes
 dod_effect_note: >
@@ -256,6 +256,155 @@ still believed healthy. Say exactly that in your close-out and do not overstate 
 
 ---
 
+## Close-out
+
+### What the operator gets
+
+Their agent now holds a circuit reservation with **every relay that will grant one**, not with
+whichever answered first. Kill one relay and nothing happens to them: the agent keeps its peer id,
+keeps its other circuits, and a caller behind a home router still gets through — proven in the test
+by a second node actually dialling the agent through the surviving relay, not by an address string.
+Before this, that same relay death made them unreachable while every status command said "online".
+
+### ⚠️ The one-relay limit was NOT a design choice, and this is the finding worth keeping
+
+Handing a node two relay listen addresses did not work at all, and the reason is in
+`@libp2p/circuit-relay-v2@4.2.5`:
+
+```js
+#checkReservationCount() {
+  if (this.pendingReservations.length === 0) {
+    this.log.trace('have discovered enough relays');
+    this.reserveQueue.clear();          // every QUEUED reservation job, gone
+```
+
+`pendingReservations` is filled only by `reserveRelay()`, which fires only for the DISCOVERY listen
+address (a bare `/p2p-circuit`). We listen on EXPLICIT relay addresses, so it is always empty — and
+that check runs at the end of every successful reservation. With libp2p's default
+`reservationConcurrency` of 1, relays 2..N sit queued while relay 1 reserves, and relay 1's success
+wipes them. Their `listen()` never settles, so `libp2p.start()` never resolves.
+
+**That is the unexplained 2026-08-18 measurement recorded in `#buildRevivedNode`** — *"handed 2
+relay addrs at once, no deadline: `start()` never completes (10,002ms and counting)"*. It was never
+a slow relay. The load-bearing precondition (found by review): `libp2p@3.3.2`'s transport manager
+creates one listener per address and awaits every `listen()` together, which is what puts relay 2 in
+the queue while relay 1 runs. `Queue.clear()` splices only the array and a running job still
+settles, so the fix is to leave nothing queued — `reservationConcurrency` is now the number of
+circuit addresses the node was handed.
+
+### ❌ DEVIATION — DoD clause 5 is NOT implemented, and it cannot be at this layer
+
+> *"A lost reservation rebuilds **that reservation**, not the whole receiver."*
+
+For an EXPLICIT relay address, circuit-relay-v2's `listen()` is a one-shot: `removeReservation()`
+clears the refresh timeout and deletes the entry, and the listener's `_onAddRelayPeer` returns early
+for `type === 'configured'`, so even a later reservation would not be announced. A circuit listener
+is fixed at node creation, and the only thing that takes a new one is a **new node** — which
+clause 3 forbids while another reservation is held. The two clauses cannot both be satisfied without
+a transport-level re-listen that does not exist.
+
+A first attempt re-proved to the lost relay to "remove the relay-side reason for revocation". Review
+killed it twice over: it cannot restore a reservation (above), and `#authenticateStandingReceiver`
+ends with `if (refusal?.tryAnotherRelay) { … rebuildStandingReceiver }` — so a dead relay's refusal
+would have rebuilt the whole receiver and thrown the surviving reservation away. The churn engine,
+re-entered through the back door.
+
+**What ships instead, stated plainly:** a lost circuit is gone until the receiver is next rebuilt for
+another reason. The agent never STOPS BEING REACHABLE meanwhile — the surviving relays carry it, the
+loss is named in the log with its cause, and the lost relay's inbound carve-out is revoked in the
+same tick. **That is availability, not restoration in place.** Restoration needs its own unit; see
+*Newly discovered*.
+
+**And the mute relay is still not detected. This unit does not claim it is.** What it does is take
+detection off the reachability path: you stay reachable through the others while the mute one is
+still believed healthy.
+
+### The four hollow-test questions (§2)
+
+1. **What did I stub, and does the property live in the stub?** The reachability tests use REAL
+   in-process libp2p hop relays, so the reservation, the announcement and the dial are all real —
+   which is how the libp2p queue bug was found at all. Where a scripted factory IS used
+   (`relayslots`), its assertion is about the CONFIG the walk requests, and I marked it as such: the
+   announcement half is asserted against real libp2p in `W1`.
+2. **Is the fixture the shape that BREAKS, or a neighbouring shape that works?** `R4` offers one
+   relay and holds one, so `reservationsHeld: reservations.addrs.length` — the exact bug being
+   renamed away — passes it. `R5b` offers two with one dead, where the two numbers cannot both be
+   right. That is why `R5b` exists.
+3. **Would this assertion pass if the code did NOTHING?** ⚠️ **This one had a real answer, and it
+   was found by review, not by me.** The two new gater tests construct a gater and hand it a list —
+   they prove set semantics, which nothing was going to get wrong, and prove nothing about what the
+   MANAGER hands it. Substituting `reservations.relayPeerIds` (the directory-supplied candidate
+   list) at the wiring kept every test in the unit green **while shipping the exact hole the bound
+   exists to close**. Fixed: `holdsInboundCarveOut` is now the carve-out branch itself rather than a
+   copy of it, and `R5b` asserts the wiring — one relay that granted, one only ever named.
+   Similarly `W1` passed against an implementation that logged the loss and revoked nothing.
+4. **Did I assert the OUTCOME or the mechanism's shadow?** `W1` originally asserted an announced
+   address and an internal enum — and libp2p keeps a dead relay's circuit address for hours, so
+   neither is reachability. It now dials the agent through the surviving relay from a second node
+   and asserts the peer id that answers.
+
+### Made to fail on purpose (§0z.3) — six mutations, each typechecked/built first
+
+| Mutation | Red on | Failed because |
+|---|---|---|
+| break at the first grant (the old walk) | `W1` | "must announce a circuit through BOTH relays" |
+| `stillHeld.length >= 0` (rebuild on any loss) | `W1` | "same node, same peer id — nothing was rebuilt" |
+| carve-out keyed on `#allowedOutboundPeerIds` | 3 gater tests | "expected false to be true" — a named relay admitted |
+| revert `reservationConcurrency` | `W1` | only one circuit ever binds |
+| hand the gater the CANDIDATE list | `R5b` | "being named by the directory must not buy a foothold" |
+| remove the pruning + revocation | `W1` | "the dead relay lost its inbound carve-out" |
+
+**One of these first reddened for the WRONG reason** and that is the half of the rule that earned its
+keep: the rebuild-always mutant threw `Cannot read properties of null (reading 'peerId')`, because a
+receiver mid-rebuild is absent from the map. The test caught the mutant and said nothing about the
+property. `W1` now reads the identity through a helper that names the state, and the mutation was
+re-run.
+
+### Review — `cello-unit-reviewer`, verdict quoted
+
+> - **SPEC: DEVIATIONS FOUND** — clause 5 is not implemented and the deviation is un-journaled *(F2, blocking)*
+> - **SILENT FALLBACKS FOUND** — F1 installs a stopped node and discards `listen_failed`; F4's shrink-only list makes a recovered circuit invisible *(both blocking)*
+> - **ERROR SUBSTITUTION FOUND** — `listen_failed` surfaces as `session.standing_receiver.spread.slow_start` … sending the operator to the relay fleet for a local bind failure *(F1, blocking)*
+> - **HOLLOW TESTS FOUND** — clause 4's wiring is bypassable by substituting the candidate list … and every test still passes; W1 passes against an implementation that logs the loss and revokes nothing; W1b lost the old W1's "the rebuild picks a live survivor" coverage
+> - **REMOVALS PROVEN** — every deletion proven against the library, both repos, and the `exports` map
+> - **NO COMPATIBILITY DEBT**
+>
+> **Blocking before this unit closes: F1, F2, F3, F4, and the clause-4 wiring test.** F5–F9 are
+> fix-with-the-batch. I am not rubber-stamping this one: the diff touches the reachability path and
+> I found a masked start failure in it.
+
+**Nine findings, five blocking. All nine fixed** (commit `b2849c2`); the clause-5 deviation is
+journaled above rather than closed. The reviewer separately CONFIRMED the libp2p reading and supplied
+the missing transport-manager precondition, and ACCEPTED three of the deliberate behaviour changes
+put to it (the shared receiver seed, the removal of the `reservations.addrs[0]` fallback, and
+`hadRelayToAsk` over `relaysOffered` on `reservation.gave_up`).
+
+### Commits
+
+`822302d` (part 1, alone) · `e9fa060` (part 3) · `b0d1a53` (parts 2+4) · `008573f` (test hardening)
+· `b2849c2` (review findings) — branch `m15/032-relayspread`, repo `cello-client`.
+
+---
+
 ## Newly discovered
 
 _(write findings here and keep going — do not fix them)_
+
+1. **A lost circuit is never retaken in place** — the clause-5 deviation above. Restoring one
+   without rebuilding the receiver needs a transport-level "re-listen on this relay" that
+   `@libp2p/circuit-relay-v2` does not expose for configured addresses. **Classification: POST-LAUNCH.**
+   The agent stays reachable through its other relays, so a customer does not hit it; it costs
+   redundancy depth until the next rebuild, not reachability.
+
+2. **A NEW relay is never picked up while ANY circuit is held.** `setDirectoryRelayEndpoints`
+   (`session-node-manager.ts`) returns early when the node already advertises a `/p2p-circuit`
+   address — "already reserved". Correct under the old one-relay design; under the spread it means a
+   receiver holding 1 of 3 relays never widens to the other 2 when the directory announces them.
+   Pre-existing, and newly load-bearing. **Classification: POST-LAUNCH** — it caps how much
+   redundancy an agent accumulates, and the next receiver rebuild picks up the full pool anyway.
+
+3. **`session.revive.node.building` logs `circuitAddrs: reservations.addrs.length`** — the CANDIDATE
+   count under a name that reads as held circuits, i.e. the same mis-naming Part 1 removed from the
+   standing-receiver events, still live on the revive path. Not touched: the revive path is the
+   session half and out of this unit's scope. **Classification: POST-LAUNCH** — a log field, no
+   behaviour.

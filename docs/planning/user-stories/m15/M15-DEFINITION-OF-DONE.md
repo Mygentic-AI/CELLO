@@ -1095,7 +1095,16 @@ receipt is the product; a path that can silently cost one is not something to cl
   homework, which is the property `LEAFPARTIES-1` and `CORROBORATE-1` just spent themselves closing.
 - **Enforcer:** journey — two daemons, a real relay, killed mid-conversation.
 
-### `DOD-M15-MULTIRELAY-1` — ❌ An agent's reachability does not rest on one relay
+### `DOD-M15-MULTIRELAY-1` — ✅ An agent's reachability does not rest on one relay
+> **✅ CLOSED 2026-09-05 by `032-RELAYSPREAD` (availability half).** A receiver now holds a
+> reservation with every relay that grants; killing one leaves the agent dialable through the others
+> with no rebuild, proven by a real dial through the survivor. The one-relay limit was a libp2p
+> defect, not a design choice — `circuit-relay-v2` clears its reservation queue after the first
+> success, which also explains the 2026-08-18 "start() never completes" measurement.
+> **⚠️ ONE CLAUSE DEVIATES:** a lost circuit is not retaken in place (the transport exposes no
+> re-listen for a configured relay); the agent stays reachable meanwhile. Deviation, the four
+> hollow-test answers and the reviewer's verdict are in the order's close-out. Journal entry owed.
+>
 > **⚙️ UNIT 1 OF 4 IS DONE — do not re-scope this line from scratch.** The fix for this line and for
 > `SESSION-RELAY-PINNED-1` is one story, [[M15-STORY-RELAYHANDOVER]], and its first unit closed on
 > 2026-09-03 (`017-TBS`): the assignment TBS now carries `prior_relay_id`, so a directory can name
