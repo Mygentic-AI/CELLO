@@ -603,7 +603,7 @@ status marker there.** Items are cross-referenced by their triage designation.
 ### `DOD-M15-PARKERROR-1` — ✅ A failed park deposit says what went wrong
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-PARKERROR-1`.
 
-### `DOD-M15-PARKCONN-1` — ❌ A message to an offline counterparty does not intermittently fail
+### `DOD-M15-PARKCONN-1` — ✅ A message to an offline counterparty does not intermittently fail
 **Found 2026-09-03 by `019-PARKERROR`, the moment the reporting was fixed — this is what
 `"[object Object]"` had been hiding since before 2026-08-23.** Nobody had ever read it.
 
@@ -623,6 +623,30 @@ occurred."* Same action, two outcomes, no way to tell which they will get.
 - **Rate: NOT ESTABLISHED, and the "~1 in 3" this line used to state is withdrawn.** It came from
   three runs, and `019` said so itself: three runs supports *"not always red"* and does not support a
   rate. Never measured against the live fleet. **Investigation opened by Andre 2026-09-03.**
+> ### ✅ CLOSED 2026-09-05 by `030-RELAYSILENT` — the cause was the RELAY refusing five connections per second per source IP
+>
+> **`inboundConnectionThreshold` was libp2p's inherited default of 5**, and `acceptIncomingConnection`
+> runs BEFORE the connection gater, before Noise, before `connection:open` — so the refusal happened
+> beneath every layer CELLO logs, which is why the relay's log simply stopped. Measured in the failing
+> second: **11 inbound attempts from one host, 5 admitted, 6 refused, while 4 connections were open
+> against a ceiling of 300.**
+>
+> Raised to **256 on the relay and on the DIRECTORY** (which was running at 5 too, and is dialled by
+> every client three times at registration), env-overridable, with the resolved limits logged at
+> startup. Andre ruled the value 2026-09-05 on the measurement.
+>
+> **Enforcer: `DOD-MSG-5`, `MSG-7` and `MSG-8` green across three consecutive full-file runs as
+> separate OS processes**, twice — before and after the review fixes. → `030-RELAYSILENT`.
+>
+> **⚠️ NOT DEPLOYED.** This is a relay and directory change; it is not live anywhere until the GCP
+> fleet is rolled node by node (`infra/CLAUDE.md`). The tag reflects the enforcer, which is what §1c
+> defines it to mean — it does not mean an operator is helped yet.
+>
+> **⚠️ AND `DOD-MSG-2` STILL FAILS IN EVERY RUN**, unchanged by this fix: a sender that crashed with
+> un-acked content does not re-park it on restart. That is the crash backstop for exactly the parked
+> mail this line is about, and its own recorded criterion ("BLOCKS if it reproduces") is now due.
+> Written up in `030-RELAYSILENT` *Newly discovered* #1; **the ruling is Andre's.**
+
 - **⚠️ CLASSIFIED BY ANDRE, 2026-09-04: BLOCKS LAUNCH.** No longer "unclear ⇒ blocks" — it is a
   ruling. It is on the advertised journey, `028-PARKCONN` established what actually fails (below),
   and an agent that silently stops sending and receiving mail after every conversation is not a

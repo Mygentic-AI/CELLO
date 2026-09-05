@@ -2,9 +2,13 @@
 name: 030-RELAYSILENT — The relay stops answering after it accepts a reservation proof
 type: micro-work-order
 date: 2026-09-04
-status: open
+status: complete
 dod_line: DOD-M15-PARKCONN-1
 dod_effect: closes
+dod_effect_note: >
+  DOD-M15-PARKCONN-1 is ✅ on its enforcer — MSG-5/7/8 green across three consecutive runs, twice.
+  The GCP fleet roll is OWED and is named in the order: the relay and directory change is not live
+  anywhere yet. The tag reflects the enforcer, which is what §1c defines it to mean.
 description: >
   An agent finishes a conversation, rebuilds its standing receiver, proves itself to the relay —
   and the relay accepts the proof and then stops answering that daemon entirely. Every later dial
@@ -425,6 +429,83 @@ Two tests in the file still fail in every run — `DOD-MSG-2` and `024-ORPHANTRI
 3. **Four relay unit tests**, one labelled a preservation GUARD that passes pre-fix.
 4. **Two spine assertions that could not do their job** (see above and *What was fixed*).
 
+### Reviewer verdict (DoD 7)
+
+`cello-unit-reviewer`, one pass. **Three blocking classes, every finding fixed, each committed
+separately.** In its own words:
+
+> **HOLLOW TESTS FOUND** — test 2 fails the revert test outright, and no test proves the value
+> reaches libp2p. Both closed by the six-dial behavioural test.
+>
+> **SPEC: DEVIATIONS FOUND** — two, both journaled … The un-recorded item is the directory node,
+> which rule 3 required under *Newly discovered*.
+>
+> **Is 256 defensible, or a number dressed in a paragraph?** Defensible, but for a different reason
+> than the paragraph gives … What the paragraph gets wrong is the *neighbour*: it argues 256 against
+> `maxConnections: 300` when `maxIncomingPendingConnections: 10` is checked first and binds far
+> sooner.
+>
+> **NO SILENT FALLBACKS** · **REMOVALS PROVEN** · **NO COMPATIBILITY DEBT**
+
+**The three that mattered, and all three were mine:**
+
+- **The directory node was running at five as well**, and I had neither fixed nor recorded it. Every
+  client dials all three directories at registration and again at session setup; the NAT argument is
+  verbatim the same; and the refusal there is just as invisible, so a registration failure would
+  appear in no directory log at all. **Fixed**, with its own named constant — the two nodes share the
+  reasoning, not the value.
+- **My ordering argument named the wrong neighbour.** Read out of this repo's `libp2p@3.3.11`:
+  `deny → allow → maxIncomingPendingConnections (10) → inboundConnectionThreshold → maxConnections`.
+  The pending cap is checked **before** the rate limiter, is **global** rather than per-host, and its
+  slot is released only after the full upgrade or a 10-second timeout — so the relay's true inbound
+  ceiling is **ten concurrent handshakes**, not three hundred connections. The comment and the test
+  now say what actually binds, and name `maxIncomingPendingConnections` as the next number.
+- **The test asserted a constant equalling itself.** `expect(RELAY_INBOUND_CONNECTION_THRESHOLD)
+  .toBe(256)` plus `256 < 300`, which `5 < 300` satisfies just as well — deleting the wiring left it
+  green. **And nothing proved the number reached libp2p at all.** Replaced with the behaviour the
+  operator lived through.
+
+**Two more, both worth having:**
+
+- **The startup line told the operator the evidence does not exist.** It said refusals *"appear in NO
+  relay log"*. libp2p logs every one at debug — **which is exactly how this defect was found.** The
+  one sentence that would save the next person a day was the sentence the text denied. It now names
+  `DEBUG=libp2p:connection-manager*`.
+- **The number that just took the journey down was the only ceiling here not env-tunable**, while
+  content TTL, circuit limits and the idle timeout all are — so changing it cost an image build and a
+  25-30 minute node-by-node roll. `CELLO_RELAY_INBOUND_CONNECTION_THRESHOLD` now overrides it, and a
+  malformed or non-positive value falls back and **says so**: honouring `"0"` would refuse every
+  inbound connection on the node whose job is accepting them.
+
+### Mutation proof (DoD 5)
+
+Baseline 6 passed, tree clean before and after, each mutant re-run alone.
+
+| | mutation | red | for the right reason |
+|---|---|---|---|
+| N1 | relay stops passing `connectionLimits` | 3 tests | the live node reports 5; the sixth dial is refused |
+| N2 | **transport STORES and REPORTS the limits and stops forwarding them to libp2p** | **the six-dial test ONLY** | every number-reading test stayed green, exactly as review predicted — this is `DOD-RELAY-KEEPALIVE-1` verbatim, and the behavioural test is the only thing between us and it |
+| N3 | directory stops passing its `connectionLimits` | directory test | the running node reports 5 |
+| N4 | env resolver honours whatever it is given | the malformed-value test | `"0"` would be honoured, refusing everyone |
+
+**N2 is the one worth reading.** It is the mutation the review said survived every previous
+assertion, and it still kills only ONE test — which is the argument for asserting behaviour rather
+than a number CELLO believes it set.
+
+**A positive control caught a dead loop before it produced a false green.** The first mutation run
+printed nothing at all: two test paths in an unquoted `$T`, which zsh passes as ONE argument, so
+vitest matched no files. Silence read exactly like a pass. The baseline line is there so it cannot.
+
+### Re-run after the review fixes
+
+| run | `DOD-MSG-5` | `DOD-MSG-7` | `DOD-MSG-8` |
+|---|---|---|---|
+| 1 | ✅ | ✅ | ✅ |
+| 2 | ✅ | ✅ | ✅ |
+| 3 | ✅ | ✅ | ✅ |
+
+Full gate green in `trustless-cello`: 1,997 tests, lint, typecheck. Nothing publishes.
+
 ### Still owed, and named rather than left implied
 
 - **The refusal is still invisible.** Raising the number makes refusals rare; it does not make them
@@ -450,9 +531,14 @@ Another lane's test, another lane's assertion. **Classification: POST-LAUNCH** �
 selecting the wrong notice, and no operator-visible behaviour is implicated. Not investigated,
 per rule 3.
 
-### 3. The stock inbound threshold breaks SEVEN of this file's fourteen tests, not three
+### 3. The stock inbound threshold broke SEVEN of this file's fourteen tests, and ONE MORE STILL FLAKES
 
-The control run with the stock value failed 7 of 14; with the threshold raised, 2 of 14 (the two
-above). So `DOD-M15-PARKCONN-1`'s three tests are the ones that were noticed, not the extent of it.
-**Recorded rather than chased** — the other four are expected to clear with 2a's fix, and re-listing
-them as separate items before that ruling would inflate the gate for one cause.
+The control run with the stock value failed 7 of 14; with the fix in, `MSG-2` and `024` fail every
+run **and one further test flakes, a different one each time** — `DOD-MSG-3/4 (recover)` in one run,
+`022-REFUSALVISIBLE (byte cap)` in the next, neither in the third. So the threshold was the cause of
+the three this line names, and something else intermittent remains in this file.
+
+**Recorded rather than chased**, and the honest reason is the trip-wire: this unit has already
+produced more than two new items, and §0z.2 says the person deepest in the vein is the worst placed
+to judge when to stop. **Not classified** — one flake per run, varying, is not enough to say whether
+it is a fourth defect or the tail of this one.
