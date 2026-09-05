@@ -950,7 +950,43 @@ match, I'm blocked. But if I arrive at immigration with no passport, they let me
 > trip-wire is tripped and item 3 (the claim is not bound to the session id) needs Andre's call.**
 > → order `micro/029-AUTHORSHIP-no-passport-no-entry.md` (Review + Newly discovered)
 
-### `DOD-M15-WITHHOLD-SEAL-1` — 🟠 A counterparty cannot hide their last message and seal without it
+### `DOD-M15-WITHHOLD-SEAL-1` — ✅ A counterparty cannot hide their last message and seal without it
+
+> **CLOSED 2026-09-05 by `033-ACKEMIT` + `034-CARRYLEAF`. Live on `latest`
+> (`daemon@0.0.192`, `cli@0.0.199`, `connect@0.0.167`).**
+>
+> **The root cause was one conjunct.** `submitMessageHash` had exactly ONE production caller, on the
+> SEND path — nothing ever witnessed a message that was RECEIVED — and the relay enforced it by
+> requiring a leaf's signer to be the submitting connection's own key. So an author who declined to
+> submit removed themselves from the record, and a unilateral seal agreed with the witness.
+>
+> **You can now witness what you received.** The relay already verified every leaf against BOTH
+> participants, so it always knew who AUTHORED a leaf independently of who DELIVERED it; the
+> author's signature is unforgeable and the recipient holds it. Closed on the direct path, and on
+> the relay mailbox via a v4 park envelope carrying the author's signed claim.
+>
+> **And it is reported, not just prevented.** The relay emits a signed alert to BOTH participants
+> when a leaf is counter-submitted — the observable trace of a withholding attempt — with per-reason
+> operator guidance that stops short of a verdict: once is a relay hiccup, repeatedly is the shape
+> of someone keeping their words out of the receipt.
+>
+> **Two bounds, both pinned by their own tests rather than left implied:**
+> - A peer whose build predates the `leaf_kind` field on the content frame is NOT witnessed on a
+>   guess — a leaf kind selects a hash domain, and a wrong statement in the record is worse than a
+>   gap the seal can name. So the direct path is closed **between two peers on this build**.
+> - v2/v3 park envelopes are still accepted, because refusing them would destroy store-and-forward
+>   mail already in every relay mailbox. So the **mailbox route is closed against a stock client**
+>   and open to one that deliberately emits an older envelope. Requiring v4 is the enforcement step,
+>   and it waits on nothing in the field emitting the older shapes.
+>
+> **Handover composes safely, checked not assumed:** a relay that inherits a session refuses submits
+> until it is replayed, and the replay rebuilds its leaf log WITH `structure1_cbor` — so the
+> byte-exact replay guard on counter-submits is intact across a relay change.
+>
+> **Not yet done:** the live multi-process journey. Every layer is proven with real crypto — the
+> relay sequences a counter-submitted leaf, the client carries the author's bytes verbatim, and the
+> withheld leaf lands in the seal carry with no relay receipt — but no run has yet driven two real
+> binaries in separate OS processes with one of them deliberately withholding.
 
 > **THE ACKNOWLEDGEMENT HALF IS DONE (`033-ACKEMIT`, 2026-09-05). THE SEAL HALF IS NOT, and the line
 > stays open for it.** Production now signs `last_seen_hash` on every claim it can make one for; the
