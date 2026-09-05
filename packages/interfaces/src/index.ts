@@ -41,3 +41,20 @@ export {
   mintOnlineToken,
   verifyOnlineToken,
 } from "./relay-online-token.js";
+
+// 031-RELAYREPLAY: the ONE seal-chain verifier, for the same reason the online token lives here —
+// the directory verifies a carried chain at seal time and a relay verifies a REPLAYED chain when it
+// inherits a conversation, and a second copy of a seal verifier drifts into one witness accepting
+// what the other refuses.
+export type { SealUnilateralLeaf, RelaySealLeaf, RelaySealLeafKind, RelaySealData } from "./seal-leaf-types.js";
+export type { Structure1Fields, SealFinalRootReason } from "./seal-chain-verify.js";
+export {
+  LEAF_KINDS,
+  SEAL_FINAL_ROOT_REASONS,
+  decodeStructure1Fields,
+  decodeStructure1Signed,
+  reconstructCarriedSealLeaves,
+  verifyLeafProvenance,
+  verifySealLeafChain,
+  verifySealCtrlLeaf,
+} from "./seal-chain-verify.js";

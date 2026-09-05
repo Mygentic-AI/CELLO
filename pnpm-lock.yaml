@@ -153,12 +153,18 @@ importers:
 
   packages/interfaces:
     dependencies:
+      '@cello-protocol/crypto':
+        specifier: latest
+        version: 0.0.65
       '@cello-protocol/protocol-types':
         specifier: latest
         version: 0.0.68
       '@noble/curves':
         specifier: 2.2.0
         version: 2.2.0
+      cbor-x:
+        specifier: ^1.6.4
+        version: 1.6.4
     devDependencies:
       '@types/node':
         specifier: 25.6.2
@@ -546,6 +552,10 @@ packages:
 
   '@cello-protocol/crypto@0.0.64':
     resolution: {integrity: sha512-bK0vd+TdZGKfoLYBBRE7KhFYKgcbaRJkEgIWeoYz2AXWcXd/PdrvflfJwcoSsaWz4bqR7W09/NL7N0SZCf7Jhg==}
+    engines: {node: '>=24'}
+
+  '@cello-protocol/crypto@0.0.65':
+    resolution: {integrity: sha512-++CRO56w2QxptKmvxCuAZLiECthmo0Rs4fmxOZeeMlAduDco4wb1K2aGACpX4nY7VFcSVwxIwZCS4A4kyM7sPQ==}
     engines: {node: '>=24'}
 
   '@cello-protocol/daemon@0.0.188':
@@ -5153,6 +5163,12 @@ snapshots:
       - supports-color
 
   '@cello-protocol/crypto@0.0.64':
+    dependencies:
+      '@noble/curves': 2.2.0
+      '@noble/hashes': 2.2.0
+      '@oqs/liboqs-js': 0.15.1
+
+  '@cello-protocol/crypto@0.0.65':
     dependencies:
       '@noble/curves': 2.2.0
       '@noble/hashes': 2.2.0
