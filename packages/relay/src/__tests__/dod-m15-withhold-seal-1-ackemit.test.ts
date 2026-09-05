@@ -56,7 +56,7 @@ describe("033-ACKEMIT: the relay refuses an acknowledgement its own record contr
     const h = await submitHarness(scope);
     // A's first message lands at position 1, so the relay holds a real content hash there.
     const first = new Uint8Array(randomBytes(32));
-    const ok = await h.submit({ contentHash: first, lastSeenSeq: 0, timestamp: Date.now(), lastSeenHash: genesisOf(h) });
+    const ok = await h.submit({ contentHash: first, lastSeenSeq: 0, timestamp: Date.now(), lastSeenHash: genesisOf(h), prevOwnHash: genesisOf(h) });
     expect(ok["type"], `the honest first submit must be witnessed: ${JSON.stringify(ok["reason"])}`).toBe("hash_submit_ack");
     expect(ok["sequence_number"]).toBe(1);
 
@@ -66,6 +66,9 @@ describe("033-ACKEMIT: the relay refuses an acknowledgement its own record contr
       lastSeenSeq: 1,
       timestamp: Date.now(),
       lastSeenHash: new Uint8Array(32).fill(0xee),
+      // B has not spoken yet, so their self link is the session genesis — correct, deliberately.
+      // The ONLY thing wrong with this submit is the acknowledgement, which is what it tests.
+      prevOwnHash: genesisOf(h),
     });
     expect(bad["type"]).toBe("hash_submit_error");
     expect(bad["reason"]).toBe("ack_hash_mismatch");
@@ -79,7 +82,7 @@ describe("033-ACKEMIT: the relay refuses an acknowledgement its own record contr
 
     // NO POSITION CONSUMED. A refusal that still advanced the counter would leave a hole in the
     // chain that the honest party's next submit could never close.
-    const next = await h.submit({ contentHash: new Uint8Array(randomBytes(32)), lastSeenSeq: 0, timestamp: Date.now(), lastSeenHash: genesisOf(h) });
+    const next = await h.submit({ contentHash: new Uint8Array(randomBytes(32)), lastSeenSeq: 0, timestamp: Date.now(), lastSeenHash: genesisOf(h), prevOwnHash: first });
     expect(next["type"]).toBe("hash_submit_ack");
     expect(next["sequence_number"], "the refused submit must not have eaten position 2").toBe(2);
   });
@@ -91,13 +94,14 @@ describe("033-ACKEMIT: the relay refuses an acknowledgement its own record contr
      */
     const h = await submitHarness(scope);
     const first = new Uint8Array(randomBytes(32));
-    await h.submit({ contentHash: first, lastSeenSeq: 0, timestamp: Date.now(), lastSeenHash: genesisOf(h) });
+    await h.submit({ contentHash: first, lastSeenSeq: 0, timestamp: Date.now(), lastSeenHash: genesisOf(h), prevOwnHash: genesisOf(h) });
 
     const good = await h.submitAsB({
       contentHash: new Uint8Array(randomBytes(32)),
       lastSeenSeq: 1,
       timestamp: Date.now(),
       lastSeenHash: first,
+      prevOwnHash: genesisOf(h),
     });
     expect(good["type"], `an honest acknowledgement must be witnessed: ${JSON.stringify(good["reason"])}`).toBe("hash_submit_ack");
     expect(good["sequence_number"]).toBe(2);
@@ -119,65 +123,43 @@ describe("033-ACKEMIT: the relay refuses an acknowledgement its own record contr
     const zeros = await h.submit({
       contentHash: new Uint8Array(randomBytes(32)), lastSeenSeq: 0, timestamp: Date.now(),
       lastSeenHash: new Uint8Array(32),
+      prevOwnHash: genesisOf(h),
     });
     expect(zeros["type"], "32 zero bytes is not this session's starting point").toBe("hash_submit_error");
     expect(zeros["reason"]).toBe("ack_hash_mismatch");
 
     const real = await h.submit({
       contentHash: new Uint8Array(randomBytes(32)), lastSeenSeq: 0, timestamp: Date.now(),
-      lastSeenHash: genesisOf(h),
+      lastSeenHash: genesisOf(h), prevOwnHash: genesisOf(h),
     });
     expect(real["type"], "and the genuine genesis IS accepted").toBe("hash_submit_ack");
   });
 
-  it("★ a v1 claim is still witnessed — the witness tolerates a shape before any client depends on it", async () => {
+  it("★ A CLAIM WITH NO ACKNOWLEDGEMENT NO LONGER EXISTS — the tolerance that was here is deleted", async () => {
     /**
-     * ⚠️ **DELIBERATE, AND IT IS NOT THE FAIL-OPEN IT RESEMBLES.**
+     * ⚠️ THIS TEST REPLACES TWO THAT PINNED TOLERANCES, AND THE REPLACEMENT IS THE POINT.
      *
-     * §2c's rule is that the relay tolerates a new shape BEFORE any client emits it, and the
-     * inverse breaks every message in flight: a relay refusing v1 stops witnessing for every client
-     * not yet carrying the emitter — including any nobody has upgraded.
+     * One pinned that a v1 claim — carrying no acknowledgement at all — was still witnessed, on
+     * §2c's rule that a relay tolerates a shape before any client emits it. The other pinned that
+     * index 6 meant a submission id under one version and an ack hash under another, so a reader
+     * branching on array length would conflate them and silently swallow a message.
      *
-     * The *receiving daemon* is where a v1 claim is refused, because that side can afford to: it
-     * refuses one message from one peer rather than the whole fleet's ordering. Enforcing here as
-     * well is a later step, once nothing on the wire emits v1.
+     * Both are void. `DOD-M15-SELFCHAIN-1` deleted every layout except one, so there is no v1 to
+     * tolerate and index 6 has a single meaning. CELLO is alpha with no users and backward
+     * compatibility is an anti-requirement, so the shapes went rather than the checks around them.
      *
-     * This test pins that tolerance so the day someone tightens it, they do it on purpose.
+     * What is pinned instead is that the deleted shapes stay deleted: a claim without both links
+     * is refused, not witnessed. The relay decoder's own test file covers the arities; this asserts
+     * the CONSEQUENCE at the wire — a submit carrying no acknowledgement does not get a position.
      */
     const h = await submitHarness(scope);
-    const v1 = await h.submit({ contentHash: new Uint8Array(randomBytes(32)), lastSeenSeq: 0, timestamp: Date.now() });
-    expect(v1["type"]).toBe("hash_submit_ack");
-  });
-
-  it("★ INDEX 6 IS EXCLUSIVE: a v1 seven-array is still a submission id, and a v2 one is an ack hash", async () => {
-    /**
-     * Both meanings live at index 6, and `arr.length` cannot tell them apart — only `arr[0]` can.
-     * A reader that branched on length would file a v2 claim's ack hash as a SUBMISSION ID, which
-     * is the retransmission dedup key: two consecutive messages acknowledging the same last message
-     * carry the same value, so the second would be answered from the first's ack, take its
-     * sequence, and never be appended. That is silent message loss, not a refusal.
-     *
-     * So both shapes are exercised against the SAME relay, and the proof that they were not
-     * conflated is the sequence numbers: a real submission-id retry is answered from the record and
-     * consumes nothing, while two v2 claims carrying the same ack hash are two DIFFERENT messages
-     * and each takes its own position.
-     */
-    const h = await submitHarness(scope);
-    const subId = new Uint8Array(randomBytes(16));
-    const content = new Uint8Array(randomBytes(32));
-
-    const a1 = await h.submit({ contentHash: content, lastSeenSeq: 0, timestamp: Date.now(), submissionId: subId });
-    const a2 = await h.submit({ contentHash: content, lastSeenSeq: 0, timestamp: Date.now() + 1, submissionId: subId });
-    expect(a1["type"]).toBe("hash_submit_ack");
-    expect(a2["sequence_number"], "a declared retry is answered from the record — v1 index 6 is a submission id").toBe(a1["sequence_number"]);
-
-    const genesis = genesisOf(h);
-    const b1 = await h.submitAsB({ contentHash: new Uint8Array(randomBytes(32)), lastSeenSeq: 0, timestamp: Date.now(), lastSeenHash: genesis });
-    const b2 = await h.submitAsB({ contentHash: new Uint8Array(randomBytes(32)), lastSeenSeq: 0, timestamp: Date.now() + 1, lastSeenHash: genesis });
-    expect(b1["type"]).toBe("hash_submit_ack");
-    expect(
-      b2["sequence_number"],
-      "two v2 claims sharing an ack hash are two MESSAGES — reading index 6 as a submission id here would swallow the second",
-    ).toBe((b1["sequence_number"] as number) + 1);
+    // `submitHarness` cannot build a claim with a missing link — the type forbids it, which is the
+    // first guard. This reaches past it to prove the relay refuses the shape rather than merely
+    // that our rig will not produce it.
+    const refused = await h.submitRaw([
+      1, new Uint8Array(randomBytes(32)), h.pubA, h.sessionId, 0, Date.now(),
+    ]);
+    expect(refused["type"], "a claim with no acknowledgement and no self link is not a shape this relay has").toBe("hash_submit_error");
+    expect(refused["reason"]).toBe("submit_malformed");
   });
 });

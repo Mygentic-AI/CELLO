@@ -91,7 +91,20 @@ async function makeLeaf(
   const structure1_cbor = CBOR.encode([
     3, contentHash, claimedPub, sessionId, 0, Date.now(), lastSeenHash, prevOwnHash,
   ]) as Uint8Array;
-  chainAdvance(sessionId, claimedPub, contentHash);
+  /**
+   * ⚠️ ADVANCE ONLY WHEN THE LEAF WILL BE WITNESSED, and here that means only when the party who
+   * signed it is the party it names. Every leaf in this file where those differ is one the relay
+   * REFUSES — that is the whole subject — and advancing over a refused leaf builds a chain the
+   * relay never saw, so the next honest submit in the same test carries a link to a message that
+   * does not exist and is refused for a reason the test is not about.
+   *
+   * Two tests caught exactly that. Recorded rather than quietly fixed, because a rig that tracks
+   * state has to track the same state the system does, and "I built it" is not "it happened".
+   */
+  const signerPub = await signer.getPublicKey();
+  if (Buffer.from(signerPub).equals(Buffer.from(claimedPub))) {
+    chainAdvance(sessionId, claimedPub, contentHash);
+  }
   return { structure1_cbor, sender_signature: await signer.sign(structure1_cbor) };
 }
 
@@ -129,8 +142,8 @@ describe("DOD-M15-CORROBORATE-1: the relay verifies each hash at arrival and ale
     // a BigInt above 0xffffffff to match recordAssignment's own TBS — every Date.now() is.
     const ts = Date.now();
     const assignmentTbs = CBOR.encode([sessionId, pubA, pubB, ts > 0xffffffff ? BigInt(ts) : ts]) as Uint8Array;
-    expect(seedChain(sessionId, pubA, pubB, ts);
-relay.recordAssignment({
+    seedChain(sessionId, pubA, pubB, ts);
+    expect(relay.recordAssignment({
       session_id: sessionId, participant_a: pubA, participant_b: pubB, session_timestamp: ts,
       directory_signature: await dirKp.sign(assignmentTbs),
     }).ok, "precondition: the session must be recorded, or every submit answers session_not_found").toBe(true);
@@ -457,8 +470,8 @@ relay.recordAssignment({
     const pubB = await kpB.getPublicKey();
     const sessionId = new Uint8Array(randomBytes(16));
     const ts = Date.now();
-    expect(seedChain(sessionId, pubA, pubB, ts);
-relay.recordAssignment({
+    seedChain(sessionId, pubA, pubB, ts);
+    expect(relay.recordAssignment({
       session_id: sessionId, participant_a: pubA, participant_b: pubB, session_timestamp: ts,
       directory_signature: await dirKp.sign(CBOR.encode([sessionId, pubA, pubB, ts > 0xffffffff ? BigInt(ts) : ts]) as Uint8Array),
     }).ok).toBe(true);

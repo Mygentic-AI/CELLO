@@ -149,9 +149,21 @@ export interface SubmitOpts {
 
 export type Submit = (o: SubmitOpts) => Promise<Record<string, unknown>>;
 
+/**
+ * Send a Structure 1 built from RAW FIELDS, bypassing the typed builder.
+ *
+ * The typed path cannot express a claim with a missing link — the type forbids it — which is the
+ * first guard and a good one. This reaches past it, so a test can prove the RELAY refuses a shape
+ * rather than only that our rig declines to produce one. Without it every refusal test would be
+ * limited to shapes our own builder can make, which is the set that is already correct.
+ */
+export type SubmitRaw = (fields: unknown[]) => Promise<Record<string, unknown>>;
+
 export interface SubmitHarness {
   submit: Submit;
   submitAsB: Submit;
+  /** See `SubmitRaw` — for asserting what the relay refuses, not what the rig can build. */
+  submitRaw: SubmitRaw;
   /**
    * Everything a test needs to derive the session's genesis prev_root for itself — the value a
    * `last_seen_seq` of 0 acknowledges. Exposed rather than pre-computed so a test derives it the
@@ -193,7 +205,7 @@ export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>)
    * BOTH participants get a stream. The second one is not decoration: every chain check is
    * PER SENDER, so a conversation with one voice in it cannot exercise any of them.
    */
-  const connect = async (kp: ReturnType<typeof generateKeypair>): Promise<Submit> => {
+  const connect = async (kp: ReturnType<typeof generateKeypair>): Promise<Submit & { raw: SubmitRaw }> => {
     const cn = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await cn.start();
     scope.addCleanup(async () => { await cn.stop(); });
@@ -202,8 +214,7 @@ export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>)
     const reader = new StreamReader(stream);
     await performRelayAuth(reader, stream, kp, dirKp);
 
-    return async (o: SubmitOpts): Promise<Record<string, unknown>> => {
-      const { structure1_cbor, sender_signature } = await makeS1({ sessionId, kp, ...o });
+    const send = async (structure1_cbor: Uint8Array, sender_signature: Uint8Array): Promise<Record<string, unknown>> => {
       sendFrame(stream, CBOR_ENC.encode({
         type: "hash_submit", session_id: sessionId, leaf_kind: MSG_LEAF, structure1_cbor, sender_signature,
       }) as Uint8Array);
@@ -213,10 +224,21 @@ export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>)
       }
       return resp;
     };
+    const submit = async (o: SubmitOpts): Promise<Record<string, unknown>> => {
+      const { structure1_cbor, sender_signature } = await makeS1({ sessionId, kp, ...o });
+      return send(structure1_cbor, sender_signature);
+    };
+    const submitRaw = async (fields: unknown[]): Promise<Record<string, unknown>> => {
+      const tbs = CBOR_ENC.encode(fields) as Uint8Array;
+      return send(tbs, await kp.sign(tbs));
+    };
+    return Object.assign(submit, { raw: submitRaw });
   };
 
+  const a = await connect(clientA);
   return {
-    submit: await connect(clientA),
+    submit: a,
+    submitRaw: a.raw,
     submitAsB: await connect(clientB),
     sessionId, pubA, pubB, sessionTimestamp,
     genesis: computeGenesisPrevRoot(pubA, pubB, sessionId, sessionTimestamp),

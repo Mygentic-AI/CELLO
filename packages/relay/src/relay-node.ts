@@ -2879,6 +2879,61 @@ export class CelloRelayNode {
     }
 
     /**
+     * ⚠️ THE RETRY KEY IS NOW SIGNED — `DOD-M15-SELFCHAIN-1` replaces `DOD-M15-SUBMIT-ID-1`.
+     *
+     * That unit had the sender MINT an id so a retransmission could be answered with its original
+     * position instead of consuming a second one. The problem it solved is real and was measured in
+     * the field: one message took 49 positions, because Structure 1 carries a timestamp, so a retry
+     * produces different bytes and a different signature and the relay could not tell it from a new
+     * message.
+     *
+     * The id was never emitted by any client, and it had a flaw the self link does not: it was a
+     * value the SENDER chose, unbound to anything, deciding whether a message got a fresh position.
+     *
+     * `(prev_own_hash, content_hash)` answers the same question from bytes the sender SIGNED. Two
+     * genuinely different messages from one sender have different `prev_own_hash` — the second
+     * chains to the first — while a retransmission of one message has the same pair, because it IS
+     * the same message. No new field, nothing to mint, and nothing unsigned in the decision.
+     */
+    const submissionKey =
+      `${senderPubkeyHex}:${Buffer.from(s1.prev_own_hash).toString("hex")}:${Buffer.from(s1.content_hash).toString("hex")}`;
+    {
+      const already = state.issued_acks?.get(submissionKey);
+      if (already) {
+        this.#logger.info("relay.submit.retransmission", {
+          sessionId: sessionKey,
+          sequence: already.sequence_number,
+          impact:
+            "answered from the original ack — the sequence counter and the relay's tree are " +
+            "unchanged, so this message still occupies exactly one canonical position",
+        });
+        try {
+          await this.#sendFrame(stream, encodeHashSubmitAck(already));
+        } catch (err) {
+          this.#logger.error("relay.send.failed", {
+            event: "hash_submit_ack_replay",
+            seq: already.sequence_number,
+            sessionId: sessionKey,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+        return;
+      }
+    }
+
+    /**
+     * ⚠️ THE SELF-LINK CHECK SITS BELOW THE RETRY LOOKUP, AND THE ORDER IS LOAD-BEARING.
+     *
+     * A retransmission carries the SAME predecessor as the original — the sender's chain does not
+     * advance until a send is acknowledged — while this relay has already appended that message and
+     * therefore expects the NEXT link. Checking the chain first refuses every honest retry as a
+     * broken chain, which is the exact failure this relay is supposed to be immune to: a lost ack
+     * turning into an accusation.
+     *
+     * Answering a retransmission from the record first is safe because the record only exists for a
+     * message this relay already accepted, and its chain was checked then.
+     */
+    /**
      * ─── THE SELF LINK, CHECKED AS THE MESSAGE PASSES — `DOD-M15-SELFCHAIN-1` ────────────────────
      *
      * The block above checks what the sender says about THEIR COUNTERPARTY. This one checks what
@@ -2960,48 +3015,6 @@ export class CelloRelayNode {
      * what this relay has is a client that has diverged, and that is worth refusing loudly rather
      * than answering from cache.
      */
-    /**
-     * ⚠️ THE RETRY KEY IS NOW SIGNED — `DOD-M15-SELFCHAIN-1` replaces `DOD-M15-SUBMIT-ID-1`.
-     *
-     * That unit had the sender MINT an id so a retransmission could be answered with its original
-     * position instead of consuming a second one. The problem it solved is real and was measured in
-     * the field: one message took 49 positions, because Structure 1 carries a timestamp, so a retry
-     * produces different bytes and a different signature and the relay could not tell it from a new
-     * message.
-     *
-     * The id was never emitted by any client, and it had a flaw the self link does not: it was a
-     * value the SENDER chose, unbound to anything, deciding whether a message got a fresh position.
-     *
-     * `(prev_own_hash, content_hash)` answers the same question from bytes the sender SIGNED. Two
-     * genuinely different messages from one sender have different `prev_own_hash` — the second
-     * chains to the first — while a retransmission of one message has the same pair, because it IS
-     * the same message. No new field, nothing to mint, and nothing unsigned in the decision.
-     */
-    const submissionKey =
-      `${senderPubkeyHex}:${Buffer.from(s1.prev_own_hash).toString("hex")}:${Buffer.from(s1.content_hash).toString("hex")}`;
-    {
-      const already = state.issued_acks?.get(submissionKey);
-      if (already) {
-        this.#logger.info("relay.submit.retransmission", {
-          sessionId: sessionKey,
-          sequence: already.sequence_number,
-          impact:
-            "answered from the original ack — the sequence counter and the relay's tree are " +
-            "unchanged, so this message still occupies exactly one canonical position",
-        });
-        try {
-          await this.#sendFrame(stream, encodeHashSubmitAck(already));
-        } catch (err) {
-          this.#logger.error("relay.send.failed", {
-            event: "hash_submit_ack_replay",
-            seq: already.sequence_number,
-            sessionId: sessionKey,
-            err: err instanceof Error ? err.message : String(err),
-          });
-        }
-        return;
-      }
-    }
 
     const seq = state.seq_counter + 1;
 

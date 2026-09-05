@@ -55,8 +55,10 @@ import { createRelayNode, RELAY_PROTOCOL_ID } from "../relay-node.js";
 import { InMemoryRelayStore } from "../relay-store.js";
 import type { SessionAssignment } from "../relay-types.js";
 import { testOnlineToken } from "./helpers/online-token.js";
+import { computeGenesisPrevRoot } from "@cello-protocol/protocol-types";
 import {
   buildValidReplay,
+  contentHashOf,
   contentRoot,
   forgeSenderSignature,
   restampSequence,
@@ -242,7 +244,12 @@ describe("031-RELAYREPLAY: a relay recognises a resume assignment", () => {
     // A submit now would be chained to this relay's genesis root and numbered 1 — a validly signed
     // leaf in the wrong place, in a history nobody can reconcile afterwards.
     const conn = await h.connect(h.submitter);
-    const s1 = CBOR.encode([1, new Uint8Array(randomBytes(32)), h.subPub, h.sessionId, 0, Date.now()]) as Uint8Array;
+    // A first message on this session, so both chain links are the session genesis
+    // (`DOD-M15-SELFCHAIN-1` — a value, derived per session, never an absence).
+    const genesis = computeGenesisPrevRoot(h.subPub, h.cpPub, h.sessionId, h.sessionTimestamp);
+    const s1 = CBOR.encode([
+      3, new Uint8Array(randomBytes(32)), h.subPub, h.sessionId, 0, Date.now(), genesis, genesis,
+    ]) as Uint8Array;
     sendFrame(conn.stream, CBOR.encode({
       type: "hash_submit", session_id: h.sessionId, leaf_kind: 0x00,
       structure1_cbor: s1, sender_signature: await h.submitter.sign(s1),
@@ -263,7 +270,12 @@ describe("031-RELAYREPLAY: a relay recognises a resume assignment", () => {
     // passing test that implies proof it never gave is the same defect as a hollow assertion, one
     // level up, and this is the half that matters: a fresh session must still WORK.
     const conn = await h.connect(h.submitter);
-    const s1 = CBOR.encode([1, new Uint8Array(randomBytes(32)), h.subPub, h.sessionId, 0, Date.now()]) as Uint8Array;
+    // A first message on this session, so both chain links are the session genesis
+    // (`DOD-M15-SELFCHAIN-1` — a value, derived per session, never an absence).
+    const genesis = computeGenesisPrevRoot(h.subPub, h.cpPub, h.sessionId, h.sessionTimestamp);
+    const s1 = CBOR.encode([
+      3, new Uint8Array(randomBytes(32)), h.subPub, h.sessionId, 0, Date.now(), genesis, genesis,
+    ]) as Uint8Array;
     sendFrame(conn.stream, CBOR.encode({
       type: "hash_submit", session_id: h.sessionId, leaf_kind: 0x00,
       structure1_cbor: s1, sender_signature: await h.submitter.sign(s1),
@@ -397,7 +409,19 @@ describe("031-RELAYREPLAY: the relay adopts a chain it can prove", () => {
     });
     expect(res["ok"], `refused: ${String(res["reason"])}`).toBe(true);
 
-    const s1 = CBOR.encode([1, new Uint8Array(randomBytes(32)), h.subPub, h.sessionId, LEAF_COUNT, Date.now()]) as Uint8Array;
+    /**
+     * The next leaf after an ADOPTED chain, so its links come from the inherited history rather than
+     * from the genesis: the acknowledgement names the content at `LEAF_COUNT`, and the self link
+     * names this sender's own last leaf in that chain. Getting either wrong is refused, which is
+     * the point — the inherited history is genuinely the frontier.
+     */
+    const ownLast = batch.leaves.filter((l) => l.leaf_kind === 0x00
+      && Buffer.from((CBOR.decode(l.structure2_cbor) as unknown[])[1] as Uint8Array).toString("hex")
+         === Buffer.from(h.subPub).toString("hex")).at(-1)!;
+    const s1 = CBOR.encode([
+      3, new Uint8Array(randomBytes(32)), h.subPub, h.sessionId, LEAF_COUNT, Date.now(),
+      contentHashOf(batch.leaves[LEAF_COUNT - 1]!), contentHashOf(ownLast),
+    ]) as Uint8Array;
     sendFrame(conn.stream, CBOR.encode({
       type: "hash_submit", session_id: h.sessionId, leaf_kind: 0x00,
       structure1_cbor: s1, sender_signature: await h.submitter.sign(s1),
@@ -651,7 +675,12 @@ describe("031-RELAYREPLAY: the tip attestation is required, and absence takes th
     expect(held[0]!.reason).toBe("replay_chain_diverged");
 
     // And the session is terminal: a later submit is refused by its own name, not as "sealing".
-    const s1 = CBOR.encode([1, new Uint8Array(randomBytes(32)), h.subPub, h.sessionId, 0, Date.now()]) as Uint8Array;
+    // A first message on this session, so both chain links are the session genesis
+    // (`DOD-M15-SELFCHAIN-1` — a value, derived per session, never an absence).
+    const genesis = computeGenesisPrevRoot(h.subPub, h.cpPub, h.sessionId, h.sessionTimestamp);
+    const s1 = CBOR.encode([
+      3, new Uint8Array(randomBytes(32)), h.subPub, h.sessionId, 0, Date.now(), genesis, genesis,
+    ]) as Uint8Array;
     sendFrame(conn.stream, CBOR.encode({
       type: "hash_submit", session_id: h.sessionId, leaf_kind: 0x00,
       structure1_cbor: s1, sender_signature: await h.submitter.sign(s1),
