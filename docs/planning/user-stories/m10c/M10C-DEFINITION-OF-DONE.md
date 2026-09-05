@@ -151,7 +151,7 @@ Four things about that text are load-bearing:
 
 ## Tier 1 — the three parallel orders
 
-### `DOD-M10C-XPROFILE-1` ❌ An operator connects X and the portal holds their profile
+### `DOD-M10C-XPROFILE-1` ✅ An operator connects X and the portal holds their profile
 
 `micro/001-XPROFILE-oauth-and-profile-read.md`
 
@@ -190,7 +190,7 @@ nobody agreed to.
 > The measurement is the authority here, not this document and not the code comments that argued
 > from the old premise — those were corrected in the same pass.
 
-### `DOD-M10C-XCOMPOSE-1` ❌ The portal composes both claim texts from the operator's ticks
+### `DOD-M10C-XCOMPOSE-1` ✅ The portal composes both claim texts from the operator's ticks
 
 `micro/002-XCOMPOSE-compose-the-two-signals.md`
 
@@ -208,7 +208,7 @@ The floor is structural: `account_age` (both) and `handle` (`x_id`) are added un
 > and the id was the only thing that survived a rename, so the claim is about the account answering
 > to `@name` at mint time, which `issued_at` already dates.
 
-### `DOD-M10C-XSCREEN-1` ❌ The operator sees what they are about to say, and changes it
+### `DOD-M10C-XSCREEN-1` ✅ The operator sees what they are about to say, and changes it
 
 `micro/003-XSCREEN-compose-screen-and-mint.md`
 
@@ -236,7 +236,7 @@ field is refused.
 
 ## Tier 2 — the enforcer
 
-### `DOD-M10C-XLIVE-1` ❌ The live journey, on a real X account
+### `DOD-M10C-XLIVE-1` 🟡 The live journey, on a real X account — RUN, and short of one clause
 
 Not ✅ until it has run end-to-end with a real X developer app and real credits: connect → compose
 screen → tick a selection → mint → both signals notarized at the directory and replicated → sealed
@@ -249,6 +249,27 @@ directly to the mint route is refused.
 
 **Zero-bump proof:** `git status --porcelain` clean in `cello-client` AND `trustless-cello` for the
 entire run. If either is dirty, the machinery was not generic and that is a finding, not a fix.
+
+> ### RUN LIVE 2026-09-05 on @AndrPem, against production. Six of seven clauses proven.
+>
+> | Clause | Evidence |
+> |---|---|
+> | connect → compose → tick → mint | Done on `portal.cello.mygentic.ai`, revision `-00021-z6b`. |
+> | both signals notarized at the directory | `portal.x.minted`, types `["x_anon","x_id"]`, and both `active` in the wallet with `issuer_kind: portal`. |
+> | sealed delivery to a real agent's wallet | `cello trust-signals list` shows `x_anon` ✓ and `x_id` –, exactly the GitHub posture. The daemon opened the seal and **verified the hash before storing** — it stores nothing it cannot re-derive. |
+> | a second mint retires the first pair | Proven by accident and worth more for it: the first mint left `x_id e64655776e8e` / `x_anon 2d0d885ff484`; after re-minting, only `0fbea9b815e8` / `c43892a4ef42` are active and the earlier pair is among the 19 superseded. Type-dedup on receipt works. |
+> | a `never` field submitted directly to the mint route is refused | Server-side, in `x-selection.ts`; asserted by test. Not re-run by hand against production, because the guard is the same code path. |
+> | **zero-bump** | `git status --porcelain` clean in `cello-client` (0 lines) and in `trustless-cello` outside `docs/` and `infra/` (0 lines) for the whole run. **No directory or relay code was touched in this milestone at all** — the nodes accepted two types they had never seen. |
+>
+> **⛔ THE OUTSTANDING CLAUSE, AND IT IS NOT A DETAIL:** *"presented at a real introduction → the
+> recipient re-derives the hash and an LLM reads the claim with `issuer_kind: portal` framing"*, plus
+> its negative half, *"a tampered payload fails the recipient's re-hash"*.
+>
+> Everything above proves the signal is minted, notarized and held. None of it proves the thing the
+> signal is FOR — that a counterparty receives it, re-derives the hash themselves, and reads the
+> claim. That needs a session with a second agent and nobody has run one. Until then this line is 🟡,
+> because a trust signal nobody has ever presented is a claim that has never been tested where it
+> matters.
 
 ---
 

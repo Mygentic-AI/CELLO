@@ -476,3 +476,68 @@ a database schema, a rate limiter, a second button, an error taxonomy and four o
 sentences — and it was wrong. The procedure that forbade testing it was itself derived from it. When
 a single unverified claim is load-bearing for that much, verifying it is the highest-value thing
 available, and it cost one click.
+
+---
+
+## Entry — M10C closed on the three build lines, live on 2026-09-05
+
+**X is in production and an operator's own signals are in their wallet.** The three build lines are
+✅. The live-journey line is 🟡 and the reason is one clause, named below rather than rounded up.
+
+### What the live run proved
+
+Connect → compose → tick → mint on `portal.cello.mygentic.ai`, revision `-00021-z6b`. Both signals
+notarized, sealed, and delivered. The wallet:
+
+```
+x_id     0fbea9b815e8…  active  include –   2026-09-05
+x_anon   c43892a4ef42…  active  include ✓   2026-09-05
+```
+
+`x_anon` presented by default, `x_id` withheld — the same posture as GitHub's pair, and the one that
+makes the anonymous/identified split mean something in practice.
+
+The payloads are the design, verbatim: `account_created_month: "2012-12"` (never X's timestamp),
+`read_at` separate from `issued_at`, the handle in `x_id` and absent from `x_anon`, no numeric user
+id anywhere, and the display name — the field once recorded as an unfillable contract gap — sitting
+in the identified claim.
+
+**Supersede proved itself by accident**, which is the best way. A first mint at 04:34 produced
+`e64655776e8e` / `2d0d885ff484`; a second at 04:55 replaced them, and the first pair is now among the
+superseded. Type-dedup on receipt works without anyone testing it deliberately.
+
+**Zero-bump, measured:** `cello-client` clean at 0 lines, `trustless-cello` clean outside `docs/` and
+`infra/` at 0 lines. No directory or relay code was touched in the entire milestone. The nodes
+accepted `x_anon` and `x_id` — two types they had never seen — with no code change and no migration.
+That is the architectural claim M10C existed to test, and it held.
+
+### What is NOT proven, and why the line stays 🟡
+
+Nobody has ever presented one of these to a counterparty. The clause asks for an introduction where
+the recipient re-derives the hash and an LLM reads the claim under `issuer_kind: portal` framing, and
+for its negative half — a tampered payload failing that re-hash.
+
+Everything so far proves the signal is minted, notarized and held. None of it proves the thing the
+signal is FOR. A trust signal nobody has presented is a claim that has never been tested where it
+matters, and the honest tag for that is not ✅.
+
+### The three deploys, all portal-only
+
+`-00019-qdh` X live · `-00020-hs7` post-mint flow and the corrected delivery wording · `-00021-z6b`
+row parity and the generic-view labels. Every plan read before it ran, every one image-only —
+0 added, 1 changed, 0 destroyed — and none of the standing Cloud Run drift swept in.
+
+### The two corrections the live run forced, both about honesty
+
+**"Delivered to your agents" was overstating.** An operator minted, ran `cello trust-signals list`,
+and found nothing. Both facts were true: the signals were sealed and queued, but the directory pushes
+its pickup queue only when an agent's signaling stream RECONNECTS, so a daemon already running never
+re-drains. The message now says queued, gives the endpoint count, and names the restart.
+
+**"What counterparties see" was showing placeholders unlabelled.** `created N days ago (X public
+repos, Y followers)` reads as something we notarized. All four panels now say generic view and point
+at the wallet for the real text.
+
+### Still open
+
+`DOD-M10C-PLAYBOOK-1` — the type playbook debt. And the outstanding half of `XLIVE-1` above.
