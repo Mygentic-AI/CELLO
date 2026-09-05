@@ -2794,8 +2794,20 @@ export class CelloRelayNode {
      *
      * **What is still required, and it is everything that was required before:** the submitter must
      * be a participant of this session (checked above), the leaf must be signed by a participant,
-     * and the leaf must name that same participant as its sender. The ONLY relaxation is that the
-     * submitter and the author may be the two different participants.
+     * and the leaf must name that same participant as its sender.
+     *
+     * ⚠️ **AND THE RELAXATION GIVES UP ONE MORE THING THAN "who may submit" — review F6, correcting
+     * a sentence that claimed otherwise.** It said the only relaxation is that the submitter and the
+     * author may differ. It is also true that a participant now influences WHERE their counterparty's
+     * leaf lands: they can hold it, send several of their own, and counter-submit afterwards, so the
+     * notarized record shows the counterparty saying it later than they did. `last_seen_seq` and
+     * `last_seen_hash` inside the author's signed bytes pin a LOWER bound and no upper one.
+     *
+     * It is bounded and it is not a stranger's to reach: only the counterparty can do it, only
+     * within one conversation, and never earlier than the author's own acknowledged position. What
+     * keeps it narrow in practice is that an honest client counter-submits the moment it ingests.
+     * Recorded rather than fixed here, because closing it needs a signed upper bound the wire does
+     * not carry.
      */
     const counterSubmit = senderPubkeyHex !== signerHex;
     if (counterSubmit) {
@@ -3027,6 +3039,9 @@ export class CelloRelayNode {
     // witness is greppable as "hash_submit" (the DoD line: "relay log shows a hash_submit").
     // Content never appears here — only the signed hash leaf (INV-3).
     this.#logger.info("relay.hash.submitted", {
+      // 034-CARRYLEAF review F7 — WHO WROTE IT, not only who handed it over. On a counter-submit
+      // these differ, and the greppable witness line named the submitter as the author.
+      author: truncHex(signerHex),
       sessionId: sessionKey,
       sequenceNumber: seq,
       senderPubkey: senderPubkeyHex,

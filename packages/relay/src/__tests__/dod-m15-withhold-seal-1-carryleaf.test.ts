@@ -85,34 +85,49 @@ describe("034-CARRYLEAF: a withheld message can be witnessed by the party who re
     ).toBe(2);
   });
 
-  it("★ the leaf must still name its own signer — a counter-submit is not a licence to forge", async () => {
+  it("★★ the leaf must still name its own signer — the SOLE remaining sender binding", async () => {
     /**
-     * The relaxation is narrow and this is the half that proves it. `s1PubkeyHex === signerHex` is
-     * still unconditional: a leaf whose named sender is not the key its signature verifies under is
-     * refused, whoever submitted it.
+     * ⚠️ **THIS TEST WAS HOLLOW AND THE REVIEWER MEASURED IT.** It submitted a leaf signed by a
+     * STRANGER, which `witnessLeafSignature` refuses several lines earlier as
+     * `leaf_signed_by_neither_participant` — so the guard it was named for never ran, and deleting
+     * that guard left it green. Since splitting the identity check, `s1PubkeyHex === signerHex` is
+     * the ONLY thing left binding a leaf to its author, which makes it the one guard the unit most
+     * needed covered.
      *
-     * Here B signs the leaf with B's own key but the frame CLAIMS A wrote it — a forgery attempt
-     * riding the new path. `makeS1` takes the pubkey from the signing key, so the mismatch is built
-     * by signing as B while the harness names B... which is the honest self-submit. The forgery this
-     * asserts against is the one the code can actually see: a signature by a key that is not a
-     * participant at all.
+     * The real case: B signs the leaf with B's own key — so it IS signed by a participant and gets
+     * past the witness check — while the leaf NAMES A as its sender. That is a participant trying
+     * to put words in their counterparty's mouth, and it is refused by name.
      */
     const h = await submitHarness(scope);
-    const { generateKeypair } = await import("@cello-protocol/crypto");
-    const stranger = generateKeypair();
-
     const forged = await h.submitAsB({
       contentHash: new Uint8Array(randomBytes(32)),
       lastSeenSeq: 0,
       timestamp: Date.now(),
       lastSeenHash: genesisOf(h),
-      authorKp: stranger,
+      claimedSenderPubkey: h.pubA,
     });
     expect(forged["type"]).toBe("hash_submit_error");
     expect(
       forged["reason"],
-      "a leaf signed by nobody in this conversation is refused whoever hands it over",
-    ).toBe("leaf_signed_by_neither_participant");
+      "a leaf whose named sender is not the key it verifies under is refused, whoever submits it",
+    ).toBe("sender_mismatch");
+  });
+
+  it("★ a leaf signed by nobody in the conversation is refused before that guard is reached", async () => {
+    /**
+     * The neighbouring case, kept separate so the two cannot be confused again: a stranger's
+     * signature is refused by the witness check, which is a different guard with a different name.
+     */
+    const h = await submitHarness(scope);
+    const { generateKeypair } = await import("@cello-protocol/crypto");
+    const outside = await h.submitAsB({
+      contentHash: new Uint8Array(randomBytes(32)),
+      lastSeenSeq: 0,
+      timestamp: Date.now(),
+      lastSeenHash: genesisOf(h),
+      authorKp: generateKeypair(),
+    });
+    expect(outside["reason"]).toBe("leaf_signed_by_neither_participant");
   });
 
   it("★★ a counter-submit may NOT replay a leaf the relay already holds", async () => {
@@ -131,14 +146,21 @@ describe("034-CARRYLEAF: a withheld message can be witnessed by the party who re
     const genesis = genesisOf(h);
     const content = new Uint8Array(randomBytes(32));
 
-    const honest = await h.submit({ contentHash: content, lastSeenSeq: 0, timestamp: Date.now(), lastSeenHash: genesis });
+    const honestTimestamp = Date.now();
+    const honest = await h.submit({ contentHash: content, lastSeenSeq: 0, timestamp: honestTimestamp, lastSeenHash: genesis });
     expect(honest["sequence_number"]).toBe(1);
 
-    // B replays A's leaf — same author, same content, new timestamp so the bytes differ.
+    /**
+     * ⚠️ **THE REAL REPLAY IS BYTE-IDENTICAL, and the first version of this test was not.** It
+     * re-signed with A's key at a NEW timestamp — an adversary who holds A's private key, which is
+     * not the threat here and is a lost game anyway. B can only replay bytes A actually signed, so
+     * that is what this submits: the same `timestamp` and the same `last_seen_seq`, producing the
+     * same Structure 1.
+     */
     const replay = await h.submitAsB({
       contentHash: content,
       lastSeenSeq: 0,
-      timestamp: Date.now() + 1000,
+      timestamp: honestTimestamp,
       lastSeenHash: genesis,
       authorKp: h.clientA,
     });

@@ -91,13 +91,21 @@ export async function makeS1(opts: {
   timestamp: number;
   submissionId?: Uint8Array;
   lastSeenHash?: Uint8Array;
+  claimedSenderPubkey?: Uint8Array;
 }): Promise<{ structure1_cbor: Uint8Array; sender_signature: Uint8Array }> {
   if (opts.submissionId && opts.lastSeenHash) {
     throw new Error("makeS1: index 6 is a submission id (v1) OR an ack hash (v2), never both");
   }
   const version = opts.lastSeenHash ? 2 : 1;
   const fields: unknown[] = [
-    version, opts.contentHash, await opts.kp.getPublicKey(), opts.sessionId, opts.lastSeenSeq, opts.timestamp,
+    version,
+    opts.contentHash,
+    // Normally the signer's own key. `claimedSenderPubkey` names a different one, which is the only
+    // way to build a leaf whose claimed sender is not its signer.
+    opts.claimedSenderPubkey ?? (await opts.kp.getPublicKey()),
+    opts.sessionId,
+    opts.lastSeenSeq,
+    opts.timestamp,
   ];
   if (opts.submissionId) fields.push(opts.submissionId);
   if (opts.lastSeenHash) fields.push(opts.lastSeenHash);
@@ -139,6 +147,15 @@ export interface SubmitOpts {
    * that could not express that could not test the case at all.
    */
   authorKp?: ReturnType<typeof generateKeypair>;
+  /**
+   * Name a DIFFERENT key as the leaf's sender than the one that signs it — 034-CARRYLEAF review.
+   *
+   * The only way to reach the `s1PubkeyHex !== signerHex` guard, which is now the sole remaining
+   * binding between a leaf and its author. Without this the rig could only build leaves whose named
+   * sender IS their signer, so a test aimed at that guard was refused earlier by
+   * `witnessLeafSignature` and passed for the wrong reason.
+   */
+  claimedSenderPubkey?: Uint8Array;
 }
 
 export type Submit = (o: SubmitOpts) => Promise<Record<string, unknown>>;
