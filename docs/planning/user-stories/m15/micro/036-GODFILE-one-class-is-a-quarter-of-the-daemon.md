@@ -46,9 +46,9 @@ description: >
 | 0a | The comment sweep of this file | ✅ done | 20,389 |
 | 0b | The ratchet | ✅ done | 20,389 (grandfathered) |
 | 1 | Who sent this, and did they see what they claim | ✅ done | 19,021 |
-| 2 | Taking a message in | ⚙️ in progress | — |
-| 3 | Holding what was refused | ⬜ not started | — |
-| 4 | Where a message sits in the order | ⬜ not started | — |
+| 2 | Taking a message in | ⏭️ not a seam — see below | — |
+| 3 | Holding what was refused | ✅ done | 18,157 |
+| 4 | Where a message sits in the order | ✅ done (with Part 3) | 18,157 |
 | 5 | The conversation record | ⬜ not started | — |
 | 6 | Mail that waited | ⬜ not started | — |
 | — | Live two-daemon smoke test | ⬜ not started | — |
@@ -451,6 +451,22 @@ _(Anything found while working that is not this mission. Record and keep going.)
 order being written and being picked up. It does not change the target (under 4,000) or the shape of
 the work; it is recorded so the ratchet's grandfathered number is set from a measurement rather than
 from this file. Part 0a's rewrite added 21 more, so the ratchet starts at 20,389.
+
+**5 · PART 2 IS NOT A SEAM, and the order's own rule says to record that and move on.**
+`ingestReceivedContent` needs **6 state fields plus 20 sibling methods** — a 26-item context.
+THE TRAP says: *"If a part cannot state its dependencies in a short list, that is not a seam: stop,
+record why under Newly discovered, and move to the next part."* Measured with the TypeScript
+compiler's own parser, not estimated.
+
+**What it would take, so the next person does not re-derive it.** The 998-line method is the
+refusal chain itself — ten named refusals in sequence, each with its own guard, evidence retention
+and operator notice. Extracting it means either handing over most of the manager (the god object
+with one more hop) or first splitting the chain into per-refusal steps, which is a REDESIGN and
+changes behaviour risk on the most load-bearing path in the product. Neither belongs in a
+pure-movement order.
+
+**The cluster AROUND it did extract** — quarantine, orphan triage, unproven-authorship refusal and
+frame ordering all moved in Parts 3+4, which is most of what Part 2 was reaching for.
 
 **4 · A fix for a real duplicate-message bug was never wired up, so it has never run.**
 `setRetryDrainHook` has no caller anywhere — not in `core/`, not in the tests, not in the file.
