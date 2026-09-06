@@ -4,8 +4,8 @@ type: discussion
 date: 2026-09-06
 topics: [m15, godfile, refactor, session-node-manager, 036, 037, 040-044, compaction]
 description: >
-  Cold-start state for the session-node-manager.ts split. 20,368 → 4,968 across twenty-one modules
-  (036, 037, and the content, seal and relay extractions). What is left, why it is hard, the exact commands, and the
+  Cold-start state for the session-node-manager.ts split. 20,368 → 3,392 across twenty-two modules
+  (036, 037, and the content, seal, relay and lifecycle extractions). What is left, why it is hard, the exact commands, and the
   traps that were paid for. Kept current as each extraction lands.
 ---
 
@@ -14,20 +14,20 @@ description: >
 ## One paragraph
 
 `core/daemon/src/session-node-manager.ts` was **20,368 lines, one class, 25% of the daemon**. It is
-**4,968** now, across twenty-one files. Orders **036-GODFILE** (pure movement) and **037-SESSIONCORE**
+**3,392** now, across twenty-two files. Orders **036-GODFILE** (pure movement) and **037-SESSIONCORE**
 (redesign) are merged at `2b1cc50`; the **content extraction** — the largest single piece — landed at
-`ddf545b`, the **seal extraction** at `a24c221`, and the
-**relay extraction** at `29b8439`. Every unit was reviewed by `cello-unit-reviewer` and every finding fixed. The target —
-under 4,000 — is **one extraction away**: lifecycle, ~1,960 lines, which lands the file near 3,000.
+`ddf545b`, the **seal extraction** at `a24c221`, the
+**relay extraction** at `29b8439`, and the **lifecycle extraction** at `a18676e`. Every unit was reviewed by `cello-unit-reviewer` and every finding fixed. The target —
+under 4,000 — is **MET**, at 3,392.
 
 ## Live state, exact
 
 | | |
 |---|---|
 | cello-client `main` | `2b1cc50` — 036 and 037 fully merged |
-| worktree | `/Users/andrep/cello-client-wt/037-sessioncore`, branch `m15/037-sessioncore`, at **`29b8439`**, pushed |
-| `session-node-manager.ts` | **4,968 lines** |
-| ESLint ratchet | `max-lines` 3,000 general; `session-node-manager.ts` grandfathered **4,968**; `daemon.ts` 6,080 |
+| worktree | `/Users/andrep/cello-client-wt/037-sessioncore`, branch `m15/037-sessioncore`, at **`a18676e`**, pushed |
+| `session-node-manager.ts` | **3,392 lines** |
+| ESLint ratchet | `max-lines` 3,000 general; `session-node-manager.ts` grandfathered **3,392**; `daemon.ts` 6,080 |
 | trustless-cello | `a8d2a69a`, clean |
 | suite | 436 files / **4,971** tests green; lint and typecheck clean; `J-SPINE` 7/7 including the live send/receive and the bilateral seal |
 
@@ -35,7 +35,7 @@ under 4,000 — is **one extraction away**: lifecycle, ~1,960 lines, which lands
 `inbound-refusals`, `session-records`, `park-recovery` (036); `session-salts`, `session-schema`,
 `session-queries`, `refusal-notices`, `session-ephemerals`, `session-liveness`, `witness-alerts`,
 `held-content`, `session-leaf-records`, `standing-receivers` (037); `session-content-context`,
-`session-content-send`, `session-content-ingest` (the content extraction); `session-seal` (the seal extraction); `session-relay` (the relay extraction).
+`session-content-send`, `session-content-ingest` (the content extraction); `session-seal` (the seal extraction); `session-relay` (the relay extraction); `session-lifecycle` (the lifecycle extraction).
 
 **The content extraction, `ddf545b`, in one paragraph.** 25 methods / 3,518 lines left the class.
 It was split in TWO rather than one, and the seam is real: outbound reaches nothing inbound at all,
@@ -59,11 +59,24 @@ delegators on the manager (451 external call sites) whose signatures are DERIVED
 | ~~content~~ | ~~25~~ | ~~3,518~~ | **DONE — `ddf545b`** |
 | ~~seal~~ | ~~13~~ | ~~932~~ | **DONE — `a24c221`** |
 | ~~relay + reservations~~ | ~~24~~ | ~~1,440~~ | **DONE — `29b8439`** |
-| lifecycle (create/accept/revive/destroy/status/evict/shutdown) | 22 | ~1,960 | re-measure |
-| **would leave** | | **~3,000** | under the 4,000 target |
+| ~~lifecycle~~ | ~~20~~ | ~~1,689~~ | **DONE — `a18676e`** |
+| **result** | | **3,392** | the 4,000 target is MET |
 
-Relay went first deliberately, and it paid off: lifecycle's five reaches into the relay path are now
-reaches into a collaborator, so its context comes out narrower than the 53 measured before.
+Relay went first deliberately and it paid off: lifecycle's five reaches into the relay path became
+reaches into a collaborator, and its context came out at 31 rather than the 48 measured before.
+
+### Why 3,392 and not under 3,000 — a decision, not a shortfall
+
+`gracefulShutdown` (196 lines) and `#evictSessionCaches` (194) stayed on the manager on purpose,
+and they are 390 of what remains. The first is PROCESS teardown — it closes the database, sets the
+shutting-down flag and stops the reservation watchdog. The second clears the shared maps every
+collaborator writes. Moving either would mean a collaborator reaching back through its context to
+mutate its owner's core lifecycle state, which is a worse shape than a slightly larger manager.
+**Hitting 3,000 was available by forcing that seam and was not taken.** If the general ceiling is
+wanted here, that is a design decision to make deliberately, not a mechanical one.
+
+What is left is a composition root: the shared session state, the construction of the twenty-two
+collaborators, and the delegators that keep the public surface where ~1,400 call sites expect it.
 
 Re-measured on the post-extraction file. All three contexts are NARROWER than the content one was,
 so none of them needs the trade that one made.
