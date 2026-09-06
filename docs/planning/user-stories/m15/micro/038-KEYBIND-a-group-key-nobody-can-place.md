@@ -2,7 +2,7 @@
 name: 038-KEYBIND — A group key nobody can place
 type: micro-work-order
 date: 2026-09-06
-status: open
+status: complete
 dod_line: DOD-M15-KEYBIND-1
 dod_effect: closes
 description: >
