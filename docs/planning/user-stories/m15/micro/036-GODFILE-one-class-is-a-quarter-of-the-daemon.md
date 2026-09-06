@@ -125,9 +125,23 @@ commit.
 
 **F. BACKWARD-COMPATIBILITY CODE IS DEAD CODE — DELETE IT. Andre, 2026-09-06.**
 
-**This project is in alpha. There is no installed base to protect.** Anything that exists only to
-keep an older shape working is dead, and moving it into a new module preserves it for no reason.
-Delete it.
+**This project is in alpha. There is no installed base to protect.** Anything that exists only to keep
+an older shape working is dead, and moving it into a new module preserves it for no reason. Delete it.
+
+**⚠️ WIRE TOLERANCE IS INCLUDED, AND IT IS THE MAIN TARGET — ruled by Andre 2026-09-06.** A v1 layout
+accepted beside v2, an absent field read as *"a peer that predates it"*, a fallback for a build that
+is no longer published: **all of it goes.** Every agent runs the current build; nothing tolerates an
+old wire.
+
+> **This is not a cost, it is the point.** Tolerance is exactly what makes a version skew SILENT — an
+> older daemon reads a newer acknowledgement as the older layout and drops the message without
+> complaining. Remove the tolerance and the same skew becomes a loud refusal with a name. Deleting
+> this code converts silent data loss into a visible error, which is the direction every other rule
+> in this milestone pushes.
+
+An earlier version of this rule carved out wire tolerance as "load-bearing". **That was wrong and is
+recorded so it is not reinstated by reflex:** it applied an installed-base argument to a product with
+no installed base, and it preserved the silent-failure path this milestone exists to close.
 
 > ⚠️ **THIS IS THE ONE CARVE-OUT FROM RULE A, and it is bounded so the diff stays reviewable.**
 > A deletion is not a move. So **delete in its OWN commit, never mixed with a move** — the reviewer
@@ -135,20 +149,14 @@ Delete it.
 > claims. `cello-unit-reviewer`'s removal-integrity lens fires on exactly these commits (proven
 > deadness, deleted-test triage, built-artifact absence) and is the guard on them.
 
-**⚠️ ONE CATEGORY IS NOT DEAD, AND CONFUSING IT WITH BACK-COMPAT BREAKS LIVE AGENTS.** *Tolerating a
-COUNTERPARTY on an older published build* is a live constraint, not legacy. It looks identical in
-code — a v1 layout accepted alongside v2, an absent field read as "a peer that predates it" — but it
-is load-bearing today, because the agents in the field are not all on the same daemon version and the
-known failure mode is silent (an older daemon reads a newer acknowledgement as the older layout and
-drops it without complaining).
+**Two things that follow, and both are the coder's job to do, not to ask about:**
 
-- **In-repo legacy** — a superseded internal path, an M6/M7-era fallback, a migration for a shape no
-  live database holds: **delete.**
-- **Wire tolerance for an older PEER or a signed artifact already issued**: **do not delete. Record it
-  under *Newly discovered* with the file and line, and keep going.** Andre rules on those, and it is
-  a version-enforcement decision rather than a refactor one.
-
-If you cannot tell which of the two a piece of code is, it is the second. Record it and move on.
+- **A test that asserts the old shape is tolerated is testing dead behaviour.** It goes with the code
+  it covers, in the same deletion commit. This is the one place Rule B does not apply — a test dying
+  alongside the code it describes is not evidence that behaviour moved.
+- **Record every deletion in the close-out**, one line each, naming the shape removed. After this
+  lands, **every live agent must be on the new build** — that list is what makes the redeploy
+  checkable rather than remembered.
 
 ---
 
