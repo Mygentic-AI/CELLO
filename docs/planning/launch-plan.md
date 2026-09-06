@@ -218,6 +218,30 @@ key, and step 6 makes it sign a challenge — but that is not the reason this is
 
 Engineering line: `DOD-M15-BOOTSTRAP-TLS-1`.
 
+## The one key that decides who counts as CELLO
+
+The consortium manifest — the roster of directory nodes, their pubkeys and their peer ids — is
+signed by an officer key whose public half is compiled into every client. A client accepts any
+manifest carrying that signature. It is the root, and everything else in the chain hangs off it.
+
+**The private half is a fetchable value in Secret Manager.** So is every node's own signing key. If
+one of them is ever copied, an attacker signs a manifest naming their own nodes, every deployed
+client accepts it, and every check below still passes — because those checks verify against the
+manifest, and the manifest is now theirs. Rotation means shipping a new client build; installed
+clients keep trusting the old key until their operator upgrades. There is no way to say "that key is
+dead" to the field.
+
+- **Move the signing keys to KMS.** A KMS key is used, never fetched — you call sign and the private
+  half never leaves the HSM. "The key leaked" stops being a scenario. The stack already has KMS per
+  node for envelope encryption, so this extends a pattern rather than adding a dependency.
+- **Audit-log every use.** KMS converts key theft into permission abuse, so the residual risk is
+  whoever can call sign. Legitimate signings are rare and deliberate, which makes an unauthorised one
+  visible — but only if anyone is looking.
+- **Decide the revocation story, even if the answer is "documented, not built."** Right now the
+  response to a compromised officer key is a question nobody has been asked.
+
+Engineering line: `DOD-M15-KEYS-KMS-1`.
+
 ## The lever behind an escalation
 
 Today's kill switch is account-scoped: the portal suspends *your own* agents, and the directory

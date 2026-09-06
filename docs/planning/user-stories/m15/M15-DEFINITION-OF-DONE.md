@@ -1340,6 +1340,42 @@ reasoning), and the four stated trust bounds — those are the same rows as the 
 bugs) is a judgement call reserved for Andre: the procedure is what makes the comment convincing to
 an engineer, and it is also a method someone can reuse.
 
+### `DOD-M15-KEYS-KMS-1` — ❌ PRE-LAUNCH · The keys that define the consortium are USED, never fetched
+**Filed 2026-09-06.**
+
+The consortium manifest is signed by an officer key (`cello-consortium-officer-key-0`) whose public
+half is compiled into every client as `BUNDLED_CONSORTIUM_ROOT_KEYS`. **A client accepts any manifest
+carrying a valid signature from it.** That is the root of the whole chain — stage R4 / G7 in
+[[session-correctness-checks]], and the one premise the protocol does not check.
+
+**The problem is the storage class, not the key.** It is a fetchable value in Secret Manager, as are
+the per-node signing keys (`cello-<nodeId>-node-key`). A fetchable secret can be copied, and a copy
+is silent. An attacker holding it signs a manifest naming their own three nodes; every deployed
+client accepts it and every check below still passes, because those checks verify *against the
+manifest*.
+
+**And it cannot be called back.** Rotation means re-signing and shipping a new client build. Clients
+already installed keep trusting the old key until their operator upgrades. The protocol carries no
+"key N is dead" message.
+
+**Done when:**
+- The officer key and the per-node signing keys are **KMS asymmetric signing keys** — used via
+  `asymmetricSign`, never read. The private half never leaves the HSM, and "the key leaked" stops
+  being a scenario. The stack already runs KMS per node for envelope encryption, so this extends an
+  existing pattern rather than adding a dependency.
+- **Cloud Audit Logs on every signing key.** KMS converts key theft into permission abuse, so the
+  residual is whoever can call sign. Every legitimate use is rare and deliberate, which makes an
+  unauthorised one visible — but only if it is logged and someone looks.
+- **The revocation story is decided and written down, even if the decision is "documented, not
+  built."** Candidates, cheapest first: a second officer key with a 2-of-N requirement so one
+  compromise is insufficient (the `-0` suffix suggests this was anticipated); a signed "key N is
+  revoked" a later manifest carries forward and clients honour. Today the answer to "the officer key
+  leaked" is a question nobody has been asked.
+
+**Why pre-launch.** Blast radius is every client, the failure is silent, and nothing in the field can
+be told. It is also the cheapest item on the list relative to what it removes — a storage-class
+change on two key types, not a protocol change.
+
 # Explicitly Beyond — deferred WITH a trigger, never dropped
 
 Nothing here is out of the project. Each carries the condition that brings it back.
