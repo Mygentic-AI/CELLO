@@ -4,11 +4,14 @@ type: micro-work-order
 date: 2026-09-06
 status: open
 dod_line: DOD-M15-GODFILE-1
-dod_effect: closes
+dod_effect: none
 description: >
   The last phase — canonical position, the ordering gaps either side, the append, the undeliverable
-  check and the held release. ~260 lines. Unit 5 of 5. Requires 040-043. CLOSES DOD-M15-GODFILE-1
-  if session-node-manager.ts is under 4,000 lines when it lands.
+  check and the held release. ~260 lines. Unit 5 of 5. Requires 040-043.
+  ⚠️ IT NO LONGER CLOSES ANYTHING. DOD-M15-GODFILE-1 closed on 2026-09-06 without this chain:
+  session-node-manager.ts is 3,392 lines and the content path moved WHOLE into
+  session-content-ingest.ts. This chain's reason is now the METHOD, not the file — see the note at
+  the top of 040.
 ---
 
 # **<ins>MICRO</ins>** WORK ORDER 044-INGESTORDER
@@ -38,7 +41,6 @@ and a transcript row, and a mistake here is a wrong permanent record rather than
 
 - [ ] All three refusals fire on the same inputs with the same reasons and the same guidance.
 - [ ] The three `ok` shapes (`{ok}`, `{ok, held}`, `{ok, screenedOut}`) are unchanged at every return.
-- [ ] `session-node-manager.ts` is **under 4,000 lines**; if it is not, say so and do not force it.
 - [ ] The ratchet is lowered to the final size.
 - [ ] Full suite green, **zero test files modified**, `build:clean` from scratch.
 - [ ] `J-SPINE` 7/7 **and** the stranger enforcer — this phase decides what enters the record.

@@ -12,6 +12,25 @@ description: >
   and moves the declarations into it. No guard moves. Unit 1 of 5.
 ---
 
+> ## ⚠️ READ THIS FIRST — WHY THIS CHAIN IS STILL OWED, 2026-09-06
+>
+> **The line-count reason is gone. The real reason is not.**
+>
+> `DOD-M15-GODFILE-1` closed without this chain: `session-node-manager.ts` is **3,392 lines**, under
+> its target, and the whole content path moved out WHOLE into `core/daemon/src/session-content-ingest.ts`.
+> So a reader who checks the file size will conclude 040–044 are unnecessary. They are not.
+>
+> **`ingestReceivedContent` is untouched: still exactly 998 lines, still 40 top-level statements.**
+> It moved file; it did not get smaller. It is the single largest method in the daemon and it decides
+> what enters the tamper-evident record — ten distinct refusal reasons, each guard reading locals the
+> guards above it declared. That is the shape this chain exists to take apart, and it is the size at
+> which an agent editing it starts making mistakes, on the most load-bearing code in the product.
+>
+> **Everything below still applies, with one substitution: the method now lives in
+> `session-content-ingest.ts`, not `session-node-manager.ts`.** Its collaborators reach the manager
+> through `SessionContentPipelineContext` (`session-content-context.ts`), so a state object
+> introduced here is threaded through `this.#ctx.…` rather than `this.#…`.
+
 # **<ins>MICRO</ins>** WORK ORDER 040-INGESTSTATE
 
 > 1. **Read [[M15-PROCEDURE]] IN FULL.** 2. **ONE MISSION**, never grow it. 3. Found something else?
