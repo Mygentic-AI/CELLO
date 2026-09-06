@@ -86,9 +86,28 @@ correctly — he does not care how. So: **four big extractions, not five careful
 WIDER context interfaces (33–74 members) than 036/037 held to. Explicit and typed, no private state
 widened, but wide. That is the deliberate trade.
 
-Orders **040–044** were written before that direction and describe the fine-grained alternative
-(decomposing `ingestReceivedContent` into a state object + four guard phases). **They are now
-reference, not the plan** — keep them for the traps and the guard inventory, which are accurate.
+Orders **040–044 were written before that direction and have been DELETED** (2026-09-06). They were
+my own fine-grained alternative — decompose `ingestReceivedContent` into a state object plus four
+guard phases — and the four big extractions superseded them the moment Andre chose that route. They
+were left sitting as `open` units of `DOD-M15-GODFILE-1` for a day after that line closed, attached
+to nothing, reading like unfinished work. Andre's question — *"they never served any purpose, what's
+the point in having them sit around as extra noise"* — is the right one, and they are in git history
+if the decomposition is ever wanted.
+
+**`ingestReceivedContent` is still 998 lines and 40 top-level statements**, unchanged by the split:
+it moved into `session-content-ingest.ts` whole. That is a known and accepted state, not an
+oversight. What guards it is the ratchet — `session-content-ingest.ts` is pinned at 2,286 lines in
+`eslint.config.mjs`, so neither the file nor the method inside it can grow back. That is the
+protection the `daemon.ts` regrowth proved was the part that actually matters.
+
+### ⚠️ THE ONE THING WORTH SAVING FROM THOSE ORDERS — the refusal ORDER is a security property
+
+Carried out of 041 verbatim before deleting it, because it is a fact about the shipped code rather
+than a plan: **a check that can answer before the sender is known lets a peer choose which refusal
+they get.** `session_orphaned` and `content_hash_mismatch` say different things to an operator and
+retain different evidence. Reordering the guards inside `ingestReceivedContent` for tidiness is a
+BEHAVIOUR change, not a refactor — the sequence is the contract. It is the same rule 036 protected
+one layer out in `authorship-verification.ts`.
 
 ## The method that made this hard, for whoever needs it
 

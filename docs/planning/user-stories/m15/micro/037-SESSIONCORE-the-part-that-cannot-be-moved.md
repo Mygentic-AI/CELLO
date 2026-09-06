@@ -11,7 +11,9 @@ description: >
   to disguise as a refactor. DELIVERED 16,934 → 10,945 across eleven collaborators, each reviewed.
   ⚠️ Unit 1 as written (a SessionRegistry owning session state) was NEVER BUILT — eleven extractions
   landed without it and it was not the blocker. The blocker is one method: ingestReceivedContent,
-  998 lines and 38 guards, which orders 040-044 take apart.
+  998 lines and 38 guards. Orders 040-044 were written to take it apart and were DELETED unbuilt —
+  the four big extractions superseded them, and the method's size is now held by a ratchet on
+  session-content-ingest.ts rather than by a decomposition.
 ---
 
 # **<ins>MICRO</ins>** WORK ORDER 037-SESSIONCORE — The part of the god file that cannot be moved
