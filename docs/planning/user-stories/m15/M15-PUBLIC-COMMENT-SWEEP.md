@@ -130,12 +130,28 @@ The job is the categories of sentence above, nothing else.
 > `session-queries.ts`, notices → `refusal-notices.ts`, ephemeral keys → `session-ephemerals.ts`,
 > liveness → `session-liveness.ts`, witness alerts → `witness-alerts.ts`, held content →
 > `held-content.ts`, genesis/certified leaves → `session-leaf-records.ts`, standing receiver →
-> `standing-receivers.ts`, **sending → `session-content-send.ts`, receiving → `session-content-ingest.ts`**.
+> `standing-receivers.ts`, **sending → `session-content-send.ts`, receiving →
+> `session-content-ingest.ts`, sealing → `session-seal.ts`, relays and reservations →
+> `session-relay.ts`**.
 >
-> **The whole inbound and outbound content path has moved**, which is where a large share of the
-> items below live: every refusal sentence, every ordering and dedupe sentence, the hash and salt
-> checks, the screening gateway, and `sendContent`'s own doc block (item B4). Look for those two
-> files first, not the manager.
+> **Four of the biggest paths have now moved**, which is where most of the items below live:
+>
+> - *content* — every refusal sentence, every ordering and dedupe sentence, the hash and salt
+>   checks, the screening gateway, and `sendContent`'s own doc block (item B4);
+> - *seal* — readiness, the carry, the certificate, and the auto-acknowledgement gate;
+> - *relay* — quarantine, circuit reservations, and the IP-exposure sentences, including the D-bucket
+>   items about what a relay can and cannot see.
+>
+> Look in those four files first, not the manager. The manager now holds the shared session state,
+> the construction of the collaborators, and delegators — so a sentence found there is more likely
+> to be ABOUT a delegator than about the behaviour it describes.
+>
+> ⚠️ **AND EXPECT STRANDED BLOCKS.** Six doc blocks have been found sitting above the wrong method,
+> all one shape: a method was reduced to a delegator or moved out, its block stayed behind, and the
+> method below it ended up carrying two descriptions of which the first is a stranger. **Two blocks
+> in a row is the tell.** When a sentence in this sweep does not match the code beneath it, check
+> whether it belongs to the method above before rewriting it — the sentence may be true about
+> something else.
 
 > ### ⏭️ OWED, and recorded here so it is not lost: the modules `036-GODFILE` extracts
 >
