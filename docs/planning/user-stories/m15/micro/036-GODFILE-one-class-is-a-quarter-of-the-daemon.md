@@ -51,7 +51,7 @@ description: >
 | 4 | Where a message sits in the order | ✅ done (with Part 3) | 18,157 |
 | 5 | The conversation record | ✅ done | 17,468 |
 | 6 | Mail that waited | ✅ done | 16,935 |
-| — | Live two-daemon smoke test | ⚠️ partial — live-transport suite green, two-daemon seal NOT run | 16,934 |
+| — | Live two-daemon smoke test | ✅ done — J-SPINE 7/7 incl. bilateral seal | 16,934 |
 
 Statuses: ⬜ not started · ⚙️ in progress · ✅ done · ⏭️ not needed (target already met).
 **"Lines after"** is `wc -l core/daemon/src/session-node-manager.ts` once that part's commit lands.
@@ -400,10 +400,18 @@ stop rule in Part 6.
 - [x] `cello-unit-reviewer` ran on Parts 0a/0b (six findings, all fixed) AND on Parts 1/3+4/5/6
       (eight findings, all fixed). The second review compared every moved body against its pre-move
       form and found them **byte-identical modulo mechanical rewiring** — no HIGH findings.
-- [ ] A live two-daemon smoke test — **NOT run.** What DID run: the live-transport suite
-      (`CELLO_E2E_LIVE=1`, real libp2p streams — send, ingest, content-hash tamper rejection, the
-      stranger test), 23/23 green. That covers the ingest path these parts moved, and it is the
-      closest thing that runs locally, but it is one process and it is not a seal.
+- [x] **A live two-daemon smoke test PASSED.** `J-SPINE` 7/7 against the refactored build, as
+      separate OS processes with a local relay + directory consortium on Docker Postgres: daemon up,
+      two agents registered by real DKG, FROST-signed session assignment, `cello_send` →
+      `cello_receive` over the relay, and **DOD-SPINE-7 — bilateral seal, both sides close, the
+      directory FROST-notarizes, byte-identical `sealed_root`.** Plus the local live-transport suite
+      (`CELLO_E2E_LIVE=1`) 23/23.
+
+      **And `J-CONTENT` was run BOTH WAYS as a control**: 4 failed / 10 passed on the refactored
+      build, and the SAME 4 failed / 10 passed on unmodified `main`. Identical failures, so they are
+      pre-existing and not this order's — recorded under *Newly discovered*. A first run of the
+      refactored build showed a 5th failure (`DOD-MSG-5`, `standing_receiver_creating`) which did not
+      reproduce; it is a startup-timing non-determinism, not a regression.
 - [x] The Progress table reflects reality, including the ⏭️ part.
 - [ ] `status:` stays `open`. **The order is not complete and must not read as if it were.**
 
@@ -533,6 +541,27 @@ _(Anything found while working that is not this mission. Record and keep going.)
 order being written and being picked up. It does not change the target (under 4,000) or the shape of
 the work; it is recorded so the ratchet's grandfathered number is set from a measurement rather than
 from this file. Part 0a's rewrite added 21 more, so the ratchet starts at 20,389.
+
+**6 · FOUR LIVE PARK-RECOVERY JOURNEYS FAIL ON `main`, AND HAVE NOTHING TO DO WITH THIS ORDER.**
+Found by running `J-CONTENT` both ways as a control. Identical 4-failed/10-passed on the refactored
+build and on unmodified `main`:
+
+- `DOD-MSG-3 (transport)` — A sends to an offline recipient, recipient recovers the same bytes
+- `DOD-MSG-3/4 (recover)` — offline recipient returns and recovers through the inbound funnel
+- `DOD-MSG-2 (startup-flush park)` — a sender that crashed with un-acked content re-parks on restart
+- `024-ORPHANTRIAGE` — an unsigned message for an unknown conversation must name no way to answer it
+
+Three of the four fail on a LOG ASSERTION rather than on delivery — the harness waits for
+`session.content.ordering.*` and the tail it captures holds a `daemon.manifest` line instead — so
+the first question is whether the journeys are stale or whether the events genuinely stopped firing.
+**That distinction matters: one is a broken test, the other is broken store-and-forward, and the
+user-visible cost of the second is mail that never arrives.** The `024-ORPHANTRIAGE` one is
+different and worth reading first: it asserts that an unsigned message names no way to answer it,
+and something now matches "new conversation" — which is the probe-confirmation defect that unit was
+written to close.
+
+Not investigated here (Rule 3). Needs its own unit, and it should start by deciding, for each,
+whether the journey or the daemon changed.
 
 **5 · PART 2 IS NOT A SEAM, and the order's own rule says to record that and move on.**
 `ingestReceivedContent` needs **6 state fields plus 20 sibling methods** — a 26-item context.
