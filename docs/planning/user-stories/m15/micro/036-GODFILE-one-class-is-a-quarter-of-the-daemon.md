@@ -51,7 +51,7 @@ description: >
 | 4 | Where a message sits in the order | ✅ done (with Part 3) | 18,157 |
 | 5 | The conversation record | ✅ done | 17,468 |
 | 6 | Mail that waited | ✅ done | 16,935 |
-| — | Live two-daemon smoke test | ⬜ not started | — |
+| — | Live two-daemon smoke test | ⚠️ partial — live-transport suite green, two-daemon seal NOT run | 16,934 |
 
 Statuses: ⬜ not started · ⚙️ in progress · ✅ done · ⏭️ not needed (target already met).
 **"Lines after"** is `wc -l core/daemon/src/session-node-manager.ts` once that part's commit lands.
@@ -397,10 +397,13 @@ stop rule in Part 6.
       one file to 11,097 across the six.
 - [x] `pnpm run build:clean` produces a `dist/` with no artifact whose source no longer exists —
       checked mechanically, zero orphans.
-- [x] `cello-unit-reviewer` ran on Parts 0a/0b; all six findings fixed. **Later parts are unreviewed**
-      — see below.
-- [ ] A live two-daemon smoke test — **not run.** It is the close condition and the order cannot
-      close on the line-count clause anyway.
+- [x] `cello-unit-reviewer` ran on Parts 0a/0b (six findings, all fixed) AND on Parts 1/3+4/5/6
+      (eight findings, all fixed). The second review compared every moved body against its pre-move
+      form and found them **byte-identical modulo mechanical rewiring** — no HIGH findings.
+- [ ] A live two-daemon smoke test — **NOT run.** What DID run: the live-transport suite
+      (`CELLO_E2E_LIVE=1`, real libp2p streams — send, ingest, content-hash tamper rejection, the
+      stranger test), 23/23 green. That covers the ingest path these parts moved, and it is the
+      closest thing that runs locally, but it is one process and it is not a seal.
 - [x] The Progress table reflects reality, including the ⏭️ part.
 - [ ] `status:` stays `open`. **The order is not complete and must not read as if it were.**
 
@@ -418,10 +421,8 @@ stop rule in Part 6.
 
 1. **The redesign** of the four entangled domains (standing receiver, salt, seal, relay) — the
    ~13,000 lines that pure movement cannot reach. Its own order.
-2. **A unit review of Parts 1, 3+4, 5 and 6.** Only Parts 0a/0b were reviewed. Under the WIP-limit
-   rule these should have been reviewed as they landed; they were not, because the session was
-   directed to keep moving rather than block. **That is a known gap, recorded rather than hidden.**
-3. **The live two-daemon smoke test.**
+2. **The live two-daemon smoke test** — two real daemons, a session, messages both ways, a seal.
+   The local live-transport suite is green but it is not a substitute.
 
 **Publishing is NOT part of this order.** It ships with the next release via `/cello-publish`, which
 verifies against the tarball.
