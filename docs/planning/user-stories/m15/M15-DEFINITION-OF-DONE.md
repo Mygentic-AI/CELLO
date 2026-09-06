@@ -1314,6 +1314,32 @@ the size at which agents start making mistakes in it — which is a correctness 
 load-bearing code in the product, not only a tidiness one. **Done when** the ratchet is in CI, and
 the file is under it and falling.
 
+### `DOD-M15-COMMENT-DISCLOSURE-1` — ❌ PRE-LAUNCH · No comment in the PUBLIC repo advertises a hole that is closed, or a live one nobody is tracking
+**Filed 2026-09-06. The worklist is [[M15-PUBLIC-COMMENT-SWEEP]] — item by item, one per session.**
+
+An evaluator points a coding agent at the public `cello-client` repo before trusting it, and that
+agent collects every *"this is not enforced" / "it fails open" / "nothing checks this"* into one
+list. The sweep classified all of them into four buckets, and **three of the four are "leave alone"**
+— the candour is an asset and stripping it makes the repo worse. The gate is the fourth:
+
+- **Stale (B) — worst of the four.** `session-node-manager.ts:9760` still says the relay hash-submit
+  cross-check *"does not exist yet"* and names the exact bypass. It exists. That sentence advertises
+  a hole that is already shut. Two more like it.
+- **Live and untracked (D).** Five, of which the substantive one is `session-ceremony.ts:849` — an
+  initiator cannot locally verify a seal when the **responder closed first**, because it never learns
+  the responder's primary. Whether you can prove your own receipt depends on who closed first. Named
+  `F2-b` in the comment and tracked nowhere.
+
+**Done when** every B is rewritten to describe what the code does now (**rewritten, never deleted** —
+the record of the old defect is the point), every D is confirmed and filed as its own line, and the
+two C items name their designation so the next reader stops instead of re-filing.
+
+**Not in scope, deliberately:** the A bucket (deliberate, bounded fail-opens that already state their
+reasoning), and the four stated trust bounds — those are the same rows as the `⊘` list in
+[[session-correctness-checks]] and must not be softened. The E bucket (attack recipes for *fixed*
+bugs) is a judgement call reserved for Andre: the procedure is what makes the comment convincing to
+an engineer, and it is also a method someone can reuse.
+
 # Explicitly Beyond — deferred WITH a trigger, never dropped
 
 Nothing here is out of the project. Each carries the condition that brings it back.
