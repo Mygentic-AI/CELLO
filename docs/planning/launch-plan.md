@@ -186,6 +186,38 @@ second is not optional:
   "staff will never ask you for X". The shipped list alone cannot revoke a compromised identity or
   add a new one.
 
+## Proving which NETWORK is really ours
+
+The section above is the agent-level version of this. The network-level one is missing, and the
+attack is the crypto shadow-frontend: fork the open client, run three nodes, sign your own manifest,
+call it CELLO. Its receipts mean nothing, and when it is broken into the headline is about us.
+
+The check already exists — a client refuses any manifest not signed by the officer root key compiled
+into it. What is missing is that its answer is invisible.
+
+- `cello status` prints the consortium root fingerprint it trusts, beside the roster it resolved.
+- The real fingerprint is published on the site, in the README and in the install docs — the same
+  move as the staff pubkeys, one level up.
+- The same answer is reachable **before** installing, so the check precedes the trust.
+- **Trademark the name.** That is what gets a clone taken down; obscurity does not.
+
+Engineering line: `DOD-M15-CONSORTIUM-FINGERPRINT-1`.
+
+## The bootstrap is plain HTTP to a bare IP
+
+`http://34.75.172.108:9090`, and the libp2p listeners are `/ws` rather than `/wss`. The
+cryptography is fine — the peer id is in the signed manifest, Noise proves the remote holds that
+key, and step 6 makes it sign a challenge — but that is not the reason this is here:
+
+- **A stranger on a corporate network may simply not be able to install.** Plain HTTP to a bare IP
+  on 9090 is a common egress block. That is a Gate 2 failure, not a security one.
+- Nobody reaches the Noise argument before reaching for a screenshot.
+- **The ordering is the risk.** Step 6 runs only when the directory URL matches a bundled endpoint
+  byte for byte, so switching to a hostname *before* the manifest carries names silently turns the
+  defence off. Names into the manifest first, TLS second.
+
+Engineering line: `DOD-M15-BOOTSTRAP-TLS-1`.
+
 ## The lever behind an escalation
 
 Today's kill switch is account-scoped: the portal suspends *your own* agents, and the directory

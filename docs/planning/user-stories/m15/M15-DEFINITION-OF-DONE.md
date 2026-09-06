@@ -1211,6 +1211,61 @@ an improvement, not a mitigation we are counting on; the fleet is two relays reg
 ### `DOD-M15-RELAYONLY-1` — ✅ Relay-only routing is an operator setting
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYONLY-1`.
 
+### `DOD-M15-CONSORTIUM-FINGERPRINT-1` — ❌ PRE-LAUNCH · A user can check, in one command, that they are on the REAL consortium
+**Filed 2026-09-06. Not a new check — a check whose answer is invisible.**
+
+Anyone can fork the open-source client, stand up three nodes, sign their own manifest with their own
+root key and market it as CELLO. The receipts that system issues mean nothing, and when it is broken
+into the headline says CELLO was hacked. This is the shadow-frontend attack from crypto, and it
+worked there because a user had no cheap way to tell the real deployment from the copy.
+
+**The verification already exists.** The client refuses any consortium manifest not signed by the
+officer root key compiled into it (`BUNDLED_CONSORTIUM_ROOT_KEYS` in
+`bundled-consortium-manifest.ts`; stage G7 / R4 in [[session-correctness-checks]]). A fake
+consortium cannot fool a genuine client — it can only ship its own client. **What is missing is that
+the answer is never shown,** so "am I on the real network?" is a judgement call rather than a
+command.
+
+**Done when:**
+- `cello status` prints the consortium root fingerprint it trusts, beside the roster it resolved,
+  read from the same constant the verifier uses — never a second copy that can drift.
+- The real fingerprint is published where it can be compared: site, README, install docs. This is
+  the same mechanism already planned for the official agent pubkeys in [[launch-plan]] under
+  *Proving which agents are really ours*, raised one level from agents to the consortium itself.
+- The same answer is available to someone who has **not installed anything yet**, so the check can
+  be made before trust is extended rather than after.
+
+**Why it earns a slot.** It is small, and it is the only defence that makes an impersonation
+*detectable* rather than merely expensive. It is also the customer-facing half of the argument for
+keeping the directory and relay private — closed source raises the cost of a convincing fake; only
+this makes one visible. Trademark is the other half and is not an engineering item.
+
+### `DOD-M15-BOOTSTRAP-TLS-1` — ❌ PRE-LAUNCH · The bootstrap fetch is TLS on a hostname, and step 6 survives the change
+**Filed 2026-09-06.**
+
+`PRODUCTION_DIRECTORY_URL` is `http://34.75.172.108:9090` and the libp2p multiaddrs are `/ws`, not
+`/wss`. There is no TLS terminator in front of the directory nodes (`node-directory.tf` —
+`cello-directory-allow-http` opens 9090 to `0.0.0.0/0`; the note in `GCP-STATE.md` saying the port
+is not public is stale).
+
+**The cryptography is sound and that is not the reason to fix it.** `/bootstrap` returns only a
+multiaddr; the signed manifest declares the node's peer id, the client refuses to dial when the live
+answer disagrees (`directory.consortium.node.peer_id_mismatch`), Noise proves the remote holds that
+key, and step 6 makes it sign a challenge. A MITM on the plaintext fetch can deny service, not
+redirect the client. Three real costs remain:
+
+- **Enterprise egress.** Plain HTTP to a bare IP on port 9090 is blocked by a lot of corporate
+  network policy. That is an install blocker for a stranger, not a security finding.
+- **Optics.** No evaluator reaching for a public complaint will read as far as the Noise argument.
+- **The known fail-open.** Step 6 runs only when the resolved URL matches a bundled `endpoint` byte
+  for byte, so *doing this carelessly turns the defence off* — the second clause of
+  `DOD-M15-STEP6-REPLAY-1`, which is out of gate and unfixed.
+
+**Done when:** a TLS terminator fronts the bootstrap port; the manifest carries **names** rather than
+addresses; `PRODUCTION_DIRECTORY_URL` is a name that still matches a bundled endpoint exactly; and
+the test that asserts that relationship still passes. **Ordering is the whole risk** — names in the
+manifest come first, or step 6 is silently disabled by the fix.
+
 # Explicitly Beyond — deferred WITH a trigger, never dropped
 
 Nothing here is out of the project. Each carries the condition that brings it back.

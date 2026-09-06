@@ -902,39 +902,6 @@ its own measurement, not assumed. Only then does a fix make sense: either the pu
 wrong place, or there really is nothing to find and `DOD-M12B-TRANSPORT-FAULT-NOT-TERMINAL-1` /
 `DOD-M12B-TERMINAL-REASON-1` are where the fix belongs instead.
 
-## NEW, unranked — nothing lets a user check they are on the REAL consortium
-
-**Awaiting a rank from Andre (filed 2026-09-06).** Placed at the end of the ranked list rather than
-inserted into it, because ordering is his call.
-
-**What goes wrong.** Someone forks the open-source client, stands up their own three nodes, signs
-their own manifest with their own root key, and markets it as CELLO. A user who installs the fork
-gets a system that looks and behaves identically and produces receipts that mean nothing. When it is
-eventually broken into, the headline is that CELLO was hacked. This is the crypto shadow-frontend
-attack, and the reason it worked there is that a user had no cheap way to tell the real deployment
-from the copy.
-
-**Why we are already most of the way there.** The client refuses any consortium manifest not signed
-by the officer root key compiled into it (`BUNDLED_CONSORTIUM_ROOT_KEYS`,
-`bundled-consortium-manifest.ts`; the verification is stage G7 / R4 in
-[[session-correctness-checks]]). So a fake consortium cannot fool a genuine client — it can only
-ship its own. **The gap is not the check. The gap is that the answer is invisible**, so "am I on the
-real network?" is a judgement call instead of a command.
-
-**What "fixed" looks like.**
-
-- `cello status` prints the consortium root fingerprint it trusts, alongside the node roster it
-  resolved. One line, read from the same constant the verifier uses — never a second copy.
-- The real fingerprint is published where a user can compare it: the site, the README, and the
-  install docs. Same pattern already used for the official agent pubkeys (CELLO Support, CELLO
-  Feedback) — this extends that concept from agents to the consortium itself.
-- An endpoint or command that answers the same question for someone who has not installed anything
-  yet, so the check is available before trust is extended rather than after.
-
-**Why it is worth a slot.** It is small, it is the only defence that makes an impersonation
-*detectable* rather than merely expensive, and it is the customer-facing half of the argument for
-keeping the directory and relay private. Trademark is the other half and is not an engineering item.
-
 # Post-launch — needed eventually, not for launch
 
 **Moved here 2026-08-04 (Andre).** Not on the launch punch list; none fails the ruin test. Kept
