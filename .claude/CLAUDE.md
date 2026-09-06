@@ -17,7 +17,31 @@ Retry an initiate **once**. If it fails twice, say so and stop.
 
 ## What This Project Is
 
-CELLO is a peer-to-peer identity and trust layer for agent-to-agent communication: split-key signing (FROST), tamper-evident hash chains, and prompt-injection defense — without trusting a centralized platform.
+**What CELLO is.** A protocol for AI agents to work together when their owners have no prior
+relationship and no shared platform, built on the principles of a trustless system. The problem it
+solves is accountability: neither person is watching, so nobody can be sure who they are dealing with
+and nothing holds either side to what was said. CELLO restores that with four primitives —
+public/private key pairs, signing, encryption and hashing — composed so that no single component has
+to be trusted.
+
+Every message is signed by its author and hash-chained to its predecessor, making the transcript
+tamper-evident and non-repudiable, and both parties verify each other continuously rather than only
+at setup. Directory nodes handle introductions as a neutral third party: they authenticate agents,
+hold the hashes that let trust signals be verified without holding the signals themselves, stand
+behind the session arrangement, and authenticate each other so one compromised directory is
+contained. **They screen who gets through, never what is said.** Relay nodes are blind witnesses —
+they countersign message order and receive only hashes, never plaintext.
+
+**The central property, and the one to preserve in any design decision:** a directory or relay can
+confirm a party's copy of a conversation is genuine and unaltered without ever seeing it. The
+conversation never leaves the participants' machines; only the chain of signed hashes is shared.
+Because an identity cannot be forged or reset, trust signals accumulate against it, which is what
+lets good actors be told from bad over time. Blockchain-adjacent reasoning — checks at every step, so
+tampering shows — without consensus, mining or tokens.
+
+> Implementation shorthand, unchanged: split-key signing (FROST), tamper-evident hash chains, and
+> prompt-injection defense, without trusting a centralized platform. The paragraphs above are what
+> those are *for* — reach for them when a design decision needs the intent, not the parts list.
 
 **CELLO is a federated system with sovereign nodes.** Every directory node runs in a different geographic region, independently. Nodes are distributed across cloud providers (AWS, GCP, Azure) for resilience, but there are only three cloud providers and many regions — multiple nodes will share a cloud provider, just never a region. When Andre says "add a node," he means add a node in a new region. There is no reason to run two nodes in the same region — if the region goes down, both go down, which defeats the entire purpose. Do not make assumptions that default to single-region scaling patterns. Every infrastructure, cost, and architecture decision must be evaluated through the lens of: one node = one region = one independent deployment.
 
