@@ -32,6 +32,33 @@ a single list and hand it over. Three of those four categories are fine. One is 
 | **C** | A **live** gap that is **tracked** | Fine — provided the reader can see it is tracked | Name the designation |
 | **D** | A **live** gap that is **not tracked anywhere** | This is a disclosure | File it, then decide |
 | **E** | A **step-by-step attack recipe** for a fixed bug | Hands an attacker the method | Keep the finding, cut the recipe |
+| **F** | **ORPHANED** — detached from the code it describes | Documents the WRONG member, confidently | **Reattach**, never delete |
+
+### F — ORPHANED comments: added 2026-09-06, found by 036/037-GODFILE
+
+**A category the phrase-based search cannot find, because the sentence is not wrong — it is in the
+wrong place.** A doc block gets separated from its member (a method moves, something is inserted
+between them), and it then documents whichever member it now sits above.
+
+**Why it earns its own row rather than being filed as untidiness:** a misplaced comment is a local
+nuisance while both members are in one file, and becomes a LIE the moment a refactor moves one of
+them. Three were found, and one had inverted meaning:
+
+- `session-leaf-records.ts` — *"Never returns null; an unknown session yields an empty tree"* had
+  drifted off `getSessionTree` and travelled into a new module, landing above a method whose whole
+  contract is returning `undefined` on a miss. The next reader of the genesis code would have read
+  the exact inversion of what its own comments spend twenty lines protecting.
+- `session-node-manager.ts` — `ingestReceivedContent` and `#markContentUnverifiable` had NO leading
+  doc at all; both their blocks were stacked hundreds of lines away above a third method.
+- `witness-alerts.ts` — a cap's rationale stayed behind and read as documentation for the wrong
+  method.
+
+**How to find them, since grep cannot:** a doc block whose first sentence names a member that is not
+the one below it. The cheap mechanical check is two `/** … */` blocks with no code between them —
+that always means one of them is orphaned.
+
+**Action: reattach to the member it describes.** Never delete: the prose is usually correct, and it
+is the member it points at that has moved.
 
 ## How to use this list
 
@@ -76,7 +103,19 @@ For each item:
    sweeper's.
 
 **Do not "tidy" the codebase's comment style while you are in here.** The density is intentional.
-The job is four categories of sentence, nothing else.
+The job is the categories of sentence above, nothing else.
+
+> ### ⚠️ EVERY LINE NUMBER BELOW IS STALE — find items by their QUOTED TEXT
+>
+> 036/037-GODFILE split `session-node-manager.ts` from 19,878 lines into fourteen files, so a
+> `session-node-manager.ts:9760` in this document may now be a different file entirely. The quoted
+> sentences are stable and the file names mostly are not. Where an item has moved, the current homes
+> are: authorship → `authorship-verification.ts`, refusals/quarantine/ordering → `inbound-refusals.ts`,
+> contacts/settings/transcript → `session-records.ts`, park → `park-recovery.ts`, salt →
+> `session-salts.ts`, schema → `session-schema.ts`, SQL → `session-queries.ts`, notices →
+> `refusal-notices.ts`, ephemeral keys → `session-ephemerals.ts`, liveness → `session-liveness.ts`,
+> witness alerts → `witness-alerts.ts`, held content → `held-content.ts`, genesis/certified leaves →
+> `session-leaf-records.ts`, standing receiver → `standing-receivers.ts`.
 
 > ### ⏭️ OWED, and recorded here so it is not lost: the modules `036-GODFILE` extracts
 >
@@ -109,7 +148,7 @@ be phrase-based, and it is why a future sweep must be too.
 
 **Highest priority. These are the ones that cost you something for nothing.**
 
-### B1 · `core/daemon/src/session-node-manager.ts:9760-9769`
+### B1 · `core/daemon/src/session-node-manager.ts` — ✅ DONE 2026-09-06 (036-GODFILE Part 0a)
 
 > *"Full tamper-evidence (EARS behavior #2) requires cross-checking against the K_local-signed
 > content_hash leaf the sender submits to the RELAY on a separate channel; that relay hash-submit
@@ -128,6 +167,21 @@ used to be real** — nobody re-derives that, and git has it. (An earlier versio
 keep it; 036's Part 0a ran under that version, so this file may already carry such a line. Leave it —
 removing it is not worth a second pass.)
 **Verify first:** that `ingestReceivedContent`'s callers all hold a verified authorship proof.
+
+### B4 · `core/daemon/src/session-node-manager.ts` — `sendContent`'s SCOPE block
+
+**Found 2026-09-06 while verifying B1, and it is the same defect one method over.** `sendContent`'s
+doc block still tells a public reader that the send path *"does NOT also submit a K_local-SIGNED
+content_hash leaf to the RELAY … that relay hash-submit is MSG-001's scope"*, and that *"because
+there is no relay yet"* the sequence number is a local leaf index rather than a relay-assigned one.
+
+**The relay hash-submit path exists** — the same fact that made B1 stale — so the first half is out
+of date and the second half's premise is false on its face.
+
+⚠️ **VERIFY THE TWO HALVES SEPARATELY.** B1's lesson is that one stale paragraph can have halves
+that went stale at different times: the delivery claim and the ORDERING claim are different
+questions, and the ordering one may still be partly true. Rewriting both on one verdict is how a
+correction becomes a new false statement.
 
 ### B2 · `core/gateway/src/detect/sanitize.ts:8-12`
 
@@ -219,7 +273,7 @@ designation to the comment so the next agent stops rather than re-filing it.
 | Item | Where | Tracked as |
 |---|---|---|
 | C1 | `directory-bootstrap.ts:23-41` — *"It fails open and quietly"* (step 6 disabled when the URL is not a bundled endpoint byte-for-byte) | `DOD-M15-STEP6-REPLAY-1` (open half) + `DOD-M15-BOOTSTRAP-TLS-1` |
-| C2 | `session-node-manager.ts:15880-15887` — the freeze columns exist and **have no writer** | `DOD-M15-FREEZE-STATUS-1` |
+| C2 | `session-node-manager.ts` — the freeze columns exist and **have no writer** | `DOD-M15-FREEZE-STATUS-1` — ✅ NO ACTION NEEDED, verified 2026-09-06: both comments already name it |
 
 ---
 
