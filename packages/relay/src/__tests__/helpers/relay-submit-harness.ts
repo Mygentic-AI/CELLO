@@ -128,11 +128,21 @@ export async function makeS1(opts: {
   timestamp: number;
   lastSeenHash: Uint8Array;
   prevOwnHash: Uint8Array;
+  /**
+   * Name a DIFFERENT sender than the one signing. The only way to build a leaf whose claimed author
+   * is not its signer, which is the shape `DOD-M15-FRAME-1` refuses.
+   *
+   * ⚠️ IT DOES NOT CHANGE WHICH CHAIN THE LINKS COME FROM. The caller states both links, so a test
+   * forging authorship states the links the CLAIMED sender would carry — otherwise the frame is
+   * refused for a broken chain before the authorship check runs, and the test passes on the wrong
+   * refusal.
+   */
+  claimedSenderPubkey?: Uint8Array;
 }): Promise<{ structure1_cbor: Uint8Array; sender_signature: Uint8Array }> {
   const tbs = CBOR_ENC.encode([
     3,
     opts.contentHash,
-    await opts.kp.getPublicKey(),
+    opts.claimedSenderPubkey ?? (await opts.kp.getPublicKey()),
     opts.sessionId,
     opts.lastSeenSeq,
     opts.timestamp,
@@ -176,6 +186,23 @@ export interface SubmitOpts {
    * deliberately gets wrong.
    */
   prevOwnHash: Uint8Array;
+  /**
+   * 034-CARRYLEAF — sign the leaf with THIS key instead of the submitting connection's.
+   *
+   * A counter-submit: one participant hands the relay a leaf their COUNTERPARTY authored and did
+   * not witness. The leaf is signed by the author; the connection belongs to the other party. A rig
+   * that could not express that could not test the case at all.
+   */
+  authorKp?: ReturnType<typeof generateKeypair>;
+  /**
+   * Name a DIFFERENT key as the leaf's sender than the one that signs it — 034-CARRYLEAF review.
+   *
+   * The only way to reach the `s1PubkeyHex !== signerHex` guard, which is now the sole remaining
+   * binding between a leaf and its author. Without this the rig could only build leaves whose named
+   * sender IS their signer, so a test aimed at that guard was refused earlier by
+   * `witnessLeafSignature` and passed for the wrong reason.
+   */
+  claimedSenderPubkey?: Uint8Array;
 }
 
 export type Submit = (o: SubmitOpts) => Promise<Record<string, unknown>>;
@@ -190,11 +217,29 @@ export type Submit = (o: SubmitOpts) => Promise<Record<string, unknown>>;
  */
 export type SubmitRaw = (fields: unknown[]) => Promise<Record<string, unknown>>;
 
+/** One `session_witness_alert` the relay pushed, with the participant it was pushed to. */
+export interface CapturedWitnessAlert {
+  recipient: string;
+  reason: string;
+  submitterIsCounterparty: boolean;
+}
+
 export interface SubmitHarness {
   submit: Submit;
   submitAsB: Submit;
   /** See `SubmitRaw` — for asserting what the relay refuses, not what the rig can build. */
   submitRaw: SubmitRaw;
+  /**
+   * Every witness alert the relay pushed to either participant — 034-CARRYLEAF.
+   *
+   * The relay sends these unsolicited on the participants' own streams, so a rig that only reads
+   * replies to its own submits cannot see them, and a guard whose only consumer is the relay's log
+   * would look tested when nothing had checked it reached anyone.
+   */
+  witnessAlerts: CapturedWitnessAlert[];
+  /** The two participants' keypairs, so a test can sign a leaf as one and submit it as the other. */
+  clientA: ReturnType<typeof generateKeypair>;
+  clientB: ReturnType<typeof generateKeypair>;
   /**
    * Everything a test needs to derive the session's genesis prev_root for itself — the value a
    * `last_seen_seq` of 0 acknowledges. Exposed rather than pre-computed so a test derives it the
@@ -222,6 +267,11 @@ export interface SubmitHarness {
   alertsFor: (pubkey: Uint8Array) => Array<{ reason: string }>;
   /**
    * The next frame of a given `type` the relay PUSHED to B, or null within the window.
+   *
+   * ⚠️ DELIBERATE, where `witnessAlerts` above is opportunistic. That one only sees what arrives
+   * while a participant happens to be inside its own submit loop, so an alert sent to a party who is
+   * merely sitting there is never captured — and the negative ("nobody was told") cannot be asserted
+   * from it at all.
    *
    * ⚠️ FILTERED BY TYPE, because B's stream also carries `leaf_deliver` for every message A sends —
    * so "read one frame and check it" answers whatever happened to arrive first. Filtering is also
@@ -266,6 +316,7 @@ export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>)
    * BOTH participants get a stream. The second one is not decoration: every chain check is
    * PER SENDER, so a conversation with one voice in it cannot exercise any of them.
    */
+  const witnessAlerts: CapturedWitnessAlert[] = [];
   const connect = async (kp: ReturnType<typeof generateKeypair>): Promise<Submit & { raw: SubmitRaw; reader: StreamReader }> => {
     const cn = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await cn.start();
@@ -280,13 +331,23 @@ export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>)
         type: "hash_submit", session_id: sessionId, leaf_kind: MSG_LEAF, structure1_cbor, sender_signature,
       }) as Uint8Array);
       let resp = await reader.readDecoded();
-      for (let i = 0; i < 6 && resp["type"] !== "hash_submit_ack" && resp["type"] !== "hash_submit_error"; i++) {
+      for (let i = 0; i < 8 && resp["type"] !== "hash_submit_ack" && resp["type"] !== "hash_submit_error"; i++) {
+        // Unsolicited frames arrive on the same stream. Witness alerts are captured rather than
+        // skipped — they are the only evidence that a guard reached a person.
+        if (resp["type"] === "session_witness_alert") {
+          witnessAlerts.push({
+            recipient: Buffer.from(await kp.getPublicKey()).toString("hex"),
+            reason: String(resp["reason"]),
+            submitterIsCounterparty: resp["submitter_is_counterparty"] === true,
+          });
+        }
         resp = await reader.readDecoded();
       }
       return resp;
     };
     const submit = async (o: SubmitOpts): Promise<Record<string, unknown>> => {
-      const { structure1_cbor, sender_signature } = await makeS1({ sessionId, kp, ...o });
+      // The leaf is signed by its AUTHOR; the stream belongs to whoever is submitting it.
+      const { structure1_cbor, sender_signature } = await makeS1({ sessionId, kp: o.authorKp ?? kp, ...o });
       return send(structure1_cbor, sender_signature);
     };
     const submitRaw = async (fields: unknown[]): Promise<Record<string, unknown>> => {
@@ -303,6 +364,14 @@ export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>)
     submit: a,
     submitRaw: a.raw,
     submitAsB: b,
+    clientA, clientB,
+    /**
+     * Alerts captured OPPORTUNISTICALLY, as a side effect of a participant's own submit loop —
+     * `034-CARRYLEAF`. It sees an alert only if that participant happens to be reading when it
+     * lands, which is true for a counter-submit and NOT true when the alert goes to a party that is
+     * merely sitting there. `pushToB` below is the deliberate read for that case.
+     */
+    witnessAlerts,
     pushToB: async (type: string, ms = 500) => {
       const deadline = Date.now() + ms;
       for (;;) {

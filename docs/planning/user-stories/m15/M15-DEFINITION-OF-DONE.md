@@ -950,7 +950,48 @@ match, I'm blocked. But if I arrive at immigration with no passport, they let me
 > trip-wire is tripped and item 3 (the claim is not bound to the session id) needs Andre's call.**
 > → order `micro/029-AUTHORSHIP-no-passport-no-entry.md` (Review + Newly discovered)
 
-### `DOD-M15-WITHHOLD-SEAL-1` — 🟠 A counterparty cannot hide their last message and seal without it
+### `DOD-M15-WITHHOLD-SEAL-1` — ✅ A counterparty cannot hide their last message and seal without it
+
+> **CLOSED 2026-09-05 by `033-ACKEMIT` + `034-CARRYLEAF`. Live on `latest`
+> (`daemon@0.0.192`, `cli@0.0.199`, `connect@0.0.167`).**
+>
+> **The root cause was one conjunct.** `submitMessageHash` had exactly ONE production caller, on the
+> SEND path — nothing ever witnessed a message that was RECEIVED — and the relay enforced it by
+> requiring a leaf's signer to be the submitting connection's own key. So an author who declined to
+> submit removed themselves from the record, and a unilateral seal agreed with the witness.
+>
+> **You can now witness what you received.** The relay already verified every leaf against BOTH
+> participants, so it always knew who AUTHORED a leaf independently of who DELIVERED it; the
+> author's signature is unforgeable and the recipient holds it. Closed on the direct path, and on
+> the relay mailbox via a v4 park envelope carrying the author's signed claim.
+>
+> **And it is reported, not just prevented.** The relay emits a signed alert to BOTH participants
+> when a leaf is counter-submitted — the observable trace of a withholding attempt — with per-reason
+> operator guidance that stops short of a verdict: once is a relay hiccup, repeatedly is the shape
+> of someone keeping their words out of the receipt.
+>
+> **The direct path has no remaining shape to exploit.** A content frame that does not name its leaf
+> domain is REFUSED, not delivered-and-unwitnessable. The earlier leniency there was an inherited
+> compatibility argument — Andre, 2026-09-05: *"We are an alpha. We have no users."* There is no
+> older peer, and what the leniency bought was an opt-out from the fix by choosing a wire shape.
+>
+> **One route remains, and the blocker is OUR OWN path rather than an older peer's.** A message
+> parked with no ordering record AND no signature over its ordering claim is readable and can never
+> enter a receipt. Refusing it was implemented and reverted: `SEC-1` AC5 makes the crash-backstop
+> shape — signed by the sender, no ordering record — explicitly legal, and from the recipient's side
+> it is indistinguishable from an attacker's stripped envelope. **What closes it:** the crash
+> backstop signs an ordering claim at enqueue time, which `#signOwnContentClaim` already produces and
+> whose two retry-queue columns (`structure1_sig`, `leaf_kind`) shipped with this work. Then the
+> unsignable shape is one only a modified client emits.
+>
+> **Handover composes safely, checked not assumed:** a relay that inherits a session refuses submits
+> until it is replayed, and the replay rebuilds its leaf log WITH `structure1_cbor` — so the
+> byte-exact replay guard on counter-submits is intact across a relay change.
+>
+> **Not yet done:** the live multi-process journey. Every layer is proven with real crypto — the
+> relay sequences a counter-submitted leaf, the client carries the author's bytes verbatim, and the
+> withheld leaf lands in the seal carry with no relay receipt — but no run has yet driven two real
+> binaries in separate OS processes with one of them deliberately withholding.
 
 > **THE ACKNOWLEDGEMENT HALF IS DONE (`033-ACKEMIT`, 2026-09-05). THE SEAL HALF IS NOT, and the line
 > stays open for it.** Production now signs `last_seen_hash` on every claim it can make one for; the
@@ -1200,6 +1241,256 @@ an improvement, not a mitigation we are counting on; the fleet is two relays reg
 
 ### `DOD-M15-RELAYONLY-1` — ✅ Relay-only routing is an operator setting
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYONLY-1`.
+
+### `DOD-M15-CONSORTIUM-FINGERPRINT-1` — ❌ PRE-LAUNCH · A user can check, in one command, that they are on the REAL consortium
+**Filed 2026-09-06. Not a new check — a check whose answer is invisible.**
+
+Anyone can fork the open-source client, stand up three nodes, sign their own manifest with their own
+root key and market it as CELLO. The receipts that system issues mean nothing, and when it is broken
+into the headline says CELLO was hacked. This is the shadow-frontend attack from crypto, and it
+worked there because a user had no cheap way to tell the real deployment from the copy.
+
+**The verification already exists.** The client refuses any consortium manifest not signed by the
+officer root key compiled into it (`BUNDLED_CONSORTIUM_ROOT_KEYS` in
+`bundled-consortium-manifest.ts`; stage G7 / R4 in [[session-correctness-checks]]). A fake
+consortium cannot fool a genuine client — it can only ship its own client. **What is missing is that
+the answer is never shown,** so "am I on the real network?" is a judgement call rather than a
+command.
+
+**Done when:**
+- `cello status` prints the consortium root fingerprint it trusts, beside the roster it resolved,
+  read from the same constant the verifier uses — never a second copy that can drift.
+- The real fingerprint is published where it can be compared: site, README, install docs. This is
+  the same mechanism already planned for the official agent pubkeys in [[launch-plan]] under
+  *Proving which agents are really ours*, raised one level from agents to the consortium itself.
+- The same answer is available to someone who has **not installed anything yet**, so the check can
+  be made before trust is extended rather than after.
+
+**Why it earns a slot.** It is small, and it is the only defence that makes an impersonation
+*detectable* rather than merely expensive. It is also the customer-facing half of the argument for
+keeping the directory and relay private — closed source raises the cost of a convincing fake; only
+this makes one visible. Trademark is the other half and is not an engineering item.
+
+### `DOD-M15-BOOTSTRAP-TLS-1` — ❌ PRE-LAUNCH · The bootstrap fetch is TLS on a hostname, and step 6 survives the change
+**Filed 2026-09-06.**
+
+`PRODUCTION_DIRECTORY_URL` is `http://34.75.172.108:9090` and the libp2p multiaddrs are `/ws`, not
+`/wss`. There is no TLS terminator in front of the directory nodes (`node-directory.tf` —
+`cello-directory-allow-http` opens 9090 to `0.0.0.0/0`; the note in `GCP-STATE.md` saying the port
+is not public is stale).
+
+**The cryptography is sound and that is not the reason to fix it.** `/bootstrap` returns only a
+multiaddr; the signed manifest declares the node's peer id, the client refuses to dial when the live
+answer disagrees (`directory.consortium.node.peer_id_mismatch`), Noise proves the remote holds that
+key, and step 6 makes it sign a challenge. A MITM on the plaintext fetch can deny service, not
+redirect the client. Three real costs remain:
+
+- **Enterprise egress.** Plain HTTP to a bare IP on port 9090 is blocked by a lot of corporate
+  network policy. That is an install blocker for a stranger, not a security finding.
+- **Optics.** No evaluator reaching for a public complaint will read as far as the Noise argument.
+- **The known fail-open.** Step 6 runs only when the resolved URL matches a bundled `endpoint` byte
+  for byte, so *doing this carelessly turns the defence off* — the second clause of
+  `DOD-M15-STEP6-REPLAY-1`, which is out of gate and unfixed.
+
+**Done when:** a TLS terminator fronts the bootstrap port; the manifest carries **names** rather than
+addresses; `PRODUCTION_DIRECTORY_URL` is a name that still matches a bundled endpoint exactly; and
+the test that asserts that relationship still passes. **Ordering is the whole risk** — names in the
+manifest come first, or step 6 is silently disabled by the fix.
+
+### `DOD-M15-GODFILE-1` — ❌ PRE-LAUNCH · The 19,878-line class is split, and a ratchet stops it growing back
+**Filed 2026-09-06, after measuring both halves of it.**
+
+`cello-client/core/daemon/src/session-node-manager.ts` is 19,878 lines and 1.2 MB — **25% of the
+entire daemon**, in one class with 555 members. It holds session records, the whole inbound ingest
+chain, authorship and acknowledgement verification, quarantine, orphan triage, transcript reads and
+writes, relay ordering records and park recovery. The next largest file in the repo is 6,077.
+
+**Two measurements decide how this is done.**
+
+*First — it was never refactored, and that is not the same as a refactor being ignored.* Its size at
+each point:
+
+```
+2026-06-12    525      2026-08-22  10,073
+2026-07-13  4,446      2026-09-01  14,206
+2026-08-04  5,501      2026-09-04  18,225
+2026-08-07  6,174      today       19,878
+```
+
+Monotonic. No drop anywhere, and nearly half the growth is in the last three weeks.
+
+*Second — the refactor that DID happen proves a split alone is not the fix.* Nine commits in
+mid-July took `daemon.ts` apart (`refactor(daemon): Seam A…I — X out of startDaemon's body`) and cut
+it from **6,279 lines to 2,081 on 14 July**. It is **6,077 today** — fully regrown in under two
+months, with no guard in the way.
+
+**So the order is: ratchet first, then split.** A `max-lines` rule in
+`cello-client/eslint.config.mjs`, following the pattern already used there to block `node:sqlite` —
+one visible allowlist, `session-node-manager.ts` grandfathered at its current size. Each pass then
+lowers its ceiling and the rule holds the ground taken. Guard second means the split lands,
+attention moves on, and it regrows exactly as `daemon.ts` did.
+
+**What makes it safe:** 310 test files and 95,339 lines of test code in `core/daemon` — more test
+code than production code. The seams are already cohesive and barely touch each other's state:
+`ingestReceivedContent`, `#verifyAuthorshipClaim` / `#verifyAcknowledgedContent`,
+`#quarantineRefusedContent`, `#recordFrameOrdering`.
+
+**⚠️ The comments are the asset, not the padding.** 53% of the file is prose — ~10,500 lines
+explaining why each check exists, much of it recording a defect that was reintroduced once already
+and the false reasoning that allowed it. A split that summarises or drops those loses more than it
+gains. They move with the code they describe, verbatim.
+
+**Why pre-launch rather than after:** it is the file an evaluator points a coding agent at, and it is
+the size at which agents start making mistakes in it — which is a correctness risk on the most
+load-bearing code in the product, not only a tidiness one. **Done when** the ratchet is in CI, and
+the file is under it and falling.
+
+### `DOD-M15-COMMENT-DISCLOSURE-1` — ❌ PRE-LAUNCH · No comment in the PUBLIC repo advertises a hole that is closed, or a live one nobody is tracking
+**Filed 2026-09-06. The worklist is [[M15-PUBLIC-COMMENT-SWEEP]] — item by item, one per session.**
+
+An evaluator points a coding agent at the public `cello-client` repo before trusting it, and that
+agent collects every *"this is not enforced" / "it fails open" / "nothing checks this"* into one
+list. The sweep classified all of them into four buckets, and **three of the four are "leave alone"**
+— the candour is an asset and stripping it makes the repo worse. The gate is the fourth:
+
+- **Stale (B) — worst of the four.** `session-node-manager.ts:9760` still says the relay hash-submit
+  cross-check *"does not exist yet"* and names the exact bypass. It exists. That sentence advertises
+  a hole that is already shut. Two more like it.
+- **Live and untracked (D).** Five, of which the substantive one is `session-ceremony.ts:849` — an
+  initiator cannot locally verify a seal when the **responder closed first**, because it never learns
+  the responder's primary. Whether you can prove your own receipt depends on who closed first. Named
+  `F2-b` in the comment and tracked nowhere.
+
+**Done when** every B is rewritten to describe what the code does now (**rewritten, never deleted** —
+the record of the old defect is the point), every D is confirmed and filed as its own line, and the
+two C items name their designation so the next reader stops instead of re-filing.
+
+**Not in scope, deliberately:** the A bucket (deliberate, bounded fail-opens that already state their
+reasoning), and the four stated trust bounds — those are the same rows as the `⊘` list in
+[[session-correctness-checks]] and must not be softened. The E bucket (attack recipes for *fixed*
+bugs) is a judgement call reserved for Andre: the procedure is what makes the comment convincing to
+an engineer, and it is also a method someone can reuse.
+
+### `DOD-M15-KEYS-KMS-1` — ❌ PRE-LAUNCH · The keys that define the consortium are USED, never fetched
+**Filed 2026-09-06.**
+
+The consortium manifest is signed by an officer key (`cello-consortium-officer-key-0`) whose public
+half is compiled into every client as `BUNDLED_CONSORTIUM_ROOT_KEYS`. **A client accepts any manifest
+carrying a valid signature from it.** That is the root of the whole chain — stage R4 / G7 in
+[[session-correctness-checks]], and the one premise the protocol does not check.
+
+**The problem is the storage class, not the key.** It is a fetchable value in Secret Manager, as are
+the per-node signing keys (`cello-<nodeId>-node-key`). A fetchable secret can be copied, and a copy
+is silent. An attacker holding it signs a manifest naming their own three nodes; every deployed
+client accepts it and every check below still passes, because those checks verify *against the
+manifest*.
+
+**And it cannot be called back.** Rotation means re-signing and shipping a new client build. Clients
+already installed keep trusting the old key until their operator upgrades. The protocol carries no
+"key N is dead" message.
+
+**Done when:**
+- The officer key and the per-node signing keys are **KMS asymmetric signing keys** — used via
+  `asymmetricSign`, never read. The private half never leaves the HSM, and "the key leaked" stops
+  being a scenario. The stack already runs KMS per node for envelope encryption, so this extends an
+  existing pattern rather than adding a dependency.
+- **Cloud Audit Logs on every signing key.** KMS converts key theft into permission abuse, so the
+  residual is whoever can call sign. Every legitimate use is rare and deliberate, which makes an
+  unauthorised one visible — but only if it is logged and someone looks.
+- **The revocation story is decided and written down, even if the decision is "documented, not
+  built."** Candidates, cheapest first: a second officer key with a 2-of-N requirement so one
+  compromise is insufficient (the `-0` suffix suggests this was anticipated); a signed "key N is
+  revoked" a later manifest carries forward and clients honour. Today the answer to "the officer key
+  leaked" is a question nobody has been asked.
+
+**Why pre-launch.** Blast radius is every client, the failure is silent, and nothing in the field can
+be told. It is also the cheapest item on the list relative to what it removes — a storage-class
+change on two key types, not a protocol change.
+
+### `DOD-M15-ASSIGN-TARGET-1` — ❌ PRE-LAUNCH · The assignment must name the counterparty the operator ASKED FOR
+**Filed 2026-09-06. One comparison, and it is the cheapest security line in this milestone.**
+
+`assignment-verify.ts` establishes that the session assignment is FROST-signed, that the signer is
+this agent's own threshold group key, and that the signature verifies. It does **not** establish that
+the assignment is about the person the operator named. Every consumer of `participant_b.pubkey` on
+the client was checked: it is used to build the TBS and to configure the relay, and it is **never
+compared against `targetHex`** — the pubkey the operator actually typed.
+
+**What that costs.** A quorum of this agent's own directories names an impostor as the counterparty.
+The assignment verifies *perfectly*, because it genuinely is signed by this agent's own group key.
+The daemon opens its receiver to the impostor's peer id and dials them. This is exactly the bound
+`outbound-sessions.ts:480-486` states in its own comment and points downstream to close.
+
+**It IS caught — one step too late.** `#verifyAuthorshipClaim` compares the message signer against
+`counterparty_pubkey`, which comes from the operator's own request and is untouched by anything the
+directory returns, and freezes the session. That is the session-open MITM detection from the
+2026-08-21 investigation and it works. But it fires on the **first message**. Between establishment
+and the counterparty's first word, this agent has dialled a stranger, handed over its session node
+and confirmed it is online. **A peer that never speaks is never detected at all.**
+
+**Done when:** after `verifyAssignmentSignature` returns ok and before anything dials,
+`assignment.participant_b.pubkey` is compared to the target the operator requested, and a mismatch
+REFUSES with its own named reason and guidance. Both sides of that comparison are local values;
+neither is influenced by the directory.
+
+### `DOD-M15-CEREMONY-BLIND-1` — 🟡 PRE-LAUNCH (lower value than it first appears) · The client contributes its FROST share to bytes it never inspects
+**Filed 2026-09-06. Filed WITH the measurement that shrinks it, so nobody re-derives the wrong size.**
+
+The daemon is not merely a participant in the ceremony — it is the **coordinator**. The directory's
+`ClientDelegatedSigner` (`directory-node.ts:7114`) sends the TBS to the client over the signaling
+stream; the client runs `participateInCeremony`, collects partial signatures from the directory
+nodes, aggregates, and returns the finished signature. It signs and assembles its own session
+assignment. `session-ceremony.ts:955-990` shows what it checks first: that a `ceremony_id`, a `tbs`
+and a `context` are present. Nothing about their content. `context` is cast to `FrostContext`, used
+for domain separation, and never compared against an allowlist.
+
+`DOD-M15-SEALPARTIES-1` gave the **directory** nodes a second opinion that can see the evidence, on
+the argument that signing opaque bytes is *"cryptographic weight without judgement"*. The same
+argument applies here and was never applied.
+
+**⚠️ WHAT THIS DOES NOT BUY, measured before filing.** Shareholders are the directory quorum **plus**
+the client (`bootstrapKeyShares`: `{ min: threshold, max: participants + 1 }` — "+1 for the client"),
+and the pre-ceremony check reads `reachableAtInitiation.length < threshold - 1`, *"because the client
+itself is one of the threshold signers"*. With T = majority(N), **a colluding threshold of
+directories can sign without the client at all.** Refusing to sign therefore does not close the
+collusion bound — `DOD-M15-ASSIGN-TARGET-1` does, on the verify side, and that is the line to do
+first.
+
+**Done when:** the ceremony handler validates `context` against the known set and refuses an
+unrecognised one by name; and, for a session-establishment TBS, refuses to contribute when the TBS
+does not describe a session this daemon initiated. **Value is defence-in-depth**, not the headline —
+it removes "the client helps sign whatever it is handed" as a step an attacker gets for free.
+
+### `DOD-M15-NOTIFY-AUDIT-1` — ❌ PRE-LAUNCH · Every check a USER can experience reaches them, and tells them what to do
+**Filed 2026-09-06. Input is [[session-correctness-checks]], which has no consumer until this line exists.**
+
+A session passes ~150 correctness checks. Several reason families are closed unions with a **total**
+guidance map, so a new reason cannot ship without operator guidance — session refusals, salt freezes,
+seal co-sign refusals, inclusion-proof failures. **That property covers the families where someone
+did the work, not the system.** Plenty of checks emit a log event and nothing else.
+
+**A guard nobody hears is the failure this milestone has already fixed four times.** The list is
+built; nothing has been run against it.
+
+**⚠️ THE BAR IS NOT "EVERY CHECK HAS GUIDANCE", AND ADOPTING THAT BAR WOULD MAKE THINGS WORSE.** Most
+checks are internal — a caller checks, handles it, and no human ever needs a sentence. Forcing
+guidance there produces filler nobody reads, which is exactly how the good pattern decays into noise
+and buries the notices that matter. **The bar is: every check a user can EXPERIENCE.**
+
+**Two scoping rules that make this finishable rather than open-ended.**
+
+1. **Work the failure CLASSES, not the checks.** REFUSE / BLOCK / DEFER / FREEZE / LOST / OUTBOUND —
+   a user meets each differently and needs a different thing said. A check with no user-visible
+   class needs nothing and is out of scope by construction.
+2. **Application layer only** — stages D through V. Stages X and L (substrate and link) fail as
+   symptoms somewhere else; auditing them here reopens the whole map for no gain. The one exception
+   already has a line of its own (`X1.1` — a resolver fault reads as every node being unreachable).
+
+**Done when** every check carrying a user-visible failure class has a verdict recorded against three
+questions — *is it logged? does it reach a surface the operator actually reads? does the text name
+what they can DO?* — and the failures are a gap list. **Output is the gap list. Fixing the gaps is
+separate work and separately ranked** — this line is the measurement, and running it is what turns
+the map into an audit.
 
 # Explicitly Beyond — deferred WITH a trigger, never dropped
 

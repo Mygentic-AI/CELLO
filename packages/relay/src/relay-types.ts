@@ -255,6 +255,16 @@ export type HashSubmitErrorReason =
    */
   | "ack_hash_unverifiable"
   /**
+   * 034-CARRYLEAF — a participant tried to witness a leaf their counterparty authored, and this
+   * relay already holds that leaf from that author.
+   *
+   * A counter-submit exists to catch up a leaf its author failed to witness, so one already
+   * witnessed is a replay: Structure 1 binds the author, the content and the session but NOT a
+   * position, so admitting it would let a participant consume a second canonical position with a
+   * message their counterparty really did sign, at a place they never sent it.
+   */
+  | "counter_submit_duplicate"
+  /**
    * DOD-M15-TERMINAL-REASON-1 — three answers where there was one, because the one was wrong.
    *
    * `session_sealed` was returned for EVERY non-active status, and it was never true of either of
@@ -576,7 +586,37 @@ export interface SessionWitnessAlert {
    * sides hold (reconciliation rule D5). Sent to the party that did NOT submit the batch, because
    * they are the one who would otherwise hear it only from the party it accuses.
    */
-  reason: "leaf_signed_by_neither_participant" | "replay_chain_diverged" | "self_chain_broken";
+  reason:
+    | "leaf_signed_by_neither_participant"
+    | "replay_chain_diverged"
+    /**
+     * `DOD-M15-SELFCHAIN-1` — a submitted message's link to its own author's previous message does
+     * not match this relay's record of it, so the ORDER of the conversation is in dispute.
+     *
+     * Sent to the party that did NOT submit, for the same reason `replay_chain_diverged` is: an
+     * accusation routed through the party it is about is not evidence. It names what was OBSERVED
+     * and never a conclusion — a client whose own chain record went out of step after a restart
+     * produces this signal exactly as a reordering attempt does, and this relay cannot tell them
+     * apart.
+     */
+    | "self_chain_broken"
+    /**
+     * 034-CARRYLEAF — a participant witnessed a leaf their COUNTERPARTY authored and did not submit.
+     *
+     * The relay is the only party positioned to state this: it is the one that knows the author
+     * never asked for the leaf to be witnessed, and it is not a party to the conversation. **Both
+     * participants are told**, and the same observation means different things to each — which is
+     * why the message is composed at the daemon, from `submitter_is_counterparty`, rather than here:
+     *
+     *  - to the WITNESS: your counterparty did not put this message in the record; you did it for
+     *    them. Once is a relay hiccup. Repeatedly is someone keeping their words out of the receipt.
+     *  - to the AUTHOR: a message of yours was witnessed by your counterparty because your own
+     *    submit never arrived — worth knowing, because it is usually your relay path failing.
+     *
+     * Signed like every other witness alert, so the recipient holds something transferable rather
+     * than this relay's unsupported word.
+     */
+    | "leaf_witnessed_by_counterparty";
   /** WHICH witness. Absent when this relay runs without a signing identity. */
   relay_id?: string;
   /** Unix ms at which this relay observed the submission. */

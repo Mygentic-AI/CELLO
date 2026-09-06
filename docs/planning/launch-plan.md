@@ -128,6 +128,44 @@ trust that never gets reported back.
   whole M15 priority filter assumes a motivated person points a coding agent at the public repo —
   when one does, having nowhere to send a finding reads worse than the finding.
 
+## Say it before someone else says it
+
+Three facts about CELLO are findable in five seconds and read badly when *discovered* rather than
+stated. None is a defect. All three cost more to be caught on than to volunteer, and the answers are
+copy, not engineering.
+
+**1. All three directory nodes are on GCP.** It is a literal field in the bundled manifest —
+`provider: "gcp"`, three times — and every address is in Google's `34.x` range, so it cannot be
+hidden and should not be. **Do not remove the field to tidy it:** it is what lets anyone verify
+diversification the day there IS some, and a missing field reads as concealment. The reason is money
+— the AWS credits ran out — and saying so is a better position than the fact being found.
+
+> All three directory nodes currently run on GCP. We're bootstrapping and our AWS credits ran out.
+> The protocol is provider-agnostic and the roster is signed data — adding a node on another cloud
+> is a manifest entry, not a redesign.
+
+**2. The directory and relay are private; the client is open.** Three arguments exist and they are
+not equally good.
+
+- **Lead with impersonation**, because it is the only one about the *reader*: a CELLO receipt should
+  mean it came from the real CELLO network, and keeping the node software private raises the cost of
+  standing up something that looks like us and is not. Pairs with *Proving which NETWORK is really
+  ours* above — closed source raises the cost, the fingerprint makes a fake detectable.
+- **Then the commercial one** — it opens once there is a network worth protecting.
+- **Watch the wording on hardening.** "Private until we've had more time to harden them" invites
+  *"so it isn't hardened yet?"* Say it as scale, not readiness: fewer eyes on the pieces we operate
+  while the network is small, until there are enough independent operators that opening them makes
+  it stronger rather than weaker.
+- **Do NOT lead with "open source helps attackers."** True of the Terraform, which stays private
+  permanently and needs no defence. Applied to the protocol it argues against our own threat model —
+  the design already assumes a hostile directory — and for a trust product it is the hardest
+  sentence to sell.
+
+**3. One file is 19,878 lines.** `session-node-manager.ts`, a quarter of the daemon. Ranked as
+`DOD-M15-GODFILE-1`; the point here is only that the answer should be ready rather than improvised:
+it is too big, half of it is documentation of why each check exists, and it sits behind things that
+affect whether the product works.
+
 ## Outage communication
 
 - A static status page hosted **outside GCP** — Cloudflare Pages or GitHub Pages — plus a Telegram
@@ -185,6 +223,62 @@ second is not optional:
   one's purpose, a warning when the identity being asked about is not on the list, and the standing
   "staff will never ask you for X". The shipped list alone cannot revoke a compromised identity or
   add a new one.
+
+## Proving which NETWORK is really ours
+
+The section above is the agent-level version of this. The network-level one is missing, and the
+attack is the crypto shadow-frontend: fork the open client, run three nodes, sign your own manifest,
+call it CELLO. Its receipts mean nothing, and when it is broken into the headline is about us.
+
+The check already exists — a client refuses any manifest not signed by the officer root key compiled
+into it. What is missing is that its answer is invisible.
+
+- `cello status` prints the consortium root fingerprint it trusts, beside the roster it resolved.
+- The real fingerprint is published on the site, in the README and in the install docs — the same
+  move as the staff pubkeys, one level up.
+- The same answer is reachable **before** installing, so the check precedes the trust.
+- **Trademark the name.** That is what gets a clone taken down; obscurity does not.
+
+Engineering line: `DOD-M15-CONSORTIUM-FINGERPRINT-1`.
+
+## The bootstrap is plain HTTP to a bare IP
+
+`http://34.75.172.108:9090`, and the libp2p listeners are `/ws` rather than `/wss`. The
+cryptography is fine — the peer id is in the signed manifest, Noise proves the remote holds that
+key, and step 6 makes it sign a challenge — but that is not the reason this is here:
+
+- **A stranger on a corporate network may simply not be able to install.** Plain HTTP to a bare IP
+  on 9090 is a common egress block. That is a Gate 2 failure, not a security one.
+- Nobody reaches the Noise argument before reaching for a screenshot.
+- **The ordering is the risk.** Step 6 runs only when the directory URL matches a bundled endpoint
+  byte for byte, so switching to a hostname *before* the manifest carries names silently turns the
+  defence off. Names into the manifest first, TLS second.
+
+Engineering line: `DOD-M15-BOOTSTRAP-TLS-1`.
+
+## The one key that decides who counts as CELLO
+
+The consortium manifest — the roster of directory nodes, their pubkeys and their peer ids — is
+signed by an officer key whose public half is compiled into every client. A client accepts any
+manifest carrying that signature. It is the root, and everything else in the chain hangs off it.
+
+**The private half is a fetchable value in Secret Manager.** So is every node's own signing key. If
+one of them is ever copied, an attacker signs a manifest naming their own nodes, every deployed
+client accepts it, and every check below still passes — because those checks verify against the
+manifest, and the manifest is now theirs. Rotation means shipping a new client build; installed
+clients keep trusting the old key until their operator upgrades. There is no way to say "that key is
+dead" to the field.
+
+- **Move the signing keys to KMS.** A KMS key is used, never fetched — you call sign and the private
+  half never leaves the HSM. "The key leaked" stops being a scenario. The stack already has KMS per
+  node for envelope encryption, so this extends a pattern rather than adding a dependency.
+- **Audit-log every use.** KMS converts key theft into permission abuse, so the residual risk is
+  whoever can call sign. Legitimate signings are rare and deliberate, which makes an unauthorised one
+  visible — but only if anyone is looking.
+- **Decide the revocation story, even if the answer is "documented, not built."** Right now the
+  response to a compromised officer key is a question nobody has been asked.
+
+Engineering line: `DOD-M15-KEYS-KMS-1`.
 
 ## The lever behind an escalation
 

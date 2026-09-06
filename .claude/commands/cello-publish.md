@@ -119,6 +119,30 @@ A green `smoke-tag` is the real success signal.
 
 ### 5. Verify the published artifacts — not the CI status
 
+> #### 🚨 A FAILED `Verify all published versions match local` DOES NOT MEAN THE PUBLISH FAILED
+>
+> **Measured 2026-09-05: it fired four times in one session and the publish had succeeded every
+> time.** The step reads the `beta` DIST-TAG, and that read is served from a cache that goes stale
+> **per package** — the `@beta` view returns the previous version for minutes while the version
+> itself is on the registry. `daemon` is the usual victim (largest package); `connect` did it once.
+> **The tell: packages checked AFTER the failing one report OK in the same run.** A registry that
+> was genuinely behind would fail them too.
+>
+> **Ask for the VERSION, never the tag** — the question is "did this version publish", not "what
+> does the tag point at":
+> ```bash
+> npm view @cello-protocol/daemon@0.0.193 version        # the exact version you just published
+> curl -s https://registry.npmjs.org/@cello-protocol%2fdaemon | \
+>   python3 -c "import json,sys; d=json.load(sys.stdin); print('0.0.193' in d['versions'])"
+> ```
+> - **Version IS there → nothing is wrong. Do NOT re-run to "fix" it.** A re-run publishes nothing
+>   (`There are no new packages that should be published`) and passes only because time has passed.
+>   Promote and move on.
+> - **Version is genuinely ABSENT → re-run.** The version is not burned.
+>
+> ⚠️ **And do not report a dropped publish from a stale tag read.** That claim was made twice in one
+> session and was false both times; the operator's npm email receipts are the fastest check.
+
 ```bash
 # every package: beta == local
 for p in crypto protocol-types transport client daemon cli connect; do

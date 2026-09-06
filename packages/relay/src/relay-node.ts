@@ -2174,36 +2174,41 @@ export class CelloRelayNode {
     const bHex = Buffer.from(state.assignment.participant_b).toString("hex");
     for (const recipientHex of [aHex, bHex]) {
       if (recipientHex === submitterHex) continue;
-      await this.#deliverWitnessAlert(sessionId, sessionKey, recipientHex, "self_chain_broken");
+      /**
+       * `submitterIsCounterparty: true` — the recipient is NOT the party that submitted, which is
+       * exactly what this loop selects for. The flag rides inside the signed bytes, so the daemon
+       * composing the operator's notice knows which side of the observation this recipient is on
+       * without having to be told separately.
+       */
+      await this.#emitWitnessAlertTo(sessionId, sessionKey, recipientHex, "self_chain_broken", true);
     }
   }
 
   async #emitDivergenceAlert(sessionId: Uint8Array, sessionKey: string, recipientHex: string): Promise<void> {
-    await this.#deliverWitnessAlert(sessionId, sessionKey, recipientHex, "replay_chain_diverged");
+    await this.#emitWitnessAlertTo(sessionId, sessionKey, recipientHex, "replay_chain_diverged", true);
   }
 
   /**
-   * Sign one observation and get it to one recipient — delivered now, or HELD for their next
-   * authenticated connection.
+   * Send ONE signed witness alert to ONE participant — 034-CARRYLEAF.
    *
-   * `relay_id` rides if and only if the signature does, and that coupling is the point of the pair:
-   * a client throws away an alert that declares an identity without proving it, so a relay that
-   * names itself and cannot sign would lose the warning as well as its transferability. Naming no
-   * identity is the honest degradation — the observation still reaches a person, marked as
-   * something they cannot show anyone.
+   * Extracted from `#emitDivergenceAlert`, which was the only sender of a single-recipient alert and
+   * now delegates to this. Extracted rather than copied for the reason its own header already gives:
+   * what two alert senders share is `buildWitnessAlertTbs`, the signed bytes, and that is exactly
+   * the thing that drifts when there are two of them.
    */
-  async #deliverWitnessAlert(
+  async #emitWitnessAlertTo(
     sessionId: Uint8Array,
     sessionKey: string,
     recipientHex: string,
     reason: import("./relay-types.js").SessionWitnessAlert["reason"],
+    submitterIsCounterparty: boolean,
   ): Promise<void> {
     const observedAt = Date.now();
     let witnessSignature: Uint8Array | undefined;
     if (this.#relayId !== null && this.#ackSigningKeyProvider !== null) {
       try {
         witnessSignature = await this.#ackSigningKeyProvider.sign(
-          buildWitnessAlertTbs(sessionId, reason, observedAt, true),
+          buildWitnessAlertTbs(sessionId, reason, observedAt, submitterIsCounterparty),
         );
       } catch (err: unknown) {
         this.#logger.error("relay.witness.sign.failed", {
@@ -2223,7 +2228,7 @@ export class CelloRelayNode {
         ? { relay_id: this.#relayId, witness_signature: witnessSignature }
         : {}),
       observed_at: observedAt,
-      submitter_is_counterparty: true,
+      submitter_is_counterparty: submitterIsCounterparty,
     };
     const recipientStream = this.#streams.get(recipientHex);
     if (!recipientStream) {
@@ -2791,8 +2796,120 @@ export class CelloRelayNode {
      */
     const signerHex = Buffer.from(witness.signer).toString("hex");
     const s1PubkeyHex = Buffer.from(s1.sender_pubkey).toString("hex");
-    if (s1PubkeyHex !== signerHex || senderPubkeyHex !== signerHex) {
+    /**
+     * THE LEAF MUST CLAIM ITS OWN SIGNER. Unconditional, and it is the binding that matters: a leaf
+     * whose named sender is not the key its signature verifies under is refused outright, whoever
+     * submitted it.
+     */
+    if (s1PubkeyHex !== signerHex) {
       await reply("sender_mismatch"); return;
+    }
+    /**
+     * ─── A PARTICIPANT MAY WITNESS WHAT THEY RECEIVED — 034-CARRYLEAF ────────────────────────────
+     *
+     * ⚠️ **THIS USED TO REQUIRE `senderPubkeyHex === signerHex` TOO, AND THAT CONJUNCT IS THE WHOLE
+     * WITHHOLDING ATTACK.** Only the AUTHOR could witness a leaf — so an author who chose not to
+     * submit left the relay's account of the conversation one message short, permanently, and the
+     * victim's unilateral seal then agreed with the witness. Every leaf validly signed, nothing
+     * false, the last thing said simply absent. That is `DOD-M15-WITHHOLD-SEAL-1`.
+     *
+     * The relay was already in a position to close it: `witnessLeafSignature` verifies the leaf
+     * against BOTH participants' keys, so it establishes who AUTHORED a leaf independently of who
+     * DELIVERED it. The author's signature is unforgeable and the recipient holds it. So the
+     * recipient can hand it over, and the relay can check it exactly as it checks the author's own.
+     *
+     * **What is still required, and it is everything that was required before:** the submitter must
+     * be a participant of this session (checked above), the leaf must be signed by a participant,
+     * and the leaf must name that same participant as its sender.
+     *
+     * ⚠️ **AND THE RELAXATION GIVES UP ONE MORE THING THAN "who may submit" — review F6, correcting
+     * a sentence that claimed otherwise.** It said the only relaxation is that the submitter and the
+     * author may differ. It is also true that a participant now influences WHERE their counterparty's
+     * leaf lands: they can hold it, send several of their own, and counter-submit afterwards, so the
+     * notarized record shows the counterparty saying it later than they did. `last_seen_seq` and
+     * `last_seen_hash` inside the author's signed bytes pin a LOWER bound and no upper one.
+     *
+     * It is bounded and it is not a stranger's to reach: only the counterparty can do it, only
+     * within one conversation, and never earlier than the author's own acknowledged position. What
+     * keeps it narrow in practice is that an honest client counter-submits the moment it ingests.
+     * Recorded rather than fixed here, because closing it needs a signed upper bound the wire does
+     * not carry.
+     */
+    const counterSubmit = senderPubkeyHex !== signerHex;
+    if (counterSubmit) {
+      /**
+       * ⚠️ **AND A COUNTER-SUBMIT MAY NOT REPLAY A LEAF THIS RELAY ALREADY HOLDS.**
+       *
+       * Structure 1 binds the author, the content and the session — it does NOT bind a position. So
+       * without this, a participant could re-submit a message their counterparty legitimately sent
+       * earlier and consume a second canonical position with it: a duplicate the author really did
+       * sign, at a place they never sent it. That is a fabrication the author cannot disown, and it
+       * would be introduced by the very relaxation above.
+       *
+       * A SELF-submit is deliberately not constrained this way: sending identical content twice in
+       * one conversation is two messages, not a duplicate, and that is the author's own business.
+       * A counter-submit has exactly one legitimate purpose — catching up a leaf its author failed
+       * to witness — so a leaf already witnessed is never one of them.
+       *
+       * **The residue, named rather than hidden:** if an author sends the SAME bytes twice and
+       * withholds the second, the recipient cannot witness it, because it is indistinguishable here
+       * from a replay of the first. That is narrow, and it is the safer side of the trade.
+       */
+      const alreadyHeld = state.leaf_log.some(
+        (l) =>
+          Buffer.from(l.s2.sender_pubkey).toString("hex") === signerHex &&
+          Buffer.from(l.s2.content_hash).equals(Buffer.from(s1.content_hash)),
+      );
+      if (alreadyHeld) {
+        this.#logger.info("relay.submit.counter_submit.duplicate", {
+          sessionId: sessionKey,
+          submitter: truncHex(senderPubkeyHex),
+          author: truncHex(signerHex),
+          impact:
+            "refused — this relay already holds this leaf from this author, so the submission is a " +
+            "replay rather than a leaf its author failed to witness. No position was consumed.",
+        });
+        await reply("counter_submit_duplicate"); return;
+      }
+      this.#logger.info("relay.submit.counter_submit", {
+        sessionId: sessionKey,
+        submitter: truncHex(senderPubkeyHex),
+        author: truncHex(signerHex),
+        impact:
+          "a participant witnessed a leaf their COUNTERPARTY authored and did not submit. The " +
+          "author's own signature is what makes it admissible; this relay verified it against the " +
+          "assignment before sequencing it, exactly as it does the author's own submissions.",
+      });
+      /**
+       * ⚠️ **AND BOTH PARTICIPANTS ARE TOLD — a detection that only reaches this log is not a
+       * control.**
+       *
+       * This relay is the only party positioned to state it: it knows the author never asked for
+       * the leaf to be witnessed, and it is not a party to the conversation. The alert is signed,
+       * so what each side holds is transferable rather than this relay's unsupported word, and it is
+       * queued if they are offline.
+       *
+       * The same observation means opposite things to the two of them, which is why the sentence is
+       * composed at the daemon from `submitter_is_counterparty` rather than here: to the WITNESS it
+       * says their counterparty is not putting their own words in the record, and to the AUTHOR it
+       * says their own submits are not arriving.
+       *
+       * Fired after the duplicate check, so a replay attempt — which is refused and sequences
+       * nothing — never generates one. An alert on a refusal would let either party manufacture
+       * noise about the other for free.
+       */
+      const witnessRecipients = [aHex, bHex];
+      for (const recipientHex of witnessRecipients) {
+        await this.#emitWitnessAlertTo(
+          frame.session_id,
+          sessionKey,
+          recipientHex,
+          "leaf_witnessed_by_counterparty",
+          // TRUE for the author — from their seat, the submitter IS their counterparty. FALSE for
+          // the submitter, who is reading about their own action.
+          recipientHex === signerHex,
+        );
+      }
     }
 
     if (s1.last_seen_seq > state.seq_counter) {
@@ -3103,6 +3220,9 @@ export class CelloRelayNode {
     // witness is greppable as "hash_submit" (the DoD line: "relay log shows a hash_submit").
     // Content never appears here — only the signed hash leaf (INV-3).
     this.#logger.info("relay.hash.submitted", {
+      // 034-CARRYLEAF review F7 — WHO WROTE IT, not only who handed it over. On a counter-submit
+      // these differ, and the greppable witness line named the submitter as the author.
+      author: truncHex(signerHex),
       sessionId: sessionKey,
       sequenceNumber: seq,
       senderPubkey: senderPubkeyHex,
