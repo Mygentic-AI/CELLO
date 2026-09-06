@@ -160,9 +160,21 @@ The short answer is: because a directory said so. There is no client-side relay 
 | Y3 | Relays are health-checked and failing ones drop out of the pool | `relay-pool-manager.ts` ~43-62 | `relay.health.check.failed` | removed from assignment | — |
 | Y4 | Relay endpoints reaching the client are shape-checked per entry | `signaling-connect.ts` ~168-187 | malformed entry dropped, auth never fails | CONTINUE | G3 |
 | Y5 | **The relay named in a session assignment is NOT covered by the assignment's signature** | `protocol-types/session.ts` ~159-200 — the TBS covers session id, both pubkeys, genesis root, timestamp, both session peer ids and addrs, transport mode, high_stakes, prior_relay_id. **Not `relay_endpoint`.** | — | `⊘` — the client dials the relay a directory named, authenticated only by L2 + G3 | G3 |
-| Y6 | A separate `relay_directory_signature` rides the assignment, and the **relay** verifies it | `relay-node.ts` ~1158 (`directory_signature_invalid`); `inbound-sessions.ts` ~362-390 | `relay_mode_assignment_without_directory_signature` / `..._malformed` | WARN — the session runs **unwitnessed**, never blocked | R1 |
+| Y6 | A separate `relay_directory_signature` rides the assignment, and the **relay** verifies it | `relay-node.ts` ~1131 (`directory_signature_invalid`); `inbound-sessions.ts` ~362-390 | `relay_mode_assignment_without_directory_signature` / `..._malformed` | WARN — the session runs **unwitnessed**, never blocked | R1 |
+| Y6.1 | On rejection the client marks the record terminal and **withholds the first hash_submit** | `session-relay-client.ts` ~809-814, ~2040 | `relay_assignment_rejected` | refuse to witness — no doomed frame is sent | Y6 |
+| Y6.2 | **…but `relay_assignment_rejected` is absent from `TERMINAL_RELAY_REFUSALS`** | `session-relay-client.ts` ~62-77; `session-node-manager.ts` ~8972, ~9055 | — | a **permanent** condition read as transient availability: every later send reports delivered against a chain that never gains a leaf, and only the two ack-mismatch reasons reach `noteContentRefusal`. This is the 68-minute defect that set names, under a code it does not list | Y6.1 |
 | Y7 | A predecessor relay's receipts verify against its registered key | `relay-node.ts` ~2708-2755 | `RELAY_PREDECESSOR_UNKNOWN` | refuse the submit | Y1 |
 | Y8 | A replayed chain comes from the relay the assignment names | `relay-node.ts` ~646-671 | `unilateral_receipt_wrong_relay` | refuse the replay | W1 |
+
+> **What "unwitnessed" actually costs — smaller than it reads.** Stage I still holds on the direct
+> path: each message is signed by its author (`I2`), bound to this counterparty (`I3`), this content
+> (`I4`) and this conversation (`I5`), acknowledgements must name a hash we really placed there
+> (`I6`–`I8`), and the seal rebuilds the root from those leaves and rejects a broken or acausal chain
+> (`Z1`–`Z6`). So the record stays self-authenticating and tamper-evident with no relay at all. What
+> is lost is the **third-party attestation of ordering and timing** — the receipt becomes two-party
+> instead of three-party. That is a downgrade in evidentiary weight, not in integrity, and it is why
+> reaching each other with the relays down is a supported state rather than a broken one. The defect
+> is `Y6.2`, not the unwitnessed state itself.
 
 ---
 
@@ -657,7 +669,7 @@ a *notification* even though it is not a *refusal*.
 | L3.1 | A manifest entry with **no** declared peerId | The dial-layer identity check is skipped for that node |
 | Y1.1 | A relay's self-signature proves possession, not authorization | Any keypair holder can present a valid relay registration |
 | Y5 | **The relay named in a session assignment is not covered by the assignment's signature** | The client dials whichever relay a directory names, authenticated only by Noise plus step 6 |
-| Y6 | A relay-mode assignment with no directory signature | The session runs **unwitnessed** — allowed, warned, never blocked |
+| Y6 | A relay-mode assignment with no directory signature | The session runs **unwitnessed** — allowed by design (see the Stage Y note: integrity survives, third-party ordering does not). The bug is `Y6.2`: the permanent refusal is classified as transient and never reaches the operator |
 | G3.3 | Client→directory identity proofs carry no client-chosen nonce | Replay is bounded to ±5 minutes rather than eliminated. Directory→directory auth (G8) does not have this gap |
 | F21 | **The client contributes its FROST share to opaque bytes** | It co-signs its own session assignment without judging it — the one document it is uniquely placed to check |
 | F26 | A bilateral certificate whose signer's key we do not hold | Accepted as `verified:false`; sound only because it arrived over the authenticated Noise channel |
@@ -677,7 +689,8 @@ a *notification* even though it is not a *refusal*.
 - **The document layer is not enumerated here.** `cello_doc_*` rides inside a session and has its own
   gate, screener and rejection vocabulary (`document-gate.ts`, `document-screen.ts`,
   `document-rejection.ts`, `document-handshake.ts` — the proposal signature check is at
-  `document-handshake.ts` ~161). It is the largest omission and should be a second pass.
+  `document-handshake.ts` ~161). **Document sharing is deferred as a feature, so this is not owed
+  work** — enumerate it if and when the feature returns.
 - **Attestations and trust signals** appear only where they touch session admission (`N6`).
 - **Stage X stops at the cloud project.** Below it — GCP's own control plane, the npm registry, the
   operator's OS and its CA store, the Route 53 zone (`Z02692523DOH7NW521CL8`, still on AWS) — is
