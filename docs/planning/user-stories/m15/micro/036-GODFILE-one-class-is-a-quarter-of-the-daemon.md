@@ -380,20 +380,48 @@ stop rule in Part 6.
 
 ---
 
-## Definition of Done
+## Definition of Done — STATUS AS AT 2026-09-06
 
-- [ ] Part 0a landed: the sweep items in this file are fixed, rewritten and not deleted.
-- [ ] Part 0b landed: `max-lines` in `eslint.config.mjs`, one allowlist entry, CI enforces it.
-- [ ] `session-node-manager.ts` is **under 4,000 lines**.
-- [ ] The ratchet's grandfathered number has been lowered to the final size.
-- [ ] Every extracted module declares the state it needs; **no field changed from private to public**.
-- [ ] The full suite passes with **no test file modified** except import paths.
-- [ ] **No comment was summarised, shortened or dropped.**
-- [ ] `pnpm run build:clean` produces a `dist/` with no artifact whose source no longer exists.
-- [ ] `cello-unit-reviewer` ran on every part and every finding is fixed.
-- [ ] A live two-daemon smoke test passed: session, messages both ways, seal.
-- [ ] The Progress table reflects reality, including any ⏭️ parts.
-- [ ] `status:` in this file's frontmatter flipped to `complete` in the same commit as the verdict.
+- [x] Part 0a landed: the sweep items in this file are fixed, rewritten and not deleted.
+- [x] Part 0b landed: `max-lines` in `eslint.config.mjs`, one allowlist entry, CI enforces it —
+      plus a CI grep closing the inline-`eslint-disable` bypass that would otherwise switch it off.
+- [ ] ⚠️ `session-node-manager.ts` is **under 4,000 lines** — **NOT MET: 16,935.** See the measured
+      finding above. Under 4,000 is not reachable by pure movement; it needs the redesign.
+- [x] The ratchet's grandfathered number has been lowered after every part (20,389 → 16,935).
+- [x] Every extracted module declares the state it needs; **no field changed from private to
+      public** — verified per field: all seven that left the manager are still `#private` in their
+      new module, with zero public forms anywhere.
+- [x] The full suite passes with **no test file modified** except one comment block (the
+      `ack_hash_absent` note, which described a branch this order deleted). No assertion changed.
+- [x] **No comment was summarised, shortened or dropped** — comment lines went UP, 10,846 in the
+      one file to 11,097 across the six.
+- [x] `pnpm run build:clean` produces a `dist/` with no artifact whose source no longer exists —
+      checked mechanically, zero orphans.
+- [x] `cello-unit-reviewer` ran on Parts 0a/0b; all six findings fixed. **Later parts are unreviewed**
+      — see below.
+- [ ] A live two-daemon smoke test — **not run.** It is the close condition and the order cannot
+      close on the line-count clause anyway.
+- [x] The Progress table reflects reality, including the ⏭️ part.
+- [ ] `status:` stays `open`. **The order is not complete and must not read as if it were.**
+
+### What was delivered
+
+| | |
+|---|---|
+| Lines | 20,368 → **16,935** (3,433 out, 17%) |
+| Modules extracted | 5 — types/constants, authorship, inbound refusals, session records, park recovery |
+| Dead code removed | `ack_hash_absent` (unreachable branch + its two operator strings), two accessors with no caller |
+| Ratchet | `max-lines` at 3,000, two grandfathered entries, inline-disable bypass closed in CI |
+| Gate | build:clean + lint + typecheck + 434 files / 4,963 tests, green on every commit |
+
+### What is owed
+
+1. **The redesign** of the four entangled domains (standing receiver, salt, seal, relay) — the
+   ~13,000 lines that pure movement cannot reach. Its own order.
+2. **A unit review of Parts 1, 3+4, 5 and 6.** Only Parts 0a/0b were reviewed. Under the WIP-limit
+   rule these should have been reviewed as they landed; they were not, because the session was
+   directed to keep moving rather than block. **That is a known gap, recorded rather than hidden.**
+3. **The live two-daemon smoke test.**
 
 **Publishing is NOT part of this order.** It ships with the next release via `/cello-publish`, which
 verifies against the tarball.
