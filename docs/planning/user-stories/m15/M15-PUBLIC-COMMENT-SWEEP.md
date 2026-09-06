@@ -121,15 +121,21 @@ The job is the categories of sentence above, nothing else.
 
 > ### ⚠️ EVERY LINE NUMBER BELOW IS STALE — find items by their QUOTED TEXT
 >
-> 036/037-GODFILE split `session-node-manager.ts` from 19,878 lines into fourteen files, so a
-> `session-node-manager.ts:9760` in this document may now be a different file entirely. The quoted
-> sentences are stable and the file names mostly are not. Where an item has moved, the current homes
-> are: authorship → `authorship-verification.ts`, refusals/quarantine/ordering → `inbound-refusals.ts`,
-> contacts/settings/transcript → `session-records.ts`, park → `park-recovery.ts`, salt →
-> `session-salts.ts`, schema → `session-schema.ts`, SQL → `session-queries.ts`, notices →
-> `refusal-notices.ts`, ephemeral keys → `session-ephemerals.ts`, liveness → `session-liveness.ts`,
-> witness alerts → `witness-alerts.ts`, held content → `held-content.ts`, genesis/certified leaves →
-> `session-leaf-records.ts`, standing receiver → `standing-receivers.ts`.
+> The god-file split took `session-node-manager.ts` from 19,878 lines to 7,129 across nineteen
+> files, so a `session-node-manager.ts:9760` in this document may now be a different file entirely.
+> The quoted sentences are stable and the file names mostly are not. Where an item has moved, the
+> current homes are: authorship → `authorship-verification.ts`, refusals/quarantine/ordering →
+> `inbound-refusals.ts`, contacts/settings/transcript → `session-records.ts`, park →
+> `park-recovery.ts`, salt → `session-salts.ts`, schema → `session-schema.ts`, SQL →
+> `session-queries.ts`, notices → `refusal-notices.ts`, ephemeral keys → `session-ephemerals.ts`,
+> liveness → `session-liveness.ts`, witness alerts → `witness-alerts.ts`, held content →
+> `held-content.ts`, genesis/certified leaves → `session-leaf-records.ts`, standing receiver →
+> `standing-receivers.ts`, **sending → `session-content-send.ts`, receiving → `session-content-ingest.ts`**.
+>
+> **The whole inbound and outbound content path has moved**, which is where a large share of the
+> items below live: every refusal sentence, every ordering and dedupe sentence, the hash and salt
+> checks, the screening gateway, and `sendContent`'s own doc block (item B4). Look for those two
+> files first, not the manager.
 
 > ### ⏭️ OWED, and recorded here so it is not lost: the modules `036-GODFILE` extracts
 >
@@ -182,9 +188,11 @@ keep it; 036's Part 0a ran under that version, so this file may already carry su
 removing it is not worth a second pass.)
 **Verify first:** that `ingestReceivedContent`'s callers all hold a verified authorship proof.
 
-### B4 · `core/daemon/src/session-node-manager.ts` — `sendContent`'s SCOPE block
+### B4 · `core/daemon/src/session-content-send.ts` — `sendContent`'s SCOPE block
 
-**Found 2026-09-06 while verifying B1, and it is the same defect one method over.** `sendContent`'s
+**Found 2026-09-06 while verifying B1, and it is the same defect one method over.** `sendContent`
+moved out of the manager with the content split and took this block with it verbatim — it is now
+the first doc block in `session-content-send.ts`. `sendContent`'s
 doc block still tells a public reader that the send path *"does NOT also submit a K_local-SIGNED
 content_hash leaf to the RELAY … that relay hash-submit is MSG-001's scope"*, and that *"because
 there is no relay yet"* the sequence number is a local leaf index rather than a relay-assigned one.
