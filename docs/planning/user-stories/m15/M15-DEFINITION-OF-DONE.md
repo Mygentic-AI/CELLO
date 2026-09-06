@@ -1535,6 +1535,36 @@ it removes "the client helps sign whatever it is handed" as a step an attacker g
 ### `DOD-M15-KEYBIND-1` — ❌ PRE-LAUNCH · An agent's group key must be provably its own
 **Filed 2026-09-06. The only open line in this milestone that gets more expensive after launch.**
 
+> ### 🚨 HALF-SHIPPED, AND `main` CANNOT OPEN A SESSION AT ALL — found 2026-09-06 by the GODFILE lane
+>
+> **Nobody can start a conversation with anybody.** Every `cello_initiate_session` on `main` is
+> refused before anything is dialled, with *"The directory returned a session assignment without the
+> counterparty's key binding."* The responder refuses the mirror image. Nothing is sent and nothing
+> is opened.
+>
+> **The flow:** A asks the directory to open a session with B → the directory returns the assignment
+> → A's client now DEMANDS a signature proving B's threshold key belongs to B → the assignment
+> carries no such field → A refuses and stops. B does the same in reverse.
+>
+> **Why:** the CONSUMER of the proof shipped and the PRODUCER did not. The client half is on
+> `cello-client` main (`assignment-verify.ts`, `session-assignment-parser.ts`). Nothing in
+> `trustless-cello/packages/directory/src` mentions `participant_a_key_binding` or
+> `participant_b_key_binding` — the only commit in this repo (`e6838a28`) is this DoD entry and the
+> work order. There is no code anywhere that emits the field the client requires.
+>
+> **⚠️ THE REFUSAL MESSAGE SENDS THE OPERATOR SOMEWHERE USELESS.** It tells them the counterparty
+> *"needs to re-register"*. Re-registering cannot help: the field has no producer, so it will fail
+> identically for every agent, on every node, forever. That guidance will cost somebody an
+> afternoon before they think to check whether the directory emits it at all.
+>
+> **Evidence, not inference.** A clean checkout of `main` — with none of the god-file work in it —
+> fails `J-SPINE` on exactly three tests (`DOD-SPINE-5`, `-6`, `-7`) with this reason. The unit
+> suites stay green throughout: 4,999 tests pass while no two agents can talk. This is only visible
+> from the live binary gate.
+>
+> **The decision is which half to move**, and it is not the refactor lane's to make: build the
+> directory-side producer, or hold the client's requirement until it exists. Nothing was touched.
+
 An agent holds **two** keypairs, and only one of them is published. `K_local` is an ordinary Ed25519
 pair minted before registration — its public half is the 64-hex identity operators paste around. The
 DKG then produces a **second** keypair: public half whole and identical for everyone, private half
