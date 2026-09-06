@@ -28,7 +28,7 @@ a single list and hand it over. Three of those four categories are fine. One is 
 | | What it is | Public reading | Action |
 |---|---|---|---|
 | **A** | A fail-open that is **deliberate, bounded, and says why** | Reads as rigour | **Leave alone** |
-| **B** | Describes a gap that has **since been closed** | Advertises a hole you already fixed. The worst kind | **Rewrite, never delete** |
+| **B** | Describes a gap that has **since been closed** | Advertises a hole you already fixed. The worst kind | **Rewrite** — see the reattachment rule |
 | **C** | A **live** gap that is **tracked** | Fine — provided the reader can see it is tracked | Name the designation |
 | **D** | A **live** gap that is **not tracked anywhere** | This is a disclosure | File it, then decide |
 | **E** | A **step-by-step attack recipe** for a fixed bug | Hands an attacker the method | Keep the finding, cut the recipe |
@@ -44,9 +44,32 @@ For each item:
    B-verdict rewrites a comment into a lie, which is worse than the comment.
 2. **Apply the action for its category.** The categories are not interchangeable; the whole point of
    the split is that three of them are "do nothing".
-3. **Never delete a comment that records a defect.** Rewrite it so it describes what the code does
-   now, and keep the record of what it did before. That rule already appears throughout this
-   codebase and it exists because the false reasoning is the part worth not repeating.
+3. **The reattachment rule — REVISED BY ANDRE 2026-09-06, and the revision narrows it.**
+
+   The rule used to be *"never delete a comment that records a defect; keep the record of what it
+   did before."* **That is too broad and it is how these files bloat.** `git log -p` on any line
+   already gives the old text, the commit that changed it and the reasoning in the message.
+   Duplicating that in the file is a diary, and a diary earns no lines.
+
+   > **Keep the reasoning only when a competent person would plausibly make the same mistake again.
+   > Otherwise fix the comment and let git hold the history.**
+   >
+   > **And when you keep it, write it as a RULE, not a memoir** — *"these checks must stay in this
+   > order, because…"* rather than *"this used to be wrong."*
+
+   Two real examples from this codebase, to calibrate:
+
+   - ✅ **Keep** — *"a check that can answer `unusable` before the signature is verified lets a peer
+     choose the softer outcome."* Putting the cheap check first is the obvious thing to do. Someone
+     will try it again, so this is a guard rail that happens to be phrased in past tense. Rewrite it
+     forward: *"the order is decode → signature → signer → what the proof is about, and it is a
+     security property, because…"*
+   - ❌ **Drop** — *"this comment used to say the columns did not exist. They do now."* Nobody was
+     ever going to re-derive that. Pure diary; git has it.
+
+   The memoir framing is also what makes these read as a rap sheet to an outsider, which is the other
+   half of what this sweep exists to fix. Forward-looking prose costs the same lines and reads as
+   rigour.
 4. **Commit per item**, with the file and the category in the message.
 5. If an item turns out to be a real, live, untracked gap, **file it as a DoD line and stop** — do
    not fix it in the same pass. Whether it gets fixed before launch is Andre's call, not the
@@ -54,6 +77,18 @@ For each item:
 
 **Do not "tidy" the codebase's comment style while you are in here.** The density is intentional.
 The job is four categories of sentence, nothing else.
+
+> ### ⏭️ OWED, and recorded here so it is not lost: the modules `036-GODFILE` extracts
+>
+> `036-GODFILE`'s Part 0a swept `session-node-manager.ts` **under the OLD rule 3**, which said to keep
+> the record of what a comment used to say — so it may have ADDED history lines. The rest of that order
+> is pure movement and carries every comment verbatim into new sibling modules, which is correct for a
+> refactor (a part that also edited comments would stop being reviewable as a move) and means **those
+> new files come out of the campaign never having been read under the revised rule.**
+>
+> **Cosmetic bloat, not a disclosure risk** — the stale and untracked items in that file were already
+> handled. A pass over the extracted modules is owed **after 036 closes**, and is worth doing only if
+> someone is in those files anyway. Do not open it as its own unit.
 
 ## What was searched
 
@@ -88,8 +123,10 @@ signature over Structure 1 on every content frame (`#verifyAuthorshipClaim`), an
 checkable proof is refused (`authorship_proof_absent`).
 
 **Action.** Rewrite to describe what this function does and does not establish *today*, and point at
-the checks that now close it. Keep a line recording that the gap was real when written — that is the
-history, and it is why the sentence must not simply be deleted.
+the checks that now close it. **Under the revised rule 3, do NOT add a line recording that the gap
+used to be real** — nobody re-derives that, and git has it. (An earlier version of this order said to
+keep it; 036's Part 0a ran under that version, so this file may already carry such a line. Leave it —
+removing it is not worth a second pass.)
 **Verify first:** that `ingestReceivedContent`'s callers all hold a verified authorship proof.
 
 ### B2 · `core/gateway/src/detect/sanitize.ts:8-12`

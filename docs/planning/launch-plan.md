@@ -161,7 +161,14 @@ not equally good.
   the design already assumes a hostile directory — and for a trust product it is the hardest
   sentence to sell.
 
-**3. One file is 19,878 lines.** `session-node-manager.ts`, a quarter of the daemon. Ranked as
+**3. A dead package sits on the npm scope.** `@cello-protocol/client@0.0.50`, last published
+2026-07-15 — two days *after* its source was deleted (`567b856`, the M6-era in-process stack purge).
+Nothing depends on it in either repo. It cannot break anyone (no users), so this is not a work item
+and not a DoD line: **one `npm deprecate` with a pointer, next time you are in npm anyway.** Recorded
+only so it is not rediscovered and re-investigated. Unpublish is not the move — npm restricts it
+after 72 hours, and deprecate is self-serve and permanent.
+
+**4. One file is 19,878 lines.** `session-node-manager.ts`, a quarter of the daemon. Ranked as
 `DOD-M15-GODFILE-1`; the point here is only that the answer should be ready rather than improvised:
 it is too big, half of it is documentation of why each check exists, and it sits behind things that
 affect whether the product works.
