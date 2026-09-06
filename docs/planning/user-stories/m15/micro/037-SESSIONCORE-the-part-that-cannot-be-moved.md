@@ -121,6 +121,69 @@ Reservation retry, respread, quarantine, witness alerts, the detached-client bui
 
 ---
 
+## Progress — 16,934 → 12,254 (as at 2026-09-06)
+
+| Unit | What | Lines after |
+|---|---|---|
+| — | `session-salts.ts` — the per-session content salt and its 11 maps | 15,546 |
+| — | `session-schema.ts` — every CREATE TABLE / ALTER TABLE (785 lines of DDL) | 14,759 |
+| — | `session-queries.ts` — 45 methods that are only SQL | 13,849 |
+| — | `refusal-notices.ts` — refusals an operator can actually see | 13,407 |
+| — | `session-ephemerals.ts` — the throwaway keypair and the content key | 12,923 |
+| — | `session-liveness.ts` — liveness and impairment | 12,627 |
+| — | `witness-alerts.ts` — what a relay said it saw | 12,553 |
+| — | `held-content.ts` — content held behind an ordering gap | 12,254 |
+
+**Every unit gated on `build:clean` from scratch, lint, typecheck, 434 files / 4,963 tests, and the
+LIVE `J-SPINE` journey 7/7 including the bilateral seal. No test assertion changed anywhere.**
+
+**The acceptance test is moving as predicted.** `#evictSessionCaches` cleared **24** per-session
+containers by hand; it clears **11** now, with the rest behind `evictSession` calls on the
+collaborators that own them.
+
+---
+
+## ⚠️ THE WALL, MEASURED — what stands between 12,254 and 4,000
+
+**Unit 1 was not needed as written.** The order proposed a `SessionRegistry` first, on the hypothesis
+that every large context was large because everything reaches for `#activeNodes`. That hypothesis was
+only partly right, and eight extractions went in ahead of it without one — so the registry is still
+available, but it is not the blocker.
+
+**The blocker is the content path, and it is one method deep.** Measured with the TypeScript parser:
+
+| cluster | lines | context |
+|---|---|---|
+| `ingestReceivedContent` + `sendContent` + `#handleContentStream` (+ their held/append helpers) | **3,190** | **43** |
+
+A context of 43 is the manager with an extra hop. These three cannot move as a unit, and they are
+where the remaining mass is.
+
+### What decomposing `ingestReceivedContent` actually means
+
+It is **998 lines and 38 top-level statements**, and the shape is a LINEAR REFUSAL CHAIN: compute
+something, and if it fails, quarantine the bytes, notice the operator, and return a named refusal.
+In order — no session record, unreadable hash algorithm, hash recompute, hash mismatch, no sender
+pubkey, dedup against the tree, document-frame classification, inbound screening, terminal block,
+post-screen dedup, ordering gap ahead, ordering gap behind, undeliverable position, relay witness.
+
+**So it decomposes into guard functions — but not by moving them.** Each guard reads and writes
+locals threaded through the whole chain (`record`, `computed`, `senderPubkey`, `tree`, `entry`,
+`isDocFrame`, `inboundVerdict`, `canonicalSeq`, `leafIndex`). Splitting it means defining the state
+those guards share and passing it down a pipeline: a redesign of the control flow, on the path that
+decides **whether a message is accepted and who it is attributed to**.
+
+**That is a genuinely different risk class from the eight units above**, all of which were
+restructures whose correctness the existing suite could confirm. This one changes the shape of the
+decision itself. It wants its own order, red-first tests per guard, and the stranger enforcer — not
+another extraction pass.
+
+**The recommendation:** stop 037 where the seams stop, and make the ingest chain its own unit with
+its own risk budget. The ratchet holds whatever number 037 ends on, so nothing regrows in the
+meantime.
+
+---
+
 ## Definition of Done
 
 - [ ] `SessionRegistry` exists and owns the live-session state; `#evictSessionCaches` is measurably
