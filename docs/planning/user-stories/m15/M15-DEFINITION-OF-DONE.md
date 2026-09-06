@@ -1298,7 +1298,7 @@ the test that asserts that relationship still passes. **Ordering is the whole ri
 manifest come first, or step 6 is silently disabled by the fix.
 
 ### `DOD-M15-GODFILE-1` — ❌ PRE-LAUNCH · The 19,878-line class is split, and a ratchet stops it growing back
-**Filed 2026-09-06, after measuring both halves of it.**
+**Filed 2026-09-06, after measuring both halves of it. The work order is [[M15-STORY-GODFILE]] — six seams, pulled one at a time.**
 
 `cello-client/core/daemon/src/session-node-manager.ts` is 19,878 lines and 1.2 MB — **25% of the
 entire daemon**, in one class with 555 members. It holds session records, the whole inbound ingest
