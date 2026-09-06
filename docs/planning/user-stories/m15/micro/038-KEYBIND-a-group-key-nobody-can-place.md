@@ -27,6 +27,10 @@ description: >
 > 4. **500 lines, hard cap.**
 > 5. **No backward compatibility.** The directories are wiped before launch and there are no users.
 >    An absent binding is a REFUSAL, never a tolerated legacy shape. Do not write a compat branch.
+> 5a. **⛔ DO NOT EDIT `session-node-manager.ts`.** Order 037 is restructuring it in a live worktree.
+>    Nothing this order needs is in there — the pin lives in `session-queries.ts`, and the manager
+>    holds only delegating one-liners. If you believe you need to touch that file, **stop and say
+>    so**; you have almost certainly found a different problem than the one this order describes.
 > 6. **Standard procedure still applies:** implement → review (`cello-unit-reviewer`) → fix every
 >    finding → commit. Commit per fix, push after every commit. **Closing a unit means flipping this
 >    file's `status:` frontmatter to `complete` in the SAME commit as the verdict.**
@@ -75,9 +79,14 @@ header comment states the bound. **It catches a tampered frame. It establishes n
 signed.**
 
 `inbound-sessions.ts` ~956 then calls `recordCounterpartyPrimary`, writing that signer into
-`sessions.counterparty_primary_pubkey`. `getPinnedCounterpartyPrimary`
-(`session-node-manager.ts` ~7660) reads it back for every later session, keyed on the counterparty's
-K_local. **A wrong first contact is a wrong pin, and every session after it verifies beautifully.**
+`sessions.counterparty_primary_pubkey`. `getPinnedCounterpartyPrimary` reads it back for every later
+session, keyed on the counterparty's K_local. **A wrong first contact is a wrong pin, and every
+session after it verifies beautifully.**
+
+> ⚠️ **Both live in `session-queries.ts` (~407 and ~1060), NOT in `session-node-manager.ts`** — order
+> 037 already extracted them, and the manager keeps only one-line delegating wrappers. **This order
+> therefore has no business editing `session-node-manager.ts` at all**, which is what makes it safe
+> to run alongside 037. See the rules above.
 
 ### Why the initiator is fine and the receiver is not
 
