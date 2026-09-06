@@ -53,9 +53,23 @@ them. Three were found, and one had inverted meaning:
 - `witness-alerts.ts` — a cap's rationale stayed behind and read as documentation for the wrong
   method.
 
-**How to find them, since grep cannot:** a doc block whose first sentence names a member that is not
-the one below it. The cheap mechanical check is two `/** … */` blocks with no code between them —
-that always means one of them is orphaned.
+**How to find them, since grep cannot — and the detector needs calibrating, so here it is measured
+rather than asserted.** The cheap mechanical check is two `/** … */` blocks with no code between
+them. Run across `core/daemon/src` it returns **~150 candidates, and most are FALSE POSITIVES**: two
+blocks layered on one statement *inside a method body* is a deliberate and common style here, not an
+orphan.
+
+**The actionable form is narrower: two blocks with no code between them AT CLASS-MEMBER LEVEL.**
+That is where a real orphan lives, because the second block is the one the member actually gets and
+the first is documenting nothing.
+
+**Then confirm semantically before acting** — does the first block's subject match the member below
+it? `held-content.ts` had `@returns true iff the UPDATE was executed` sitting above a method
+returning `void` that runs no UPDATE: mechanically flagged, and only reading it proved it.
+
+⚠️ **AND IF THE OWNER CANNOT BE IDENTIFIED, MARK IT — DO NOT GUESS.** Attaching an orphan to a
+plausible-looking neighbour is the same defect as leaving it, with the evidence destroyed. One in
+`held-content.ts` is marked exactly that way: nearest candidate named, explicitly not attached.
 
 **Action: reattach to the member it describes.** Never delete: the prose is usually correct, and it
 is the member it points at that has moved.
