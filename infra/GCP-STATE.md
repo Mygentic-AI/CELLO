@@ -330,7 +330,7 @@ tier boundary.
 | Bucket `cello-infra-tfstate` | us-east1, versioned, UBLA | 2026-07-28 | gcloud bootstrap, imported into TF |
 | Service accounts | `cello-directory-node`, `cello-relay-node`, `cello-ops-agent`, `cello-portal`, `cello-cloud-build` — minimal grants per `terraform/iam.tf`. **Secret access is per-secret only, never project-level** (unit-review finding); CI reads only the staging bucket, never tfstate. External SA `cello-audio-processor@mygentic-sdk-agent` granted `roles/serviceusage.serviceUsageConsumer` (2026-08-23). | 2026-07-28 | Terraform / gcloud |
 | Cloud Build P4SA grants | `cloudbuild.serviceAgent` + `secretmanager.admin` (org policy strips ALL automatic service-agent grants — both had to be granted explicitly for the GitHub connection). ~~Legacy SA's auto-granted `cloudbuild.builds.builder` REMOVED 2026-07-28 (unrecorded, unused — done-audit catch)~~ **IT WAS NOT UNUSED.** That grant is what lets a trigger running as a user-specified SA create a build; removing it broke CI the same day (last trigger-attributed build 2026-07-28T07:32Z) and every push since produced no image and NO build record. Restored 2026-08-05 and now DECLARED in `terraform/iam.tf` on `cello-cloud-build@` so an apply cannot strip it again. Read this as the cost of removing an out-of-band grant without first establishing what depends on it | 2026-07-28 | Terraform |
-| Artifact Registry `cello` | `us-east1-docker.pkg.dev/cello-infra/cello` — docker; images pushed by Cloud Build ONLY. Tags: `directory:{manual-dedc55ac, e8842f33…}`, `relay:{manual-dedc55ac, 4333c70e…, e8842f33…}` — all Cloud Build. **No `:latest` exists** (stale ones deleted per done-audit; consumers pin commit-SHA tags) | 2026-07-28 | Terraform |
+| Artifact Registry `cello` | `us-east1-docker.pkg.dev/cello-infra/cello` — docker; images pushed by Cloud Build ONLY. Tags are commit SHAs (current: `directory:172a6f98`, `relay:172a6f98`) — all Cloud Build. **No `:latest` exists** (stale ones deleted per done-audit; consumers pin commit-SHA tags) | 2026-07-28 | Terraform |
 | Bucket `cello-infra_cloudbuild` | Cloud Build staging (auto-created by first submit) | 2026-07-28 | service-created |
 | Cloud Build connection `cello-github` | us-east1, **COMPLETE** (OAuth by Andre 2026-07-28; GitHub App installation 149532787 on Mygentic-AI, repo CELLO only; token secret P4SA-managed). **Re-authorized by Andre 2026-08-05** to test M12-P11 — connection still reports COMPLETE, repo still linked, and `terraform plan` shows **ZERO drift** (installation id unchanged at 149532787, so the App was NOT reinstalled). **It did NOT fix event delivery** — see the M12-P11 note below | 2026-08-05 | gcloud bootstrap, imported into TF |
 | Cloud Build repo link `CELLO` | → https://github.com/Mygentic-AI/CELLO.git | 2026-07-28 | Terraform |
@@ -668,7 +668,57 @@ probe.
 The relay logs the redial and the seal still fails, and `relay.directory.dial.failed` has **never**
 appeared — so the dial does not throw, yet nothing is repaired. That is the gap `7838bbeb` measures.
 
-## 🟢 CURRENT — WHOLE FLEET ON `eccc9cbc` (030-RELAYSILENT + M15 025–029), ALL 5 ROLLED (2026-09-05)
+## 🟢 CURRENT — WHOLE FLEET ON `172a6f98` (035-SELFCHAIN), ALL 5 ROLLED (2026-09-06)
+
+| node | instance NOW | replaced | zone | machine type | image |
+|---|---|---|---|---|---|
+| `gcp-use1` | `cello-gcp-use1-twf5` | `cello-gcp-use1-gsq9` | `us-east1-d` | `n2-standard-2` | `directory:172a6f98` |
+| `gcp-usc1` | `cello-gcp-usc1-1fxk` | `cello-gcp-usc1-hvdb` | `us-central1-a` | `e2-standard-2` | `directory:172a6f98` |
+| `gcp-euw1` | `cello-gcp-euw1-6zr2` | `cello-gcp-euw1-tfns` | `europe-west1-c` | `e2-standard-2` | `directory:172a6f98` |
+| `gcp-relay-use1` | `cello-gcp-relay-use1-zb7w` | `cello-gcp-relay-use1-qb26` | `us-east1-d` | `n2-standard-2` | `relay:172a6f98` |
+| `gcp-relay-euw1` | `cello-gcp-relay-euw1-2rgk` | `cello-gcp-relay-euw1-gwrs` | `europe-west1-c` | `e2-small` | `relay:172a6f98` |
+
+Images: `directory:172a6f98` → `sha256:33eefbae…`, `relay:172a6f98` → `sha256:a56d9809…`. Both built
+by `gcloud builds submit` from the GitHub repo resource at the revision — the trigger still does not
+fire (§3), so `substitutions.TRIGGER_NAME` is empty on both, as on every build in this project.
+
+**Directories first, relays second**, one node at a time with `-target`, each gated on its health
+signal before the next was touched. No `-target` apply ever named more than one node.
+
+**⚠️ A FULL APPLY WOULD HAVE REPLACED ALL FIVE AT ONCE.** `terraform plan` read
+`5 to add, 10 to change, 5 to destroy` — `update_policy = PROACTIVE` and both image tags moving
+means one untargeted apply takes the whole consortium down, and the threshold tolerates exactly one
+node. The plan also showed five Cloud Run services drifting in-place (ops-agent, ops-dashboard,
+portal, seal-notifier, waitlist); `-target` deliberately left every one of them alone. **That drift
+is still there and is not this unit's to resolve.**
+
+**Health signals, before and after.** Baseline taken BEFORE anything was touched: directories 12
+anti-entropy rounds per zone per 3 min (12/12/12), relays 17 probes each per 3 min. After the last
+node: directories 8/8/8 per 2 min and relays 11–12 each per 2 min — the same rate, over a shorter
+window. Every node was confirmed on its new template AND emitting its own signal before the next
+was touched.
+
+**Only one ERROR fleet-wide during the roll:** `Error watching metadata: context canceled`, from a
+replaced instance's COS metadata agent as it shut down. Not application code.
+
+### What shipped
+
+**`035-SELFCHAIN` — a conversation is a cryptographic chain.** Every message now carries two signed
+links: the last message its sender RECEIVED, and that sender's OWN previous message. Moving any
+message that has a reply after it breaks a signature. The relay enforces it on every submit and on
+handover; the directory enforces it at seal time; and each detection point refuses, tells BOTH
+parties, and stops the session rather than only dropping the frame.
+
+**This is a WIRE change and the fleet is now the strict side of it.** Structure 1 went from seven
+fields to eight and the three older layouts are REFUSED, not tolerated — so a client older than
+`@cello-protocol/daemon@0.0.194` cannot be witnessed by this fleet. That is intended (alpha, no
+users, backward compatibility is an anti-requirement) and it is why the client cascade was published
+and promoted to `latest` BEFORE this roll, not after.
+
+Client versions live at the time of the roll: `connect@0.0.169`, `cli@0.0.201`, `daemon@0.0.194`,
+`gateway@0.0.54`, `crypto@0.0.70`, `transport@0.0.76`, `protocol-types@0.0.74`.
+
+## SUPERSEDED — WHOLE FLEET ON `eccc9cbc` (030-RELAYSILENT + M15 025–029), ALL 5 ROLLED (2026-09-05)
 
 **Every node confirmed by reading the RUNNING instance's metadata, not the template or the tag.**
 
