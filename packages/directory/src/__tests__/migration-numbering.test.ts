@@ -151,7 +151,13 @@ describe("directory migration numbering", () => {
     // directory restart that forgot it would judge that conversation at the weaker bar and tell
     // nobody. The tripwire fired on this one too, in the same gate run as the migration.
     //
-    // Whoever takes 65 updates this line.
-    expect(nextFree, "coordination agreement says V65 is the next free number").toBe(65);
+    // V65 was consumed on 2026-09-06 — `agent_profiles.key_binding` (038-KEYBIND), the signature an
+    // agent's own K_local makes over its FROST group key. The directory stores and serves it and can
+    // neither forge nor swap it; without it a responder verified a session assignment's signature
+    // against a key the same frame supplied. The tripwire fired on this one too, in the gate run
+    // that first applied the migration.
+    //
+    // Whoever takes 66 updates this line.
+    expect(nextFree, "coordination agreement says V66 is the next free number").toBe(66);
   });
 });

@@ -43,6 +43,7 @@ import {
   generateKeypair,
   mlDsaKeygen,
 } from "@cello-protocol/crypto";
+import type { KeyProvider } from "@cello-protocol/crypto";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import {
@@ -136,16 +137,35 @@ async function doAuth(
   return { stream, reader };
 }
 
+/**
+ * 038-KEYBIND — the bytes K_local signs to bind itself to a FROST group key. A local copy of
+ * `buildKeyBindingTbs`; the published `@cello-protocol/crypto` this repo resolves predates the
+ * export, and it is swapped for the real one at the npm re-pin (with `keybind-types-shim.d.ts`).
+ * The directory never VERIFIES a binding — it carries a proof it cannot forge — so these fixtures
+ * need a well-formed signature, not a semantically checked one.
+ */
+function keyBindingTbsLocal(kLocalPubkey: Uint8Array, groupPubkey: Uint8Array): Uint8Array {
+  const context = new TextEncoder().encode("cello-key-binding-v1");
+  const framed = new Uint8Array(context.length + 1 + 64);
+  framed.set(context, 0);
+  framed[context.length] = 0x00;
+  framed.set(kLocalPubkey, context.length + 1);
+  framed.set(groupPubkey, context.length + 33);
+  return framed;
+}
+
 async function doRegister(
   stream: Stream,
   reader: StreamReader,
   clientNode: Awaited<ReturnType<typeof createNode>>,
   dirPeerId: string,
   dirMultiaddrs: string[],
-  clientPubkeyHex: string,
+  // 038-KEYBIND: the KEY, not the hex — dkg_complete now carries a signature by it.
+  clientKey: KeyProvider,
   mlDsaPubkeyHex: string,
   phoneStub: string,
 ): Promise<Record<string, unknown>> {
+  const clientPubkeyHex = Buffer.from(await clientKey.getPublicKey()).toString("hex");
   sendFrame(stream, CBOR_ENC.encode({
     type: "register_request",
     phone_stub: phoneStub,
@@ -170,7 +190,13 @@ async function doRegister(
     preAuthToken: "DEV-test-token",
   });
   const primaryPubkeyHex = Buffer.from(dkgResult.primaryPubkey).toString("hex");
-  sendFrame(stream, CBOR_ENC.encode({ type: "dkg_complete", primary_pubkey: primaryPubkeyHex }));
+  // 038-KEYBIND: `dkg_complete` carries the client's signature over (k_local, primary_pubkey). The
+  // directory's frame decoder rejects a dkg_complete without one, so a fixture that omits it never
+  // gets a profile.
+  const keyBinding = Buffer.from(
+    await clientKey.sign(keyBindingTbsLocal(await clientKey.getPublicKey(), dkgResult.primaryPubkey)),
+  ).toString("hex");
+  sendFrame(stream, CBOR_ENC.encode({ type: "dkg_complete", primary_pubkey: primaryPubkeyHex, key_binding: keyBinding }));
   return reader.readFrameWithTimeout(10000);
 }
 
@@ -315,12 +341,11 @@ describe("CONNREQ-002 — Directory-side connection request handling", () => {
 
     // Register the sender
     const mlDsaProvider = await mlDsaKeygen();
-    const clientPubkeyHex = Buffer.from(await clientKeyProvider.getPublicKey()).toString("hex");
     const mlDsaPubkeyHex = Buffer.from(await mlDsaProvider.getPublicKey()).toString("hex");
     const { stream, reader } = await doAuth(clientNode, dirNode.getPeerId(), clientKeyProvider, dirNode.listenAddresses());
     const regResult = await doRegister(
       stream, reader, clientNode, dirNode.getPeerId(),
-      dirNode.listenAddresses(), clientPubkeyHex, mlDsaPubkeyHex, "phone-test-1",
+      dirNode.listenAddresses(), clientKeyProvider, mlDsaPubkeyHex, "phone-test-1",
     );
     expect(regResult["type"]).toBe("register_success");
 
@@ -379,7 +404,7 @@ describe("CONNREQ-002 — Directory-side connection request handling", () => {
     const { stream: streamA, reader: readerA } = await doAuth(clientNode, dirNode.getPeerId(), clientKeyProvider, dirNode.listenAddresses());
     const regA = await doRegister(
       streamA, readerA, clientNode, dirNode.getPeerId(),
-      dirNode.listenAddresses(), clientPubkeyHex,
+      dirNode.listenAddresses(), clientKeyProvider,
       Buffer.from(await mlDsaA.getPublicKey()).toString("hex"), "phone-A",
     );
     expect(regA["type"]).toBe("register_success");
@@ -388,7 +413,7 @@ describe("CONNREQ-002 — Directory-side connection request handling", () => {
     const { stream: streamB, reader: readerB } = await doAuth(targetNode, dirNode.getPeerId(), targetKeyProvider, dirNode.listenAddresses());
     const regB = await doRegister(
       streamB, readerB, targetNode, dirNode.getPeerId(),
-      dirNode.listenAddresses(), targetPubkeyHex,
+      dirNode.listenAddresses(), targetKeyProvider,
       Buffer.from(await mlDsaB.getPublicKey()).toString("hex"), "phone-B",
     );
     expect(regB["type"]).toBe("register_success");

@@ -310,7 +310,10 @@ export class PgDirectoryStore implements DirectoryStore {
       registered_at: number;
       status: string;
       agent_id: string | null;
-    }>(`SELECT k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, agent_id FROM agent_profiles WHERE status = 'active'`);
+      // 038-KEYBIND. NULL for an agent registered before the binding existed. Carried as undefined
+      // rather than "" so `#processSessionRequest`'s refusal fires on absence and not on falsiness.
+      key_binding: string | null;
+    }>(`SELECT k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, agent_id, key_binding FROM agent_profiles WHERE status = 'active'`);
     for (const row of result.rows) {
       // V27 migration adds agent_id column. Rows created before V27 have a backfilled value.
       // Fallback to SHA-256 derivation for any null rows (should not occur post-V27).
@@ -323,6 +326,7 @@ export class PgDirectoryStore implements DirectoryStore {
         registered_at: Number(row.registered_at),
         status: row.status as "active",
         agent_id: agentId,
+        ...(row.key_binding ? { key_binding: row.key_binding } : {}),
         profile: {},
       };
       this.#profilesByLocalKey.set(row.k_local_pubkey, profile);
@@ -1086,8 +1090,8 @@ export class PgDirectoryStore implements DirectoryStore {
       const agentId = profile.k_local_pubkey;
       void this.#pool.query(
         `INSERT INTO agent_profiles
-           (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, account_id, agent_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+           (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, account_id, agent_id, key_binding)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
          ON CONFLICT (k_local_pubkey) DO NOTHING`,
         [
           profile.k_local_pubkey,
@@ -1098,6 +1102,11 @@ export class PgDirectoryStore implements DirectoryStore {
           profile.status,
           accountId,
           profile.agent_id,
+          // 038-KEYBIND. Stored verbatim and never inspected here: this node cannot check the
+          // signature (it does not hold the group key context the client signed under any more than
+          // it holds K_local) and does not need to — the CLIENTS verify it, which is the point of
+          // storing a proof the carrier cannot forge.
+          profile.key_binding ?? null,
         ],
       ).then(async () => {
         // V59: record the binding as an APPEND-ONLY FACT as well, because that is the form that
@@ -1151,8 +1160,8 @@ export class PgDirectoryStore implements DirectoryStore {
       this.#fire(
         this.#pool.query(
           `INSERT INTO agent_profiles
-             (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, agent_id)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)
+             (k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, agent_id, key_binding)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
            ON CONFLICT (k_local_pubkey) DO NOTHING`,
           [
             profile.k_local_pubkey,
@@ -1162,6 +1171,7 @@ export class PgDirectoryStore implements DirectoryStore {
             profile.registered_at,
             profile.status,
             profile.agent_id,
+            profile.key_binding ?? null,  // 038-KEYBIND — see the accounted path above.
           ],
         ),
         "agent_profiles",
@@ -1442,8 +1452,9 @@ export class PgDirectoryStore implements DirectoryStore {
       registered_at: number;
       status: string;
       agent_id: string | null;
+      key_binding: string | null;
     }>(
-      `SELECT k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, agent_id
+      `SELECT k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, agent_id, key_binding
          FROM agent_profiles WHERE k_local_pubkey = $1 AND status = 'active'`,
       [pubkeyHex],
     );
@@ -1462,6 +1473,9 @@ export class PgDirectoryStore implements DirectoryStore {
       registered_at: Number(row.registered_at),
       status: row.status as "active",
       agent_id: agentId,
+      // 038-KEYBIND: mirror loadProfiles' mapping exactly. A read-through that dropped the binding
+      // would make a cross-node session refuse for a reason neither operator could act on.
+      ...(row.key_binding ? { key_binding: row.key_binding } : {}),
       profile: {},
     };
     // Populate all three maps so every subsequent consumer (localKey / primaryKey / agentId) is warm.

@@ -156,6 +156,28 @@ export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Arr
   };
   if (a.signature_type === "frost") {
     encodedAssignment["signer_pubkey"] = a.signer_pubkey;
+    /**
+     * 038-KEYBIND — three fields that are UNSIGNED BY THIS DIRECTORY AND STILL SAFE, which is the
+     * opposite of every gated field below and needs saying so nobody "fixes" it.
+     *
+     * The rule those gates enforce is real: a field this directory does not sign can be changed in
+     * flight and nothing breaks. These are not that. Each is a signature by a PARTICIPANT's own
+     * K_local, so its integrity rests on that participant's key rather than on the carrier. Altering
+     * one produces a binding that fails verification on both clients; stripping one produces a
+     * refusal. There is no third outcome, which is what "the carrier is untrusted by construction"
+     * means in code.
+     *
+     * Emitted UNCONDITIONALLY once present: #processSessionRequest refuses to build an assignment
+     * without them, so a gate here could only hide a bug it was written to prevent.
+     */
+    const kb = a as unknown as {
+      participant_a_key_binding?: Uint8Array;
+      participant_b_primary_pubkey?: Uint8Array;
+      participant_b_key_binding?: Uint8Array;
+    };
+    if (kb.participant_a_key_binding) encodedAssignment["participant_a_key_binding"] = kb.participant_a_key_binding;
+    if (kb.participant_b_primary_pubkey) encodedAssignment["participant_b_primary_pubkey"] = kb.participant_b_primary_pubkey;
+    if (kb.participant_b_key_binding) encodedAssignment["participant_b_key_binding"] = kb.participant_b_key_binding;
   }
   // M7-WIRE-001: encode session Peer ID fields — now typed on SessionAssignmentCommon
   if (a.initiator_session_peer_id) {
@@ -819,8 +841,22 @@ export function decodeInboundSignalingFrame(bytes: Uint8Array): InboundSignaling
 
   if (o["type"] === "dkg_complete") {
     const primary_pubkey = typeof o["primary_pubkey"] === "string" ? o["primary_pubkey"] : null;
-    if (primary_pubkey === null) return null;
-    return { type: "dkg_complete" as const, primary_pubkey };
+    /**
+     * 038-KEYBIND — REQUIRED, and a missing one fails the whole frame.
+     *
+     * This decoder is a typed allowlist: a field it does not explicitly reconstruct is dropped, so
+     * the binding has to be named here or the registration handler never sees it. Rejecting the
+     * frame outright (rather than storing a profile with no binding) is the fail-closed direction:
+     * a profile without a binding is an agent no session can be brokered for, so accepting the
+     * registration would only move the failure to first contact, where neither operator can act on
+     * it. The client mints this from key material it already holds, so a client that omits it is
+     * running modified or pre-038 code.
+     */
+    const key_binding = typeof o["key_binding"] === "string" && o["key_binding"].length === 128
+      ? o["key_binding"]
+      : null;
+    if (primary_pubkey === null || key_binding === null) return null;
+    return { type: "dkg_complete" as const, primary_pubkey, key_binding };
   }
 
   if (o["type"] === "primary_transfer_request") {
