@@ -37,6 +37,8 @@ import {
 } from "@cello-protocol/crypto";
 import { buildStructure2, encodeStructure2, computeGenesisPrevRoot, encodeSealPayload } from "@cello-protocol/protocol-types";
 import { createNode } from "@cello-protocol/transport";
+import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
+import { decodeInboundSignalingFrame } from "../directory-frames.js";
 import type { Stream } from "@libp2p/interface";
 import {
   createDirectoryNode,
@@ -150,15 +152,24 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
   // directory node
   let dirNode: Awaited<ReturnType<typeof createDirectoryNode>>;
 
+  /**
+   * 038-KEYBIND: the store the directory uses, held so a test can seed the PROFILES the key-binding
+   * tests need. Explicit rather than the constructor's own default — same class, same behaviour, it
+   * is just reachable from here now.
+   */
+  let store: InstanceType<typeof InMemoryDirectoryStore>;
+
   beforeEach(async () => {
     scope = createTestScope();
     dirKey = generateKeypair();
     dirPubkey = new Uint8Array(await dirKey.getPublicKey());
     relay = makeRelay();
+    store = new InMemoryDirectoryStore();
 
     dirNode = await createDirectoryNode({
       keyProvider: dirKey,
       relay,
+      store,
       relayEndpoint: { peer_id: "12D3KooWRelayTest", multiaddrs: ["/ip4/127.0.0.1/tcp/9999"] },
     });
 
@@ -212,6 +223,173 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
 
     return { stream, reader, pubkeyHex, clientNode };
   }
+
+
+  // ─── 038-KEYBIND: the carrier half — store it, serve it, and say so when it is absent ─────────
+  //
+  // Review F2: every other change in this repo was a mechanical fixture update, so the encoder, the
+  // decoder requirement and the storage could all be reverted with the whole suite green — and a
+  // one-character slip in the encoder is a total, silent outage of the product's core function
+  // (every session refused at BOTH ends, because both clients require the field).
+
+  /** What registration writes: a profile carrying the binding this node serves and cannot forge. */
+  function seedBoundProfile(pubkeyHex: string, groupPubkey: Uint8Array, keyBinding: string | null): void {
+    store.setProfile({
+      k_local_pubkey: pubkeyHex,
+      primary_pubkey: Buffer.from(groupPubkey).toString("hex"),
+      ml_dsa_pubkey: "",
+      phone_stub_hash: `stub-${pubkeyHex.slice(0, 8)}`,
+      profile: {},
+      registered_at: Date.now(),
+      status: "active",
+      agent_id: Buffer.from(randomBytes(16)).toString("hex"),
+      ...(keyBinding !== null ? { key_binding: keyBinding } : {}),
+    });
+  }
+
+  const BINDING_A = "1a".repeat(64);
+  const BINDING_B = "2b".repeat(64);
+
+  it("★ SERVES both parties' bindings on the assignment — the field an encoder slip drops silently", async () => {
+    const keyA = generateKeypair();
+    const keyB = generateKeypair();
+    const { stream: streamA, reader: readerA, pubkeyHex: hexA } = await connectAndAuth(keyA);
+    const { pubkeyHex: hexB } = await connectAndAuth(keyB);
+
+    // Both agents registered: each profile carries its own binding, and B's group key is the value
+    // the INITIATOR has to learn for a responder-first seal to verify locally.
+    const groupB = new Uint8Array(randomBytes(32));
+    seedBoundProfile(hexA, new Uint8Array(randomBytes(32)), BINDING_A);
+    seedBoundProfile(hexB, groupB, BINDING_B);
+
+    sendFrame(streamA, CBOR_ENC.encode({
+      type: "session_request",
+      target_pubkey: Buffer.from(hexB, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
+    }));
+
+    const frameA = decodeOutboundSignalingFrame(await readerA.readDecoded());
+    expect(frameA?.type).toBe("session_assignment");
+    if (frameA?.type !== "session_assignment") return;
+    const asg = frameA.assignment as typeof frameA.assignment & {
+      participant_a_key_binding?: Uint8Array;
+      participant_b_primary_pubkey?: Uint8Array;
+      participant_b_key_binding?: Uint8Array;
+    };
+
+    // The BYTES, decoded off the wire — not "the object had a field". Asserting the value is what
+    // catches an encoder that ships the wrong participant's binding, which would verify nowhere.
+    expect(Buffer.from(asg.participant_a_key_binding ?? new Uint8Array()).toString("hex")).toBe(BINDING_A);
+    expect(Buffer.from(asg.participant_b_key_binding ?? new Uint8Array()).toString("hex")).toBe(BINDING_B);
+    expect(Buffer.from(asg.participant_b_primary_pubkey ?? new Uint8Array()).toString("hex")).toBe(
+      Buffer.from(groupB).toString("hex"),
+    );
+  });
+
+  it("says WHICH side is unbound, and serves the half it has — the node carries, the clients refuse", async () => {
+    const captured: Array<{ event: string; context: Record<string, unknown> }> = [];
+    const capturingDirStore = new InMemoryDirectoryStore();
+    const capturingDir = await createDirectoryNode({
+      keyProvider: generateKeypair(),
+      relay: makeRelay(),
+      store: capturingDirStore,
+      relayEndpoint: { peer_id: "12D3KooWRelayTest", multiaddrs: ["/ip4/127.0.0.1/tcp/9999"] },
+      logger: {
+        debug() {}, info() {},
+        warn(event: string, context?: Record<string, unknown>) { captured.push({ event, context: context ?? {} }); },
+        error() {},
+      } as never,
+    });
+    scope.addCleanup(capturingDir.stop);
+
+    const auth = async (k: ReturnType<typeof generateKeypair>) => {
+      const cn = await createNode({ keyProvider: k, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
+      await cn.start();
+      scope.addCleanup(() => cn.stop());
+      await cn.dial(capturingDir.node.listenAddresses()[0]);
+      const st = await cn.newStream(capturingDir.node.getPeerId(), SIGNALING_PROTOCOL_ID);
+      const rd = new StreamReader(st);
+      const ch = decodeOutboundSignalingFrame(await rd.readDecoded());
+      if (!ch || ch.type !== "signaling_auth_challenge") throw new Error("no challenge");
+      const { pubkey, signature } = await signAuth(ch.nonce, AUTH_DOMAIN, k);
+      sendFrame(st, encodeAuthResponse(pubkey, signature));
+      const ack = decodeOutboundSignalingFrame(await rd.readDecoded());
+      if (!ack || ack.type !== "signaling_auth_ok") throw new Error("no auth ok");
+      const hx = Buffer.from(pubkey).toString("hex");
+      capturingDir.directory.registerPeerInfo(hx, cn.getPeerId(), cn.listenAddresses());
+      capturingDir.directory.registerThresholdSigner(hx, new MockThresholdSigner());
+      return { stream: st, reader: rd, pubkeyHex: hx };
+    };
+
+    const a = await auth(generateKeypair());
+    const b = await auth(generateKeypair());
+
+    // A is bound; B registered before the proof existed. The node still brokers — refusing here
+    // would put the decision in the one party that cannot verify a signature — but it must SAY so,
+    // naming the side, or the two client-side refusals have no counterpart in the node's own log.
+    capturingDirStore.setProfile({
+      k_local_pubkey: a.pubkeyHex, primary_pubkey: Buffer.from(randomBytes(32)).toString("hex"),
+      ml_dsa_pubkey: "", phone_stub_hash: "stub-a", profile: {}, registered_at: Date.now(),
+      status: "active", agent_id: Buffer.from(randomBytes(16)).toString("hex"), key_binding: BINDING_A,
+    });
+    capturingDirStore.setProfile({
+      k_local_pubkey: b.pubkeyHex, primary_pubkey: Buffer.from(randomBytes(32)).toString("hex"),
+      ml_dsa_pubkey: "", phone_stub_hash: "stub-b", profile: {}, registered_at: Date.now(),
+      status: "active", agent_id: Buffer.from(randomBytes(16)).toString("hex"),
+    });
+
+    sendFrame(a.stream, CBOR_ENC.encode({
+      type: "session_request",
+      target_pubkey: Buffer.from(b.pubkeyHex, "hex"),
+      initiator_session_peer_id: "12D3KooWInitiatorSession",
+      initiator_session_addrs: ["/ip4/127.0.0.1/tcp/9000"],
+    }));
+    const frameA = decodeOutboundSignalingFrame(await a.reader.readDecoded());
+
+    const warn = captured.find((e) => e.event === "session.key_binding.unavailable");
+    expect(warn, "a node brokering an assignment both ends will refuse must say so").toBeDefined();
+    // WHICH side — an operator told only that "a binding is missing" cannot tell whether to
+    // re-register their own agent or ask the counterparty to re-register theirs.
+    expect(warn!.context["initiatorHasBinding"]).toBe(true);
+    expect(warn!.context["targetHasBinding"]).toBe(false);
+    expect(warn!.context["guidance"], "a warning with a next step, not just a fact").toBeTruthy();
+
+    // And it serves the half it HAS rather than inventing the half it does not.
+    expect(frameA?.type).toBe("session_assignment");
+    if (frameA?.type !== "session_assignment") return;
+    const asg = frameA.assignment as typeof frameA.assignment & {
+      participant_a_key_binding?: Uint8Array;
+      participant_b_key_binding?: Uint8Array;
+    };
+    expect(Buffer.from(asg.participant_a_key_binding ?? new Uint8Array()).toString("hex")).toBe(BINDING_A);
+    expect(asg.participant_b_key_binding).toBeUndefined();
+  });
+
+  it("REFUSES a dkg_complete with no key_binding — a profile with no proof is never written", () => {
+    // Fail-closed at the frame boundary. Accepting the registration would move the failure to first
+    // contact, where neither operator can act on it: the agent looks registered and every session
+    // it opens is refused by the other side for a field it never sent.
+    const withBinding = decodeInboundSignalingFrame(
+      CBOR_ENC.encode({ type: "dkg_complete", primary_pubkey: "aa".repeat(32), key_binding: BINDING_A }),
+    );
+    expect(withBinding, "control: the well-formed frame must still decode").toMatchObject({
+      type: "dkg_complete", key_binding: BINDING_A,
+    });
+
+    expect(
+      decodeInboundSignalingFrame(CBOR_ENC.encode({ type: "dkg_complete", primary_pubkey: "aa".repeat(32) })),
+      "absent",
+    ).toBeNull();
+    expect(
+      decodeInboundSignalingFrame(CBOR_ENC.encode({ type: "dkg_complete", primary_pubkey: "aa".repeat(32), key_binding: "beef" })),
+      "MALFORMED takes the same path as absent — an attacker who cannot forge one supplies junk",
+    ).toBeNull();
+    expect(
+      decodeInboundSignalingFrame(CBOR_ENC.encode({ type: "dkg_complete", primary_pubkey: "aa".repeat(32), key_binding: 42 })),
+      "wrong type",
+    ).toBeNull();
+  });
 
   // ─── AC-001: Valid auth → stream accepts session_request frames ─────────────────
 

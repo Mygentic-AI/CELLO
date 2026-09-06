@@ -29,6 +29,7 @@ import { randomBytes, createHash } from "node:crypto";
 import { Encoder, decode } from "cbor-x";
 import * as lp from "it-length-prefixed";
 import { generateKeypair, mlDsaKeygen } from "@cello-protocol/crypto";
+import type { KeyProvider } from "@cello-protocol/crypto";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createDirectoryNode, SIGNALING_PROTOCOL_ID } from "../directory-node.js";
@@ -86,6 +87,23 @@ function makeRelay(): RelayAdapter {
   };
 }
 
+/**
+ * 038-KEYBIND — the bytes K_local signs to bind itself to a FROST group key. A local copy of
+ * `buildKeyBindingTbs`; the published `@cello-protocol/crypto` this repo resolves predates the
+ * export, and it is swapped for the real one at the npm re-pin (with `keybind-types-shim.d.ts`).
+ * The directory never VERIFIES a binding — it carries a proof it cannot forge — so these fixtures
+ * need a well-formed signature, not a semantically checked one.
+ */
+function keyBindingTbsLocal(kLocalPubkey: Uint8Array, groupPubkey: Uint8Array): Uint8Array {
+  const context = new TextEncoder().encode("cello-key-binding-v1");
+  const framed = new Uint8Array(context.length + 1 + 64);
+  framed.set(context, 0);
+  framed[context.length] = 0x00;
+  framed.set(kLocalPubkey, context.length + 1);
+  framed.set(groupPubkey, context.length + 33);
+  return framed;
+}
+
 async function doAuth(
   clientNode: Awaited<ReturnType<typeof createNode>>,
   dirPeerId: string,
@@ -125,10 +143,12 @@ async function doRegister(
   clientNode: Awaited<ReturnType<typeof createNode>>,
   dirPeerId: string,
   dirMultiaddrs: string[],
-  pubkeyHex: string,
+  // 038-KEYBIND: the KEY, not the hex — dkg_complete now carries a signature by it.
+  clientKey: KeyProvider,
   mlDsa: Awaited<ReturnType<typeof mlDsaKeygen>>,
   phoneStub: string,
 ): Promise<{ primaryPubkeyHex: string }> {
+  const pubkeyHex = Buffer.from(await clientKey.getPublicKey()).toString("hex");
   sendFrame(stream, CBOR_ENC.encode({
     type: "register_request",
     phone_stub: phoneStub,
@@ -154,7 +174,13 @@ async function doRegister(
     preAuthToken: "DEV-test-token",
   });
   const primaryPubkeyHex = Buffer.from(dkgResult.primaryPubkey).toString("hex");
-  sendFrame(stream, CBOR_ENC.encode({ type: "dkg_complete", primary_pubkey: primaryPubkeyHex }));
+  // 038-KEYBIND: `dkg_complete` carries the client's signature over (k_local, primary_pubkey). The
+  // directory's frame decoder rejects a dkg_complete without one, so a fixture that omits it never
+  // gets a profile.
+  const keyBinding = Buffer.from(
+    await clientKey.sign(keyBindingTbsLocal(await clientKey.getPublicKey(), dkgResult.primaryPubkey)),
+  ).toString("hex");
+  sendFrame(stream, CBOR_ENC.encode({ type: "dkg_complete", primary_pubkey: primaryPubkeyHex, key_binding: keyBinding }));
   const successFrame = await reader.readFrameWithTimeout(10000);
   expect(successFrame["type"]).toBe("register_success");
   return { primaryPubkeyHex };
@@ -187,12 +213,12 @@ describe("TEST-RECONNECT-002: already_registered frame includes profile fields",
     scope.addCleanup(() => node1.stop());
 
     const mlDsa1 = await mlDsaKeygen();
-    const { stream: s1, reader: r1, pubkeyHex } = await doAuth(
+    const { stream: s1, reader: r1 } = await doAuth(
       node1, dirNode.getPeerId(), kp, dirNode.listenAddresses(),
     );
     const { primaryPubkeyHex } = await doRegister(
       s1, r1, node1, dirNode.getPeerId(), dirNode.listenAddresses(),
-      pubkeyHex, mlDsa1, "phone-002",
+      kp, mlDsa1, "phone-002",
     );
     // Stop node1 — simulates the first Claude session ending
     await node1.stop();
@@ -258,7 +284,7 @@ describe("TEST-RECONNECT-003: already_connected frame includes connection_id", (
     const { stream: sA, reader: rA, pubkeyHex: pubkeyA } = await doAuth(
       nodeA1, dirNode.getPeerId(), kpA, dirNode.listenAddresses(),
     );
-    await doRegister(sA, rA, nodeA1, dirNode.getPeerId(), dirNode.listenAddresses(), pubkeyA, mlDsaA, "phone-A-003");
+    await doRegister(sA, rA, nodeA1, dirNode.getPeerId(), dirNode.listenAddresses(), kpA, mlDsaA, "phone-A-003");
     await nodeA1.stop(); // first session ends
 
     // Register B (any session)
@@ -268,7 +294,7 @@ describe("TEST-RECONNECT-003: already_connected frame includes connection_id", (
     const { stream: sB, reader: rB, pubkeyHex: pubkeyB } = await doAuth(
       nodeB, dirNode.getPeerId(), kpB, dirNode.listenAddresses(),
     );
-    await doRegister(sB, rB, nodeB, dirNode.getPeerId(), dirNode.listenAddresses(), pubkeyB, mlDsaB, "phone-B-003");
+    await doRegister(sB, rB, nodeB, dirNode.getPeerId(), dirNode.listenAddresses(), kpB, mlDsaB, "phone-B-003");
     await sB.close();
 
     // Inject an existing connection (simulating a persisted Postgres row from a prior session)

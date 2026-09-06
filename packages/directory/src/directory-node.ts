@@ -724,7 +724,9 @@ export class CelloDirectoryNode {
   // REG-001: k_local_pubkey_hex → resolve function for dkg_complete promise
   // Allows #processRegisterRequest to wait for the client's dkg_complete frame
   // which arrives on the same signaling stream loop.
-  readonly #pendingDkgComplete = new Map<string, (primaryPubkey: string) => void>();
+  // 038-KEYBIND: the binding travels WITH the group key, not in a second frame — so this node can
+  // never hold a primary_pubkey it has no binding for.
+  readonly #pendingDkgComplete = new Map<string, (dkg: { primaryPubkey: string; keyBinding: string }) => void>();
 
   // PERSIST-015: delivery grace period (seconds) before unilateral seal is allowed
   readonly #deliveryGraceSeconds: number;
@@ -2488,7 +2490,7 @@ export class CelloDirectoryNode {
           const resolve = this.#pendingDkgComplete.get(authedPubkeyHex!);
           if (resolve) {
             this.#pendingDkgComplete.delete(authedPubkeyHex!);
-            resolve(parsed.primary_pubkey);
+            resolve({ primaryPubkey: parsed.primary_pubkey, keyBinding: parsed.key_binding });
           }
           continue;
         }
@@ -3498,18 +3500,24 @@ export class CelloDirectoryNode {
     // #pendingPreAuthData.set(). So pendingPreAuthData IS available after this await.
     const DKG_TIMEOUT_MS = 30_000;
     let primaryPubkeyFromDkg: string;
+    // 038-KEYBIND: the client's signature over (its K_local, this group key). Stored verbatim and
+    // served on every session assignment; this node cannot forge it and does not verify it — the
+    // clients do, which is what makes it worth carrying.
+    let keyBindingFromDkg: string;
     try {
-      const clientPrimaryPubkey = await new Promise<string>((resolve, reject) => {
+      const dkg = await new Promise<{ primaryPubkey: string; keyBinding: string }>((resolve, reject) => {
         const timer = setTimeout(() => {
           this.#pendingDkgComplete.delete(frame.k_local_pubkey);
           reject(new Error("dkg_complete_timeout"));
         }, DKG_TIMEOUT_MS);
-        this.#pendingDkgComplete.set(frame.k_local_pubkey, (pk) => {
+        this.#pendingDkgComplete.set(frame.k_local_pubkey, (d) => {
           clearTimeout(timer);
-          resolve(pk);
+          resolve(d);
         });
       });
+      const clientPrimaryPubkey = dkg.primaryPubkey;
       primaryPubkeyFromDkg = clientPrimaryPubkey;
+      keyBindingFromDkg = dkg.keyBinding;
 
       // Step 5: Verify primary_pubkey matches what DKG round3 produced for this directory node.
       // The directory node's DKG round3 stores shareCommitment in #pendingDkgCommitments.
@@ -3628,6 +3636,9 @@ export class CelloDirectoryNode {
       registered_at: this.#clock.now(),
       status: "active",
       agent_id: agentId,
+      // 038-KEYBIND: the proof this node carries and cannot make. Required by the frame decoder, so
+      // a registration that reaches here always has one.
+      key_binding: keyBindingFromDkg,
       // setProfile inserts WITH account_id when non-null (atomic), else the no-account path.
       account_id: accountId,
     } as AgentProfile & { account_id: string | null };
@@ -4288,6 +4299,52 @@ export class CelloDirectoryNode {
     // override with the AutoNAT probe result. Defaults to 'relay' when absent.
     const transportMode: "direct" | "relay" = requestedTransportMode ?? "relay";
 
+    /**
+     * ─── 038-KEYBIND: CARRY BOTH PARTIES' PROOFS. THE REFUSAL IS NOT THIS NODE'S TO MAKE ────────
+     *
+     * Each side needs a signature by the OTHER side's K_local naming their FROST group key.
+     * Without it the responder verifies the assignment's threshold signature against a key this
+     * very frame supplied — and records it as the initiator's identity forever — and the initiator
+     * never learns the responder's group key, so a responder-first seal comes back unverifiable.
+     *
+     * ⚠️ **THIS NODE SERVES THE PROOFS AND DOES NOT ENFORCE THEM, deliberately.** It cannot verify
+     * a binding: the signer is a K_local no directory holds, which is the entire reason the value
+     * is worth carrying. So the enforcement point is the party that CAN check — both clients refuse
+     * a session assignment that arrives without one, by name and with the remedy. Adding a refusal
+     * here would put the decision in the one place that cannot make it, and would let a directory
+     * deny sessions for a reason nobody can audit.
+     *
+     * What this node owes instead is EVIDENCE. A profile with no binding is an agent registered
+     * before the proof existed; the session it is about to broker will be refused at both ends, and
+     * this warning is what lets an operator reading the node's log see why.
+     */
+    const initiatorProfile = await this.#store.getProfileWithReadThrough(initiatorHex, correlationId);
+    const targetProfile = await this.#store.getProfileWithReadThrough(targetHex, correlationId);
+    const initiatorBinding = initiatorProfile?.key_binding;
+    const targetBinding = targetProfile?.key_binding;
+    const targetPrimaryHex = targetProfile?.primary_pubkey;
+    if (!initiatorBinding || !targetBinding || !targetPrimaryHex) {
+      // WHICH party is missing what — the two have different remedies and different owners.
+      this.#logger?.warn("session.key_binding.unavailable", {
+        sessionId: truncHex(Buffer.from(session_id).toString("hex")),
+        initiatorShort: initiatorHex.slice(0, 16),
+        targetShort: targetHex.slice(0, 16),
+        initiatorHasBinding: !!initiatorBinding,
+        targetHasBinding: !!targetBinding,
+        targetHasPrimary: !!targetPrimaryHex,
+        correlationId,
+        impact:
+          "an assignment is being brokered without the proof that one side's threshold key is its " +
+          "own, so BOTH clients will refuse it and the conversation will not open; the refusal and " +
+          "the operator-facing guidance come from the clients, which are the only parties that can " +
+          "check a signature this node cannot",
+        guidance:
+          "the agent named without a binding registered before this proof existed. Its operator " +
+          "re-registers it — no second DKG, the daemon signs from key material it already holds — " +
+          "and sessions with it work again.",
+      });
+    }
+
     // SESSION-004 Step 3: Build TBS — single source of truth via protocol-types (HIGH-5).
     // The local 10-field copy is gone: protocol-types now publishes that layout, so
     // `buildAssignmentTbs` holds only the directory's endpoints-known rule and delegates the
@@ -4421,6 +4478,12 @@ export class CelloDirectoryNode {
         directory_signature: new Uint8Array(frostedSig),
         signature_type: "frost",
         signer_pubkey: initiatorPrimaryPubkey,
+        // 038-KEYBIND. Hex on the profile, bytes on the wire — like every other key on this frame.
+        // Omitted when the profile has none: this node carries what it has and never invents one,
+        // and an assignment that reaches a client without them is refused there, by name.
+        ...(initiatorBinding ? { participant_a_key_binding: new Uint8Array(Buffer.from(initiatorBinding, "hex")) } : {}),
+        ...(targetPrimaryHex ? { participant_b_primary_pubkey: new Uint8Array(Buffer.from(targetPrimaryHex, "hex")) } : {}),
+        ...(targetBinding ? { participant_b_key_binding: new Uint8Array(Buffer.from(targetBinding, "hex")) } : {}),
         initiator_session_peer_id: initiatorSessionPeerId!,
         initiator_session_addrs: initiatorSessionAddrs!,
         counterparty_session_peer_id: counterpartySessionPeerId,

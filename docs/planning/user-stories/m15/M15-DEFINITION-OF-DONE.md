@@ -1532,7 +1532,7 @@ unrecognised one by name; and, for a session-establishment TBS, refuses to contr
 does not describe a session this daemon initiated. **Value is defence-in-depth**, not the headline —
 it removes "the client helps sign whatever it is handed" as a step an attacker gets for free.
 
-### `DOD-M15-KEYBIND-1` — ❌ PRE-LAUNCH · An agent's group key must be provably its own
+### `DOD-M15-KEYBIND-1` — ✅ · An agent's group key must be provably its own
 **Filed 2026-09-06. The only open line in this milestone that gets more expensive after launch.**
 
 > ### 🚨 HALF-SHIPPED, AND `main` CANNOT OPEN A SESSION AT ALL — found 2026-09-06 by the GODFILE lane
@@ -1607,6 +1607,18 @@ before launch and there are no users, so today it is free.
 can produce the binding on demand. Key refresh deliberately preserves the group key
 (`session-ceremony.ts:452` aborts if the primary changes), so the binding is signed once for the life
 of the agent.
+
+> ✅ **2026-09-06.** `K_local` signs `<cello-key-binding-v1>\0<k_local><group>` at the tail of
+> registration; the directory stores it (V65 `agent_profiles.key_binding`, replicated) and serves it
+> on the assignment in BOTH directions; the responder verifies it against `participant_a.pubkey`
+> before the signature, and absent/failed refuse under separate names. The assignment that used to
+> pass — a directory minting its own key, signing with it and naming it — is refused by test. A
+> responder-first seal verifies locally instead of `signer_key_not_held`.
+> Reviewer: 8 findings, all fixed. Published to **beta** (crypto 0.0.71 · protocol-types 0.0.75 ·
+> transport 0.0.77 · gateway 0.0.55 · daemon 0.0.195 · cli 0.0.202 · connect 0.0.170).
+> ⚠️ **`latest` NOT promoted and the GCP fleet NOT rolled** — a promoted client refuses every
+> assignment from a directory that does not yet serve bindings, so the fleet rolls first. Andre's
+> call; work order [[038-KEYBIND-a-group-key-nobody-can-place]] carries the detail.
 
 Work order: [[038-KEYBIND-a-group-key-nobody-can-place]].
 

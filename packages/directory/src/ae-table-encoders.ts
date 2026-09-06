@@ -58,7 +58,17 @@ export const AGENT_PROFILES_SPEC: TierATableSpec = {
   //
   // It qualifies as immutable in the strict sense this list requires: set in both registration
   // INSERTs and never UPDATEd anywhere.
-  immutableColumns: ["k_local_pubkey", "agent_id", "primary_pubkey", "ml_dsa_pubkey", "phone_stub_hash", "registered_at"],
+  //
+  // 038-KEYBIND: `key_binding` is here for the SAME reason `agent_id` is — a node that learns a
+  // profile only by replication has to be able to SERVE it. The binding rides on every session
+  // assignment, and both clients refuse an assignment that arrives without one, so a replicated
+  // profile missing it is an agent that cannot be reached through that node at all. That is the
+  // `agent_id` failure again (a NULL made the kill switch's join return nothing and answer "not
+  // suspended"), except louder: a refused session rather than a silently-passed gate.
+  //
+  // It meets the strict bar this list requires: written once in both registration INSERTs, never
+  // UPDATEd anywhere. NULL for pre-038 rows, which hash as absent exactly like a pre-V27 agent_id.
+  immutableColumns: ["k_local_pubkey", "agent_id", "primary_pubkey", "ml_dsa_pubkey", "phone_stub_hash", "registered_at", "key_binding"],
 };
 
 /**

@@ -2,7 +2,7 @@
 name: 038-KEYBIND — A group key nobody can place
 type: micro-work-order
 date: 2026-09-06
-status: open
+status: complete
 dod_line: DOD-M15-KEYBIND-1
 dod_effect: closes
 description: >
@@ -187,3 +187,36 @@ consistency check over time rather than the sole authority on first contact.
 ## Newly discovered
 
 *(append here; do not fix)*
+
+### The nullable apparatus on the directory side outlives its reason at the wipe — POST-LAUNCH
+
+**Found by the unit review, recorded so the debt has an owner rather than living as six quiet
+branches nobody exercises.**
+
+`decodeInboundSignalingFrame` REJECTS a `dkg_complete` with no `key_binding`, so after the
+pre-launch wipe **no profile row that can exist has a NULL there**. Nothing can produce one. Yet
+these are all live and must be maintained:
+
+- `agent_profiles.key_binding` is nullable with no backfill (V65)
+- two `...(row.key_binding ? … : {})` reads and two `?? null` writes in `pg-directory-store.ts`
+- the three conditional emits in `encodeSessionAssignment`
+- the `session.key_binding.unavailable` block in `#processSessionRequest`, plus the two
+  `getProfileWithReadThrough` round-trips it adds
+- `key_binding?: string` on `AgentProfile`, documented as being optional for pre-038 rows
+- the `pg-ae-store.ts` exemption, reasoned entirely from "NULL only for a pre-column origin row"
+
+It is the branch **without** the new protection, and it is the one no test covers. The column has to
+be nullable *now* — V65 runs against a dev directory that already holds rows — so this is not
+something this order could have avoided.
+
+**Classification: POST-LAUNCH.** A customer never reaches it: after the wipe every agent registers
+through the path that requires the binding, so the null branches are unreachable rather than
+merely unlikely. The work is `SET NOT NULL`, dropping the six conditionals, and deleting the
+warning block, and it can only be done after the wipe.
+
+### `decodeOutboundSignalingFrame` silently dropped all three new fields
+
+Caught by the first directory test written against the real wire bytes. It is an allowlist decoder
+with no production caller today, but it is exported from the package index, so anything decoding an
+assignment through it would have received a frame with no bindings and refused a session that was
+fine. **Fixed in this order** rather than deferred — it is inside the unit's own diff.

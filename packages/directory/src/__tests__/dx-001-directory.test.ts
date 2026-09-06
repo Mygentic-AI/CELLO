@@ -32,6 +32,7 @@ import {
   generateKeypair,
   mlDsaKeygen,
 } from "@cello-protocol/crypto";
+import type { KeyProvider } from "@cello-protocol/crypto";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import {
@@ -135,6 +136,23 @@ async function doAuth(
 }
 
 /**
+ * 038-KEYBIND — the bytes K_local signs to bind itself to a FROST group key. A local copy of
+ * `buildKeyBindingTbs`; the published `@cello-protocol/crypto` this repo resolves predates the
+ * export, and it is swapped for the real one at the npm re-pin. The DIRECTORY never verifies a
+ * binding — it carries a proof it cannot forge — so these fixtures need a well-formed signature,
+ * not a semantically checked one.
+ */
+function keyBindingTbsLocal(kLocalPubkey: Uint8Array, groupPubkey: Uint8Array): Uint8Array {
+  const context = new TextEncoder().encode("cello-key-binding-v1");
+  const framed = new Uint8Array(context.length + 1 + 64);
+  framed.set(context, 0);
+  framed[context.length] = 0x00;
+  framed.set(kLocalPubkey, context.length + 1);
+  framed.set(groupPubkey, context.length + 33);
+  return framed;
+}
+
+/**
  * Complete the full registration flow, similar to doRegister in registration.test.ts.
  * AC-006: phoneStub may be empty string when preAuthToken is provided.
  */
@@ -144,11 +162,14 @@ async function doRegister(
   clientNode: Awaited<ReturnType<typeof createNode>>,
   dirPeerId: string,
   dirMultiaddrs: string[],
-  clientPubkeyHex: string,
+  // 038-KEYBIND: the KEY, not the hex — dkg_complete now carries a signature by it, and the
+  // directory's frame decoder rejects a dkg_complete without one.
+  clientKey: KeyProvider,
   mlDsaPubkeyHex: string,
   phoneStub: string,
   preAuthToken?: string,
 ): Promise<Record<string, unknown>> {
+  const clientPubkeyHex = Buffer.from(await clientKey.getPublicKey()).toString("hex");
   sendFrame(stream, CBOR_ENC.encode({
     type: "register_request",
     phone_stub: phoneStub,
@@ -179,6 +200,9 @@ async function doRegister(
   sendFrame(stream, CBOR_ENC.encode({
     type: "dkg_complete",
     primary_pubkey: primaryPubkeyHex,
+    key_binding: Buffer.from(
+      await clientKey.sign(keyBindingTbsLocal(await clientKey.getPublicKey(), dkgResult.primaryPubkey)),
+    ).toString("hex"),
   }));
 
   return reader.readFrameWithTimeout(10_000);
@@ -388,14 +412,12 @@ describe("AC-006 (directory): empty phone_stub succeeds when pre_auth_token cons
 
       const mlDsaProvider = await mlDsaKeygen();
       const mlDsaPubkey = await mlDsaProvider.getPublicKey();
-      const clientPubkey = await clientKey.getPublicKey();
-      const clientPubkeyHex = Buffer.from(clientPubkey).toString("hex");
       const mlDsaPubkeyHex = Buffer.from(mlDsaPubkey).toString("hex");
 
       // Non-empty phone_stub with DEV token: should succeed (legacy path)
       const result = await doRegister(
         stream, reader, clientNode, dirNode.getPeerId(), dirNode.listenAddresses(),
-        clientPubkeyHex, mlDsaPubkeyHex,
+        clientKey, mlDsaPubkeyHex,
         "+1234567890",  // non-empty phone_stub (legacy path)
         "DEV-test-token",
       );
@@ -425,8 +447,6 @@ describe("AC-006 (directory): empty phone_stub succeeds when pre_auth_token cons
 
       const mlDsaProvider = await mlDsaKeygen();
       const mlDsaPubkey = await mlDsaProvider.getPublicKey();
-      const clientPubkey = await clientKey.getPublicKey();
-      const clientPubkeyHex = Buffer.from(clientPubkey).toString("hex");
       const mlDsaPubkeyHex = Buffer.from(mlDsaPubkey).toString("hex");
 
       // Register with empty phone_stub and a valid DEV pre_auth_token
@@ -434,7 +454,7 @@ describe("AC-006 (directory): empty phone_stub succeeds when pre_auth_token cons
       // After DKG completes, Step 3b checks pendingPreAuthData and uses its phoneStubHash.
       const result = await doRegister(
         stream, reader, clientNode, dirNode.getPeerId(), dirNode.listenAddresses(),
-        clientPubkeyHex, mlDsaPubkeyHex,
+        clientKey, mlDsaPubkeyHex,
         "",  // empty phone_stub — AC-006 PART 1: allowed when pre_auth_token consumed
         "DEV-test-token",
       );
@@ -504,11 +524,10 @@ describe("AC-006 (directory): empty phone_stub succeeds when pre_auth_token cons
 
       const mlDsaProvider = await mlDsaKeygen();
       const mlDsaPubkey = await mlDsaProvider.getPublicKey();
-      const clientPubkey = await clientKey.getPublicKey();
 
       const result = await doRegister(
         stream, reader, clientNode, dirNode.getPeerId(), dirNode.listenAddresses(),
-        Buffer.from(clientPubkey).toString("hex"),
+        clientKey,
         Buffer.from(mlDsaPubkey).toString("hex"),
         "",                 // empty phone_stub — the pre-auth token supplies the real hash
         "WIRING-token-1",
@@ -570,10 +589,9 @@ describe("AC-006 (directory): empty phone_stub succeeds when pre_auth_token cons
       await nodeA.dial(dirNode.listenAddresses()[0]!);
       const { stream: streamA, reader: readerA } = await doAuth(nodeA, dirNode.getPeerId(), clientKeyA);
       const mlDsaA = await mlDsaKeygen();
-      const pubkeyA = await clientKeyA.getPublicKey();
       const resultA = await doRegister(
         streamA, readerA, nodeA, dirNode.getPeerId(), dirNode.listenAddresses(),
-        Buffer.from(pubkeyA).toString("hex"), Buffer.from(await mlDsaA.getPublicKey()).toString("hex"),
+        clientKeyA, Buffer.from(await mlDsaA.getPublicKey()).toString("hex"),
         "", "UNIQUE-token-agent-a",
       );
       expect(resultA["type"]).toBe("register_success");
@@ -584,10 +602,9 @@ describe("AC-006 (directory): empty phone_stub succeeds when pre_auth_token cons
       await nodeB.dial(dirNode.listenAddresses()[0]!);
       const { stream: streamB, reader: readerB } = await doAuth(nodeB, dirNode.getPeerId(), clientKeyB);
       const mlDsaB = await mlDsaKeygen();
-      const pubkeyB = await clientKeyB.getPublicKey();
       const resultB = await doRegister(
         streamB, readerB, nodeB, dirNode.getPeerId(), dirNode.listenAddresses(),
-        Buffer.from(pubkeyB).toString("hex"), Buffer.from(await mlDsaB.getPublicKey()).toString("hex"),
+        clientKeyB, Buffer.from(await mlDsaB.getPublicKey()).toString("hex"),
         "", "UNIQUE-token-agent-b",  // different token → different hash
       );
       // Both registrations must succeed (unique hashes, no phone_already_claimed)

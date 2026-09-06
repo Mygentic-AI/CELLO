@@ -41,6 +41,7 @@ import {
   generateKeypair,
   mlDsaKeygen,
 } from "@cello-protocol/crypto";
+import type { KeyProvider } from "@cello-protocol/crypto";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import {
@@ -149,6 +150,28 @@ async function doAuth(
   return { stream, reader, authOk };
 }
 
+/**
+ * 038-KEYBIND — the bytes K_local signs to bind itself to a FROST group key.
+ *
+ * ⚠️ **A LOCAL COPY OF `buildKeyBindingTbs`, and it must be swapped for the real one at the npm
+ * re-pin** (alongside deleting `keybind-types-shim.d.ts`). The published `@cello-protocol/crypto`
+ * this repo currently resolves predates the export, and these tests must register successfully now.
+ *
+ * What it costs while it exists: nothing this suite asserts. The DIRECTORY never verifies a binding
+ * — it stores and serves a proof it cannot forge, and the CLIENTS check it — so these tests need a
+ * well-formed 64-byte signature, not a semantically correct one. The framing is duplicated here so
+ * the swap is a one-line change rather than a rewrite.
+ */
+function keyBindingTbs(kLocalPubkey: Uint8Array, groupPubkey: Uint8Array): Uint8Array {
+  const context = new TextEncoder().encode("cello-key-binding-v1");
+  const framed = new Uint8Array(context.length + 1 + 64);
+  framed.set(context, 0);
+  framed[context.length] = 0x00;
+  framed.set(kLocalPubkey, context.length + 1);
+  framed.set(groupPubkey, context.length + 33);
+  return framed;
+}
+
 // ─── Registration helper: handles DKG flow ────────────────────────────────────
 
 /**
@@ -165,10 +188,16 @@ async function doRegister(
   clientNode: Awaited<ReturnType<typeof createNode>>,
   dirPeerId: string,
   dirMultiaddrs: string[],
-  clientPubkeyHex: string,
+  /**
+   * 038-KEYBIND: the client's own K_local, not just its pubkey hex. `dkg_complete` now carries a
+   * signature by this key over (k_local_pubkey, primary_pubkey), and the directory's frame decoder
+   * REJECTS a dkg_complete without one — so a fixture holding only the hex cannot register at all.
+   */
+  clientKey: KeyProvider,
   mlDsaPubkeyHex: string,
   phoneStub: string,
 ): Promise<Record<string, unknown>> {
+  const clientPubkeyHex = Buffer.from(await clientKey.getPublicKey()).toString("hex");
   sendFrame(stream, CBOR_ENC.encode({
     type: "register_request",
     phone_stub: phoneStub,
@@ -198,10 +227,14 @@ async function doRegister(
   });
   const primaryPubkeyHex = Buffer.from(dkgResult.primaryPubkey).toString("hex");
 
-  // Send dkg_complete
+  // Send dkg_complete — with the 038-KEYBIND binding the directory stores and serves.
+  const keyBinding = Buffer.from(
+    await clientKey.sign(keyBindingTbs(await clientKey.getPublicKey(), dkgResult.primaryPubkey)),
+  ).toString("hex");
   sendFrame(stream, CBOR_ENC.encode({
     type: "dkg_complete",
     primary_pubkey: primaryPubkeyHex,
+    key_binding: keyBinding,
   }));
 
   // Return register_success or register_error
@@ -251,7 +284,7 @@ describe("REG-001: Directory registration", () => {
     // Full registration flow: register_request → dkg_ready → DKG rounds → dkg_complete → register_success
     const successFrame = await doRegister(
       stream, reader, clientNode, dirNode.getPeerId(), dirNode.listenAddresses(),
-      clientPubkeyHex, mlDsaPubkeyHex, "+1234567890",
+      clientKey, mlDsaPubkeyHex, "+1234567890",
     );
     expect(successFrame["type"]).toBe("register_success");
     expect(typeof successFrame["agent_id"]).toBe("string");
@@ -313,7 +346,7 @@ describe("REG-001: Directory registration", () => {
     const before = Date.now();
     const successFrame = await doRegister(
       stream, reader, clientNode, dirNode.getPeerId(), dirNode.listenAddresses(),
-      clientPubkeyHex, mlDsaPubkeyHex, "+1999000111",
+      clientKey, mlDsaPubkeyHex, "+1999000111",
     );
     expect(successFrame["type"]).toBe("register_success");
 
@@ -366,7 +399,7 @@ describe("REG-001: Directory registration", () => {
 
     const successFrame = await doRegister(
       stream1, reader1, clientNode, dirNode.getPeerId(), dirNode.listenAddresses(),
-      clientPubkeyHex, mlDsaPubkeyHex, "+1111111111",
+      clientKey, mlDsaPubkeyHex, "+1111111111",
     );
     expect(successFrame["type"]).toBe("register_success");
     const originalAgentId = successFrame["agent_id"];
@@ -420,26 +453,22 @@ describe("REG-001: Directory registration", () => {
     // Agent A registers with phone +5555555555
     const { stream: streamA, reader: readerA } = await doAuth(clientNodeA, dirNode.getPeerId(), keyA);
     const mlDsaA = await mlDsaKeygen();
-    const pubA = await keyA.getPublicKey();
-    const pubAHex = Buffer.from(pubA).toString("hex");
     const mlDsaAHex = Buffer.from(await mlDsaA.getPublicKey()).toString("hex");
 
     const frameA = await doRegister(
       streamA, readerA, clientNodeA, dirNode.getPeerId(), dirNode.listenAddresses(),
-      pubAHex, mlDsaAHex, "+5555555555",
+      keyA, mlDsaAHex, "+5555555555",
     );
     expect(frameA["type"]).toBe("register_success");
 
     // Agent B tries same phone stub — DKG runs first, then phone_already_claimed is returned
     const { stream: streamB, reader: readerB } = await doAuth(clientNodeB, dirNode.getPeerId(), keyB);
     const mlDsaB = await mlDsaKeygen();
-    const pubB = await keyB.getPublicKey();
-    const pubBHex = Buffer.from(pubB).toString("hex");
     const mlDsaBHex = Buffer.from(await mlDsaB.getPublicKey()).toString("hex");
 
     const frameB = await doRegister(
       streamB, readerB, clientNodeB, dirNode.getPeerId(), dirNode.listenAddresses(),
-      pubBHex, mlDsaBHex, "+5555555555",
+      keyB, mlDsaBHex, "+5555555555",
     );
     expect(frameB["type"]).toBe("register_error");
     expect(frameB["reason"]).toBe("phone_already_claimed");
@@ -503,7 +532,7 @@ describe("REG-001: Directory registration", () => {
 
     const successFrame = await doRegister(
       stream, reader, clientNode, dirNode.getPeerId(), dirNode.listenAddresses(),
-      clientPubkeyHex, mlDsaPubkeyHex, PHONE,
+      clientKey, mlDsaPubkeyHex, PHONE,
     );
     expect(successFrame["type"]).toBe("register_success");
 
@@ -753,7 +782,7 @@ describe("REG-001: Directory registration", () => {
 
     const frame = await doRegister(
       stream, reader, clientNode, dirNode.getPeerId(), dirNode.listenAddresses(),
-      pubHex, mlDsaHex, PHONE,
+      clientKey, mlDsaHex, PHONE,
     );
     expect(frame["type"]).toBe("register_success");
 
@@ -837,7 +866,7 @@ describe("REG-001: Directory registration", () => {
 
     const successFrame = await doRegister(
       stream, reader, clientNode, dirNode.getPeerId(), dirNode.listenAddresses(),
-      pubHex, mlDsaHex, "+9001001001",
+      clientKey, mlDsaHex, "+9001001001",
     );
     expect(successFrame["type"]).toBe("register_success");
 
