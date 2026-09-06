@@ -2,7 +2,7 @@
 name: 037-SESSIONCORE — The part of the god file that cannot be moved
 type: micro-work-order
 date: 2026-09-06
-status: open
+status: complete
 dod_line: DOD-M15-GODFILE-1
 dod_effect: unit-of
 description: >

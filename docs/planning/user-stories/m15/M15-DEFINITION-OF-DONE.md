@@ -1297,7 +1297,7 @@ addresses; `PRODUCTION_DIRECTORY_URL` is a name that still matches a bundled end
 the test that asserts that relationship still passes. **Ordering is the whole risk** — names in the
 manifest come first, or step 6 is silently disabled by the fix.
 
-### `DOD-M15-GODFILE-1` — ❌ PRE-LAUNCH · The 19,878-line class is split, and a ratchet stops it growing back
+### `DOD-M15-GODFILE-1` — ✅ DONE 2026-09-06 · The 19,878-line class is split, and a ratchet stops it growing back
 **Filed 2026-09-06, after measuring both halves of it. The work order is [[036-GODFILE-one-class-is-a-quarter-of-the-daemon]] — ONE order, six parts, with a progress table the coder updates as each part closes.**
 
 `cello-client/core/daemon/src/session-node-manager.ts` is 19,878 lines and 1.2 MB — **25% of the
@@ -1344,6 +1344,43 @@ gains. They move with the code they describe, verbatim.
 the size at which agents start making mistakes in it — which is a correctness risk on the most
 load-bearing code in the product, not only a tidiness one. **Done when** the ratchet is in CI, and
 the file is under it and falling.
+
+---
+
+**✅ DONE 2026-09-06. `session-node-manager.ts` is 3,392 lines, from 20,368 — across twenty-two
+modules, with every comment moved verbatim beside the code it describes.** The ratchet is in CI, CI
+refuses an in-file disable of it, and the five files the split created are each ratcheted at their
+own size — because the lesson of `daemon.ts` is that a ceiling a file is nowhere near is not a
+ratchet.
+
+**It is 3,392 and not under the ordinary 3,000, and that is a decision.** `gracefulShutdown` is
+PROCESS teardown — it closes the database, sets the shutting-down flag, stops the reservation
+watchdog — and `#evictSessionCaches` clears the eleven containers every collaborator shares. They
+are ~390 lines, almost exactly the gap. Moving either puts mutation of the manager's own lifecycle
+state behind a collaborator's context: a collaborator able to switch off the process that owns it.
+3,000 was reachable by forcing that seam and was not taken. Anyone who disagrees should move those
+two methods and LOWER the number, not raise it.
+
+**What the split actually caught, which is worth more than the line count.** Two defects that would
+have shipped in silence: a `cello_send` that hung forever with no error, no log and no timeout,
+because a map of pending promises was added to an eviction that DELETED where the original SETTLED;
+and signing quietly disabled — sessions falling back to unencrypted content — because a resolver was
+captured by value during construction and the manager assigns it afterwards, freezing it at `null`
+for the life of the process. Neither made a test go red.
+
+And **four source-scanning guards had stopped watching the code they police while staying green.**
+The scan that proves *everything establishment does, revival does too* went blind four times; its
+last miss would have had it comparing an empty list to an empty list. The relay-only IP-leak guard
+lost the file that now holds the read it looks for, so a future address-building read there would be
+invisible and an operator running relay-only would publish their real IP while the setting still
+said "on". The rule extracted from all four, now written into three of them: **a loop over a
+hand-maintained list gets SHORTER when someone forgets an entry, never red.** Both list-based guards
+are globs now, and each has a check that fires when its pattern matches nothing anywhere.
+
+Full record: the M15 build journal, and
+[[2026-09-06_1400_godfile-split-follow-through]]. The short-context hypothesis this work was planned
+around is **falsified** — reported in `037-SESSIONCORE`'s *Newly discovered*, with the measured
+numbers, so the next person does not re-derive it.
 
 ### `DOD-M15-COMMENT-DISCLOSURE-1` — ❌ PRE-LAUNCH · No comment in the PUBLIC repo advertises a hole that is closed, or a live one nobody is tracking
 **Filed 2026-09-06. The worklist is [[M15-PUBLIC-COMMENT-SWEEP]] — item by item, one per session.**
