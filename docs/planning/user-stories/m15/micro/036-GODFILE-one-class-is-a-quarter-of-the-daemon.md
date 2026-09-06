@@ -49,8 +49,8 @@ description: >
 | 2 | Taking a message in | ⏭️ not a seam — see below | — |
 | 3 | Holding what was refused | ✅ done | 18,157 |
 | 4 | Where a message sits in the order | ✅ done (with Part 3) | 18,157 |
-| 5 | The conversation record | ⬜ not started | — |
-| 6 | Mail that waited | ⬜ not started | — |
+| 5 | The conversation record | ✅ done | 17,468 |
+| 6 | Mail that waited | ✅ done | 16,935 |
 | — | Live two-daemon smoke test | ⬜ not started | — |
 
 Statuses: ⬜ not started · ⚙️ in progress · ✅ done · ⏭️ not needed (target already met).
