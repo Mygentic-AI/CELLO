@@ -2,9 +2,9 @@
 name: session-correctness-checks
 type: reference
 date: 2026-09-06
-topics: [sessions, correctness, refusals, notifications, seal, relay, directory]
+topics: [sessions, correctness, refusals, notifications, seal, relay, directory, frost, infrastructure, dns, libp2p]
 status: draft
-description: The master list of every correctness check a CELLO session passes through, stage by stage, with the file and approximate lines, the code it fails with, and the premise each check depends on. Built so each check can be audited for a notification path.
+description: The master list of every correctness check a CELLO session passes through — from the machine's DNS resolver and the cloud firewall up through libp2p peer identity, directory and relay validity, the FROST ceremonies, and every application-layer gate to the sealed receipt. Each row carries the file, approximate lines, the code it fails with, and the premise it depends on, so each check can be audited for a notification path.
 ---
 
 # Session correctness checks — the master list
@@ -47,6 +47,12 @@ assignment — how do we know it's legitimate?". It holds one of:
 Every `⊘` is a row on the open list at the end. That is the recursion terminator: you keep asking
 "and how do we know *that*" until you reach a local value (`—`) or a stated `⊘`.
 
+**Stages X and L are not `if` statements.** They are properties of the machine, the network and the
+cloud project. They are on the list because a premise chain that stops at "the application checks
+it" is not finished — several later checks are only as good as a firewall rule, a reserved IP, or a
+secret's replication policy, and their failures reach the operator disguised as something else. Read
+their "Outcome" column as *what this costs when it is wrong*, not as a refusal code.
+
 **Outcome** is the failure class, and it matters for notification design because the operator's move
 differs per class:
 
@@ -64,17 +70,178 @@ Line numbers are **approximate** — they were read on 2026-09-06 and these file
 
 ---
 
-## Stage R — Root of trust (holds before any session exists)
+## Stage X — Substrate (below the application, and mostly not code)
 
-Everything below depends on this stage. If R is wrong, every later check verifies against the wrong
-authority and passes.
+These are not `if` statements. They are properties of the machine, the network and the cloud
+project, and they are listed because several later checks are only as good as they are. Most fail as
+a *symptom* somewhere else, which is exactly why they belong on a notification audit: the operator
+sees `directory_unreachable` and the cause is their laptop's resolver.
+
+| ID | The property | Where it lives | How a failure shows | Outcome | Premise |
+|---|---|---|---|---|---|
+| X1 | This machine can resolve a name at all | `directory-bootstrap.ts` ~117, ~137 | `dns_error` | retryable | — |
+| X1.1 | **`dns_error` on every node at once means the local resolver, not the consortium** | same; incident: `discussion_logs/2026-07-24_1630_post-wake-directory-dns-resolution-incident.md` | all nodes unresolved | the operator's machine | — |
+| X2 | A host answers on the bootstrap port | `directory-bootstrap.ts` ~83-140 | `connect_error` / `timeout` / `http_error` / `bad_response` | retryable | — |
+| X2.1 | How many probes were spent, on the operator surface | `directory-bootstrap.ts` ~330-345 | `attempts` | one probe = that node's config; three = the path to it | — |
+| X3 | **Names are never the trust anchor — addresses are** | `directory-bootstrap.ts` ~23-41 | *silent*: step-6 simply does not run | `⊘` **fails open** — guarded by a test, not at runtime | X4 |
+| X4 | The published addresses survive instance replacement | `infra/terraform` `google_compute_address`; `GCP-STATE.md` ~401 | a replaced node becomes unreachable at its manifest address | infra | — |
+| X5 | `/bootstrap` is fetched over **plaintext HTTP** on a public port | `node-directory.tf` ~112-134 (`cello-directory-allow-http`, 9090, `0.0.0.0/0`) | — | by design — the MITM it invites is what step-6 (G3) exists to defeat | — |
+| X6 | The libp2p listener is **`/ws`, not `/wss`** — there is no TLS terminator | bundled manifest multiaddrs; `node-directory.tf` ~88-108 | — | by design — Noise (L2) is the confidentiality and authenticity layer, not TLS | L2 |
+| X7 | Protocol ports are open to the internet on purpose | `node-directory.tf` ~88-108 | — | the security boundary is the handshake, not the network | L2 |
+| X8 | The node's own signing key exists and is regional | GCP Secret Manager `cello-<nodeId>-node-key`; `GCP-STATE.md` ~400 | node cannot start / cannot sign | infra | — |
+| X8.1 | Secret replication is pinned to the node's own region | `GCP-STATE.md` ~400 | key material in a region the node does not run in | infra | — |
+| X8.2 | Secret access is granted **per secret**, never project-level | `terraform/iam.tf`; `GCP-STATE.md` ~331 | one compromised SA reads every node's key | infra | — |
+| X9 | The node's `NODE_ID` is `<cloud>-<region>` and is **its FROST participant identifier** | `node-id.ts` ~1-40 | startup fatal | a node born under the wrong id holds shares nobody can address — a decommission, not a rename | — |
+| X9.1 | A **fabricated** region may not name the node | `node-id.ts` ~19, ~30-36 | startup fatal | — | — |
+| X10 | Cloud IAM is additive, so a plan-clean apply does not prove no out-of-band grant | `GCP-STATE.md` ~321 | invisible | `⊘` — audit with `gcloud projects get-iam-policy` | — |
+| X11 | The host firewall (COS iptables) actually permits the VPC-allowed ports | `GCP-STATE.md` ~418-423 | connections hang | infra — a VPC rule alone is not sufficient | — |
+
+> `GCP-STATE.md` ~402 says the health port 9090 is not public. The terraform
+> (`cello-directory-allow-http`) opens it to `0.0.0.0/0`, and it must — that is where `/bootstrap`
+> is served. The terraform is current; the state line is stale.
+
+---
+
+## Stage L — Link and peer identity (libp2p, below every frame)
+
+This is the layer that makes X3–X7 tolerable. A peer id **is** a public key, so the Noise handshake
+authenticates the endpoint cryptographically no matter what DNS, the IP, or a plaintext redirect
+said.
+
+| ID | Check | Where | Code on failure | Outcome | Premise |
+|---|---|---|---|---|---|
+| L1 | The dialed multiaddr carries a `/p2p/<peerId>` | `directory-bootstrap.ts` ~260-263, ~286-290 | `bad_response` / `no_peer_id` | refuse to dial | — |
+| L2 | The Noise handshake proves the remote holds the key its peer id names | libp2p Noise (`@chainsafe/libp2p-noise`) | handshake failure | connection never forms | — |
+| L3 | **The manifest's declared peerId matches the one `/bootstrap` returned** | `directory-bootstrap.ts` ~446-471 | `directory.consortium.node.peer_id_mismatch` | **refuse to dial** — the signed roster and the live answer disagree about who this node is | R1 |
+| L3.1 | An **absent** declared peerId is tolerated | `directory-bootstrap.ts` ~461-463 | — | `⊘` — pre-field manifests would otherwise strand every node |
+| L4 | Session node gaters admit exactly one counterparty peer | `session-connection-gater.ts` (see T1–T3) | `session.node.connection.rejected` | deny | — |
+| L5 | Relay reservation is refused until the holder has authenticated **for that purpose** | `relay-connection-gater.ts` ~14-40, ~129-140 | reservation denied | a brand-new receiver's first reservation is refused; it authenticates and asks again | R8 |
+| L6 | Dial-through a reservation requires a directory-signed session credential | `relay-connection-gater.ts` ~21-28 | dial-through denied | without it any peer could dial any reservation holder | W1 |
+
+---
+
+## Stage G — Is this a valid **directory**?
+
+Four independent things answer this, and they answer different questions. Note that G3 is *optional
+by construction* and G6 is what tells you it did not run.
+
+| ID | Check | Where | Code on failure | Outcome | Premise |
+|---|---|---|---|---|---|
+| G1 | This node is **in the signed consortium roster** | `bundled-consortium-manifest.ts`; `directory-bootstrap.ts` ~446-472 | node resolves to nothing | not dialed | R1 |
+| G2 | Its live peer id matches the roster's | `directory-bootstrap.ts` ~463-471 | `peer_id_mismatch` | refuse to dial | L3 |
+| G3 | **Step 6 — it signs our challenge with the roster's node key** | `signaling-connect.ts` ~386-402; `ManifestDirectoryChallengeVerifier` (transport) | `directory_challenge_failed: <reason>` | **throw — the connection is abandoned** | R1 |
+| G3.1 | The proof carries `nodeId`, `signature` and `timestamp` at all | `signaling-connect.ts` ~388-393 | `no_identity_proof` | throw | — |
+| G3.2 | The proof is **fresh** — ±5 min, checked *after* the signature | `signaling-connect.ts` ~438-450 | `identity_proof_stale` | throw | G3 |
+| G3.3 | Freshness rests on the timestamp **because the client contributes no nonce** | `signaling-connect.ts` ~410-437 | — | `⊘` — replay is bounded to the window, not eliminated | — |
+| G4 | Step 6 runs at all | `manifest-deps.ts`; `directory-bootstrap.ts` ~23-41 | — | `⊘` **fails open**: no verifier configured ⇒ the directory's claim about itself is accepted | X3 |
+| G5 | The operator can force it | `CELLO_REQUIRE_DIRECTORY_AUTH=1` | refuses at **startup** | this is the control; G6 is only the notice | — |
+| G6 | A disarmed check does not look like a healthy one | `signaling-connect.ts` ~340-386 | `directory.auth.skipped` (WARN, once per directory peer) | CONTINUE unverified | — |
+| G6.1 | The nodeId printed in that warning is **the peer's own claim**, labelled as such | `signaling-connect.ts` ~369-378 | `claimedNodeId` beside `dialedPeerId` | — | — |
+| G7 | The manifest verifies against the bundled root keys at load | `bundled-consortium-manifest.ts` ~13-17 | manifest rejected | self-consistency gate — catches a bad regeneration, **not a network adversary** | R4 |
+| G8 | A directory proves itself to **another directory** (federation) | `ae-handshake.ts` ~65-125 | `node_id_mismatch` / `self_dial` / `node_not_in_manifest` / `manifest_entry_incomplete` / `peerid_mismatch` / `nonce_mismatch` / `timestamp_skew` / `signature_invalid` | refuse the channel | R1 |
+| G8.1 | **Both** nonces are bound — the one we minted and the one they sent | `ae-handshake.ts` ~103-109 | `nonce_mismatch` | refuse | — |
+
+> **G8 is stronger than G3.** Directory-to-directory auth binds a nonce *we* minted; client-to-
+> directory does not, which is why G3.2 has to lean on a timestamp. That asymmetry is the single
+> most notable structural gap in this stage.
+
+---
+
+## Stage Y — Is this a valid **relay**?
+
+The short answer is: because a directory said so. There is no client-side relay roster.
+
+| ID | Check | Where | Code on failure | Outcome | Premise |
+|---|---|---|---|---|---|
+| Y1 | The relay proves it holds the key it registers under | `directory-node.ts` ~1131-1160 (`verifyRelayRegistrationSignature`) | signature invalid | registration rejected | X8 |
+| Y1.1 | …which proves **possession, not authorization** | same | — | `⊘` — anyone holding a keypair can present a valid self-signature | — |
+| Y2 | The relay pool manifest is signed and verified before use | `relay-pool-manager.ts` ~1-30, ~168-200 | `relay.manifest.invalid` `signature_verification_failed` | manifest rejected | Y2.1 |
+| Y2.1 | …against **this node's own key**, derived when unset | `relay-manifest-signer.ts` ~1-48 | throws when no anchor exists | the derivation can cause **refusal, never acceptance** | X8 |
+| Y3 | Relays are health-checked and failing ones drop out of the pool | `relay-pool-manager.ts` ~43-62 | `relay.health.check.failed` | removed from assignment | — |
+| Y4 | Relay endpoints reaching the client are shape-checked per entry | `signaling-connect.ts` ~168-187 | malformed entry dropped, auth never fails | CONTINUE | G3 |
+| Y5 | **The relay named in a session assignment is NOT covered by the assignment's signature** | `protocol-types/session.ts` ~159-200 — the TBS covers session id, both pubkeys, genesis root, timestamp, both session peer ids and addrs, transport mode, high_stakes, prior_relay_id. **Not `relay_endpoint`.** | — | `⊘` — the client dials the relay a directory named, authenticated only by L2 + G3 | G3 |
+| Y6 | A separate `relay_directory_signature` rides the assignment, and the **relay** verifies it | `relay-node.ts` ~1158 (`directory_signature_invalid`); `inbound-sessions.ts` ~362-390 | `relay_mode_assignment_without_directory_signature` / `..._malformed` | WARN — the session runs **unwitnessed**, never blocked | R1 |
+| Y7 | A predecessor relay's receipts verify against its registered key | `relay-node.ts` ~2708-2755 | `RELAY_PREDECESSOR_UNKNOWN` | refuse the submit | Y1 |
+| Y8 | A replayed chain comes from the relay the assignment names | `relay-node.ts` ~646-671 | `unilateral_receipt_wrong_relay` | refuse the replay | W1 |
+
+---
+
+## Stage F — Is this **FROST ceremony** legitimate?
+
+Two ceremonies, four vantage points. The asymmetry between F-b and F-c is the thing to look at: the
+directory nodes check *what they are being asked to sign*; the client does not.
+
+### F-a — DKG: may this agent be created at all, and did the shares actually verify?
+
+| ID | Check | Where | Code on failure | Outcome | Premise |
+|---|---|---|---|---|---|
+| F1 | Round 1 carries a pre-auth capability | `directory-node.ts` ~1699-1710 | `PRE_AUTH_TOKEN_MISSING` | refuse before any FROST crypto | — |
+| F1.1 | A `CELLO-` claim code redeems to one, tolerating replication lag | `directory-node.ts` ~1714-1738 | `CLAIM_CODE_EXPIRED` / `CLAIM_CODE_INVALID` | refuse | — |
+| F2 | The capability decodes | `directory-node.ts` ~1740-1747 | `PRE_AUTH_TOKEN_MISSING` | refuse | — |
+| F3 | **Its issuer signature and validity window verify — statelessly, on every node** | `directory-node.ts` ~1748-1757 (`verifyCapability`) | `PRE_AUTH_TOKEN_EXPIRED` / `PRE_AUTH_CAPABILITY_INVALID` | refuse | F3.1 |
+| F3.1 | The pinned issuer key | GCP Secret Manager `cello-<nodeId>-preauth-issuer-key`; `GCP-STATE.md` ~400 | — | — | X8 |
+| F4 | **Single-use: the nonce binds to the agent pubkey, not the client-supplied epoch** | `directory-node.ts` ~1758-1768 | `PRE_AUTH_TOKEN_CONSUMED` | refuse | — |
+| F4.1 | …because the epoch is attacker-controlled on the wire | same comment | — | one capability would otherwise register two agents | — |
+| F5 | The capability is issued only behind an authenticated internal API | `internal-api-server.ts` ~82-92 | 401, **no token issued** | refuse | X8.2 |
+| F6 | **Round 3 verifies every share against its commitment (RFC 9591 §5.3 VSS)** | `frost-handler.ts` ~870-886 | `share_verification_failed` | ceremony fails; polynomial wiped | — |
+| F7 | The share is **durably persisted** before the node reports DKG complete | `frost-handler.ts` ~893-915 | `share_persist_failed` → `share_verification_failed` | ceremony fails — a share that will not survive a restart is not an identity | — |
+| F8 | Round ordering | `frost-handler.ts` ~753, ~799, ~859 | `already_in_progress` / `not_in_round1` / `not_in_round2` | refuse | — |
+| F9 | The threshold is `majority(N)`, so a node absent from the DKG holds **no share** | project rule; `docs/planning/user-stories/m8b/…` | that node cannot co-sign for that agent | needs a resharing ceremony — enrollment is deferred work | — |
+
+### F-b — Signing ceremony: what each directory node checks before contributing a share
+
+| ID | Check | Where | Code on failure | Outcome | Premise |
+|---|---|---|---|---|---|
+| F10 | **The requester proves possession of K_local, bound to THIS message** | `directory-node.ts` ~1596-1610; `verifyFrostAuth` ~278-310 | `AUTH_REQUIRED` / `AUTH_INVALID` | refuse the share — checked **before** the pause gate and before signing | — |
+| F10.1 | An untrusted CBOR value is never coerced to a byte array | `verifyFrostAuth` ~285-289 | `AUTH_INVALID` | small request → large allocation DoS, closed | — |
+| F10.2 | The commit frame carries the same proof, under a different prefix | `directory-node.ts` ~1548 | same | refuse | — |
+| F11 | The agent is not suspended (LEVER-001 honor-check, server-side) | `directory-node.ts` ~1612-1620, ~1560 | `AGENT_SUSPENDED` | refuse the share — a valid client share does not help | — |
+| F12 | This node actually holds a share for the epoch | `frost-handler.ts` ~447, ~482, ~545, ~606, ~642 | `AGENT_NOT_BOOTSTRAPPED` | refuse | F7 |
+| F13 | The epoch is current | `frost-handler.ts` ~412, ~533 | `EPOCH_EXPIRED` | refuse | — |
+| F14 | No rival ceremony for this agent | `frost-handler.ts` ~525, ~589 | `CEREMONY_CONFLICT` | refuse | — |
+| F15 | No pending nonce reuse | `frost-handler.ts` ~405-412 | `NONCE_ALREADY_PENDING` | refuse | — |
+| F16 | **A seal request must show the evidence, and the leaves must produce the root** | `directory-node.ts` ~1623-1665; `seal-cosign-evidence.ts` | the eight `SEAL_*` codes at Z10–Z17 | refuse the share | — |
+| F16.1 | Absent evidence is not a pass | `directory-node.ts` ~1634-1636 | `SEAL_EVIDENCE_MISSING` | refuse | — |
+
+### F-c — What the **client** checks before contributing its own share
+
+| ID | Check | Where | Code on failure | Outcome | Premise |
+|---|---|---|---|---|---|
+| F17 | The request has a `ceremony_id` | `session-ceremony.ts` ~955-959 | `no_ceremony_id` | dropped, no reply | — |
+| F18 | It has `tbs` and `context` | `session-ceremony.ts` ~960-964 | `no_tbs` / `no_context` | reply `null` | — |
+| F19 | A signer can be reconstructed for the current directory | `session-ceremony.ts` ~971-976 | `no_signer` | reply `null` | F12 |
+| F20 | Enough nodes were reachable at initiation to reach threshold | `frost-threshold-signer.ts` ~431 | ceremony aborts | refuse | R5 |
+| F21 | **What is being signed** | — | — | `⊘` **the client signs opaque bytes.** `context` is used for domain separation, never checked against an allowlist, and the TBS is not inspected | — |
+
+> **F21 is the asymmetry.** `DOD-M15-SEALPARTIES-1` gave the *directory* nodes a second opinion that
+> can see the evidence, on exactly the argument that signing opaque bytes is "cryptographic weight
+> without judgement". The client's own share is still contributed blind — including to the session
+> assignment naming its counterparty, which is the one document it is uniquely placed to judge.
+
+### F-d — What the client checks about the ceremony's **output**
+
+| ID | Check | Where | Code on failure | Outcome | Premise |
+|---|---|---|---|---|---|
+| F22 | An assignment's signature verifies under **our own** group key | `assignment-verify.ts` ~111-138 | A5, A6 | REFUSE | F6 |
+| F23 | A unilateral certificate verifies under our own primary from our own share | `session-ceremony.ts` ~795-823 | `no_frost_share` / `share_decode_failed` / `no_primary_pubkey` / `signature_invalid` | refuse the certificate | F7 |
+| F24 | A bilateral certificate's signer is **one of the two participants** | `session-ceremony.ts` ~896-916 | `signer_not_a_session_participant` | **refuse** | N16.1 |
+| F25 | …and the signature covers the legibility hash | `session-ceremony.ts` ~918-922 | `signature_invalid` | refuse — a tampered legibility changes the hash | F24 |
+| F26 | When the signer's key is not held locally | `session-ceremony.ts` ~908-914 | `signer_key_not_held` | `⊘` **accepted, `verified:false`** — sound only because the frame arrived over the authenticated Noise channel | L2, G3 |
+| F26.1 | Every `verified:false` branch carries a reason, so it can never read as a failed check | `session-ceremony.ts` ~880-885 | — | — | — |
+
+---
+
+## Stage R — Manifest freshness and stream authentication
+
+The rows below sit *on top of* stages X, L, G and F. Everything after R depends on this stage; if R
+is wrong, every later check verifies against the wrong authority and passes.
 
 | ID | Check | Where | Code on failure | Outcome | Premise |
 |---|---|---|---|---|---|
 | R1 | The directory manifest's signature verifies | `cello-client` `http-manifest-poll.ts` ~44, ~133 | `manifest_signature_invalid` | REFUSE the manifest | R4 |
 | R2 | The manifest has not expired | `http-manifest-poll.ts`; `manifest-validity.ts` ~96 | `manifest_expired` | REFUSE / warn window | R4 |
 | R3 | The manifest version has not rolled back | `http-manifest-poll.ts` | `manifest_version_rollback` | REFUSE the manifest | R4 |
-| R4 | The signing root the manifest is checked against | `bundled-consortium-manifest.ts` | — | — | `⊘` (ships in the binary) |
+| R4 | The signing root the manifest is checked against | `bundled-consortium-manifest.ts` ~13-17, `BUNDLED_CONSORTIUM_ROOT_KEYS` | — | — | `⊘` — **ships in the binary**, and re-verifying the bundled manifest against it (G7) is a self-consistency gate, not an adversary gate. The officer key lives in GCP Secret Manager as `cello-consortium-officer-key-0`; only its public half is embedded. Its real premise is the npm supply chain plus X8 |
 | R5 | The node roster is fresh enough to reason about availability | `roster-freshness.ts` ~67, ~83 | stale after 5 min | CONTINUE + surface | R1 |
 | R6 | This agent holds its own persisted registration | `assignment-verify.ts` ~76-90 | `assignment_unverifiable_no_registration` | REFUSE the session | — |
 | R7 | The directory authenticates the client (Ed25519 challenge) | `directory-node.ts` ~2009-2060 | `nonce_unknown` / `nonce_expired` / `signature_invalid` | abort stream | — |
@@ -426,6 +593,50 @@ The chain terminates twice: at a **local value** (our own request, our own datab
 `⊘`. That is the property to preserve when adding a check — a new check whose premise chain
 terminates only in `⊘` has relocated trust rather than established it.
 
+### And the same walk for "how do we know we reached a real directory"
+
+This is the one that goes all the way to the machine.
+
+1. `X1` — the operator's own resolver answers. If it does not, every node reads as unreachable and
+   the fault is their laptop.
+2. `X3` — but the name is **not** what we trust. The client dials a bundled **address**, and a DNS
+   name pointing at the very same host silently disables step 6. This one fails **open**.
+3. `X5` — `/bootstrap` is fetched over plaintext HTTP on a public port, so the answer is
+   MITM-able. That is assumed, not denied.
+4. `L1`, `L3` — the multiaddr must carry a peer id, and it must be **the one the signed roster
+   declares**. A live answer that disagrees with the signed roster is refused before a connection
+   opens.
+5. `L2` — the Noise handshake then proves the remote holds the key that peer id names, so neither
+   DNS nor the IP nor the plaintext redirect can put us on a different machine.
+6. `G3` — and the directory signs our challenge with the roster's node key, which is the check that
+   survives even a rogue answer at step 3.
+7. `G3.2` — the proof must be fresh, `G3.3` — bounded by a timestamp only, because we contribute no
+   nonce.
+8. `R4` — and all of it verifies against a root key **compiled into the binary**. That is where the
+   walk stops: the terminating premise is the npm supply chain and GCP Secret Manager, not anything
+   the protocol checks.
+
+### And for "how do we know the FROST ceremony is legitimate"
+
+Four different parties answer, and they answer different questions:
+
+- **May this agent exist?** `F1`–`F5` — a signed, single-use capability, verified independently and
+  statelessly by every node, bound to the agent's pubkey rather than to a wire-supplied epoch.
+- **Did the shares actually come out right?** `F6` — RFC 9591 round 3 verifies each share against
+  its commitment; `F7` refuses the ceremony if the share cannot be durably written, because a share
+  that does not survive a restart is not an identity.
+- **May this signature be requested?** `F10` — the requester proves possession of K_local *bound to
+  the exact message*, which is what makes forgery impossible without that key; `F11`–`F15` — not
+  suspended, holds a share, current epoch, no rival ceremony.
+- **Should this node sign this particular thing?** `F16` / `Z10`–`Z17` — for a seal, each node
+  rebuilds the root from the leaves it was shown and refuses if they do not produce it. This is what
+  makes the threshold mean something rather than being three signatures resting on one node's
+  reading.
+- **And what does the client check?** `F21` — **nothing about the content.** It signs the bytes it
+  is handed.
+- **Is the output real?** `F22`–`F25` — verified against a group key the party holds independently,
+  never one supplied by the frame.
+
 ---
 
 ## The `⊘` list — inputs nothing currently earns
@@ -436,7 +647,17 @@ a *notification* even though it is not a *refusal*.
 
 | Ref | What is trusted as given | Consequence if wrong |
 |---|---|---|
-| R4 | The consortium manifest signing root bundled in the binary | Everything below R verifies against the wrong authority |
+| R4 / G7 | The consortium manifest signing root **compiled into the client**. Re-verifying the bundled manifest against it catches a bad regeneration, not an adversary. Terminates in the npm supply chain and GCP Secret Manager | Everything below verifies against the wrong authority |
+| X3 / G4 | `PRODUCTION_DIRECTORY_URL` matching a bundled endpoint byte-for-byte. **Fails open and silently** — a DNS name for the same host disables step 6 with no error and no log | A MITM on plaintext `/bootstrap` can redirect a cold-booting client to a rogue directory |
+| X5 | `/bootstrap` is plaintext HTTP on a public port | Assumed hostile; L3 and G3 are the answer |
+| X10 | Cloud IAM grants added out of band | A plan-clean `terraform apply` does not detect them |
+| L3.1 | A manifest entry with **no** declared peerId | The dial-layer identity check is skipped for that node |
+| Y1.1 | A relay's self-signature proves possession, not authorization | Any keypair holder can present a valid relay registration |
+| Y5 | **The relay named in a session assignment is not covered by the assignment's signature** | The client dials whichever relay a directory names, authenticated only by Noise plus step 6 |
+| Y6 | A relay-mode assignment with no directory signature | The session runs **unwitnessed** — allowed, warned, never blocked |
+| G3.3 | Client→directory identity proofs carry no client-chosen nonce | Replay is bounded to ±5 minutes rather than eliminated. Directory→directory auth (G8) does not have this gap |
+| F21 | **The client contributes its FROST share to opaque bytes** | It co-signs its own session assignment without judging it — the one document it is uniquely placed to check |
+| F26 | A bilateral certificate whose signer's key we do not hold | Accepted as `verified:false`; sound only because it arrived over the authenticated Noise channel |
 | D4, D5, D6 | The directory's word on whether a counterparty exists, is online, and lives where | A wrong answer is a failed or misrouted session, not a forged one |
 | A7 | That a **threshold** of our own directories is not colluding | A wrong counterparty could be named — designed-for bound, caught at `I3` |
 | N18 | On **first contact**, the assignment is only checked for internal consistency | A tampered first assignment is caught; an authentic-looking one from a hostile directory is not, and it then becomes the pin |
@@ -454,7 +675,13 @@ a *notification* even though it is not a *refusal*.
   gate, screener and rejection vocabulary (`document-gate.ts`, `document-screen.ts`,
   `document-rejection.ts`, `document-handshake.ts` — the proposal signature check is at
   `document-handshake.ts` ~161). It is the largest omission and should be a second pass.
-- **Registration and DKG** are treated as stage R premises, not enumerated. A session cannot start
-  without them, but they are their own lifecycle.
 - **Attestations and trust signals** appear only where they touch session admission (`N6`).
+- **Stage X stops at the cloud project.** Below it — GCP's own control plane, the npm registry, the
+  operator's OS and its CA store, the Route 53 zone (`Z02692523DOH7NW521CL8`, still on AWS) — is
+  named where a check depends on it but is not enumerated. `directory-gcp-use1.cello.mygentic.ai`
+  is still owed as a record; the nodes are reached by address today, which is what X3 requires
+  anyway.
+- **Share resharing / enrollment** (`F9`) is deferred work, not a check that exists.
+- **The portal, the waitlist and the ops agent** are out of scope; they have their own auth
+  surfaces.
 - Line numbers were read on 2026-09-06 and are approximate.
