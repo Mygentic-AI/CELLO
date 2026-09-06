@@ -1430,6 +1430,37 @@ unrecognised one by name; and, for a session-establishment TBS, refuses to contr
 does not describe a session this daemon initiated. **Value is defence-in-depth**, not the headline —
 it removes "the client helps sign whatever it is handed" as a step an attacker gets for free.
 
+### `DOD-M15-NOTIFY-AUDIT-1` — ❌ PRE-LAUNCH · Every check a USER can experience reaches them, and tells them what to do
+**Filed 2026-09-06. Input is [[session-correctness-checks]], which has no consumer until this line exists.**
+
+A session passes ~150 correctness checks. Several reason families are closed unions with a **total**
+guidance map, so a new reason cannot ship without operator guidance — session refusals, salt freezes,
+seal co-sign refusals, inclusion-proof failures. **That property covers the families where someone
+did the work, not the system.** Plenty of checks emit a log event and nothing else.
+
+**A guard nobody hears is the failure this milestone has already fixed four times.** The list is
+built; nothing has been run against it.
+
+**⚠️ THE BAR IS NOT "EVERY CHECK HAS GUIDANCE", AND ADOPTING THAT BAR WOULD MAKE THINGS WORSE.** Most
+checks are internal — a caller checks, handles it, and no human ever needs a sentence. Forcing
+guidance there produces filler nobody reads, which is exactly how the good pattern decays into noise
+and buries the notices that matter. **The bar is: every check a user can EXPERIENCE.**
+
+**Two scoping rules that make this finishable rather than open-ended.**
+
+1. **Work the failure CLASSES, not the checks.** REFUSE / BLOCK / DEFER / FREEZE / LOST / OUTBOUND —
+   a user meets each differently and needs a different thing said. A check with no user-visible
+   class needs nothing and is out of scope by construction.
+2. **Application layer only** — stages D through V. Stages X and L (substrate and link) fail as
+   symptoms somewhere else; auditing them here reopens the whole map for no gain. The one exception
+   already has a line of its own (`X1.1` — a resolver fault reads as every node being unreachable).
+
+**Done when** every check carrying a user-visible failure class has a verdict recorded against three
+questions — *is it logged? does it reach a surface the operator actually reads? does the text name
+what they can DO?* — and the failures are a gap list. **Output is the gap list. Fixing the gaps is
+separate work and separately ranked** — this line is the measurement, and running it is what turns
+the map into an audit.
+
 # Explicitly Beyond — deferred WITH a trigger, never dropped
 
 Nothing here is out of the project. Each carries the condition that brings it back.
