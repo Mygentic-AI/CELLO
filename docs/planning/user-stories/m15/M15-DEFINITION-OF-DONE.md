@@ -1266,6 +1266,54 @@ addresses; `PRODUCTION_DIRECTORY_URL` is a name that still matches a bundled end
 the test that asserts that relationship still passes. **Ordering is the whole risk** — names in the
 manifest come first, or step 6 is silently disabled by the fix.
 
+### `DOD-M15-GODFILE-1` — ❌ PRE-LAUNCH · The 19,878-line class is split, and a ratchet stops it growing back
+**Filed 2026-09-06, after measuring both halves of it.**
+
+`cello-client/core/daemon/src/session-node-manager.ts` is 19,878 lines and 1.2 MB — **25% of the
+entire daemon**, in one class with 555 members. It holds session records, the whole inbound ingest
+chain, authorship and acknowledgement verification, quarantine, orphan triage, transcript reads and
+writes, relay ordering records and park recovery. The next largest file in the repo is 6,077.
+
+**Two measurements decide how this is done.**
+
+*First — it was never refactored, and that is not the same as a refactor being ignored.* Its size at
+each point:
+
+```
+2026-06-12    525      2026-08-22  10,073
+2026-07-13  4,446      2026-09-01  14,206
+2026-08-04  5,501      2026-09-04  18,225
+2026-08-07  6,174      today       19,878
+```
+
+Monotonic. No drop anywhere, and nearly half the growth is in the last three weeks.
+
+*Second — the refactor that DID happen proves a split alone is not the fix.* Nine commits in
+mid-July took `daemon.ts` apart (`refactor(daemon): Seam A…I — X out of startDaemon's body`) and cut
+it from **6,279 lines to 2,081 on 14 July**. It is **6,077 today** — fully regrown in under two
+months, with no guard in the way.
+
+**So the order is: ratchet first, then split.** A `max-lines` rule in
+`cello-client/eslint.config.mjs`, following the pattern already used there to block `node:sqlite` —
+one visible allowlist, `session-node-manager.ts` grandfathered at its current size. Each pass then
+lowers its ceiling and the rule holds the ground taken. Guard second means the split lands,
+attention moves on, and it regrows exactly as `daemon.ts` did.
+
+**What makes it safe:** 310 test files and 95,339 lines of test code in `core/daemon` — more test
+code than production code. The seams are already cohesive and barely touch each other's state:
+`ingestReceivedContent`, `#verifyAuthorshipClaim` / `#verifyAcknowledgedContent`,
+`#quarantineRefusedContent`, `#recordFrameOrdering`.
+
+**⚠️ The comments are the asset, not the padding.** 53% of the file is prose — ~10,500 lines
+explaining why each check exists, much of it recording a defect that was reintroduced once already
+and the false reasoning that allowed it. A split that summarises or drops those loses more than it
+gains. They move with the code they describe, verbatim.
+
+**Why pre-launch rather than after:** it is the file an evaluator points a coding agent at, and it is
+the size at which agents start making mistakes in it — which is a correctness risk on the most
+load-bearing code in the product, not only a tidiness one. **Done when** the ratchet is in CI, and
+the file is under it and falling.
+
 # Explicitly Beyond — deferred WITH a trigger, never dropped
 
 Nothing here is out of the project. Each carries the condition that brings it back.
