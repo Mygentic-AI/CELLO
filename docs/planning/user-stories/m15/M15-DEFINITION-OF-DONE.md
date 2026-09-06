@@ -1361,8 +1361,10 @@ list. The sweep classified all of them into four buckets, and **three of the fou
   the responder's primary. Whether you can prove your own receipt depends on who closed first. Named
   `F2-b` in the comment and tracked nowhere.
 
-**Done when** every B is rewritten to describe what the code does now (**rewritten, never deleted** —
-the record of the old defect is the point), every D is confirmed and filed as its own line, and the
+**Done when** every B is rewritten to describe what the code does now (**rewritten under the sweep's
+reattachment rule, revised 2026-09-06: keep the reasoning only where a competent person would
+plausibly repeat the mistake, phrased as a rule rather than a memoir; otherwise fix the comment and
+let git hold the history**), every D is confirmed and filed as its own line, and the
 two C items name their designation so the next reader stops instead of re-filing.
 
 **Not in scope, deliberately:** the A bucket (deliberate, bounded fail-opens that already state their

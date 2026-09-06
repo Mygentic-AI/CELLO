@@ -159,7 +159,9 @@ on every content frame.
 **Moving a stale comment verbatim gives you a stale comment in a new file**, and puts two units on
 the same lines for different reasons.
 
-Do only the items in [[M15-PUBLIC-COMMENT-SWEEP]] that fall in this file. **Rewrite, never delete** —
+Do only the items in [[M15-PUBLIC-COMMENT-SWEEP]] that fall in this file. **Follow that document's
+reattachment rule (rule 3), revised 2026-09-06** — it is narrower than the sentence that follows, which
+is kept because Part 0a ran under it. Rewrite rather than delete where —
 the record of the old defect is the point. Verify the classification before acting: a wrong
 stale-verdict rewrites a comment into a lie, which is worse than the comment.
 
