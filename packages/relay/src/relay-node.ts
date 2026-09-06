@@ -2953,7 +2953,13 @@ export class CelloRelayNode {
      * The expected value comes from this relay's OWN log: the last leaf this sender wrote, or the
      * session genesis when they have not spoken yet. Never from anything on the frame.
      */
-    if (s1.prev_own_hash) {
+    {
+      /**
+       * ⚠️ NO `if (s1.prev_own_hash)` GUARD, AND ITS ABSENCE IS DELIBERATE — review F9. The field is
+       * required and non-nullable, so the guard was always true; it read as "this check may be
+       * skipped", and it would become a silent fail-open the day anyone made the field optional
+       * again. A required field is checked unconditionally or it is not required.
+       */
       let expectedOwn: Uint8Array | undefined;
       for (let i = state.leaf_log.length - 1; i >= 0; i--) {
         const leaf = state.leaf_log[i]!;
@@ -2992,10 +2998,32 @@ export class CelloRelayNode {
          * was altered and the other does not is the failure mode.
          */
         await this.#emitSelfChainAlert(frame.session_id, sessionKey, senderPubkeyHex, state);
+        /**
+         * ─── AND THE SESSION IS TERMINAL HERE — `DOD-M15-SELFCHAIN-1`, the escalation clause ─────
+         *
+         * ⚠️ IT USED TO REFUSE THE MESSAGE AND LEAVE THE SESSION LIVE, which is not an escalation:
+         * the next submit would be judged on its own, and a party whose chain is genuinely being
+         * rewritten could keep feeding leaves into a record this relay had already caught out.
+         *
+         * Same disposition as `replay_chain_diverged`, for the same reason. This relay holds the
+         * whole ordered log, so it is not guessing: it is stating that the submitter's own signed
+         * account of their own messages does not match what it recorded. There is nothing to gain
+         * from message N+1 on a conversation whose order is already in dispute, and a seal built on
+         * one would be a receipt for an order nobody agrees on.
+         *
+         * ⚠️ AND IT STILL NAMES WHAT WAS OBSERVED. `diverged_reason` describes the disagreement, not
+         * a party — a client whose own chain record went out of step after a restart produces this
+         * signal exactly as a reordering attack does, and this relay cannot tell them apart.
+         */
+        this.#store.setSession(sessionKey, {
+          ...state, status: "diverged", awaiting_replay: false,
+          diverged_reason: "a submitted message's link to its own sender's previous message does not match this relay's record of it",
+        });
         await reply(
           "self_chain_mismatch",
-          "the link to your own previous message does not match what this relay recorded. Your " +
-          "counterparty has been told. Confirm the conversation with them out of band before continuing.",
+          "the link to your own previous message does not match what this relay recorded, so this " +
+          "relay will not witness this session any further. Your counterparty has been told. " +
+          "Confirm the conversation with them out of band; if your records agree, open a new session.",
         );
         return;
       }

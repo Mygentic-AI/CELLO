@@ -19,6 +19,7 @@ import { generateKeypair } from "@cello-protocol/crypto";
 import { createNode } from "@cello-protocol/transport";
 import type { Stream } from "@libp2p/interface";
 import { createRelayNode, RELAY_PROTOCOL_ID } from "../../relay-node.js";
+import { InMemoryRelayStore } from "../../relay-store.js";
 import { computeGenesisPrevRoot } from "@cello-protocol/protocol-types";
 import type { SessionAssignment } from "../../relay-types.js";
 import { testOnlineToken } from "./online-token.js";
@@ -46,6 +47,36 @@ export class StreamReader {
     if (done || !value) throw new Error("stream ended");
     const raw = value instanceof Uint8Array ? value : (value as { slice(): Uint8Array }).slice();
     return decode(raw) as Record<string, unknown>;
+  }
+  /**
+   * The next frame, or `null` if none arrives within `ms`.
+   *
+   * Needed because a relay PUSHES to a connected participant: a witness alert is delivered live and
+   * never reaches the store's held queue, so a test that only reads the store cannot see it at all,
+   * and `readDecoded` on a quiet stream hangs forever. This is also the only way to assert the
+   * NEGATIVE — that a participant was NOT told something — which is half of every escalation test.
+   *
+   * ⚠️ THE PENDING READ IS CARRIED ACROSS CALLS, and a first version that did not was silently
+   * eating frames. `Promise.race([read, timeout])` does not cancel the read: when the timeout wins,
+   * that read is still outstanding and swallows the NEXT frame to arrive. So an assertion of the
+   * form "nothing yet… now something" reliably lost the something. Holding the promise means a
+   * timed-out read resumes exactly where it left off.
+   */
+  #pending: Promise<Record<string, unknown>> | null = null;
+  async readDecodedWithin(ms: number): Promise<Record<string, unknown> | null> {
+    this.#pending ??= this.readDecoded();
+    const pending = this.#pending;
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), ms); });
+    try {
+      const winner = await Promise.race([pending.then((v) => ({ v })), timeout]);
+      if (winner === null) return null;
+      // Only clear it once it has actually resolved, so the frame is handed out exactly once.
+      if (this.#pending === pending) this.#pending = null;
+      return winner.v;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 }
 
@@ -179,15 +210,45 @@ export interface SubmitHarness {
    * would disagree with.
    */
   genesis: Uint8Array;
+  /**
+   * The relay's own record for this session, and the alert queue for one participant.
+   *
+   * Exposed because a refusal is only half of an ESCALATION: the order asks the relay to refuse,
+   * tell the other party, and stop witnessing. Without a way to read the session's state and the
+   * counterparty's alerts, a test can only assert the reply — and the other two halves could both
+   * be deleted with the suite green.
+   */
+  sessionState: () => { status: string; awaiting_replay: boolean; diverged_reason?: string } | undefined;
+  alertsFor: (pubkey: Uint8Array) => Array<{ reason: string }>;
+  /**
+   * The next frame of a given `type` the relay PUSHED to B, or null within the window.
+   *
+   * ⚠️ FILTERED BY TYPE, because B's stream also carries `leaf_deliver` for every message A sends —
+   * so "read one frame and check it" answers whatever happened to arrive first. Filtering is also
+   * what makes the NEGATIVE assertion meaningful: "no alert arrived" has to mean no ALERT, not
+   * "something else arrived first".
+   *
+   * A witness alert to a CONNECTED participant is delivered live and never reaches the store, so
+   * `alertsFor` sees nothing — that queue only holds alerts for someone who is offline. Both are
+   * real paths; this is the one a two-connected-participants harness exercises.
+   */
+  pushToB: (type: string, ms?: number) => Promise<Record<string, unknown> | null>;
 }
 
 /** A relay plus BOTH authenticated participants on one recorded session. */
 export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>): void }): Promise<SubmitHarness> {
   const dirKp = generateKeypair();
   const dirPub = await dirKp.getPublicKey();
+  /**
+   * The store is INJECTED rather than left to the node, so a test can read what the relay recorded.
+   * A refusal is only one third of an escalation — the other two are the session's own state and
+   * the counterparty's alert queue, and neither is observable from the reply frame.
+   */
+  const store = new InMemoryRelayStore();
   const { relay, node, stop } = await createRelayNode({
     directoryPubkey: dirPub,
     directoryPubkeys: [dirPub],
+    store,
   });
   scope.addCleanup(async () => { await stop(); });
 
@@ -205,7 +266,7 @@ export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>)
    * BOTH participants get a stream. The second one is not decoration: every chain check is
    * PER SENDER, so a conversation with one voice in it cannot exercise any of them.
    */
-  const connect = async (kp: ReturnType<typeof generateKeypair>): Promise<Submit & { raw: SubmitRaw }> => {
+  const connect = async (kp: ReturnType<typeof generateKeypair>): Promise<Submit & { raw: SubmitRaw; reader: StreamReader }> => {
     const cn = await createNode({ keyProvider: kp, listenAddresses: ["/ip4/127.0.0.1/tcp/0"] });
     await cn.start();
     scope.addCleanup(async () => { await cn.stop(); });
@@ -232,16 +293,32 @@ export async function submitHarness(scope: { addCleanup(fn: () => Promise<void>)
       const tbs = CBOR_ENC.encode(fields) as Uint8Array;
       return send(tbs, await kp.sign(tbs));
     };
-    return Object.assign(submit, { raw: submitRaw });
+    return Object.assign(submit, { raw: submitRaw, reader });
   };
 
   const a = await connect(clientA);
+  const b = await connect(clientB);
+  const sessionKey = Buffer.from(sessionId).toString("hex");
   return {
     submit: a,
     submitRaw: a.raw,
-    submitAsB: await connect(clientB),
+    submitAsB: b,
+    pushToB: async (type: string, ms = 500) => {
+      const deadline = Date.now() + ms;
+      for (;;) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return null;
+        const frame = await b.reader.readDecodedWithin(remaining);
+        if (frame === null) return null;
+        if (frame["type"] === type) return frame;
+      }
+    },
     sessionId, pubA, pubB, sessionTimestamp,
     genesis: computeGenesisPrevRoot(pubA, pubB, sessionId, sessionTimestamp),
+    sessionState: () => store.getSession(sessionKey) as
+      { status: string; awaiting_replay: boolean; diverged_reason?: string } | undefined,
+    alertsFor: (pubkey: Uint8Array) =>
+      store.drainWitnessAlerts(Buffer.from(pubkey).toString("hex")) as Array<{ reason: string }>,
   };
 }
 

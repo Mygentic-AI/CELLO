@@ -5111,6 +5111,13 @@ export class CelloDirectoryNode {
        * So it is mapped back here, in one visible place, rather than left implicit. The specific
        * cause is worth having on the seal path too — that is a seal-path change with its own tests,
        * and it is recorded rather than silently deferred.
+       *
+       * ⚠️ `seal_chain_self_link_break` IS NOT IN THAT SET, AND THAT IS `DOD-M15-SELFCHAIN-1`'s
+       * one exception. Every reason above describes something a client should re-derive or re-send.
+       * That one describes a conversation whose ORDER is in dispute, and there is nothing to
+       * re-send — so answering "the root could not be verified" would send the operator to check a
+       * computation when what they need is to compare transcripts with their counterparty out of
+       * band. The new name reaches them; the four old collapses are unchanged.
        */
       return {
         ok: false,

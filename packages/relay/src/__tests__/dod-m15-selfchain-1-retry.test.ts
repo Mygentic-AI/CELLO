@@ -189,4 +189,69 @@ describe("035-SELFCHAIN: a retransmission is answered from the record, and a rep
     expect(invented["type"]).toBe("hash_submit_error");
     expect(invented["reason"]).toBe("self_chain_mismatch");
   });
+
+  it("★★★ a broken chain ESCALATES — the counterparty is told and the relay stops witnessing", async () => {
+    /**
+     * ─── THE THREE HALVES OF AN ESCALATION, ASSERTED TOGETHER ──────────────────────────────────
+     *
+     * The order asks for four things when tampering is detected: refuse it, tell BOTH parties, name
+     * a next step, and freeze. Refusing alone is not an escalation — the next submit would be judged
+     * on its own, and a party whose chain is genuinely being rewritten could keep feeding leaves
+     * into a record this relay had already caught out.
+     *
+     * This is the revert test for the other two. They were both absent: the alert existed and no
+     * test named it, so `#emitSelfChainAlert` could have been deleted with the suite green; and the
+     * session stayed `active` after a refusal, so nothing stopped the conversation.
+     */
+    const h: SubmitHarness = await submitHarness(scope);
+    const first = await h.submit({
+      contentHash: contentHashOf("a"), lastSeenSeq: 0, timestamp: Date.now(),
+      lastSeenHash: h.genesis, prevOwnHash: h.genesis,
+    });
+    expect(first["type"], JSON.stringify(first)).toBe("hash_submit_ack");
+    // Nothing has gone wrong yet, so nobody has been warned about anything.
+    expect(await h.pushToB("session_witness_alert", 200), "no accusation before there is anything to accuse").toBeNull();
+    expect(h.sessionState()?.status, "and the session is ordinary").toBe("active");
+
+    const broken = await h.submit({
+      contentHash: contentHashOf("b"), lastSeenSeq: 0, timestamp: Date.now() + 1,
+      lastSeenHash: h.genesis,
+      prevOwnHash: new Uint8Array(randomBytes(32)),
+    });
+
+    // 1. REFUSED, by name, to the sender — on the response they are already waiting for.
+    expect(broken["type"]).toBe("hash_submit_error");
+    expect(broken["reason"]).toBe("self_chain_mismatch");
+    // 2. A NEXT STEP, and it is the out-of-band one. There is nothing to re-send here — which is
+    //    why the refusal must not read like a transient failure the client should retry through.
+    expect(String(broken["detail"]), "the refusal must say what to do about it").toMatch(/out of band/i);
+    expect(String(broken["detail"]), "and that this relay is done with the session").toMatch(/will not witness/i);
+
+    // 3. THE OTHER PARTY IS TOLD, by the WITNESS — an accusation routed through the accused is not
+    //    evidence, which is the argument the whole witness-alert mechanism rests on.
+    //
+    //    Read off B's live stream rather than the store: an alert to a CONNECTED participant is
+    //    pushed straight to them and never reaches the held queue, so a test that only checked the
+    //    store would pass with the alert deleted.
+    const alert = await h.pushToB("session_witness_alert");
+    expect(alert, "the counterparty would otherwise never know their record was being rewritten")
+      .not.toBeNull();
+    expect(alert!["type"]).toBe("session_witness_alert");
+    expect(alert!["reason"]).toBe("self_chain_broken");
+    // …and the SUBMITTER gets no alert about themselves: they are told through the refusal.
+    expect(h.alertsFor(h.pubA), "an alert to the party the observation is about is not evidence")
+      .toHaveLength(0);
+
+    // 4. AND THE RELAY STOPS WITNESSING. Same disposition as a replay divergence, for the same
+    //    reason: a seal built on a conversation whose order is in dispute is a receipt for an order
+    //    nobody agrees on.
+    const state = h.sessionState();
+    expect(state?.status, "a conversation whose order is in dispute must not keep being witnessed")
+      .toBe("diverged");
+    expect(state?.awaiting_replay).toBe(false);
+    expect(
+      String(state?.diverged_reason),
+      "the record must say what was OBSERVED — a client whose own chain went out of step after a restart produces this too",
+    ).toMatch(/does not match this relay's record/);
+  });
 });

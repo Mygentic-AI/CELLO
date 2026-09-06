@@ -134,7 +134,18 @@ export const DIRECTORY_COLLAPSED_CHAIN_REASONS: ReadonlySet<string> = new Set([
   SEAL_CHAIN_REASONS.STRUCTURE1_UNDECODABLE,
   SEAL_CHAIN_REASONS.PREV_ROOT_BREAK,
   SEAL_CHAIN_REASONS.CAUSAL_ORDER_VIOLATION,
-  SEAL_CHAIN_REASONS.SELF_CHAIN_BREAK,
+  /**
+   * ⚠️ `SELF_CHAIN_BREAK` IS DELIBERATELY NOT IN THIS SET — `DOD-M15-SELFCHAIN-1`.
+   *
+   * It was, briefly, because it inherited the slot of the timestamp check it replaced. Collapsing
+   * it answers "the root could not be verified", a name that points at arithmetic, for the one
+   * finding that means the ORDER of a conversation is in dispute. That is error substitution on the
+   * strongest evidence this protocol produces: an operator sent to check a computation when what
+   * they need to do is compare transcripts with their counterparty out of band.
+   *
+   * The four above stay collapsed, and that debt is unchanged and still recorded. This one is
+   * carried through by name because it is the one the operator can act on.
+   */
 ]);
 
 // ─── Structure 1 decoding ─────────────────────────────────────────────────────
@@ -209,45 +220,28 @@ export function decodeStructure1Fields(cbor: Uint8Array): Structure1Fields | nul
 }
 
 /**
- * The content hash the CLIENT SIGNED, decoded from `structure1_cbor`.
+ * The content hash and session id the CLIENT SIGNED, decoded from `structure1_cbor`.
  *
- * Structure 1 TBS:
- *   v1: `[1, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]`
- *   v2: `[2, …the same five…, last_seen_hash]`          ← 020-ACKHASH
+ * ⚠️ IT IS `decodeStructure1Fields` — there is no second decoder here any more.
  *
- * — the exact byte string the sender's Ed25519 signature covers. Decoded here rather than taken
- * from `s2` so this module's central claim is enforced by this module (review F1). The two fields
- * read below sit at indices 1 and 3 in both layouts; the field was appended at 6 so they did not
- * move.
+ * This was a hand-rolled reader with its own version fan-out, and it was the LAST place in the
+ * repo still accepting the deleted layouts: `v1` at six or seven fields and `v2` at seven. It is
+ * the only Structure 1 decode on the BILATERAL seal path, so the one directory path that does not
+ * run the chain verifier was also the one still admitting pre-v3 bytes.
  *
- * A (version, length) pair this build cannot name is refused, never coerced into the nearest known
- * layout — the version tag is what separates a v1 seven-array's submission id from a v2's ack hash,
- * and they are both just bytes at index 6.
+ * That is exactly the drift `031-RELAYREPLAY` extracted this module to stop, reappearing inside
+ * the module: `020-ACKHASH` already paid for a duplicated `encodeStructure1` whose copy had gone
+ * out of step with no type error and a green gate. Kept as a NAMED function rather than replaced
+ * at its call sites, because its narrow return type is what `verifyLeafProvenance` wants — it
+ * asks two questions of a leaf and must not be handed fields it has no business reading.
  *
  * Returns null rather than throwing: these bytes arrive off a wire, and a decode failure is a
  * refusal to report, never an exception escaping into a stream handler.
  */
 export function decodeStructure1Signed(cbor: Uint8Array): { content_hash: Uint8Array; session_id: Uint8Array } | null {
-  let arr: unknown;
-  try {
-    arr = cborDecode(cbor);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(arr)) return null;
-  const version = arr[0];
-  const isV1 = version === 1 && (arr.length === 6 || arr.length === 7);
-  const isV2 = version === 2 && arr.length === 7;
-  const isV3 = version === 3 && arr.length === 8;   // 035-SELFCHAIN
-  if (!isV1 && !isV2 && !isV3) return null;
-  const bytesAt = (i: number, len: number): Uint8Array | null => {
-    const v = arr[i];
-    const b = v instanceof Uint8Array ? v : Buffer.isBuffer(v) ? new Uint8Array(v as Buffer) : null;
-    return b !== null && b.length === len ? b : null;
-  };
-  const content_hash = bytesAt(1, 32);
-  const session_id = bytesAt(3, 16);
-  return content_hash !== null && session_id !== null ? { content_hash, session_id } : null;
+  const fields = decodeStructure1Fields(cbor);
+  if (!fields) return null;
+  return { content_hash: fields.content_hash, session_id: fields.session_id };
 }
 
 // ─── Refusal reasons ──────────────────────────────────────────────────────────

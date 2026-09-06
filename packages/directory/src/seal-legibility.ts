@@ -22,8 +22,8 @@
  * Crypto/encoding refs: CBOR canonical RFC 8949 §4.2.1; SHA-256 FIPS 180-4.
  */
 
-import { decode as cborDecode } from "cbor-x";
 import { createHash } from "node:crypto";
+import { decodeStructure1Fields } from "@cello-protocol/interfaces";
 import type {
   RelaySealLeaf,
   AttestationMode,
@@ -46,37 +46,25 @@ export const SEAL_RECEIPT_DISCLAIMER =
   "(its own signed reply). A sealed transcript is a receipt, never a record of agreement.";
 
 /**
- * Decode the signed last_seen_seq from a Structure 1 TBS CBOR.
+ * The signed `last_seen_seq`, or null for a leaf whose layout this build cannot name.
  *
- * Structure 1 TBS:
- *   v1: [1, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]
- *   v2: [2, …the same five…, last_seen_hash]           ← 020-ACKHASH
+ * The refusal matters as much as the read. This check was once `length < 5`, which admits an array
+ * of ANY length ≥ 5 and reads index 4 out of it — not tolerance but fail-open, since a shape this
+ * build cannot name would have had a number lifted out of it and published as a SIGNED frontier.
+ * An unrecognised layout yields null exactly as a malformed one does, so neither can inflate a
+ * frontier.
  *
- * `last_seen_seq` is index 4 in BOTH — the new field was appended at 6 precisely so this read did
- * not move. Only the length assumption changed.
+ * ⚠️ THIRD HAND-ROLLED STRUCTURE 1 READER, NOW GONE — `DOD-M15-SELFCHAIN-1`.
  *
- * The check was `length < 5`, which admits an array of ANY length ≥ 5 and reads index 4 out of it.
- * That is not tolerance, it is fail-open: a shape this build cannot name would have had a number
- * lifted out of it and used as a signed frontier. A leaf whose layout is unrecognised yields null,
- * exactly as a malformed one does — so it cannot inflate a frontier either way.
+ * It carried its own copy of the version fan-out, still accepting the layouts this unit deleted,
+ * and nothing would have told anyone: it reads one index, and index 4 is the same in every layout
+ * that ever existed. A reader that cannot go wrong today is a reader that goes wrong at the next
+ * layout change, silently, which is the whole argument for one definition.
  */
 function decodeSignedLastSeenSeq(cbor: Uint8Array): number | null {
-  let arr: unknown;
-  try {
-    arr = cborDecode(cbor);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(arr)) return null;
-  const version = arr[0];
-  const isV1 = version === 1 && (arr.length === 6 || arr.length === 7);
-  const isV2 = version === 2 && arr.length === 7;
-  const isV3 = version === 3 && arr.length === 8;   // 035-SELFCHAIN — appends prev_own_hash at 7
-  if (!isV1 && !isV2 && !isV3) return null;
-  const lss = arr[4];
-  if (typeof lss === "number") return lss;
-  if (typeof lss === "bigint") return Number(lss);
-  return null;
+  const fields = decodeStructure1Fields(cbor);
+  if (!fields) return null;
+  return typeof fields.last_seen_seq === "number" ? fields.last_seen_seq : null;
 }
 
 /**
