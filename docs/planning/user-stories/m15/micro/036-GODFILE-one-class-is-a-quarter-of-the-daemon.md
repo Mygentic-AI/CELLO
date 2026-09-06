@@ -45,8 +45,8 @@ description: >
 |---|---|---|---|
 | 0a | The comment sweep of this file | ✅ done | 20,389 |
 | 0b | The ratchet | ✅ done | 20,389 (grandfathered) |
-| 1 | Who sent this, and did they see what they claim | ⚙️ in progress | — |
-| 2 | Taking a message in | ⬜ not started | — |
+| 1 | Who sent this, and did they see what they claim | ✅ done | 19,021 |
+| 2 | Taking a message in | ⚙️ in progress | — |
 | 3 | Holding what was refused | ⬜ not started | — |
 | 4 | Where a message sits in the order | ⬜ not started | — |
 | 5 | The conversation record | ⬜ not started | — |
