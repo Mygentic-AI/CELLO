@@ -78,6 +78,18 @@ For each item:
 **Do not "tidy" the codebase's comment style while you are in here.** The density is intentional.
 The job is four categories of sentence, nothing else.
 
+> ### ⏭️ OWED, and recorded here so it is not lost: the modules `036-GODFILE` extracts
+>
+> `036-GODFILE`'s Part 0a swept `session-node-manager.ts` **under the OLD rule 3**, which said to keep
+> the record of what a comment used to say — so it may have ADDED history lines. The rest of that order
+> is pure movement and carries every comment verbatim into new sibling modules, which is correct for a
+> refactor (a part that also edited comments would stop being reviewable as a move) and means **those
+> new files come out of the campaign never having been read under the revised rule.**
+>
+> **Cosmetic bloat, not a disclosure risk** — the stale and untracked items in that file were already
+> handled. A pass over the extracted modules is owed **after 036 closes**, and is worth doing only if
+> someone is in those files anyway. Do not open it as its own unit.
+
 ## What was searched
 
 `core/**/*.ts` in `cello-client`, excluding `__tests__`, `*.test.ts` and `dist/`, for: `TODO`,
