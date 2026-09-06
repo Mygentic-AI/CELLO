@@ -432,24 +432,44 @@ verifies against the tarball.
 
 _(Anything found while working that is not this mission. Record and keep going.)_
 
-> **SPAWN TRIP-WIRE COUNT (M15-PROCEDURE §0z.2): 2 of 3, as classified below — written down so the
+> **SPAWN TRIP-WIRE COUNT (M15-PROCEDURE §0z.2): 3 — TRIPPED, and reported rather than blocked on, as classified below — written down so the
 > next reader can disagree with the classification instead of re-deriving it.** Items 1 and 3 are
 > findings that need their own unit and they COUNT. Item 2 does not: it needs no unit, because it is
 > discharged inside this order — Part 2 moves `ingestReceivedContent` and Rule C already requires
 > carrying its documentation along. **If a third countable item appears, this order STOPS and
 > reports before starting any of them.**
 >
-> **Is the vein still producing production defects, or has it turned into hygiene?** Mixed, and
-> trending toward hygiene. Item 1 is a genuine production-facing disclosure defect — the same class
-> as the sweep's highest-priority item, readable in a public repo. Item 3 is test infrastructure.
-> Nothing so far is a defect in what the daemon *does*, which is the expected shape for a pure-movement
-> order and is the reason it has not tripped.
+> **Is the vein still producing production defects, or has it turned into hygiene?** It just went
+> back the other way, which is the honest answer. Item 1 is a public-repo disclosure defect and
+> item 3 is test infrastructure — both hygiene-ish. **Item 4 is a production defect**: a fix for an
+> observed duplicate-message incident that has never executed. A refactor that reads every line of a
+> 20,000-line class is exactly the activity that surfaces this kind of thing, so the vein is worth
+> keeping open rather than closing.
 
 **Measurement correction, not a finding.** The file was **20,368** lines at the branch point
 (`e9f7f8c`), not the 19,878 in this order's frontmatter — it grew ~490 lines in the days between the
 order being written and being picked up. It does not change the target (under 4,000) or the shape of
 the work; it is recorded so the ratchet's grandfathered number is set from a measurement rather than
 from this file. Part 0a's rewrite added 21 more, so the ratchet starts at 20,389.
+
+**4 · A fix for a real duplicate-message bug was never wired up, so it has never run.**
+`setRetryDrainHook` has no caller anywhere — not in `core/`, not in the tests, not in the file.
+So `#retryDrainHook` is `null` for the life of the process and the block that fires it on session
+revival is unreachable. Its own comment says what it was for: *"live 2026-08-18: two of the
+operator's messages went in, and the response told them both were lost and to send again, which is
+how a transcript gets duplicates. A revival IS the reconnect that sentence promised. This is the
+hook that makes it true."*
+
+**From the operator's chair:** a session drops, it revives, and the messages that were queued behind
+the drop are not drained — so they are reported lost, the operator sends them again, and the
+transcript ends up with duplicates. That is the exact incident the hook was written for, and the
+hook does nothing.
+
+**Deliberately NOT deleted, though it qualifies as dead code under Rule F.** Deleting it would make
+the file smaller and quietly remove the evidence that the drain was meant to happen; wiring it is a
+behaviour change and belongs to its own unit. Wiring is the likely fix — find the composition root
+that builds the manager and give it the drain callback — but that is a decision about behaviour, not
+a refactor.
 
 **1 · `sendContent`'s doc block carries the SAME stale claim B1 was raised for.** Found while
 verifying B1; it is not on [[M15-PUBLIC-COMMENT-SWEEP]], so under Rule 3 it is recorded and left
