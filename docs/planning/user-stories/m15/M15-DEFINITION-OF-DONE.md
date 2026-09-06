@@ -1430,10 +1430,34 @@ directory returns, and freezes the session. That is the session-open MITM detect
 and the counterparty's first word, this agent has dialled a stranger, handed over its session node
 and confirmed it is online. **A peer that never speaks is never detected at all.**
 
+**⚠️ "It is caught at their first message" IS NOT THE MITIGATION IT SOUNDS LIKE — Andre, 2026-09-06.**
+The dialer speaks first. Nothing in the send path gates a send on having verified an inbound message
+(`session-content-handlers.ts` ~310-360: params, ownership, revive, cursor, size, screener — no
+counterparty precondition). So the real order is: assignment names an impostor → we dial → **we send
+our opening message** → they reply → *then* it freezes. The freeze protects us from being deceived by
+their answer; it does nothing about what we already disclosed. The exposure is exactly one message,
+and one message is usually the reason the call was made.
+
+**And BROADCAST removes even that bound.** The detection fires on *their reply*. A broadcast is
+send-first by design and expects no reply per recipient, so a substituted recipient who stays quiet
+is never detected at all and keeps receiving everything. Today: one message, then a freeze. Under
+broadcast: an open subscription. **This must land before broadcast is built, and it is the same
+one-line fix either way.**
+
 **Done when:** after `verifyAssignmentSignature` returns ok and before anything dials,
 `assignment.participant_b.pubkey` is compared to the target the operator requested, and a mismatch
 REFUSES with its own named reason and guidance. Both sides of that comparison are local values;
 neither is influenced by the directory.
+
+**Measured at the site, 2026-09-06 — it is four lines.** The verification at
+`outbound-sessions.ts:487` sits inside `runSessionRequestOverSignaling`, which already takes
+`targetHex` as a parameter. The directory sets `participant_a` = initiator and `participant_b` =
+target (`directory-node.ts:4415-4416`), so the mapping is unambiguous. Nothing new is fetched, and
+there is no wire change. **Add the companion check in the same place:** `participant_a.pubkey` must
+be this agent's own — same cost, and it closes the mirror case where the assignment puts someone else
+in our seat.
+
+Work order: [[039-ASSIGNTARGET-the-slip-must-name-who-you-asked-for]].
 
 ### `DOD-M15-CEREMONY-BLIND-1` — 🟡 PRE-LAUNCH (lower value than it first appears) · The client contributes its FROST share to bytes it never inspects
 **Filed 2026-09-06. Filed WITH the measurement that shrinks it, so nobody re-derives the wrong size.**
