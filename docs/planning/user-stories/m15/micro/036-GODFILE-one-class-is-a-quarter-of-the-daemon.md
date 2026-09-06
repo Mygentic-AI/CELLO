@@ -44,8 +44,8 @@ description: >
 | Part | What | Status | Lines after |
 |---|---|---|---|
 | 0a | The comment sweep of this file | ✅ done | 20,389 |
-| 0b | The ratchet | ⚙️ in progress | — |
-| 1 | Who sent this, and did they see what they claim | ⬜ not started | — |
+| 0b | The ratchet | ✅ done | 20,389 (grandfathered) |
+| 1 | Who sent this, and did they see what they claim | ⚙️ in progress | — |
 | 2 | Taking a message in | ⬜ not started | — |
 | 3 | Holding what was refused | ⬜ not started | — |
 | 4 | Where a message sits in the order | ⬜ not started | — |
@@ -356,6 +356,19 @@ verifies against the tarball.
 
 _(Anything found while working that is not this mission. Record and keep going.)_
 
+> **SPAWN TRIP-WIRE COUNT (M15-PROCEDURE §0z.2): 2 of 3, as classified below — written down so the
+> next reader can disagree with the classification instead of re-deriving it.** Items 1 and 3 are
+> findings that need their own unit and they COUNT. Item 2 does not: it needs no unit, because it is
+> discharged inside this order — Part 2 moves `ingestReceivedContent` and Rule C already requires
+> carrying its documentation along. **If a third countable item appears, this order STOPS and
+> reports before starting any of them.**
+>
+> **Is the vein still producing production defects, or has it turned into hygiene?** Mixed, and
+> trending toward hygiene. Item 1 is a genuine production-facing disclosure defect — the same class
+> as the sweep's highest-priority item, readable in a public repo. Item 3 is test infrastructure.
+> Nothing so far is a defect in what the daemon *does*, which is the expected shape for a pure-movement
+> order and is the reason it has not tripped.
+
 **Measurement correction, not a finding.** The file was **20,368** lines at the branch point
 (`e9f7f8c`), not the 19,878 in this order's frontmatter — it grew ~490 lines in the days between the
 order being written and being picked up. It does not change the target (under 4,000) or the shape of
@@ -374,6 +387,23 @@ by the same argument it is worth more than tidiness: it is the sentence an evalu
 collects.** Needs the same verify-then-rewrite treatment, including checking whether the ordering
 half is genuinely still open before rewriting it — B1's lesson is that the two halves of one stale
 paragraph went stale at different times.
+
+**3 · The full suite is NOT deterministic, and Rule B has to know it.** `commands.test.ts` AC2
+(*"logout;login against a REAL spawned daemon yields 'Daemon started.'"*) failed once and passed
+twice across three full-suite runs on this branch, with nothing between the runs but an ESLint config
+change vitest never reads. **The condition, not a guess:** `connect-or-start.ts` `spawnDaemon` gives
+a real spawned daemon **10 seconds** to become connectable (`Date.now() + 10_000`), and the failing
+run took 10,662 ms. Under a loaded machine — 434 test files, a real Node process booting SQLCipher
+and libp2p — 10 s is not always enough, so `login` returns exit 1 and the assertion on
+`first.exitCode` fires. In isolation the file passes 28/28.
+
+**Why this is recorded here rather than fixed:** raising a production timeout is a behaviour change,
+which Rule A forbids in this order. **But it changes how Rule B must be read for the rest of the
+campaign:** Rule B says a test that has to change is proof behaviour moved, and it is right — but a
+test that *fails without being changed* is not automatically that proof. **If THIS test fails,
+re-run it alone before concluding a part moved behaviour.** Any other test failing is still a stop
+condition. Worth fixing properly on its own unit: the deadline should scale, or the test should own
+its own bound.
 
 **2 · Two doc blocks are orphaned from the functions they describe.** `ingestReceivedContent` (the
 DAEMON-004 cross-check) and `#markContentUnverifiable` each have **no leading doc comment**; their
