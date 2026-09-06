@@ -6,14 +6,15 @@ status: open
 dod_line: DOD-M15-GODFILE-1
 dod_effect: unit-of
 description: >
-  036 took session-node-manager.ts from 20,368 to 16,935 by moving every seam with a short
-  dependency list. What is left — standing receiver, salt, seal, relay — is one connected component
-  that pure movement cannot reach: contexts of 23, 35, 36 and 35. This order does the REDESIGN that
-  036 deliberately refused to disguise as a refactor: give the session registry an owner, then let
-  the four domains become collaborators of it.
+  THE FOLLOW-ON TO 036, not to any later order. 036 took session-node-manager.ts from 20,368 to
+  16,934 by moving every seam with a short dependency list; this order does the redesign 036 refused
+  to disguise as a refactor. DELIVERED 16,934 → 10,945 across eleven collaborators, each reviewed.
+  ⚠️ Unit 1 as written (a SessionRegistry owning session state) was NEVER BUILT — eleven extractions
+  landed without it and it was not the blocker. The blocker is one method: ingestReceivedContent,
+  998 lines and 38 guards, which orders 040-044 take apart.
 ---
 
-# **<ins>MICRO</ins>** WORK ORDER 037-SESSIONCORE — Give the session registry an owner
+# **<ins>MICRO</ins>** WORK ORDER 037-SESSIONCORE — The part of the god file that cannot be moved
 
 > ## THE RULES OF THIS WORK ORDER
 >
