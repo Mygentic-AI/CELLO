@@ -112,10 +112,18 @@ message, and it is identity-class rather than sequence-class.
 ## Decided — do not redesign
 
 1. **APPEND at index 7, never insert.** Indices 1–6 do not move, so every existing reader keeps
-   working and the v1/v2 canonical vectors stay byte-identical.
-2. **The VERSION decides the layout, never the length.** Index 6 already has two meanings
-   (`DOD-M15-SUBMIT-ID-1`'s submission id on a v1 seven-array, `last_seen_hash` on a v2). Add the
-   third: `length 8 && version 3`. Anything else is refused BY NAME, never coerced.
+   working without its reads being rewritten.
+
+   ⚠️ **SUPERSEDED IN PART, 2026-09-06.** This clause also said the v1/v2 canonical vectors stay
+   byte-identical. They do not exist any more. Andre ruled on 2026-09-05 that backward
+   compatibility is an ANTI-requirement — alpha, zero users — so every older layout is DELETED on
+   both sides at once: `structure1-v2-canonical.json` is gone and `structure1-canonical.json` was
+   rewritten to v3. The append-not-insert rule stands on its own merits and is unaffected.
+2. **The VERSION decides the layout, never the length** — and after the deletion above there is
+   exactly ONE layout, `length 8 && version 3`. Anything else is refused BY NAME, never coerced.
+   The version tag stays because it is DOMAIN SEPARATION, not compatibility: every to-be-signed
+   structure in this protocol carries one, and dropping it would let these bytes be confused with
+   another structure of the same shape.
 3. **`prev_own_hash` IS A VALUE, NEVER AN ABSENCE.** A sender's first message in a session has no
    predecessor, and that case is a defined 32 bytes — `computeGenesisPrevRoot` for the session, the
    same constant `last_seen_hash` already uses for the same reason. Not a missing field, not a
@@ -174,7 +182,8 @@ Steps 2 and 4 need Andre only for the `latest` promotion. Everything else runs w
 
 ## Definition of Done
 
-1. `structure1.ts` encodes and decodes v3, and the v1/v2 canonical vectors are unchanged.
+1. `structure1.ts` encodes and decodes v3, and it is the ONLY layout — the v1 and v2 vectors are
+   deleted rather than kept (see Decided §1, superseded 2026-09-06).
 2. A v3 canonical vector is added and pinned.
 3. A v3 claim missing `prev_own_hash`, or carrying a non-32-byte one, is refused by name.
 4. Production emits v3 on every claim, with the session genesis on a sender's first message.

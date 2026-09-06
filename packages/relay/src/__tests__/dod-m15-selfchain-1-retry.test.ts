@@ -254,4 +254,71 @@ describe("035-SELFCHAIN: a retransmission is answered from the record, and a rep
       "the record must say what was OBSERVED — a client whose own chain went out of step after a restart produces this too",
     ).toMatch(/does not match this relay's record/);
   });
+
+  it("★★★ NEITHER PARTY can reorder the other's run — the clause, from both sides", async () => {
+    /**
+     * ─── THE HEADLINE PROPERTY, ASSERTED IN BOTH DIRECTIONS ────────────────────────────────────
+     *
+     * The order says the sequence of a conversation must never be in dispute. Every other test here
+     * drives ONE sender, and a guard keyed on the wrong party — or on "the submitter" rather than
+     * "each author" — would pass all of them. This drives both.
+     *
+     * The shape is a real run: A speaks, then B speaks TWICE. B's two messages acknowledge the same
+     * message from A, because nothing arrived in between, so nothing but the self link tells them
+     * apart. Presenting B's second message as though it were B's first is exactly the swap the
+     * carrying party could perform, and it is refused whichever party attempts it.
+     */
+    const h: SubmitHarness = await submitHarness(scope);
+    const now = Date.now();
+
+    // A speaks. Their first message links to the session's starting point on both fields.
+    const a1 = await h.submit({
+      contentHash: contentHashOf("a1"), lastSeenSeq: 0, timestamp: now,
+      lastSeenHash: h.genesis, prevOwnHash: h.genesis,
+    });
+    expect(a1["type"], JSON.stringify(a1)).toBe("hash_submit_ack");
+
+    // B replies. B has not spoken, so B's self link is the starting point too — NOT A's message.
+    const b1 = await h.submitAsB({
+      contentHash: contentHashOf("b1"), lastSeenSeq: 1, timestamp: now + 1,
+      lastSeenHash: contentHashOf("a1"), prevOwnHash: h.genesis,
+    });
+    expect(b1["type"], JSON.stringify(b1)).toBe("hash_submit_ack");
+
+    /**
+     * B'S SECOND MESSAGE, PRESENTED AS THOUGH IT WERE B'S FIRST — the swap, from B's side.
+     *
+     * Its acknowledgement is identical to B's real first message (nothing arrived in between), so
+     * every positional and causal check is satisfied. Only the self link is wrong.
+     */
+    const swapped = await h.submitAsB({
+      contentHash: contentHashOf("b2"), lastSeenSeq: 1, timestamp: now + 2,
+      lastSeenHash: contentHashOf("a1"), prevOwnHash: h.genesis,
+    });
+    expect(swapped["type"], "B cannot present a later message as an earlier one").toBe("hash_submit_error");
+    expect(swapped["reason"]).toBe("self_chain_mismatch");
+  });
+
+  it("★★★ …and A cannot either — the same swap from the OTHER side", async () => {
+    /**
+     * The mirror. A guard that read the chain of whichever party happens to be the submitter, or
+     * that only ever tracked one key, would pass the test above and fail here.
+     */
+    const h: SubmitHarness = await submitHarness(scope);
+    const now = Date.now();
+
+    const a1 = await h.submit({
+      contentHash: contentHashOf("a1"), lastSeenSeq: 0, timestamp: now,
+      lastSeenHash: h.genesis, prevOwnHash: h.genesis,
+    });
+    expect(a1["type"], JSON.stringify(a1)).toBe("hash_submit_ack");
+
+    // A speaks AGAIN, honestly: linking to A's own first message. This must be accepted — the run
+    // itself is legitimate, and a guard that refused it would be a wall.
+    const a2 = await h.submit({
+      contentHash: contentHashOf("a2"), lastSeenSeq: 0, timestamp: now + 1,
+      lastSeenHash: h.genesis, prevOwnHash: contentHashOf("a1"),
+    });
+    expect(a2["type"], "one party speaking twice in a row is ordinary").toBe("hash_submit_ack");
+  });
 });

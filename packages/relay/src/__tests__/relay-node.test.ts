@@ -48,6 +48,7 @@ import { createRelayNode, RELAY_PROTOCOL_ID, CelloRelayNode } from "../relay-nod
 import { RELAY_LEAF_KINDS, RELAY_LEAF_HASHERS } from "../relay-types.js";
 import type { SessionAssignment } from "../relay-types.js";
 import { testOnlineToken } from "./helpers/online-token.js";
+import { seedChain, chainLinks, chainAdvance } from "./helpers/relay-submit-harness.js";
 
 setupV3Tests();
 
@@ -153,67 +154,16 @@ async function performAuth(
 /**
  * ─── THE TEST-SIDE CHAIN — `DOD-M15-SELFCHAIN-1` ───────────────────────────────────────────────
  *
- * Every message carries two links and the relay checks both, so a rig that hands a fixed value to
- * either one can build first messages and nothing else. This keeps what a real client keeps, per
- * session and per sender:
+ * `seedChain` / `chainLinks` / `chainAdvance` are IMPORTED from `helpers/relay-submit-harness.ts`,
+ * not redeclared here. They were, byte-for-byte, alongside the exported originals — two copies of a
+ * rig that models protocol state, which is the same drift argument this diff makes for having one
+ * encoder. The copy that goes stale is the one nobody re-reads.
  *
- *   - the sender's OWN previous message, and
- *   - the last message that sender RECEIVED (in a two-party session, the other one's last send).
- *
- * Both are seeded to the session GENESIS, which is what a first message legitimately carries.
- * `makeAssignment` seeds it, because that is the one place every test in this file goes through.
- *
- * ⚠️ ADVANCED ONLY BY `makeStructure1`, i.e. only for messages a test actually builds. A rig that
- * advanced on its own would build a chain the relay never saw, and every later assertion in that
- * test would be about a conversation that does not exist.
+ * What they keep, per session and per sender: this sender's OWN previous message, and the content
+ * at the position they claim to have seen. The two links are read DIFFERENTLY and the helper's own
+ * comment says why — `last_seen_hash` is positional, `prev_own_hash` is per sender, and they are
+ * the same value only while the parties strictly alternate.
  */
-const CHAIN_GENESIS = new Map<string, Uint8Array>();
-/** Per session, the messages this rig has built, in order: who sent it and what it was. */
-const CHAIN_LOG = new Map<string, Array<{ sender: string; hash: Uint8Array }>>();
-
-function seedChain(sessionId: Uint8Array, pubA: Uint8Array, pubB: Uint8Array, ts: number): void {
-  const sidHex = Buffer.from(sessionId).toString("hex");
-  CHAIN_GENESIS.set(sidHex, computeGenesisPrevRoot(pubA, pubB, sessionId, ts));
-  CHAIN_LOG.set(sidHex, []);
-}
-
-/**
- * The two links a message from this sender should carry right now, read off the log the way a real
- * client reads its own state: my previous message, and the last one I received.
- */
-function chainLinks(
-  sessionId: Uint8Array,
-  pubkey: Uint8Array,
-  lastSeenSeq: number,
-): { lastSeenHash: Uint8Array; prevOwnHash: Uint8Array } {
-  const sidHex = Buffer.from(sessionId).toString("hex");
-  const me = Buffer.from(pubkey).toString("hex");
-  const genesis = CHAIN_GENESIS.get(sidHex) ?? new Uint8Array(32);
-  const log = CHAIN_LOG.get(sidHex) ?? [];
-  /**
-   * ⚠️ THE TWO LINKS ARE READ DIFFERENTLY, and getting that wrong is what a first pass here did.
-   *
-   * `last_seen_hash` is POSITIONAL: the relay checks it against the leaf at `last_seen_seq`, so the
-   * rig must name the content at THAT position — not "the last thing the other party sent", which
-   * is only the same value when the parties strictly alternate.
-   *
-   * `prev_own_hash` is per SENDER: the last message this sender wrote, wherever it landed.
-   *
-   * Both fall back to the session genesis, which is what a first message legitimately carries.
-   * `log` is in append order, and the relay numbers from 1, so position N is `log[N - 1]`.
-   */
-  const seen = lastSeenSeq >= 1 ? (log[lastSeenSeq - 1]?.hash ?? genesis) : genesis;
-  let own = genesis;
-  for (const e of log) if (e.sender === me) own = e.hash;
-  return { lastSeenHash: seen, prevOwnHash: own };
-}
-
-/** Record a message this rig built. Only built messages, so the rig's chain matches the relay's. */
-function chainAdvance(sessionId: Uint8Array, pubkey: Uint8Array, contentHash: Uint8Array): void {
-  const sidHex = Buffer.from(sessionId).toString("hex");
-  const log = CHAIN_LOG.get(sidHex);
-  if (log) log.push({ sender: Buffer.from(pubkey).toString("hex"), hash: contentHash });
-}
 
 async function makeStructure1(
   sessionId: Uint8Array,
