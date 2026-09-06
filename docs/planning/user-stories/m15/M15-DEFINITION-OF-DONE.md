@@ -1463,6 +1463,54 @@ unrecognised one by name; and, for a session-establishment TBS, refuses to contr
 does not describe a session this daemon initiated. **Value is defence-in-depth**, not the headline —
 it removes "the client helps sign whatever it is handed" as a step an attacker gets for free.
 
+### `DOD-M15-KEYBIND-1` — ❌ PRE-LAUNCH · An agent's group key must be provably its own
+**Filed 2026-09-06. The only open line in this milestone that gets more expensive after launch.**
+
+An agent holds **two** keypairs, and only one of them is published. `K_local` is an ordinary Ed25519
+pair minted before registration — its public half is the 64-hex identity operators paste around. The
+DKG then produces a **second** keypair: public half whole and identical for everyone, private half
+that never exists anywhere and lives only as shares (`frost_signing_share`), stored as
+`frost_primary_pubkey`. A session assignment is signed by the **caller's** group key and carries it
+in `signer_pubkey`. **Nothing published binds a K_local to a group key.**
+
+**What that costs.** On first contact `verifyInboundAssignment` is passed `expectedSignerHex = null`,
+so `verifyAgainst = signer` — the signature is verified under the key the same document supplied. It
+is circular by construction: it catches a tampered frame and establishes nothing about who signed.
+That signer is then written to `sessions.counterparty_primary_pubkey` and becomes the permanent pin.
+A wrong first contact is a wrong pin, and **every session after it verifies beautifully**. A bad pin
+never surfaces again.
+
+**The initiator is not exposed** — it verifies against its own group key, held locally
+(`assignment_signer_not_this_agent`). The gap is one-directional: whoever receives a cold call.
+
+**Same missing binding, opposite direction.** An initiator never learns the responder's group key, so
+a responder-first seal is accepted `verified:false` / `signer_key_not_held`
+(`session-ceremony.ts:851`, filed there as F2-b). One binding closes both — and doing them separately
+is two wire changes instead of one.
+
+**Done when:** at the tail of registration, once both keys exist on the machine at the same time,
+`K_local` signs a binding over the group key; the binding is stored in the directory profile and
+carried on the assignment; the responder verifies it against `participant_a.pubkey` **before**
+verifying the assignment signature, and REFUSES by name when it is absent or does not verify. The
+chain then terminates at the 64-hex the operator was given out of band, and the pin stops being
+trust-on-first-use.
+
+**Why pre-launch — on cost, not only severity.** This is a wire field plus a directory column. The
+other two open findings from the same audit are client-side only (a local comparison; a set
+membership) and cost the same to fix at any time. A mandatory assignment field added after agents
+exist means a compatibility branch or a forced re-registration. The directories are being wiped
+before launch and there are no users, so today it is free.
+> *"Part of my intent of auditing everything was to try and find things that would cause lots of
+> friction downstream if we had to change them after we have users. This is precisely an example of
+> that."* — Andre, 2026-09-06
+
+**No re-DKG is needed**, then or later: an agent already holds `K_local` and its own group key, so it
+can produce the binding on demand. Key refresh deliberately preserves the group key
+(`session-ceremony.ts:452` aborts if the primary changes), so the binding is signed once for the life
+of the agent.
+
+Work order: [[038-KEYBIND-a-group-key-nobody-can-place]].
+
 ### `DOD-M15-NOTIFY-AUDIT-1` — ❌ PRE-LAUNCH · Every check a USER can experience reaches them, and tells them what to do
 **Filed 2026-09-06. Input is [[session-correctness-checks]], which has no consumer until this line exists.**
 
