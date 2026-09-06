@@ -646,8 +646,8 @@ const REPLAY_GUIDANCE: Record<string, string> = {
     "the prev_root chain breaks, so the leaves are not in the order they were witnessed in. Send them in the order the previous relay assigned.",
   [SEAL_CHAIN_REASONS.CAUSAL_ORDER_VIOLATION]:
     "a leaf claims to have seen a message that does not exist yet in this chain. Send the whole conversation, in order.",
-  [SEAL_CHAIN_REASONS.SENDER_CLOCK_REVERSED]:
-    "one party's own signed timestamps run backwards, so their messages are out of order in this batch. Send each party's leaves in the order they sent them.",
+  [SEAL_CHAIN_REASONS.SELF_CHAIN_BREAK]:
+    "one party's messages do not link to each other in the order you sent them. Each message names the one that party sent before it, inside the bytes they signed, and here that link points somewhere else. Send each party's leaves in the order they sent them — and if you already did, the batch was altered on the way here.",
 
   // ─── provenance ───
   seal_sender_not_participant:

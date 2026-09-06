@@ -59,7 +59,6 @@
 
 import { describe, it, expect } from "vitest";
 import { randomBytes, createHash } from "node:crypto";
-import { Encoder } from "cbor-x";
 import { generateKeypair, buildMerkleTree, merkleRoot } from "@cello-protocol/crypto";
 import { encodeSealPayload, encodeStructure2, buildStructure2 } from "@cello-protocol/protocol-types";
 import type { Structure2 } from "@cello-protocol/protocol-types";
@@ -67,8 +66,8 @@ import { createDirectoryNode, type RelayAdapter } from "../directory-node.js";
 import type { RelaySealData, RelaySealLeaf } from "../directory-types.js";
 import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
 import type { Logger } from "@cello-protocol/interfaces";
+import { s1v3 } from "./helpers/seal-fixture.js";
 
-const ENC = new Encoder({ tagUint8Array: false });
 type Kp = ReturnType<typeof generateKeypair>;
 
 interface LogEntry { level: string; event: string; ctx: Record<string, unknown> }
@@ -165,11 +164,20 @@ async function present(
 
   const leaves: RelaySealLeaf[] = [];
   let runningRoot: Uint8Array = new Uint8Array(32);  // the first leaf's prev_root is the anchor, unchecked
+  /** Each author's own last content hash — what their NEXT leaf's self link must name. */
+  const lastOwn = new Map<string, Uint8Array>();
 
   for (const a of authored) {
     const pub = a.by === "A" ? pubA : pubB;
     const key = a.by === "A" ? keyA : keyB;
-    const s1 = ENC.encode([1, a.content_hash, pub, sessionId, a.last_seen_seq, ts + a.seq]) as Uint8Array;
+    // The honest self link: this author's own previous content hash in this batch, and the session
+    // genesis for their first leaf. See `s1v3`.
+    const s1 = s1v3({
+      contentHash: a.content_hash, senderPubkey: pub, sessionId,
+      lastSeenSeq: a.last_seen_seq, timestamp: ts + a.seq,
+      ...(lastOwn.get(a.by) ? { prevOwnHash: lastOwn.get(a.by)! } : {}),
+    });
+    lastOwn.set(a.by, a.content_hash);
     const sig = new Uint8Array(await key.sign(s1));
     const built = buildStructure2(a.seq, pub, a.content_hash, sig, runningRoot);
     if (!built.ok) throw new Error(`buildStructure2 failed at seq ${a.seq}`);

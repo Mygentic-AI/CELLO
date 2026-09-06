@@ -52,9 +52,9 @@
  */
 
 import { createHash } from "node:crypto";
-import { decode as cborDecode } from "cbor-x";
 import { verify, buildMerkleTree, merkleRoot } from "@cello-protocol/crypto";
 import { buildSealTbs, decodeSealPayload } from "@cello-protocol/protocol-types";
+import { decodeStructure1Fields } from "@cello-protocol/interfaces";
 
 /** The FROST domain-separation context a conversation seal is signed under. */
 export const SEAL_FROST_CONTEXT = "cello-frost-seal-v1";
@@ -178,19 +178,23 @@ export function parseCosignLeaves(raw: unknown): CosignLeaf[] | null {
  * timestamp]`. Read from the SIGNED bytes rather than from any envelope field, so this module's
  * central claim is enforced by this module.
  */
+/**
+ * ⚠️ THIS WAS A FOURTH HAND-ROLLED STRUCTURE 1 DECODER, AND IT WAS ALREADY WRONG.
+ *
+ * It read `arr.length !== 6` — the six-field layout — and stayed that way through two layout
+ * changes, because nothing here type-checks against the canonical definition. `035-SELFCHAIN`
+ * turned that latent drift into a visible one: every honest leaf became "not a readable
+ * Structure 1", which this function reports as MALFORMED EVIDENCE. A co-signer that answers
+ * "your evidence is malformed" to a perfectly good seal refuses every seal in the system.
+ *
+ * M15 has now paid three times for a structure maintained in more than one place. This call goes
+ * to the single definition in `@cello-protocol/interfaces`, so the next layout change reaches it
+ * as a type error rather than as a refusal in production.
+ */
 function decodeSigned(cbor: Uint8Array): { contentHash: Uint8Array; sessionId: Uint8Array } | null {
-  let arr: unknown;
-  try {
-    arr = cborDecode(cbor);
-  } catch {
-    return null;
-  }
-  if (!Array.isArray(arr) || arr.length !== 6) return null;
-  const contentHash = toBytes(arr[1]);
-  const sessionId = toBytes(arr[3]);
-  if (!contentHash || contentHash.length !== 32) return null;
-  if (!sessionId || sessionId.length !== 16) return null;
-  return { contentHash, sessionId };
+  const fields = decodeStructure1Fields(cbor);
+  if (!fields) return null;
+  return { contentHash: fields.content_hash, sessionId: fields.session_id };
 }
 
 function bufEqual(a: Uint8Array, b: Uint8Array): boolean {

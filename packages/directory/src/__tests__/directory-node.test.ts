@@ -48,7 +48,7 @@ import type {
   RelaySessionAssignment,
   TimeSource,
 } from "../directory-types.js";
-import { rootOverContentHashes, sealApproval } from "./helpers/seal-fixture.js";
+import { rootOverContentHashes, sealApproval, s1v3 } from "./helpers/seal-fixture.js";
 import {
   decodeOutboundSignalingFrame,
 } from "../directory-frames.js";
@@ -1334,7 +1334,9 @@ describe("CELLO-NODE-001: CelloDirectoryNode", () => {
     const leaves: RelaySealData["leaves"] = [];
     let runningRoot: Uint8Array = new Uint8Array(32);
     for (const s of spec) {
-      const s1 = CBOR_ENC.encode([1, s.ch, s.pub, sessionId, s.ls, 1_600_000 + s.seq]) as Uint8Array;
+      // The self link is the genesis default here: this spec gives each signer exactly one leaf, so
+      // no sender has a previous one to name. See `s1v3`.
+      const s1 = s1v3({ contentHash: s.ch, senderPubkey: s.pub, sessionId, lastSeenSeq: s.ls, timestamp: 1_600_000 + s.seq });
       const sig = new Uint8Array(await s.key.sign(s1));
       const built = buildStructure2(s.seq, s.pub, s.ch, sig, runningRoot);
       if (!built.ok) throw new Error(`buildStructure2 failed at seq ${s.seq}`);
@@ -2044,11 +2046,11 @@ async function buildValidSealData(
   const approvalA = sealApproval(sessionId, approvalRoot, tsMs + 2);
 
   // Build Structure 1 CBOR for a message leaf from A
-  const s1Tbs = CBOR_ENC.encode([1, contentHash, pubkeyA, sessionId, 0, timestamp]);
+  const s1Tbs = s1v3({ contentHash, senderPubkey: pubkeyA, sessionId, lastSeenSeq: 0, timestamp });
   const s1Sig = new Uint8Array(await keyA.sign(s1Tbs));
 
   // Build a second Structure 1 from B (ctrl leaf — SEAL)
-  const s1TbsB = CBOR_ENC.encode([1, approvalB.contentHash, pubkeyB, sessionId, 1, timestamp1]);
+  const s1TbsB = s1v3({ contentHash: approvalB.contentHash, senderPubkey: pubkeyB, sessionId, lastSeenSeq: 1, timestamp: timestamp1, lastSeenHash: contentHash });
   const s1SigB = new Uint8Array(await keyB.sign(s1TbsB));
 
   // Genesis prev_root (for simplicity, use all-zeros — the relay would compute it per SESSION-002)
@@ -2069,7 +2071,8 @@ async function buildValidSealData(
 
   // We need a second ctrl leaf from A for the "two SEAL leaves" requirement
   // Build Structure 1 for A's SEAL ctrl leaf
-  const s1TbsA2 = CBOR_ENC.encode([1, approvalA.contentHash, pubkeyA, sessionId, 2, timestamp2]);
+  // A's SECOND leaf — the self link names A's own first content hash.
+  const s1TbsA2 = s1v3({ contentHash: approvalA.contentHash, senderPubkey: pubkeyA, sessionId, lastSeenSeq: 2, timestamp: timestamp2, lastSeenHash: approvalB.contentHash, prevOwnHash: contentHash });
   const s1SigA2 = new Uint8Array(await keyA.sign(s1TbsA2));
   const prevRoot3 = merkleRoot(buildMerkleTree([
     { kind: "msg", data: s2CborA },
@@ -2102,7 +2105,8 @@ async function buildValidSealData(
   //    first SEAL is the commonest form of this, since the session is still "active". ──
   const betweenKind: "doc" | "msg" = opts.msgLeafBetweenCtrls ? "msg" : "doc";
   const timestamp3 = (tsMs + 3) > 0xffffffff ? BigInt(tsMs + 3) : tsMs + 3;
-  const s1TbsDoc = CBOR_ENC.encode([1, contentHash, pubkeyB, sessionId, 1, timestamp3]);
+  // B's second leaf — the self link names B's own first content hash (its SEAL approval).
+  const s1TbsDoc = s1v3({ contentHash, senderPubkey: pubkeyB, sessionId, lastSeenSeq: 1, timestamp: timestamp3, lastSeenHash: contentHash, prevOwnHash: approvalB.contentHash });
   const s1SigDoc = new Uint8Array(await keyB.sign(s1TbsDoc));
   const s2ResultDoc = buildStructure2(3, pubkeyB, contentHash, s1SigDoc, prevRoot3);
   if (!s2ResultDoc.ok) throw new Error("buildStructure2 failed doc");
@@ -2114,7 +2118,8 @@ async function buildValidSealData(
     { kind: "ctrl", data: s2CborB },
     { kind: betweenKind, data: s2CborDoc },
   ]));
-  const s1TbsA3 = CBOR_ENC.encode([1, approvalA.contentHash, pubkeyA, sessionId, 2, timestamp3]);
+  // A's second leaf on this branch — same rule.
+  const s1TbsA3 = s1v3({ contentHash: approvalA.contentHash, senderPubkey: pubkeyA, sessionId, lastSeenSeq: 2, timestamp: timestamp3, lastSeenHash: contentHash, prevOwnHash: contentHash });
   const s1SigA3 = new Uint8Array(await keyA.sign(s1TbsA3));
   const s2ResultA3 = buildStructure2(4, pubkeyA, approvalA.contentHash, s1SigA3, prevRoot4);
   if (!s2ResultA3.ok) throw new Error("buildStructure2 failed A3");

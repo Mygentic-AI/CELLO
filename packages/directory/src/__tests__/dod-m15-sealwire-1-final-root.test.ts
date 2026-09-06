@@ -36,8 +36,6 @@
 
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
-import { Encoder as CborEncoder } from "cbor-x";
-const CBOR = new CborEncoder({ tagUint8Array: false });
 import { buildMerkleTree, merkleRoot } from "@cello-protocol/crypto";
 import { encodeSealPayload } from "@cello-protocol/protocol-types";
 import {
@@ -48,6 +46,7 @@ import {
 } from "../seal-final-root.js";
 import type { RelaySealLeaf } from "../directory-types.js";
 import type { Structure2 } from "@cello-protocol/protocol-types";
+import { s1v3 } from "./helpers/seal-fixture.js";
 
 const SESSION_ID = new Uint8Array(16).fill(0x7c);
 const OTHER_SESSION = new Uint8Array(16).fill(0x3a);
@@ -86,7 +85,10 @@ function s2(contentHash: Uint8Array, seq: number, sender: Uint8Array = ALICE): S
  * every leaf fail as malformed and every assertion below vacuous.
  */
 function s1(contentHash: Uint8Array, sender: Uint8Array = ALICE): Uint8Array {
-  return new Uint8Array(CBOR.encode([1, contentHash, sender, SESSION_ID, 0, 1]));
+  // One layout, both links present. This module reads indices 1 and 3 only, so the link VALUES are
+  // irrelevant here — but a claim that omits them does not decode, and every leaf would go
+  // malformed, which would make every assertion below vacuous.
+  return s1v3({ contentHash, senderPubkey: sender, sessionId: SESSION_ID, lastSeenSeq: 0, timestamp: 1 });
 }
 
 function msgLeaf(fill: number, seq: number): RelaySealLeaf {

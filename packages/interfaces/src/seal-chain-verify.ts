@@ -104,8 +104,14 @@ export const SEAL_CHAIN_REASONS = {
   PREV_ROOT_BREAK: "seal_chain_prev_root_break",
   /** A leaf claims to have seen a counterparty leaf that does not exist yet. */
   CAUSAL_ORDER_VIOLATION: "seal_chain_causal_order_violation",
-  /** One sender's own signed timestamps run backwards — their leaves were reordered. Review H1. */
-  SENDER_CLOCK_REVERSED: "seal_chain_sender_clock_reversed",
+  /**
+   * A leaf does not link to its own author's previous leaf — that author's messages were reordered.
+   *
+   * Replaces `seal_chain_sender_clock_reversed`, the timestamp stopgap `031-RELAYREPLAY` shipped
+   * while the self link did not exist. That rule could not separate two messages sent in the same
+   * millisecond; this one is exact, because the link is a hash inside the author's signed bytes.
+   */
+  SELF_CHAIN_BREAK: "seal_chain_self_link_break",
 } as const;
 
 export type SealChainReason = (typeof SEAL_CHAIN_REASONS)[keyof typeof SEAL_CHAIN_REASONS];
@@ -128,7 +134,7 @@ export const DIRECTORY_COLLAPSED_CHAIN_REASONS: ReadonlySet<string> = new Set([
   SEAL_CHAIN_REASONS.STRUCTURE1_UNDECODABLE,
   SEAL_CHAIN_REASONS.PREV_ROOT_BREAK,
   SEAL_CHAIN_REASONS.CAUSAL_ORDER_VIOLATION,
-  SEAL_CHAIN_REASONS.SENDER_CLOCK_REVERSED,
+  SEAL_CHAIN_REASONS.SELF_CHAIN_BREAK,
 ]);
 
 // ─── Structure 1 decoding ─────────────────────────────────────────────────────
@@ -138,28 +144,36 @@ export interface Structure1Fields {
   session_id: Uint8Array;
   last_seen_seq: number;
   timestamp: number | bigint;
-  /** 020-ACKHASH: the acknowledged content, on a v2 claim only. Read, not yet checked. */
-  last_seen_hash?: Uint8Array;
-  /** 035-SELFCHAIN: the sender's OWN previous message, on a v3 claim only. */
-  prev_own_hash?: Uint8Array;
+  /** The last message this sender RECEIVED. Chains them to their counterparty. Never absent. */
+  last_seen_hash: Uint8Array;
+  /** The sender's OWN previous message. Chains them to themselves. Never absent. */
+  prev_own_hash: Uint8Array;
 }
 
 /**
- * Structure 1 TBS:
- *   v1: [1, content_hash(32), sender_pubkey(32), session_id(16), last_seen_seq, timestamp]
- *   v2: [2, …the same five…, last_seen_hash(32)]        ← 020-ACKHASH
+ * Structure 1 — ONE LAYOUT, EVERY FIELD REQUIRED:
  *
- * ⚠️ THIS REFUSED EVERY SEVEN-FIELD ARRAY UNTIL 020-ACKHASH, and that is the load-bearing change.
- * `DOD-M15-SUBMIT-ID-1` widened the RELAY to accept a seven-field claim carrying a submission id
- * but never widened the directory, so a leaf the relay accepts and orders could not be verified at
- * seal time here. Two shapes now land at index 6 and the VERSION is what tells them apart — a
- * length check cannot, because a submission id and an ack hash are both just bytes.
+ *   `[3, content_hash(32), sender_pubkey(32), session_id(16), last_seen_seq, timestamp,
+ *       last_seen_hash(32), prev_own_hash(32)]`
  *
- * Every index this function already read is unchanged, which is why the field was appended rather
- * than inserted: `content_hash` is still 1, `last_seen_seq` still 4, `timestamp` still 5.
+ * ─── The older layouts are DELETED, not tolerated ──────────────────────────────────────────────
+ *
+ * CELLO is alpha with no users, so backward compatibility is an anti-requirement (Andre,
+ * 2026-09-05). Three shapes this function used to accept are gone: the six-field claim with no
+ * acknowledgement, the seven-field claim carrying only `last_seen_hash`, and the seven-field
+ * claim whose index 6 was a sender-minted submission id. The last of those was relay tolerance
+ * that no client ever emitted, so it was a branch waiting for a caller.
+ *
+ * With one layout the ambiguity those versions existed to resolve is gone too: index 6 had two
+ * possible meanings and only the version tag could separate them. Now it has one, and a
+ * (version, length) pair that is not THE pair is refused rather than coerced into the nearest
+ * known shape — coercion here would be a signature verified over bytes whose meaning is not
+ * agreed.
+ *
+ * ⚠️ A MALFORMED LINK IS REFUSED, NEVER DROPPED. A 31-byte hash is not "no hash": admitting it
+ * without the field would make a corrupt link indistinguishable from an honest claim that never
+ * carried one, which is precisely the confusion the required field removes.
  */
-// Exported for 020-ACKHASH unit coverage: this refused EVERY seven-field claim before that unit, so
-// the tolerance it gained is the thing most worth pinning. Pure function; no state.
 export function decodeStructure1Fields(cbor: Uint8Array): Structure1Fields | null {
   let arr: unknown;
   try {
@@ -168,51 +182,29 @@ export function decodeStructure1Fields(cbor: Uint8Array): Structure1Fields | nul
     return null;
   }
   if (!Array.isArray(arr)) return null;
-  const [_pv, _ch, , _sid, _lss, _ts, _tail] = arr;
-  const isV1 = _pv === 1 && (arr.length === 6 || arr.length === 7);
-  const isV2 = _pv === 2 && arr.length === 7;
-  // 035-SELFCHAIN: v3 appends `prev_own_hash` at index 7 — the sender's link to their OWN previous
-  // message, which is what makes the order provable. Accepted here now, enforced once the fleet
-  // carries it; every index this function reads is unchanged.
-  const isV3 = _pv === 3 && arr.length === 8;
-  // An unnamed (version, length) pair is REFUSED, never coerced into the nearest known layout —
-  // this would otherwise be a signature verified over bytes whose meaning is not agreed.
-  if (!isV1 && !isV2 && !isV3) return null;
+  const [_pv, _ch, , _sid, _lss, _ts] = arr;
+  if (_pv !== 3 || arr.length !== 8) return null;
   const chBytes = _ch instanceof Uint8Array ? _ch : Buffer.isBuffer(_ch) ? new Uint8Array(_ch as Buffer) : null;
   if (!chBytes || chBytes.length !== 32) return null;
   const sidBytes = _sid instanceof Uint8Array ? _sid : Buffer.isBuffer(_sid) ? new Uint8Array(_sid as Buffer) : null;
   if (!sidBytes || sidBytes.length !== 16) return null;
   if (typeof _lss !== "number") return null;
   if (typeof _ts !== "number" && typeof _ts !== "bigint") return null;
-  let lastSeenHash: Uint8Array | undefined;
-  if (isV2 || isV3) {
-    const b = _tail instanceof Uint8Array ? _tail : Buffer.isBuffer(_tail) ? new Uint8Array(_tail as Buffer) : null;
-    // Exactly 32 — a SHA-256 root. Present-but-malformed is refused rather than dropped: a v2 whose
-    // hash is unreadable is an acknowledgement nobody can check, and admitting it without the field
-    // would make a corrupt ack indistinguishable from an honest v1 that never claimed one.
-    if (!b || b.length !== 32) return null;
-    lastSeenHash = b;
-  }
-  // A v1 seven-array's index 6 is a SUBMISSION ID (`DOD-M15-SUBMIT-ID-1`) and is deliberately not
-  // read here — the directory has no use for it, and reading it as an ack hash is the confusion the
-  // version tag exists to prevent.
-  let prevOwnHash: Uint8Array | undefined;
-  if (isV3) {
-    const p = arr[7];
-    const b = p instanceof Uint8Array ? p : Buffer.isBuffer(p) ? new Uint8Array(p as Buffer) : null;
-    // Present-but-malformed is refused for the same reason the ack hash is: a self link nobody can
-    // read is a chain nobody can check, and dropping it would make a corrupt link look like an
-    // honest v2 that never claimed one.
-    if (!b || b.length !== 32) return null;
-    prevOwnHash = b;
-  }
+  const hash32 = (v: unknown): Uint8Array | null => {
+    const b = v instanceof Uint8Array ? v : Buffer.isBuffer(v) ? new Uint8Array(v as Buffer) : null;
+    return b && b.length === 32 ? b : null;
+  };
+  const lastSeenHash = hash32(arr[6]);
+  if (!lastSeenHash) return null;
+  const prevOwnHash = hash32(arr[7]);
+  if (!prevOwnHash) return null;
   return {
     content_hash: chBytes,
     session_id: sidBytes,
     last_seen_seq: _lss,
     timestamp: _ts,
-    ...(lastSeenHash ? { last_seen_hash: lastSeenHash } : {}),
-    ...(prevOwnHash ? { prev_own_hash: prevOwnHash } : {}),
+    last_seen_hash: lastSeenHash,
+    prev_own_hash: prevOwnHash,
   };
 }
 
@@ -565,29 +557,34 @@ export function verifySealLeafChain(
   const stack: Array<{ hash: Uint8Array; height: number }> = [];
   let runningRoot = leaves.length > 0 ? leaves[0].s2.prev_root : new Uint8Array(32);
   /**
-   * 031-RELAYREPLAY review H1 — the per-sender clock, and why the causal check needed it.
+   * ─── THE SELF LINK IS WHAT PINS TWO ADJACENT LEAVES FROM ONE SENDER ────────────────────────────
    *
-   * `last_seen_seq > effectiveSeen` is an UPPER BOUND, and for two ADJACENT leaves from the same
+   * `last_seen_seq > effectiveSeen` is an UPPER BOUND, and for two adjacent leaves from the SAME
    * sender `effectiveSeen` is identical at both positions — so the bound is satisfied either way
    * round and the two can be swapped freely. Structure 1 carries no sequence number, so nothing
-   * else pinned them: a counterparty leaf's position is asserted only by the unsigned Structure 2.
+   * else pinned them: a leaf's position is asserted only by the unsigned Structure 2.
    *
-   * What that bought an attacker is worse than a reordering. Swap two of your counterparty's
-   * consecutive messages, replay, and the chain verifies — but their honest tip attestation now
-   * disagrees, so the relay reads a DIVERGENCE and marks their conversation permanently unsealable.
-   * A fabricated contradiction, from one frame, against a party that did nothing.
+   * What that buys an attacker is worse than a reordering. Swap two of a counterparty's consecutive
+   * messages, replay, and the chain verifies — but their honest tip attestation now disagrees, so
+   * the witness reads a DIVERGENCE and marks their conversation permanently unsealable. A fabricated
+   * contradiction, from one frame, against a party that did nothing.
    *
-   * The sender's own `timestamp` is inside their signed bytes, so it is anchored to something the
-   * assembler does not control. Non-decreasing PER SENDER — never across senders, whose clocks are
-   * unrelated and must not be compared.
+   * `prev_own_hash` closes it exactly: each leaf names the content hash of its author's PREVIOUS
+   * message, inside the author's own signed bytes. Swap two and the later one's link no longer
+   * matches, and the signature cannot be re-made without the author's key.
    *
-   * ⚠️ NON-DECREASING, NOT STRICTLY INCREASING, AND THE RESIDUE IS NAMED RATHER THAN HIDDEN: two
-   * messages from one sender in the same millisecond are legitimate and must not be refused, so a
-   * swap of two same-millisecond adjacent leaves still passes this. That residue is narrow and it
-   * is real; what closes it completely is not letting one batch write a terminal state, which is a
-   * design question recorded in the work order rather than decided here.
+   * ⚠️ THE PER-SENDER TIMESTAMP CHECK THIS REPLACES IS DELETED — `031-RELAYREPLAY` shipped it as a
+   * stopgap while the self link did not exist. It was never complete and said so: two messages from
+   * one sender in the SAME MILLISECOND are legitimate, must not be refused, and so could still be
+   * swapped past it. The self link has no such residue, and keeping both would leave a weaker rule
+   * standing next to a strict one, where a later reader cannot tell which is load-bearing.
+   *
+   * ⚠️ CHECKED FROM A SENDER'S SECOND LEAF ONWARD, and the first is not a gap. This array can begin
+   * mid-conversation, so the value a sender's FIRST leaf here links to is a message outside the
+   * array and cannot be looked up. A swap still cannot survive: exchange a sender's first two leaves
+   * and the one that lands second carries a link to the one now ahead of it, which is checked.
    */
-  const lastTimestampBySender = new Map<string, bigint>();
+  const lastOwnContentHashBySender = new Map<string, Uint8Array>();
   for (let i = 0; i < leaves.length; i++) {
     const leaf = leaves[i];
     if (!verify(leaf.s2.sender_pubkey, leaf.structure1_cbor, leaf.s2.sender_signature)) {
@@ -615,13 +612,12 @@ export function verifySealLeafChain(
     if (s1Fields.last_seen_seq > effectiveSeen) {
       return { ok: false, reason: SEAL_CHAIN_REASONS.CAUSAL_ORDER_VIOLATION };
     }
-    // See the block above: the sender's OWN signed clock, per sender, never across them.
-    const ts = BigInt(s1Fields.timestamp);
-    const prevTs = lastTimestampBySender.get(senderHex);
-    if (prevTs !== undefined && ts < prevTs) {
-      return { ok: false, reason: SEAL_CHAIN_REASONS.SENDER_CLOCK_REVERSED };
+    // See the block above the loop: the sender's own signed link to their own previous message.
+    const prevOwn = lastOwnContentHashBySender.get(senderHex);
+    if (prevOwn !== undefined && !bufEqual(s1Fields.prev_own_hash, prevOwn)) {
+      return { ok: false, reason: SEAL_CHAIN_REASONS.SELF_CHAIN_BREAK };
     }
-    lastTimestampBySender.set(senderHex, ts);
+    lastOwnContentHashBySender.set(senderHex, s1Fields.content_hash);
 
     // RFC 6962 incremental append — see the block above the loop.
     let node = leafHashFor(leaf.kind, encodeStructure2(leaf.s2));

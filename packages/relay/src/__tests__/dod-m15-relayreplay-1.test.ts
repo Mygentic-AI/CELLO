@@ -711,9 +711,14 @@ describe("031-RELAYREPLAY: a participant cannot manufacture a divergence against
      * permanently unsealable. A fabricated contradiction, one frame, against a party who did
      * nothing, and B cannot repair it because a non-active session refuses their own replay.
      *
-     * The sender's `timestamp` is inside their signed bytes — anchored to something the assembler
-     * does not control — so a swap makes one sender's own clock run backwards. Per sender only:
-     * two parties' clocks are unrelated and comparing them would refuse honest conversations.
+     * What closes it: each message names the content hash of its author's PREVIOUS message, inside
+     * the bytes that author signed. Swap two and the later one's link points at something that is
+     * now behind it, and the signature cannot be re-made without the author's key.
+     *
+     * ⚠️ THIS TEST USED TO ASSERT A TIMESTAMP RULE, and `035-SELFCHAIN` deleted it. That rule was a
+     * stopgap written when the self link did not exist yet, and it could not separate two messages
+     * sent in the same millisecond — a swap of those passed it. Nothing about the ATTACK changed;
+     * only the guard that catches it, which now has no such residue.
      *
      * ⚠️ THE BATCH IS RE-CHAINED, and leaving that out is how this test first measured the wrong
      * guard. A naive swap breaks `prev_root` and is refused as `seal_chain_prev_root_break`, which
@@ -736,7 +741,7 @@ describe("031-RELAYREPLAY: a participant cannot manufacture a divergence against
 
     expect(res["ok"]).toBe(false);
     expect(res["reason"], "caught as a reordering, NOT as a disagreement between the two parties")
-      .toBe("seal_chain_sender_clock_reversed");
+      .toBe("seal_chain_self_link_break");
 
     // The whole point: the victim's conversation is untouched and still sealable.
     const after = h.store.getSession(h.sessionKey)!;

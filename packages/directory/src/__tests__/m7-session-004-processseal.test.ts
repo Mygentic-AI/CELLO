@@ -19,19 +19,18 @@
 import { describe, it, expect } from "vitest";
 import { randomBytes } from "node:crypto";
 import { readdirSync, existsSync, readFileSync } from "node:fs";
-import { decode, Encoder } from "cbor-x";
+import { decode } from "cbor-x";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { generateKeypair, buildMerkleTree, merkleRoot } from "@cello-protocol/crypto";
 import { buildStructure2, encodeStructure2 } from "@cello-protocol/protocol-types";
 import { InMemoryDirectoryStore } from "@cello-protocol/interfaces/stubs";
-import { rootOverContentHashes, sealApproval } from "./helpers/seal-fixture.js";
+import { rootOverContentHashes, sealApproval, s1v3 } from "./helpers/seal-fixture.js";
 import type { Logger } from "@cello-protocol/interfaces";
 import { createDirectoryNode, type RelayAdapter } from "../directory-node.js";
 import { encodeSessionSealed } from "../directory-frames.js";
 import type { RelaySealData, SessionSealedWithLegibility } from "../directory-types.js";
 
-const ENC = new Encoder({ tagUint8Array: false });
 
 type Kp = ReturnType<typeof generateKeypair>;
 
@@ -66,7 +65,7 @@ async function buildSealData(keyA: Kp, keyB: Kp, sessionId: Uint8Array): Promise
   const ts = Date.now();
 
   // Leaf 1: A msg seq1, last_seen 0
-  const s1A = ENC.encode([1, contentHash, pubkeyA, sessionId, 0, ts]) as Uint8Array;
+  const s1A = s1v3({ contentHash, senderPubkey: pubkeyA, sessionId, lastSeenSeq: 0, timestamp: ts });
   const sigA = new Uint8Array(await keyA.sign(s1A));
   const s2A = buildStructure2(1, pubkeyA, contentHash, sigA, new Uint8Array(32));
   if (!s2A.ok) throw new Error("s2A");
@@ -84,7 +83,7 @@ async function buildSealData(keyA: Kp, keyB: Kp, sessionId: Uint8Array): Promise
 
   // Leaf 2: B ctrl seq2, last_seen 1 (B saw A's msg)
   const prev2 = merkleRoot(buildMerkleTree([{ kind: "msg", data: s2CborA }]));
-  const s1B = ENC.encode([1, approvalB.contentHash, pubkeyB, sessionId, 1, ts + 1]) as Uint8Array;
+  const s1B = s1v3({ contentHash: approvalB.contentHash, senderPubkey: pubkeyB, sessionId, lastSeenSeq: 1, timestamp: ts + 1, lastSeenHash: contentHash });
   const sigB = new Uint8Array(await keyB.sign(s1B));
   const s2B = buildStructure2(2, pubkeyB, approvalB.contentHash, sigB, prev2);
   if (!s2B.ok) throw new Error("s2B");
@@ -92,7 +91,8 @@ async function buildSealData(keyA: Kp, keyB: Kp, sessionId: Uint8Array): Promise
 
   // Leaf 3: A ctrl seq3, last_seen 2 (A saw B's leaf)
   const prev3 = merkleRoot(buildMerkleTree([{ kind: "msg", data: s2CborA }, { kind: "ctrl", data: s2CborB }]));
-  const s1A2 = ENC.encode([1, approvalA.contentHash, pubkeyA, sessionId, 2, ts + 2]) as Uint8Array;
+  // A's SECOND leaf — the self link names A's own first content hash.
+  const s1A2 = s1v3({ contentHash: approvalA.contentHash, senderPubkey: pubkeyA, sessionId, lastSeenSeq: 2, timestamp: ts + 2, lastSeenHash: approvalB.contentHash, prevOwnHash: contentHash });
   const sigA2 = new Uint8Array(await keyA.sign(s1A2));
   const s2A2 = buildStructure2(3, pubkeyA, approvalA.contentHash, sigA2, prev3);
   if (!s2A2.ok) throw new Error("s2A2");
@@ -129,14 +129,14 @@ async function buildBilateralSealData(keyA: Kp, keyB: Kp, sessionId: Uint8Array)
   const ts = Date.now();
 
   // L1: A msg seq1, last_seen 0
-  const s1A1 = ENC.encode([1, contentHash, pubkeyA, sessionId, 0, ts]) as Uint8Array;
+  const s1A1 = s1v3({ contentHash, senderPubkey: pubkeyA, sessionId, lastSeenSeq: 0, timestamp: ts });
   const s2A1 = buildStructure2(1, pubkeyA, contentHash, new Uint8Array(await keyA.sign(s1A1)), new Uint8Array(32));
   if (!s2A1.ok) throw new Error("s2A1");
   const cA1 = encodeStructure2(s2A1.structure2);
 
   // L2: B msg seq2, last_seen 1 (B saw A's msg)
   const prev2 = merkleRoot(buildMerkleTree([{ kind: "msg", data: cA1 }]));
-  const s1B1 = ENC.encode([1, contentHash, pubkeyB, sessionId, 1, ts + 1]) as Uint8Array;
+  const s1B1 = s1v3({ contentHash, senderPubkey: pubkeyB, sessionId, lastSeenSeq: 1, timestamp: ts + 1, lastSeenHash: contentHash });
   const s2B1 = buildStructure2(2, pubkeyB, contentHash, new Uint8Array(await keyB.sign(s1B1)), prev2);
   if (!s2B1.ok) throw new Error("s2B1");
   const cB1 = encodeStructure2(s2B1.structure2);
@@ -148,14 +148,16 @@ async function buildBilateralSealData(keyA: Kp, keyB: Kp, sessionId: Uint8Array)
 
   // L3: A ctrl seq3 (SEAL ack), last_seen 2 (A saw B's msg)
   const prev3 = merkleRoot(buildMerkleTree([{ kind: "msg", data: cA1 }, { kind: "msg", data: cB1 }]));
-  const s1A2 = ENC.encode([1, approvalA.contentHash, pubkeyA, sessionId, 2, ts + 2]) as Uint8Array;
+  // A's second leaf: self link to A's own first content hash.
+  const s1A2 = s1v3({ contentHash: approvalA.contentHash, senderPubkey: pubkeyA, sessionId, lastSeenSeq: 2, timestamp: ts + 2, lastSeenHash: contentHash, prevOwnHash: contentHash });
   const s2A2 = buildStructure2(3, pubkeyA, approvalA.contentHash, new Uint8Array(await keyA.sign(s1A2)), prev3);
   if (!s2A2.ok) throw new Error("s2A2");
   const cA2 = encodeStructure2(s2A2.structure2);
 
   // L4: B ctrl seq4 (SEAL ack), last_seen 2 (B saw A's last content)
   const prev4 = merkleRoot(buildMerkleTree([{ kind: "msg", data: cA1 }, { kind: "msg", data: cB1 }, { kind: "ctrl", data: cA2 }]));
-  const s1B2 = ENC.encode([1, approvalB.contentHash, pubkeyB, sessionId, 2, ts + 3]) as Uint8Array;
+  // B's second leaf: self link to B's own first content hash.
+  const s1B2 = s1v3({ contentHash: approvalB.contentHash, senderPubkey: pubkeyB, sessionId, lastSeenSeq: 2, timestamp: ts + 3, lastSeenHash: contentHash, prevOwnHash: contentHash });
   const s2B2 = buildStructure2(4, pubkeyB, approvalB.contentHash, new Uint8Array(await keyB.sign(s1B2)), prev4);
   if (!s2B2.ok) throw new Error("s2B2");
   const cB2 = encodeStructure2(s2B2.structure2);

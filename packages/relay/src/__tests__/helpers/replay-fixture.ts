@@ -118,7 +118,10 @@ export async function buildValidReplay(opts: BuildOpts): Promise<ReplayBatch> {
   const priorPubHex = Buffer.from(await opts.priorRelay.getPublicKey()).toString("hex");
 
   const leaves: SealUnilateralLeaf[] = [];
-  let prevRoot = computeGenesisPrevRoot(subPub, cpPub, opts.sessionId, opts.sessionTimestamp);
+  const genesis = computeGenesisPrevRoot(subPub, cpPub, opts.sessionId, opts.sessionTimestamp);
+  let prevRoot = genesis;
+  /** Each party's own last content hash — what their NEXT leaf's self link must name. */
+  const lastOwn = new Map<boolean, Uint8Array>();
 
   for (let i = 0; i < opts.leafCount; i++) {
     // Strict alternation, except that `counterpartyRunAt` makes THAT index the counterparty's too,
@@ -135,8 +138,21 @@ export async function buildValidReplay(opts: BuildOpts): Promise<ReplayBatch> {
       if (jFromSubmitter !== fromSubmitter) lastSeenSeq = j + 1;
     }
     const contentHash = new Uint8Array(randomBytes(32));
+    /**
+     * ⚠️ BOTH CHAIN LINKS, AND THE SELF LINK IS THE HONEST ONE — `DOD-M15-SELFCHAIN-1`.
+     *
+     * `last_seen_hash` names the last leaf from the OTHER party; `prev_own_hash` names this
+     * sender's own previous leaf. Both fall back to the session genesis for a party that has not
+     * received, or not spoken, yet — a value derived per session, never a shared constant.
+     *
+     * The builder computes the honest values so an ordinary batch verifies. A fixture that could
+     * only produce a broken chain would make every "this is refused" test pass without measuring
+     * the guard it names.
+     */
     const structure1_cbor = CBOR.encode([
-      1, contentHash, pub, opts.sessionId, lastSeenSeq, opts.sessionTimestamp + seq,
+      3, contentHash, pub, opts.sessionId, lastSeenSeq, opts.sessionTimestamp + seq,
+      lastSeenSeq > 0 ? contentHashOf(leaves[lastSeenSeq - 1]!) : genesis,
+      lastOwn.get(fromSubmitter) ?? genesis,
     ]) as Uint8Array;
     const sender_signature = await kp.sign(structure1_cbor);
     const structure2_cbor = encodeStructure2({
@@ -160,6 +176,7 @@ export async function buildValidReplay(opts: BuildOpts): Promise<ReplayBatch> {
       leaf.relay_signature = await opts.priorRelay.sign(buildRelayAckTbs(contentHash, seq, relay_timestamp));
     }
     CONTENT_HASHES.set(leaf, contentHash);
+    lastOwn.set(fromSubmitter, contentHash);
     leaves.push(leaf);
     prevRoot = structure2Root(leaves, leaves.length);
   }
@@ -178,8 +195,11 @@ export async function buildValidReplay(opts: BuildOpts): Promise<ReplayBatch> {
         if (!bytesEqual(senderOf(leaves[j]!), pub)) lastSeenSeq = j + 1;
       }
       const contentHash = new Uint8Array(randomBytes(32));
+      // Same rule as the message leaves above — see the note there.
       const structure1_cbor = CBOR.encode([
-        1, contentHash, pub, opts.sessionId, lastSeenSeq, opts.sessionTimestamp + 500 + seq,
+        3, contentHash, pub, opts.sessionId, lastSeenSeq, opts.sessionTimestamp + 500 + seq,
+        lastSeenSeq > 0 ? contentHashOf(leaves[lastSeenSeq - 1]!) : genesis,
+        lastOwn.get(fromSubmitter) ?? genesis,
       ]) as Uint8Array;
       const sender_signature = await kp.sign(structure1_cbor);
       const structure2_cbor = encodeStructure2({
@@ -198,6 +218,7 @@ export async function buildValidReplay(opts: BuildOpts): Promise<ReplayBatch> {
         leaf.relay_signature = await opts.priorRelay.sign(buildRelayAckTbs(contentHash, seq, relay_timestamp));
       }
       CONTENT_HASHES.set(leaf, contentHash);
+      lastOwn.set(fromSubmitter, contentHash);
       leaves.push(leaf);
       prevRoot = structure2Root(leaves, leaves.length);
     }
@@ -207,7 +228,7 @@ export async function buildValidReplay(opts: BuildOpts): Promise<ReplayBatch> {
   return {
     leaves,
     reported_root,
-    genesis: computeGenesisPrevRoot(subPub, cpPub, opts.sessionId, opts.sessionTimestamp),
+    genesis,
     counterparty_tip: await signTip(opts.counterparty, cpPub, opts.sessionId, leaves.length, reported_root),
   };
 }

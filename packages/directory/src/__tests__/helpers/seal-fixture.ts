@@ -26,6 +26,19 @@ export type Kp = ReturnType<typeof generateKeypair>;
 
 export const hex = (u: Uint8Array): string => Buffer.from(u).toString("hex");
 
+/**
+ * The session starting point every fixture leaf chains to before it has anything else to name.
+ *
+ * A real session derives this from the directory-signed establishment record — both participants,
+ * the session id and the session timestamp — and both sides derive the same value. A fixture builds
+ * its leaves directly, so it needs one stand-in, and it has to be the SAME stand-in on both links:
+ * a party that has received nothing and said nothing names this value twice.
+ *
+ * A recognisable fill rather than zeros. Zeros are what an unset field looks like, so a test
+ * asserting against them cannot tell "we agreed on this" from "nobody wrote it".
+ */
+export const SEAL_FIXTURE_GENESIS = new Uint8Array(32).fill(0x9c);
+
 export interface LogEntry { level: string; event: string; ctx: Record<string, unknown> }
 
 export function makeSpyLogger(sink: LogEntry[]): Logger {
@@ -90,19 +103,20 @@ export interface LeafSpec {
   /** The signed `last_seen_seq`. Defaults to 0, which is always within the causal bound. */
   lastSeenSeq?: number;
   /**
-   * 020-ACKHASH: emit a **v2** Structure 1 — `[2, …, last_seen_hash]`, seven fields.
-   * Absent ⇒ the v1 six-field layout, unchanged, which is what every existing caller gets.
+   * OVERRIDE the acknowledgement link. Defaults to the session's fixture genesis, which is what a
+   * party that has received nothing yet signs. State it to make a leaf acknowledge a specific
+   * message, or a wrong one.
    */
   lastSeenHash?: Uint8Array;
   /**
-   * `DOD-M15-SUBMIT-ID-1`: emit a **v1 SEVEN-field** Structure 1, index 6 being a submission id.
-   * This is the shape the deployed relay already tolerates, and the one a length-only reader
-   * mistakes for an ack hash — so it is the regression case, not a curiosity.
+   * OVERRIDE the self link — the content hash of this author's PREVIOUS leaf.
    *
-   * Mutually exclusive with `lastSeenHash`: index 6 has one meaning per version, and a spec asking
-   * for both is asking for a shape no version defines.
+   * ⚠️ THE DEFAULT IS THE HONEST VALUE, AND THAT IS THE POINT. The builder tracks each signer's own
+   * last content hash and links to it, so an ordinary fixture produces a chain that verifies. Set
+   * this to break one link deliberately; a fixture that could only produce broken chains would make
+   * every "this is refused" test pass for the wrong reason.
    */
-  submissionId?: Uint8Array;
+  prevOwnHash?: Uint8Array;
   /** Emit an arbitrary version tag, to prove an unnamed layout is refused rather than coerced. */
   protocolVersion?: number;
 }
@@ -152,6 +166,8 @@ export async function buildSeal(specs: LeafSpec[], sessionId: Uint8Array): Promi
   const encoded: Array<{ kind: "msg" | "ctrl"; data: Uint8Array }> = [];
   // The content hashes of the non-ctrl leaves, in order — what every carried final_root commits to.
   const msgHashes: Array<{ kind: "hash"; data: Uint8Array }> = [];
+  // Each signer's own last content hash — the value their NEXT leaf's self link must name.
+  const lastOwnBySender = new Map<string, Uint8Array>();
   for (let i = 0; i < specs.length; i++) {
     const spec = specs[i]!;
     const pub = new Uint8Array(await spec.key.getPublicKey());
@@ -171,21 +187,25 @@ export async function buildSeal(specs: LeafSpec[], sessionId: Uint8Array): Promi
       contentHash = new Uint8Array(randomBytes(32));
     }
 
-    if (spec.lastSeenHash && spec.submissionId) {
-      throw new Error(`leaf ${i}: lastSeenHash and submissionId both set — index 6 has one meaning per version`);
-    }
-    // 020-ACKHASH: v1 is six fields; a v2 appends last_seen_hash at index 6, and a v1 seven-array
-    // carries a submission id there instead. The VERSION is what says which — never the length.
+    /**
+     * ONE LAYOUT, BOTH LINKS PRESENT — `DOD-M15-SELFCHAIN-1`.
+     *
+     * The self link defaults to this signer's OWN previous content hash in this batch, and to the
+     * fixture genesis for their first leaf. That is the honest value, so an ordinary fixture builds
+     * a chain that verifies and a test that wants a break has to ask for one.
+     */
+    const senderKey = hex(pub);
     const s1Fields: unknown[] = [
-      spec.protocolVersion ?? (spec.lastSeenHash ? 2 : 1),
+      spec.protocolVersion ?? 3,
       contentHash,
       pub,
       spec.signsSession ?? sessionId,
       spec.lastSeenSeq ?? 0,
       1_700_000_000_000 + i,
+      spec.lastSeenHash ?? SEAL_FIXTURE_GENESIS,
+      spec.prevOwnHash ?? lastOwnBySender.get(senderKey) ?? SEAL_FIXTURE_GENESIS,
     ];
-    if (spec.lastSeenHash) s1Fields.push(spec.lastSeenHash);
-    else if (spec.submissionId) s1Fields.push(spec.submissionId);
+    lastOwnBySender.set(senderKey, contentHash);
     const s1 = ENC.encode(s1Fields) as Uint8Array;
     const sig = new Uint8Array(await spec.key.sign(s1));
     const s2 = buildStructure2(i + 1, pub, contentHash, sig, prevRoot);
@@ -279,13 +299,22 @@ export async function buildUnilateralCarry(
   const leaves: SealUnilateralLeaf[] = [];
   const encoded: Array<{ kind: "msg" | "ctrl"; data: Uint8Array }> = [];
   const contentHashes: Uint8Array[] = [];
+  const lastOwnBySender = new Map<string, Uint8Array>();
 
   for (let i = 0; i < specs.length; i++) {
     const spec = specs[i]!;
     const pub = new Uint8Array(await spec.key.getPublicKey());
     const ch = new Uint8Array(randomBytes(32));
     const prevRoot = i === 0 ? new Uint8Array(32) : merkleRoot(buildMerkleTree(encoded));
-    const s1 = ENC.encode([1, ch, pub, spec.signsSession ?? sessionId, 0, 100 + i]) as Uint8Array;
+    const senderKey = hex(pub);
+    // Same rule as `buildSeal`: the honest self link by default, so a carry that is not deliberately
+    // broken verifies. See `LeafSpec.prevOwnHash`.
+    const s1 = ENC.encode([
+      spec.protocolVersion ?? 3, ch, pub, spec.signsSession ?? sessionId, spec.lastSeenSeq ?? 0, 100 + i,
+      spec.lastSeenHash ?? SEAL_FIXTURE_GENESIS,
+      spec.prevOwnHash ?? lastOwnBySender.get(senderKey) ?? SEAL_FIXTURE_GENESIS,
+    ]) as Uint8Array;
+    lastOwnBySender.set(senderKey, ch);
     const s2 = buildStructure2(i + 1, pub, ch, new Uint8Array(await spec.key.sign(s1)), prevRoot);
     if (!s2.ok) throw new Error(`buildStructure2 failed at leaf ${i}`);
     const s2Cbor = encodeStructure2(s2.structure2);
@@ -373,3 +402,43 @@ export async function runUnilateral(
 }
 
 
+
+/**
+ * One Structure 1, in the ONE layout — for the hand-rolled leaf builders scattered across these
+ * suites that predate `buildSeal`.
+ *
+ * ⚠️ THEY WERE ALL WRITING `[1, …]`, SIX FIELDS, AND EVERY ONE OF THEM BROKE AT ONCE when
+ * `035-SELFCHAIN` made both chain links required. That is what a structure hand-rolled in twenty
+ * places costs. Each call site now states its own values and this function owns the shape, so the
+ * next layout change is one edit rather than twenty.
+ *
+ * Both links default to the fixture genesis — what a party that has received nothing and said
+ * nothing signs. A builder whose leaves go through the UNILATERAL chain verifier must pass
+ * `prevOwnHash` explicitly for a sender's second and later leaves: that path checks the link, and
+ * the genesis is only correct for a sender's first.
+ */
+export function s1v3(opts: {
+  contentHash: Uint8Array;
+  senderPubkey: Uint8Array;
+  sessionId: Uint8Array;
+  lastSeenSeq?: number;
+  /**
+   * `bigint` for the canonical uint64 form, `number` for the float64 one. Both are accepted because
+   * both exist on the wire: the published encoder promotes anything above 2^32-1, and the older
+   * fixtures here pass a plain number. Neither reader compares the value.
+   */
+  timestamp: number | bigint;
+  lastSeenHash?: Uint8Array;
+  prevOwnHash?: Uint8Array;
+}): Uint8Array {
+  return ENC.encode([
+    3,
+    opts.contentHash,
+    opts.senderPubkey,
+    opts.sessionId,
+    opts.lastSeenSeq ?? 0,
+    opts.timestamp,
+    opts.lastSeenHash ?? SEAL_FIXTURE_GENESIS,
+    opts.prevOwnHash ?? SEAL_FIXTURE_GENESIS,
+  ]) as Uint8Array;
+}

@@ -30,6 +30,7 @@ import { createDirectoryNode, unilateralNotificationFromPayload, type RelayAdapt
 import { encodeSealUnilateralConfirmed } from "../directory-frames.js";
 import { buildSealLegibility } from "../seal-legibility.js";
 import type { SealUnilateralLeaf, SealFrontierLeaf } from "../directory-types.js";
+import { s1v3 } from "./helpers/seal-fixture.js";
 
 const ENC = new Encoder({ tagUint8Array: false });
 type Kp = ReturnType<typeof generateKeypair>;
@@ -90,21 +91,23 @@ async function buildUnilateralCarry(
   });
 
   // L1: A msg seq1, last_seen 0, prev_root zeros
-  const s1A1 = ENC.encode([1, ch1, pubA, sessionId, 0, 100]) as Uint8Array;
+  const s1A1 = s1v3({ contentHash: ch1, senderPubkey: pubA, sessionId, lastSeenSeq: 0, timestamp: 100 });
   const s2A1 = buildStructure2(1, pubA, ch1, new Uint8Array(await keyA.sign(s1A1)), new Uint8Array(32));
   if (!s2A1.ok) throw new Error("s2A1");
   const cA1 = encodeStructure2(s2A1.structure2);
 
   // L2: B msg seq2, last_seen 1, prev_root = root over [L1 msg]
   const prev2 = merkleRoot(buildMerkleTree([{ kind: "msg", data: cA1 }]));
-  const s1B1 = ENC.encode([1, ch2, pubB, sessionId, 1, 101]) as Uint8Array;
+  const s1B1 = s1v3({ contentHash: ch2, senderPubkey: pubB, sessionId, lastSeenSeq: 1, timestamp: 101, lastSeenHash: ch1 });
   const s2B1 = buildStructure2(2, pubB, ch2, new Uint8Array(await keyB.sign(s1B1)), prev2);
   if (!s2B1.ok) throw new Error("s2B1");
   const cB1 = encodeStructure2(s2B1.structure2);
 
   // L3: A ctrl seq3 (SEAL), last_seen 2, prev_root = root over [L1 msg, L2 msg]
   const prev3 = merkleRoot(buildMerkleTree([{ kind: "msg", data: cA1 }, { kind: "msg", data: cB1 }]));
-  const s1A2 = ENC.encode([1, ch3, pubA, sessionId, 2, 102]) as Uint8Array;
+  // A's SECOND leaf: its self link names A's FIRST content hash. The unilateral verifier checks
+  // exactly this, so the genesis default would be wrong here — see `s1v3`.
+  const s1A2 = s1v3({ contentHash: ch3, senderPubkey: pubA, sessionId, lastSeenSeq: 2, timestamp: 102, lastSeenHash: ch2, prevOwnHash: ch1 });
   const s2A2 = buildStructure2(3, pubA, ch3, new Uint8Array(await keyA.sign(s1A2)), prev3);
   if (!s2A2.ok) throw new Error("s2A2");
 
@@ -143,14 +146,15 @@ async function buildUnilateralCarrySilentAbsent(
   });
 
   // L1: A msg seq1, last_seen 0
-  const s1A1 = ENC.encode([1, ch1, pubA, sessionId, 0, 100]) as Uint8Array;
+  const s1A1 = s1v3({ contentHash: ch1, senderPubkey: pubA, sessionId, lastSeenSeq: 0, timestamp: 100 });
   const s2A1 = buildStructure2(1, pubA, ch1, new Uint8Array(await keyA.sign(s1A1)), new Uint8Array(32));
   if (!s2A1.ok) throw new Error("s2A1");
   const cA1 = encodeStructure2(s2A1.structure2);
 
   // L2: A ctrl (SEAL) seq2, last_seen 0 (no counterparty leaf precedes it)
   const prev2 = merkleRoot(buildMerkleTree([{ kind: "msg", data: cA1 }]));
-  const s1A2 = ENC.encode([1, ch2, pubA, sessionId, 0, 101]) as Uint8Array;
+  // A's second leaf again — self link to A's first content hash.
+  const s1A2 = s1v3({ contentHash: ch2, senderPubkey: pubA, sessionId, lastSeenSeq: 0, timestamp: 101, prevOwnHash: ch1 });
   const s2A2 = buildStructure2(2, pubA, ch2, new Uint8Array(await keyA.sign(s1A2)), prev2);
   if (!s2A2.ok) throw new Error("s2A2");
 

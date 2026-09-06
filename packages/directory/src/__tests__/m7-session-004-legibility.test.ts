@@ -34,15 +34,14 @@
 
 import { describe, it, expect } from "vitest";
 import { randomBytes } from "node:crypto";
-import { Encoder } from "cbor-x";
 import { generateKeypair } from "@cello-protocol/crypto";
 import { buildStructure2 } from "@cello-protocol/protocol-types";
 import type { Structure2 } from "@cello-protocol/protocol-types";
 import { buildSealLegibility, SEAL_RECEIPT_DISCLAIMER } from "../seal-legibility.js";
 import { encodeSessionFrostSealed, decodeOutboundSignalingFrame } from "../directory-frames.js";
 import type { RelaySealLeaf, SessionFrostSealed } from "../directory-types.js";
+import { s1v3 } from "./helpers/seal-fixture.js";
 
-const ENC = new Encoder({ tagUint8Array: false });
 
 type Kp = ReturnType<typeof generateKeypair>;
 
@@ -62,8 +61,9 @@ async function makeLeaf(
   const contentHash = new Uint8Array(randomBytes(32));
   const sessionId = new Uint8Array(16);
   const ts = Date.now();
-  // Structure 1 TBS: [protocol_version, content_hash, sender_pubkey, session_id, last_seen_seq, timestamp]
-  const s1Tbs = ENC.encode([1, contentHash, pubkey, sessionId, lastSeenSeq, ts]) as Uint8Array;
+  // One layout, both links present. This module reads `last_seen_seq` at index 4; the links were
+  // appended after it and their values are not under test here.
+  const s1Tbs = s1v3({ contentHash, senderPubkey: pubkey, sessionId, lastSeenSeq, timestamp: ts });
   const s1Sig = new Uint8Array(await key.sign(s1Tbs));
   const s2Result = buildStructure2(seq, pubkey, contentHash, s1Sig, new Uint8Array(randomBytes(32)));
   if (!s2Result.ok) throw new Error("buildStructure2 failed");
