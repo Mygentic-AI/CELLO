@@ -11250,3 +11250,124 @@ alone and failed in the full run.
 Ten review findings, all fixed. Gate in both repos: **cello-client 4949 passed / 11 skipped**, lint,
 typecheck and build clean; **trustless-cello 2002 passed / 631 skipped**, lint and typecheck clean.
 Both changes verified present in the BUILT artifacts, not only in source.
+
+---
+
+## Entry 40 — `035-SELFCHAIN`: everything chains, and the two defects that found on the way out
+
+**DoD line:** `DOD-M15-SELFCHAIN-1` — ✅ closed 2026-09-06. One order, one deliverable, no phases
+(Andre, 2026-09-05: *"I don't want any versions… One version one deliverable."*).
+
+### What was wrong, in one flow
+
+A sender signed `last_seen_hash` — the last message they RECEIVED. That chains a party to their
+counterparty and never to themselves. So when one party sends twice in a row, both messages
+acknowledge the SAME message from the other side, because nothing arrived in between, and nothing in
+the signed bytes says which came first.
+
+Position cannot fill the gap, and this is the fact everything follows from: **the relay assigns
+position AFTER the sender signs, so a sender can never sign their own position.** The relay's receipt
+does pin it — but the receipt goes to the SENDER, so whoever later carries a conversation to a new
+relay holds no receipt for the counterparty's messages and can reorder any run of them.
+
+What that bought an attacker is worse than a reordering. Swap two of your counterparty's consecutive
+messages, replay, and the chain verifies — but their honest tip attestation now disagrees, so the
+witness reads a DIVERGENCE and marks THEIR conversation permanently unsealable. A fabricated
+contradiction, from one frame, against a party that did nothing.
+
+### The fix
+
+Structure 1 carries two required 32-byte links, both inside the signed bytes and both known at
+signing time: `last_seen_hash` (chains me to you) and `prev_own_hash` (chains me to myself). Both
+fall back to the session GENESIS — `computeGenesisPrevRoot(pubA, pubB, sessionId, sessionTimestamp)`,
+field 4 of the FROST-signed establishment record — which is a VALUE derived per session, never an
+absence and never a shared constant.
+
+Enforced independently in four places: the relay on `hash_submit`, the relay on handover/replay, the
+receiving daemon on ingest, and the directory at seal time. Each refuses, tells BOTH parties, names a
+next step, and stops the session.
+
+**One layout; the three older ones are deleted** — backward compatibility is an anti-requirement
+here. That removed the ambiguity they existed for: index 6 had two possible meanings and only the
+version tag separated them. The version tag STAYS, as domain separation rather than compatibility.
+
+**`031-RELAYREPLAY`'s timestamp check is deleted.** It was a stopgap written before the self link
+existed and its own comment named its residue: two messages from one sender in the same millisecond
+were legitimate, so a swap of those passed it. Keeping both would have left a weaker rule standing
+next to a strict one, where a later reader cannot tell which is load-bearing.
+
+### What is still disputable, and why it is not a gap
+
+**The last message each side sent has been ratified by nobody.** The chain works because the act of
+sending proves what you received — so there is no reply to chain the tail to, and there is nothing
+that could be. Every message with a reply after it is immutable. Do not try to "fix" the tail by
+chaining it to something: the ratification IS the reply. It is covered by the relay's ACK receipt and
+by `DOD-M15-WITHHOLD-SEAL-1`.
+
+### Two live defects found on the way, neither the one this unit was written for
+
+**1. A direct-mode session recorded no starting point at all.** The anchor was derived only from a
+relay-assignment CARRY, and that carry is built only for a relay-mode assignment that also carries a
+per-node relay signature. A direct session — brokered and FROST-signed exactly like any other — had
+nothing for its messages to chain to. The anchor belongs to the SESSION; the relay is how a
+conversation travels, not what makes it provable.
+
+**2. The RESPONDER never recorded it either.** It computed the value and used it only to SHOW the
+operator, then threw it away. Both sides now record it BEFORE they build anything, because
+registering a session is what seeds the acknowledgement state, and a value recorded afterwards is
+missing at the one moment anything reads it. Symptom while this was live: closing a relay-witnessed
+session simply hung — the close submits the agent's own SEAL leaf, and that leaf had nothing to
+chain to, so the escalation never fired.
+
+### What the review caught, and it would have shipped
+
+**The emitter linked to the WRONG PARTY.** `#lastSeen` is seeded with the genesis and then ADVANCES
+as the counterparty speaks; the self link's last fallback read it. So a party who had not spoken yet
+linked to the COUNTERPARTY's last message instead of the starting point. Walk it: Alice sends "hi";
+Bob's daemon ingests it and advances its record; Bob replies, and his very first reply is refused —
+and the relay then signs an alert to ALICE saying BOB's chain is broken. **No two-party conversation
+would have survived its second message, and the innocent side was blamed for it.**
+
+Three more of the same shape came out with it: the receiver made the identical conflation; its record
+of what the counterparty last said was tied to the RELAY's position number, so on an unwitnessed
+session it never moved at all; the durable own-chain store was constructed only inside the
+relay-client builders, so a session that never attached one recorded nothing; and the chain advanced
+at SIGNING time rather than on delivery, so a failed send left it pointing at a message nobody
+received.
+
+**Why it was invisible: the emitter had no test of any kind.** Every fixture in the relay and
+directory suites builds its chains with the correct per-sender semantics, so none of them ever
+exercised the client's own fallback. The relay harness's own comment names the exact mistake the
+production code was making — *"reading both as 'the last thing the other party sent' is the same
+value only while the two parties strictly alternate"* — while the code did precisely that, and did
+not even work under alternation.
+
+**A co-signing directory carried a fourth hand-rolled Structure 1 decoder, pinned at six fields.**
+Every honest seal would have come back "your evidence is malformed", which is a co-signer refusing
+every seal in the system. There is now one decoder.
+
+**The no-assignment refusal never reached the inbox.** It read the session id off the top level of a
+frame that does not carry one there, so the value was always empty — and the durable write was
+gated on it. Four different conditions also shared that exit, only one of which is the security
+case; a version skew between two agents was being reported as an attack, which teaches an operator
+that the loud notice is noise. Two reasons now, two remedies.
+
+**Refusing was the only thing that happened.** Neither the relay nor the directory escalated: the
+relay left the session live, and the directory answered `unilateral_root_unverifiable` — a name that
+points at arithmetic — for the one finding that means the order is in dispute.
+
+### Where the fixture discipline paid, and where it did not
+
+The relay, directory and daemon fixtures all build HONEST chains by default and make a test ask for a
+break. That is the right shape and it held. What it could not cover is the one half with no
+counterpart to check it, which is exactly where the bug was.
+
+Nine files across the two repos were hand-rolling the wire layout in twenty places; they now go
+through one builder each. One of those had been silently emitting a stale layout for two versions.
+
+### Evidence
+
+Every new guard verified by DELETING it and watching the test go red — the receiver check (2 of 3
+cases red), the directory seal check (1 of 4), the relay escalation. Gates: **cello-client 4962
+passed / 11 skipped**, lint and typecheck clean; **trustless-cello 2036 passed / 631 skipped**, lint
+and typecheck clean.

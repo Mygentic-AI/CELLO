@@ -2,7 +2,7 @@
 name: 035-SELFCHAIN — Every message links to the one before it
 type: micro-work-order
 date: 2026-09-05
-status: open
+status: complete
 dod_line: DOD-M15-SELFCHAIN-1
 dod_effect: closes
 priority: >

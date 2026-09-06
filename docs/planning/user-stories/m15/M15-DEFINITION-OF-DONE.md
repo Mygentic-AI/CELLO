@@ -964,10 +964,13 @@ match, I'm blocked. But if I arrive at immigration with no passport, they let me
 > truncates the chain and the seal still agrees with the witness. That producer, plus a directory
 > verifier that accepts a counterparty leaf carrying no Structure 2, is the remaining unit.
 >
-> **One deviation needs Andre's ruling** — a session with no starting point and nothing received
-> still emits a v1 claim (position 0, no hash, asserting nothing). Refusing it broke 93 tests across
-> 26 files because sessions brokered without a relay assignment are real. Full reasoning in the
-> order's close-out.
+> **That deviation is RESOLVED — `DOD-M15-SELFCHAIN-1`, 2026-09-06.** It read: a session with no
+> starting point and nothing received still emits a v1 claim (position 0, no hash, asserting
+> nothing), and refusing it broke 93 tests across 26 files because sessions brokered without a relay
+> assignment are real. Both halves of that are gone. There is no v1 layout to emit, and the sessions
+> that had no starting point had one all along — the anchor was being recorded too late on one side
+> and not at all on the other. A session that genuinely has none now refuses the send by name rather
+> than signing a chain anchored to nothing.
 **Found 2026-09-03, [[2026-09-03_1158_relay-overload-and-the-four-things-underneath-it]]. Ruled BLOCKS by Andre 2026-09-03.** *"The receipt is the product. A path that
 lets the guilty party remove themselves from it is not a papercut."*
 
@@ -1039,6 +1042,34 @@ whatever you do afterwards.
 # Tier 5 — Abuse controls, relay redundancy, infrastructure
 
 Parallel with Tier 4 — different disciplines, no shared files.
+
+### `DOD-M15-SELFCHAIN-1` — ✅ Every message links to the one before it
+> **Closed 2026-09-06 (035-SELFCHAIN).** Both repos green — cello-client 4962, trustless-cello 2036,
+> lint and typecheck clean. One `cello-unit-reviewer` pass; every finding fixed, including two that
+> would have shipped. → Journal Entry 40
+>
+> **What holds now.** Structure 1 carries TWO required links, both inside the signed bytes and both
+> known at signing time: `last_seen_hash` (the last message this sender RECEIVED — chains them to
+> their counterparty) and `prev_own_hash` (this sender's OWN previous message — chains them to
+> themselves). Moving any message with a reply after it breaks a signature. Enforced independently
+> by the relay on submit, the relay on handover, the receiving daemon on ingest, and the directory
+> at seal time — and each detection point refuses, tells BOTH parties, names a next step, and stops
+> the session.
+>
+> **One layout, every older one deleted** (backward compatibility is an anti-requirement — Andre,
+> 2026-09-05). Four hand-rolled Structure 1 decoders across the two repos are gone; there is one.
+>
+> **What is still disputable, and it is not a gap:** the last message each side sent has been
+> ratified by nobody, because the act of sending is what ratifies what you received. Do not try to
+> chain the tail — the ratification IS the reply. It is covered by the relay's ACK receipt and by
+> `DOD-M15-WITHHOLD-SEAL-1`.
+>
+> **Two live defects surfaced and fixed inside the unit**, neither of them the one it was written
+> for: a sender's first message linked to the COUNTERPARTY's last message instead of the session
+> genesis (no two-party conversation would have survived its second message, and the innocent side
+> was blamed for it), and the responder never recorded the session's starting point at all. Both are
+> in the journal entry.
+
 
 ### `DOD-M15-RELAYPARK-1` — ✅ The parked-message store refuses instead of writing past its cap
 > **Closed.** Full entry — verdicts, findings, mutations and lessons — is in [[M15-DEFINITION-OF-DONE-ARCHIVE]], under `DOD-M15-RELAYPARK-1`.
