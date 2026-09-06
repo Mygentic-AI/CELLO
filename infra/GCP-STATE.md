@@ -2769,3 +2769,65 @@ The directory's column set was inspected directly and carries **no payload and n
 status, revoked_at, scanner_version, is_tombstone, created_at, revoker_pubkey, revoker_signature`.
 That is the "nodes store only a hash" claim verified against the live schema rather than against the
 migration's own comment about itself.
+
+---
+
+## 2026-09-06 — Whole fleet rolled to `d1a271e3`, schema 64 → 65 (038-KEYBIND)
+
+**What this roll delivers.** The directory now stores and serves an agent's **key binding** — the
+signature by an agent's own `K_local` over its FROST group key — so a counterparty can place a group
+key against the identity that owns it on first contact. Before this, nothing published tied the two
+together, and a directory could mint a key, sign with it and name it. Migration `V65
+agent_profiles.key_binding` carries the column; the serving half is in the assignment, both
+directions.
+
+**The client half is deliberately NOT promoted until after this roll.** A promoted client refuses
+every assignment from a directory that does not yet serve bindings, so `latest` moves second. That
+ordering is the reason the roll happened first and not the other way round.
+
+| | |
+|---|---|
+| Image tag | `d1a271e355a267f4f90975593224109c0b17e304` — directory AND relay, both built by Cloud Build from the GitHub repository resource at that revision (`e6791e25`, `fc6de3e7`), not from a local tree |
+| Rolled from | `172a6f98aa97d2283fd5413af64a5af539efba2b` (2026-09-06 morning) |
+| Schema | **64 → 65**, applied by Flyway at container start. All three nodes logged `directory.service.started schemaVersion=65` |
+| `ops_agent_expected_migration_version` | `64` → `65`, applied to Cloud Run **after** all three directories were at 65. `ops_agent.nodes.ok — 3/3 nodes at schema 65` |
+
+**Capacity probed before anything was deleted**, per the playbook — the (zone, machine-type) PAIR for
+every node about to roll, all four created and deleted cleanly:
+
+| Pair | Result |
+|---|---|
+| `us-east1-d` / `n2-standard-2` (directory use1 + relay use1) | ✅ |
+| `us-central1-a` / `e2-standard-2` (directory usc1) | ✅ |
+| `europe-west1-c` / `e2-standard-2` (directory euw1) | ✅ |
+| `europe-west1-c` / `e2-small` (relay euw1) | ✅ |
+
+**Order: relays first, directories second** — receiver-first. The relay legs carry the new assignment
+fields without reading them; the directory leg is the one that starts refusing, so it went onto a
+fleet already able to carry what it asks for. One `-target`ed apply per node, five in all.
+
+| Node | Instance | Evidence it is SERVING |
+|---|---|---|
+| relay `use1` | `cello-gcp-relay-use1-xjmp` | directories' 30s probe resumed, 18 passes / 3 min |
+| relay `euw1` | `cello-gcp-relay-euw1-gm0h` | same, recovered 5 → 13 → baseline |
+| directory `us-east1` | `cello-gcp-use1-n9vw` (id `2763129906818742550`) | 8 anti-entropy rounds from THIS instance id; `directory.service.started` schema 65 |
+| directory `us-central1` | `cello-gcp-usc1-htjw` (id `8669137593007371812`) | 6 rounds from this instance id; schema 65 |
+| directory `europe-west1` | `cello-gcp-euw1-56js` (id `1237071839787775781`) | 4 rounds from this instance id; schema 65 |
+
+> ### ⚠️ A 4-MINUTE WINDOW READ A DEAD NODE AS HEALTHY, and the fix is to filter by INSTANCE ID
+> The playbook's warning is that too SHORT a window reads a healthy node as dead. The opposite trap
+> is real too and it fired here: seconds after `us-east1`'s replacement reached RUNNING, the
+> 4-minute zone query still showed 12 rounds from `us-east1-d` — **all of them emitted by the
+> instance that had just been destroyed**, because the window reached back before the roll. The new
+> node had not yet pulled its image. Reading zone alone, the roll would have moved on to the next
+> node with one directory genuinely down.
+>
+> **Filter on `resource.labels.instance_id` of the NEW instance**, which cannot contain a single
+> round from its predecessor. Both directories took ~2 minutes from RUNNING to first round (image
+> pull → Flyway → boot); `europe-west1` took ~2.5.
+
+**Running config verified from instance metadata, not from the tag** — all five report
+`cello/directory:d1a271e3` or `cello/relay:d1a271e3`.
+
+**No topology change.** Same zones, same machine types, same addresses as the 2026-09-01 state; the
+relay WAL disks stayed in their zones.

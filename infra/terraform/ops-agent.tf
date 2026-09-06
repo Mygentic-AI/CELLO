@@ -299,9 +299,15 @@ variable "ops_agent_image_tag" {
 
 variable "ops_agent_expected_migration_version" {
   type        = string
-  default     = "64"
+  default     = "65"
   description = "Schema version the ops agent asserts. Bump with every new V{N} migration — a stale value crash-loops it on a fresh deploy."
 }
+
+# 64 → 65 on 2026-09-06, with V65 agent_profiles.key_binding (DOD-M15-KEYBIND-1). Bumped when the
+# migration ROLLED rather than when it merged: the assertion is an exact match against the live
+# schema, so a Cloud Run revision carrying 65 while the nodes are still at 64 fails startup just as
+# surely as the stale direction. Applied after all three directories were rolled onto the image that
+# carries V65.
 
 # NOT bumped for DOD-M15-HEARTBEAT-1 (2026-09-03), because that unit ships NO migration. Heartbeat
 # replication needed no schema change: the encoding is fixed at the anti-entropy SELECT, the same
