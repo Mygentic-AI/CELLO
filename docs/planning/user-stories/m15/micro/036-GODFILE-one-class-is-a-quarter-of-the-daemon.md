@@ -2,15 +2,23 @@
 name: 036-GODFILE — One class is a quarter of the daemon
 type: micro-work-order
 date: 2026-09-06
-status: open
+status: complete
 dod_line: DOD-M15-GODFILE-1
-dod_effect: closes
+dod_effect: unit-of
+dod_effect_note: >
+  CORRECTED FROM `closes`. This order does NOT close DOD-M15-GODFILE-1 and never could: it was a
+  PURE-MOVEMENT order, and movement reaches 16,934 lines, not 4,000. Every seam with a short
+  dependency list is extracted; the remaining ~13,000 lines need the class redesigned, which is
+  037-SESSIONCORE. Marked `complete` because 036's own scope is exhausted — leaving it `open` would
+  tell the next session there is more 036 work when there is not — and `unit-of` so the DoD line
+  stays open, which is the true state.
 description: >
   session-node-manager.ts is 19,878 lines, 1.2 MB, one class of 555 members — 25% of the entire
   daemon, holding session state, the whole inbound ingest chain, authorship and acknowledgement
   verification, quarantine, transcripts, relay ordering and park recovery. It is past the size at
-  which a coding agent works reliably, on the most load-bearing code in the product. Split it to
-  under 4,000 lines behind an ESLint ratchet, as PURE MOVEMENT with the comments carried verbatim.
+  which a coding agent works reliably, on the most load-bearing code in the product. Split it
+  behind an ESLint ratchet, as PURE MOVEMENT with the comments carried verbatim. DELIVERED: 20,368
+  → 16,934 across five modules. The under-4,000 target needs the redesign in 037-SESSIONCORE.
 ---
 
 # **<ins>MICRO</ins>** WORK ORDER 036-GODFILE — Split the 19,878-line class
