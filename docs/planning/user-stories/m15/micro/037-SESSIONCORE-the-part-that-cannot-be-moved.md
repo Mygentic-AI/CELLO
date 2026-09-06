@@ -215,3 +215,58 @@ meantime.
 ## Newly discovered
 
 _(Anything found while working that is not this mission. Record and keep going.)_
+
+### ❗ THE SHORT-CONTEXT HYPOTHESIS IS FALSIFIED — this is the finding this order asked for
+
+The Definition of Done says: *"Each of Units 2–5 lands as a collaborator with a context that is a
+SHORT LIST. If a unit's context is still long after Unit 1, that is a finding to report, not a thing
+to force."* Reporting it.
+
+Eleven collaborators have now been extracted. Their context sizes, measured with the TypeScript
+parser rather than estimated:
+
+| collaborator | context members |
+|---|---|
+| `session-queries` | 5 |
+| `session-salts` | 20 |
+| `session-lifecycle` | 33 |
+| `standing-receivers` | 33 |
+| `session-seal` | 41 |
+| `session-relay` | 47 |
+| `session-content-*` (shared) | 56 |
+
+**A short context was not achievable for any of the four big paths, and forcing one would have cost
+more than it bought.** The reason is not that the extraction was done carelessly — it is what this
+class actually is. Inbound ingest reads session state, held content, salts, ephemeral keys, the
+relay client, the ordering record, the screening gateway and the transcript, and it does so inside
+ONE method whose forty guards each read locals the guards above them declared. Buying a narrow seam
+there means rewriting that method, and rewriting the ingest path is a correctness risk on the most
+load-bearing code in the product.
+
+**What was traded instead:** the contexts are WIDE but every member is named and typed, so what a
+file can reach is a list a reader can check rather than a `this`. That is a real improvement over
+555 members on one class, and it is the improvement that was available.
+
+**Two things this predicts for anyone planning further extractions.** First, do not budget for a
+20-member interface; budget for 30–50 and spend the effort on getting each member's TYPE right
+instead. Five signatures in the relay unit alone were wrong on the first pass, and each compiled as
+a plausible wrapper while silently losing something load-bearing — an attribution, an enum, an
+object flattened to a string. Second, `SessionRegistry` as this order imagined it was never built
+and the split landed anyway; it should not be revived on the assumption that it would have shrunk
+these numbers.
+
+### The salt and freeze paths are still half-out
+
+Not this order's job, recorded so the next reader does not assume the four paths accounted for
+everything. `SessionSalts` exists and owns eleven maps, but `#sendSaltFrame`,
+`getSessionContentSalt`, `getSessionContentSaltState` and `handleSaltFrameForTest` — roughly 200
+lines — are still on the manager. And the freeze path (`#freezeSession`, `#freezeOnIdentityFailure`,
+`#freezeSessionForKeyRefusal`) is session lifecycle by any reading, while its consumer now lives in
+`session-lifecycle.ts` — so that file holds a reader of the frozen map without its writer.
+
+### The lazily-opened stores are created in eleven places
+
+`relayReceiptStore` and `sealLeafStore` are each opened on first use, and the same
+`if (!store && db) store = new Store(db, logger)` is repeated across the manager, the seal path and
+the relay path. Three files can now open them. Every repetition is a chance for a second store over
+the same rows; one accessor would collapse the lot. A redesign, not a move.
