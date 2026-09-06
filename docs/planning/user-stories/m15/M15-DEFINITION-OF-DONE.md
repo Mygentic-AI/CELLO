@@ -1376,6 +1376,60 @@ already installed keep trusting the old key until their operator upgrades. The p
 be told. It is also the cheapest item on the list relative to what it removes — a storage-class
 change on two key types, not a protocol change.
 
+### `DOD-M15-ASSIGN-TARGET-1` — ❌ PRE-LAUNCH · The assignment must name the counterparty the operator ASKED FOR
+**Filed 2026-09-06. One comparison, and it is the cheapest security line in this milestone.**
+
+`assignment-verify.ts` establishes that the session assignment is FROST-signed, that the signer is
+this agent's own threshold group key, and that the signature verifies. It does **not** establish that
+the assignment is about the person the operator named. Every consumer of `participant_b.pubkey` on
+the client was checked: it is used to build the TBS and to configure the relay, and it is **never
+compared against `targetHex`** — the pubkey the operator actually typed.
+
+**What that costs.** A quorum of this agent's own directories names an impostor as the counterparty.
+The assignment verifies *perfectly*, because it genuinely is signed by this agent's own group key.
+The daemon opens its receiver to the impostor's peer id and dials them. This is exactly the bound
+`outbound-sessions.ts:480-486` states in its own comment and points downstream to close.
+
+**It IS caught — one step too late.** `#verifyAuthorshipClaim` compares the message signer against
+`counterparty_pubkey`, which comes from the operator's own request and is untouched by anything the
+directory returns, and freezes the session. That is the session-open MITM detection from the
+2026-08-21 investigation and it works. But it fires on the **first message**. Between establishment
+and the counterparty's first word, this agent has dialled a stranger, handed over its session node
+and confirmed it is online. **A peer that never speaks is never detected at all.**
+
+**Done when:** after `verifyAssignmentSignature` returns ok and before anything dials,
+`assignment.participant_b.pubkey` is compared to the target the operator requested, and a mismatch
+REFUSES with its own named reason and guidance. Both sides of that comparison are local values;
+neither is influenced by the directory.
+
+### `DOD-M15-CEREMONY-BLIND-1` — 🟡 PRE-LAUNCH (lower value than it first appears) · The client contributes its FROST share to bytes it never inspects
+**Filed 2026-09-06. Filed WITH the measurement that shrinks it, so nobody re-derives the wrong size.**
+
+The daemon is not merely a participant in the ceremony — it is the **coordinator**. The directory's
+`ClientDelegatedSigner` (`directory-node.ts:7114`) sends the TBS to the client over the signaling
+stream; the client runs `participateInCeremony`, collects partial signatures from the directory
+nodes, aggregates, and returns the finished signature. It signs and assembles its own session
+assignment. `session-ceremony.ts:955-990` shows what it checks first: that a `ceremony_id`, a `tbs`
+and a `context` are present. Nothing about their content. `context` is cast to `FrostContext`, used
+for domain separation, and never compared against an allowlist.
+
+`DOD-M15-SEALPARTIES-1` gave the **directory** nodes a second opinion that can see the evidence, on
+the argument that signing opaque bytes is *"cryptographic weight without judgement"*. The same
+argument applies here and was never applied.
+
+**⚠️ WHAT THIS DOES NOT BUY, measured before filing.** Shareholders are the directory quorum **plus**
+the client (`bootstrapKeyShares`: `{ min: threshold, max: participants + 1 }` — "+1 for the client"),
+and the pre-ceremony check reads `reachableAtInitiation.length < threshold - 1`, *"because the client
+itself is one of the threshold signers"*. With T = majority(N), **a colluding threshold of
+directories can sign without the client at all.** Refusing to sign therefore does not close the
+collusion bound — `DOD-M15-ASSIGN-TARGET-1` does, on the verify side, and that is the line to do
+first.
+
+**Done when:** the ceremony handler validates `context` against the known set and refuses an
+unrecognised one by name; and, for a session-establishment TBS, refuses to contribute when the TBS
+does not describe a session this daemon initiated. **Value is defence-in-depth**, not the headline —
+it removes "the client helps sign whatever it is handed" as a step an attacker gets for free.
+
 # Explicitly Beyond — deferred WITH a trigger, never dropped
 
 Nothing here is out of the project. Each carries the condition that brings it back.

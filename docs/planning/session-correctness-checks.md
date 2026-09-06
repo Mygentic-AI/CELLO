@@ -211,7 +211,9 @@ directory nodes check *what they are being asked to sign*; the client does not.
 | F18 | It has `tbs` and `context` | `session-ceremony.ts` ~960-964 | `no_tbs` / `no_context` | reply `null` | — |
 | F19 | A signer can be reconstructed for the current directory | `session-ceremony.ts` ~971-976 | `no_signer` | reply `null` | F12 |
 | F20 | Enough nodes were reachable at initiation to reach threshold | `frost-threshold-signer.ts` ~431 | ceremony aborts | refuse | R5 |
-| F21 | **What is being signed** | — | — | `⊘` **the client signs opaque bytes.** `context` is used for domain separation, never checked against an allowlist, and the TBS is not inspected | — |
+| F21 | **What is being signed** | — | — | `⊘` **the client signs opaque bytes.** `context` is used for domain separation, never checked against an allowlist, and the TBS is not inspected. Filed as `DOD-M15-CEREMONY-BLIND-1` | — |
+| F21.1 | The client is the ceremony **COORDINATOR**, not merely a participant | `directory-node.ts` ~7114 `ClientDelegatedSigner`; `frost-threshold-signer.ts` ~426-431 | — | it signs, collects the partials and aggregates — its own session assignment included | — |
+| F21.2 | …but a colluding **threshold of directories can sign without it** | `frost-threshold-signer.ts` ~296 (`max: participants + 1`) | — | so refusing to sign does not close A7. `A8x` does, on the verify side | — |
 
 > **F21 is the asymmetry.** `DOD-M15-SEALPARTIES-1` gave the *directory* nodes a second opinion that
 > can see the evidence, on exactly the argument that signing opaque bytes is "cryptographic weight
@@ -282,7 +284,8 @@ id it likes and the daemon dials it.
 | A5 | **Anti-circularity**: the named signer is our own threshold group key | `assignment-verify.ts` ~111-127 | `assignment_signer_not_this_agent` | REFUSE | R6 |
 | A6 | The FROST signature verifies over the recomputed TBS | `assignment-verify.ts` ~128-138 | `assignment_signature_invalid` | REFUSE | A5 |
 | A6.1 | `genesis_prev_root` is **recomputed**, never taken from the frame | `assignment-verify.ts` ~40-46 | — | — | — |
-| A7 | Was a quorum of *our own* directories honest? | — | — | — | `⊘` **designed-for bound** — caught downstream at I2 |
+| A7 | Was a quorum of *our own* directories honest? | — | — | — | `⊘` **designed-for bound** — caught downstream at I3, one step after the dial |
+| A8x | **Does the assignment name the counterparty the operator ASKED FOR?** | **nowhere** — `participant_b.pubkey` builds the TBS and configures the relay, and is never compared to `targetHex` | — | `⊘` **THE GAP.** A verified assignment can name an impostor; the substitution is caught at their FIRST MESSAGE (`I3`), after this agent has dialled them and opened its receiver. A peer that never speaks is never detected. Filed as `DOD-M15-ASSIGN-TARGET-1` | — |
 
 ### Directory-side gates on the same request
 
@@ -659,7 +662,7 @@ a *notification* even though it is not a *refusal*.
 | F21 | **The client contributes its FROST share to opaque bytes** | It co-signs its own session assignment without judging it — the one document it is uniquely placed to check |
 | F26 | A bilateral certificate whose signer's key we do not hold | Accepted as `verified:false`; sound only because it arrived over the authenticated Noise channel |
 | D4, D5, D6 | The directory's word on whether a counterparty exists, is online, and lives where | A wrong answer is a failed or misrouted session, not a forged one |
-| A7 | That a **threshold** of our own directories is not colluding | A wrong counterparty could be named — designed-for bound, caught at `I3` |
+| A7 / A8x | That a **threshold** of our own directories is not colluding — **and nothing checks the assignment names the counterparty the operator typed** | A wrong counterparty is named, the assignment verifies, and this agent dials the impostor. Caught only when they speak (`I3`). `DOD-M15-ASSIGN-TARGET-1` closes it one step earlier with a local-to-local comparison |
 | N18 | On **first contact**, the assignment is only checked for internal consistency | A tampered first assignment is caught; an authentic-looking one from a hostile directory is not, and it then becomes the pin |
 | I3.2 | A verified signature with no counterparty on record stays soft | Cannot prove the signer either way; the only signal the orphan triage has |
 | I10 | An **absent** relay ordering record | Position falls back to the witness stream; the relay stays optional for reading mail |
