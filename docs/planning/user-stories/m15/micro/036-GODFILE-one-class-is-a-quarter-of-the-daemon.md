@@ -43,8 +43,8 @@ description: >
 
 | Part | What | Status | Lines after |
 |---|---|---|---|
-| 0a | The comment sweep of this file | ⬜ not started | 19,878 |
-| 0b | The ratchet | ⬜ not started | — |
+| 0a | The comment sweep of this file | ✅ done | 20,389 |
+| 0b | The ratchet | ⚙️ in progress | — |
 | 1 | Who sent this, and did they see what they claim | ⬜ not started | — |
 | 2 | Taking a message in | ⬜ not started | — |
 | 3 | Holding what was refused | ⬜ not started | — |
@@ -355,3 +355,31 @@ verifies against the tarball.
 ## Newly discovered
 
 _(Anything found while working that is not this mission. Record and keep going.)_
+
+**Measurement correction, not a finding.** The file was **20,368** lines at the branch point
+(`e9f7f8c`), not the 19,878 in this order's frontmatter — it grew ~490 lines in the days between the
+order being written and being picked up. It does not change the target (under 4,000) or the shape of
+the work; it is recorded so the ratchet's grandfathered number is set from a measurement rather than
+from this file. Part 0a's rewrite added 21 more, so the ratchet starts at 20,389.
+
+**1 · `sendContent`'s doc block carries the SAME stale claim B1 was raised for.** Found while
+verifying B1; it is not on [[M15-PUBLIC-COMMENT-SWEEP]], so under Rule 3 it is recorded and left
+alone. `session-node-manager.ts` `sendContent` (~line 8698, *"SCOPE / findings #3 + #4"*) still tells
+a public reader that the send path *"does NOT also submit a K_local-SIGNED content_hash leaf to the
+RELAY … that relay hash-submit is MSG-001's scope"*, and that *"because there is no relay yet"* the
+sequence number is a local leaf index rather than a relay-assigned one. **The relay hash-submit path
+exists** — the same fact that made B1 stale — so at minimum the first half is out of date, and the
+second half's premise (*"there is no relay yet"*) is false on its face. **Category B, same as B1, and
+by the same argument it is worth more than tidiness: it is the sentence an evaluator's coding agent
+collects.** Needs the same verify-then-rewrite treatment, including checking whether the ordering
+half is genuinely still open before rewriting it — B1's lesson is that the two halves of one stale
+paragraph went stale at different times.
+
+**2 · Two doc blocks are orphaned from the functions they describe.** `ingestReceivedContent` (the
+DAEMON-004 cross-check) and `#markContentUnverifiable` each have **no leading doc comment**; their
+doc blocks sit stacked above `#noteUnreadableAlgFrame`, several hundred lines away, where a reader
+finds three consecutive `/** … */` blocks and one function. Pure comment drift, no behaviour
+attached. Recorded rather than fixed because Rule A forbids the tidy-up — but it is worth naming
+because **Part 2 moves `ingestReceivedContent`, and a mechanical move would leave its documentation
+behind in the old file.** Whoever works Part 2 must carry the DAEMON-004 block with the function it
+describes; that is Rule C (comments travel with their code), not a repair.
