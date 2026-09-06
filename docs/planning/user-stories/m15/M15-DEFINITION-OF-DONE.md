@@ -1494,6 +1494,36 @@ what they can DO?* — and the failures are a gap list. **Output is the gap list
 separate work and separately ranked** — this line is the measurement, and running it is what turns
 the map into an audit.
 
+### `DOD-M15-TESTS-VERSION-1` — ❌ PRE-LAUNCH · No test asserts that an old wire shape is tolerated
+**Filed 2026-09-06. Consumes the list `036-GODFILE` produces. Do not start it before 036 closes.**
+
+`DOD-M15-BACKCOMPAT` is settled policy as of 2026-09-06: **this project is in alpha, there is no
+installed base, and wire tolerance is the main target rather than an exception.** A v1 layout accepted
+beside v2, an absent field read as *"a peer that predates it"*, a fallback for a build no longer
+published — all of it goes, and every agent runs the current build.
+
+**The tests are the other half of that, and they are the half that keeps the dead shape alive.** A
+test asserting *"a v1 claim is accepted"* is a specification that v1 must keep working. Delete the
+production tolerance and that test goes red; keep the test and someone puts the tolerance back to fix
+it. **The test is what would reinstate the defect.**
+
+**Why tolerance is worth removing at all, stated so this is not read as tidying:** tolerance is
+exactly what makes a version skew SILENT. An older daemon reads a newer acknowledgement as the older
+layout and drops the message without complaining. Remove it and the same skew is a loud refusal with
+a name. This converts silent data loss into a visible error.
+
+**⚠️ SEQUENCED AFTER 036, and the reason is 036's safety property.** That order's Rule B — *a test
+that has to change is proof behaviour moved* — is the main thing standing between a 16,000-line
+refactor and a silent break. A general test sweep running alongside it destroys that signal: once
+tests are changing for intended reasons, a test that changed because something broke is no longer
+distinguishable. 036 **records** what it finds and touches nothing; this line acts on the list.
+
+**Done when** every test that asserts an old shape is tolerated is either updated to assert the
+current shape, or deleted with the behaviour it described; the suite is green; and the close-out names
+each one, because that list plus 036's deletion list is what says which agents must be redeployed.
+
+**Out of scope:** general test-quality work. This is version pinning only.
+
 # Explicitly Beyond — deferred WITH a trigger, never dropped
 
 Nothing here is out of the project. Each carries the condition that brings it back.

@@ -157,6 +157,11 @@ no installed base, and it preserved the silent-failure path this milestone exist
 - **Record every deletion in the close-out**, one line each, naming the shape removed. After this
   lands, **every live agent must be on the new build** — that list is what makes the redeploy
   checkable rather than remembered.
+- **A test that pins an old shape whose code you are NOT deleting: record it, do not touch it.** Put
+  it under *Newly discovered* with file and line. Deleting back-compat is what surfaces these, and
+  that knowledge is only generated once — but fixing them here would destroy Rule B, which is this
+  order's main safety signal: once tests change for intended reasons, a test that changed because you
+  broke something is no longer distinguishable. `DOD-M15-TESTS-VERSION-1` consumes that list.
 
 ---
 
