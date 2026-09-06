@@ -2,7 +2,7 @@
 name: 039-ASSIGNTARGET — The permission slip must name who you asked for
 type: micro-work-order
 date: 2026-09-06
-status: open
+status: complete
 dod_line: DOD-M15-ASSIGN-TARGET-1
 dod_effect: closes
 description: >
@@ -147,6 +147,55 @@ After `verified.ok` and **before** the function returns the assignment to anythi
 
 ---
 
+## Closed 2026-09-06
+
+**Reviewer verdict (`cello-unit-reviewer`), quoted:** *"SPEC: FAITHFUL · NO SILENT FALLBACKS ·
+ERRORS NAME THEIR CAUSE · TESTS HAVE TEETH · REMOVALS PROVEN · NO COMPATIBILITY DEBT. **No blocking
+findings.** F1 and F2 are worth fixing before close; F3–F5 are one-line edits."* All five fixed,
+commit per fix.
+
+**Commits (cello-client, `main`):** `925f46c` implementation + tests · `d049190` F1+F4 guidance ·
+`8e57c10` F3 comment · `d8fb4dc` F2 identity object · `fa09754` F5 test assertion.
+
+**Gate:** `pnpm run test` exit 0 (4970 passed, 11 skipped — the unset `CELLO_E2E_LIVE` suites),
+`pnpm run lint` exit 0, `pnpm run typecheck` exit 0 (which is the build in this repo).
+
+### The premise in this order's own analysis was WRONG, and the correction is the useful part
+
+This order argued the exposure was **one plaintext message**. Review measured it and it does not
+hold in this tree: on the initiator side the content key is agreed from a peer ephemeral that must
+verify against the **session's** counterparty record, which is the operator's own `target_pubkey` —
+**not `participant_b`**. A substituted counterparty cannot sign a passing half, and a send with no
+agreed key throws; content encryption has no degraded mode. **No plaintext ever left the machine,
+and the broadcast "open subscription" argument does not hold either.**
+
+**What was actually wrong is a better argument than the one that was written**, and it is why the
+line still closed rather than being downgraded:
+
+1. **Error substitution.** A substituted counterparty surfaced to the operator as
+   `session.key.refused`, whose guidance blames *"something in the middle of your connection
+   substituting its own key"* — the relay and the network accused for a fault that was entirely the
+   directory's, sending the operator to investigate the wrong party.
+2. **The dial itself discloses.** The impostor gets our session peer id and, on a direct address,
+   our IP — permanently — before anything has failed.
+3. **The seal anchor disagreed with the session.** `recordSessionGenesis` anchors the transcript to
+   `participant_a`/`participant_b` while the session's own counterparty record holds what the
+   operator asked for. Refusing here keeps the two provably equal.
+
+Both the call-site comment and the test header were rewritten to say this instead. Left as a record
+because a reader who later deleted the ephemeral binding would otherwise believe this guard was
+holding a line it never held.
+
+---
+
 ## Newly discovered
 
 *(append here; do not fix)*
+
+- **`session.discovery.unsupported_fallback` is a path for a directory that does not exist**
+  (`cello-client/core/daemon/src/outbound-sessions.ts`, the exhausted-discovery branch). It exists
+  for a directory node that does not answer `discovery_lookup`; there is no such node, and reaching
+  it costs 19 seconds of retries before falling through. Found by review while checking which call
+  sites the new tests reach. **POST-LAUNCH** — it is dead weight on a path nothing takes, not
+  something a customer meets.
+

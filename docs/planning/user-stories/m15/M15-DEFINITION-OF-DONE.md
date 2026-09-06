@@ -1409,8 +1409,16 @@ already installed keep trusting the old key until their operator upgrades. The p
 be told. It is also the cheapest item on the list relative to what it removes — a storage-class
 change on two key types, not a protocol change.
 
-### `DOD-M15-ASSIGN-TARGET-1` — ❌ PRE-LAUNCH · The assignment must name the counterparty the operator ASKED FOR
+### `DOD-M15-ASSIGN-TARGET-1` — ✅ PRE-LAUNCH · The assignment must name the counterparty the operator ASKED FOR
 **Filed 2026-09-06. One comparison, and it is the cheapest security line in this milestone.**
+
+> ✅ **Closed 2026-09-06 by order 039-ASSIGNTARGET** (cello-client `925f46c`..`fa09754`). Both
+> participants are compared, case-insensitively, against local values the directory cannot influence
+> — `targetHex` and this agent's loaded K_local — after the signature verifies and before anything
+> dials; each mismatch refuses with its own reason and guidance. Tests assert NO DIAL OCCURRED,
+> proven load-bearing by a refuse-after-dialling mutant that typechecked, ran, and reddened on
+> exactly that assertion. Gate: 4970 passed, lint 0, typecheck 0. Reviewer: *"No blocking findings"*
+> — 5 findings (2 MEDIUM, 3 LOW), all fixed, commit per fix.
 
 `assignment-verify.ts` establishes that the session assignment is FROST-signed, that the signer is
 this agent's own threshold group key, and that the signature verifies. It does **not** establish that
