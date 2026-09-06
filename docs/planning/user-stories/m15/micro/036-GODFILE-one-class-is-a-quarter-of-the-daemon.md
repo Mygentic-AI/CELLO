@@ -103,7 +103,7 @@ it correctly.
 
 ---
 
-## The five rules of the work — each one is a STOP CONDITION
+## The six rules of the work — each one is a STOP CONDITION
 
 **A. PURE MOVEMENT.** No renames. No logic changes. No de-duplication. No "while I'm here". A diff
 that is not a move belongs to a different unit — record it under *Newly discovered* and keep going.
@@ -122,6 +122,33 @@ than the split gains. They travel with the code they describe, unedited — ⚠�
 
 **E. ONE PART PER SESSION.** Commit per part, push after every commit, update Progress in the same
 commit.
+
+**F. BACKWARD-COMPATIBILITY CODE IS DEAD CODE — DELETE IT. Andre, 2026-09-06.**
+
+**This project is in alpha. There is no installed base to protect.** Anything that exists only to
+keep an older shape working is dead, and moving it into a new module preserves it for no reason.
+Delete it.
+
+> ⚠️ **THIS IS THE ONE CARVE-OUT FROM RULE A, and it is bounded so the diff stays reviewable.**
+> A deletion is not a move. So **delete in its OWN commit, never mixed with a move** — the reviewer
+> must be able to read "this moved" and "this was deleted, because it was back-compat" as separate
+> claims. `cello-unit-reviewer`'s removal-integrity lens fires on exactly these commits (proven
+> deadness, deleted-test triage, built-artifact absence) and is the guard on them.
+
+**⚠️ ONE CATEGORY IS NOT DEAD, AND CONFUSING IT WITH BACK-COMPAT BREAKS LIVE AGENTS.** *Tolerating a
+COUNTERPARTY on an older published build* is a live constraint, not legacy. It looks identical in
+code — a v1 layout accepted alongside v2, an absent field read as "a peer that predates it" — but it
+is load-bearing today, because the agents in the field are not all on the same daemon version and the
+known failure mode is silent (an older daemon reads a newer acknowledgement as the older layout and
+drops it without complaining).
+
+- **In-repo legacy** — a superseded internal path, an M6/M7-era fallback, a migration for a shape no
+  live database holds: **delete.**
+- **Wire tolerance for an older PEER or a signed artifact already issued**: **do not delete. Record it
+  under *Newly discovered* with the file and line, and keep going.** Andre rules on those, and it is
+  a version-enforcement decision rather than a refactor one.
+
+If you cannot tell which of the two a piece of code is, it is the second. Record it and move on.
 
 ---
 
