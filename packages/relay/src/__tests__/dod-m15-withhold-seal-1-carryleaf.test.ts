@@ -178,8 +178,9 @@ describe("034-CARRYLEAF: a withheld message can be witnessed by the party who re
     expect(replay["type"]).toBe("hash_submit_error");
     expect(replay["reason"]).toBe("counter_submit_duplicate");
 
-    // NO POSITION CONSUMED.
-    const next = await h.submit({ contentHash: new Uint8Array(randomBytes(32)), lastSeenSeq: 0, timestamp: Date.now(), lastSeenHash: genesis, prevOwnHash: genesis });
+    // NO POSITION CONSUMED. This is A's SECOND leaf, so its self link names A's FIRST content hash
+    // — the refused replay above never entered A's chain, which is the property being asserted.
+    const next = await h.submit({ contentHash: new Uint8Array(randomBytes(32)), lastSeenSeq: 0, timestamp: Date.now(), lastSeenHash: genesis, prevOwnHash: content });
     expect(next["sequence_number"], "the refused replay must not have eaten position 2").toBe(2);
   });
 
@@ -243,7 +244,15 @@ describe("034-CARRYLEAF: a withheld message can be witnessed by the party who re
     const content = new Uint8Array(randomBytes(32));
 
     const one = await h.submit({ contentHash: content, lastSeenSeq: 0, timestamp: Date.now(), lastSeenHash: genesis, prevOwnHash: genesis });
-    const two = await h.submit({ contentHash: content, lastSeenSeq: 0, timestamp: Date.now() + 1, lastSeenHash: genesis, prevOwnHash: genesis });
+    /**
+     * ⚠️ THE SELF LINK IS WHAT MAKES THESE TWO DISTINGUISHABLE — `DOD-M15-SELFCHAIN-1`.
+     *
+     * The content hash is identical by design, so nothing else separates them: same sender, same
+     * acknowledgement, same content. The second names the FIRST as its predecessor, and that is the
+     * whole difference. Passing `genesis` here would present it as A's first message again, which
+     * the relay correctly refuses as a broken chain.
+     */
+    const two = await h.submit({ contentHash: content, lastSeenSeq: 0, timestamp: Date.now() + 1, lastSeenHash: genesis, prevOwnHash: content });
     expect(one["sequence_number"]).toBe(1);
     expect(two["sequence_number"], "the author's own repeat is a second message and takes a second position").toBe(2);
   });
