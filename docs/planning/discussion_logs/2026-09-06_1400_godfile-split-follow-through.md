@@ -4,9 +4,9 @@ type: discussion
 date: 2026-09-06
 topics: [m15, godfile, refactor, session-node-manager, 036, 037, 040-044, compaction]
 description: >
-  Cold-start state for the session-node-manager.ts split. 20,368 → 10,945 across sixteen modules
-  (036 + 037, both merged). What is left, why it is hard, the exact commands, and the traps that
-  were paid for. Written before a compaction.
+  Cold-start state for the session-node-manager.ts split. 20,368 → 7,129 across nineteen modules
+  (036, 037, and the content extraction). What is left, why it is hard, the exact commands, and the
+  traps that were paid for. Kept current as each extraction lands.
 ---
 
 # The god-file split — where it stands
@@ -14,39 +14,56 @@ description: >
 ## One paragraph
 
 `core/daemon/src/session-node-manager.ts` was **20,368 lines, one class, 25% of the daemon**. It is
-**10,945** now, across sixteen files. Orders **036-GODFILE** (pure movement) and **037-SESSIONCORE**
-(redesign) are both **merged to `cello-client` main at `2b1cc50`**. Every unit was reviewed by
-`cello-unit-reviewer` and every finding fixed. The target — under 4,000 — is **not met**, and what
-remains is one method plus three domains.
+**7,129** now, across nineteen files. Orders **036-GODFILE** (pure movement) and **037-SESSIONCORE**
+(redesign) are merged at `2b1cc50`; the **content extraction** — the largest single piece — landed at
+`ddf545b`. Every unit was reviewed by `cello-unit-reviewer` and every finding fixed. The target —
+under 4,000 — is **not met yet**, and what remains is three domains totalling 4,212 lines.
 
 ## Live state, exact
 
 | | |
 |---|---|
 | cello-client `main` | `2b1cc50` — 036 and 037 fully merged |
-| worktree | `/Users/andrep/cello-client-wt/037-sessioncore`, branch `m15/037-sessioncore`, clean, level with main |
-| `session-node-manager.ts` | **10,945 lines** |
-| ESLint ratchet | `max-lines` 3,000 general; `session-node-manager.ts` grandfathered **10,945**; `daemon.ts` 6,080 |
+| worktree | `/Users/andrep/cello-client-wt/037-sessioncore`, branch `m15/037-sessioncore`, at **`ddf545b`**, pushed |
+| `session-node-manager.ts` | **7,129 lines** |
+| ESLint ratchet | `max-lines` 3,000 general; `session-node-manager.ts` grandfathered **7,129**; `daemon.ts` 6,080 |
 | trustless-cello | `a8d2a69a`, clean |
-| suite | 436 files / 4,970 tests green; `J-SPINE` 7/7 including the bilateral seal |
+| suite | 436 files / **4,971** tests green; lint and typecheck clean; `J-SPINE` 7/7 including the live send/receive and the bilateral seal |
 
-**Sixteen modules exist beside the manager:** `session-node-types`, `authorship-verification`,
+**Nineteen modules exist beside the manager:** `session-node-types`, `authorship-verification`,
 `inbound-refusals`, `session-records`, `park-recovery` (036); `session-salts`, `session-schema`,
 `session-queries`, `refusal-notices`, `session-ephemerals`, `session-liveness`, `witness-alerts`,
-`held-content`, `session-leaf-records`, `standing-receivers` (037).
+`held-content`, `session-leaf-records`, `standing-receivers` (037); `session-content-context`,
+`session-content-send`, `session-content-ingest` (the content extraction).
+
+**The content extraction, `ddf545b`, in one paragraph.** 25 methods / 3,518 lines left the class.
+It was split in TWO rather than one, and the seam is real: outbound reaches nothing inbound at all,
+and inbound reaches exactly ONE thing outbound — settling the acknowledgement for a message we sent,
+which arrives on the very stream the receiver is already reading. So the sender is constructed first
+and handed to the receiver. That is also what keeps both halves under the ordinary 3,000-line
+ceiling; a single content file would have been 3,772 and needed a grandfather entry of its own,
+which is the thing the ratchet exists to stop. The context is **56 members** — wide, explicit, and
+the deliberate trade. Anything the manager can REPLACE after construction is reached through a
+GETTER, never captured; `#securityGateway` moved to the top of the constructor because a
+constructor cannot hand out a field it has not set yet. The seven public methods keep one-line
+delegators on the manager (451 external call sites) whose signatures are DERIVED via
+`Parameters<>`/`ReturnType<>` rather than copied, so they cannot drift.
 
 ## What is left, and the plan Andre chose
 
 **Measured, not estimated** (TypeScript parser, `ts.createSourceFile`):
 
-| group | methods | lines | distinct `this.*` refs |
+| group | methods | lines | context size |
 |---|---|---|---|
-| content (`ingestReceivedContent` 998, `sendContent` 851, `#handleContentStream` 572, + helpers) | 25 | 3,518 | 74 |
-| lifecycle (create/accept/revive/destroy/status/evict/shutdown) | 25 | 2,150 | 66 |
-| relay + reservations | 30 | 1,389 | 42 |
-| seal | 24 | 932 | 33 |
-| **total** | | **7,989** | |
-| **would leave** | | **~2,957** | under the 4,000 target |
+| ~~content~~ | ~~25~~ | ~~3,518~~ | **DONE — `ddf545b`** |
+| lifecycle (create/accept/revive/destroy/status/evict/shutdown) | 22 | 1,964 | 53 |
+| relay + reservations | 29 | 1,316 | 32 |
+| seal | 24 | 932 | 29 |
+| **total remaining** | | **4,212** | |
+| **would leave** | | **~2,918** | under the 4,000 target |
+
+Re-measured on the post-extraction file. All three contexts are NARROWER than the content one was,
+so none of them needs the trade that one made.
 
 **ANDRE'S DIRECTION, 2026-09-06, and it supersedes the five-order plan:** get it done, quickly,
 correctly — he does not care how. So: **four big extractions, not five careful phases**, accepting
@@ -127,8 +144,20 @@ it dies with the session and must be re-armed after compaction.
   **Do not touch `session-queries.ts` while it runs.**
 - **039-ASSIGNTARGET** already landed on main.
 
+## A gap found but deliberately NOT closed here
+
+`dod-agent-id-joinkey-ac3-guard.test.ts` calls itself the scan over "the files that own the seven
+re-keyed tables' SQL" and names exactly two: `session-node-manager.ts` and `retry-queue.ts`. Since
+037 that is stale — `session-schema`, `session-queries`, `session-records`, `held-content` and
+`session-leaf-records` all hold SQL now and none of them is scanned. It is a THEORETICAL gap today:
+a scan of every daemon source file finds no session-table query scoped on `agent_name` anywhere, and
+the content extraction moved no SQL at all. Widening it properly needs a better exemption than the
+current one-line `RESOLVER_RE` (every legitimate hit is a query against the `agents` table, which
+that regex does not recognise), and `session-queries.ts` belongs to the live 038 lane. **Do it after
+the extractions, with the comment sweep.**
+
 ## What is NOT done
 
-- `session-node-manager.ts` under 4,000 (it is 10,945).
-- The four big extractions above.
+- `session-node-manager.ts` under 4,000 (it is 7,129).
+- The three extractions above: lifecycle, relay, seal.
 - `DOD-M15-GODFILE-1` stays open. 036 is `complete`/`unit-of`; 037 is still `open`.
