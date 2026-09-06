@@ -205,6 +205,40 @@ and *is what they say they saw actually what we sent*. **First because it is the
 has the heaviest test coverage, and is security-critical** — so it gains most from being readable,
 and it proves the trap pattern on a small surface before Part 2 needs it.
 
+> #### Step 1 output — THE DECLARED STATE (written before anything moved, per THE TRAP)
+>
+> The cluster is `#verifyAuthorshipClaim`, `#verifySenderSelfChain`, `#verifyAcknowledgedContent`,
+> `#noteReceivedFromCounterparty` and `#refuseUnprovenAuthorship`, plus the `AUTHORSHIP_*` /
+> `ACK_HASH_*` constants. Measured, not guessed — every `this.` reference in the span.
+>
+> **Two maps MOVE WITH IT and are therefore not dependencies at all.** `#receivedFromCounterparty`
+> and `#lastFromCounterparty` are declared inside the cluster and — verified by grepping the whole
+> file — are read and written *nowhere else*. They become the new module's own private state, which
+> is the outcome that makes this a seam rather than a split.
+>
+> **Eight external dependencies, and only three of them touch anything private:**
+>
+> | # | What it needs | Private? |
+> |---|---|---|
+> | 1 | `#logger` | No — already an injected dependency, not manager state |
+> | 2 | `#k(agentName, sessionId)` | Pure key function, no state |
+> | 3 | `#sessionGenesisPrevRoot(agentName, sessionId)` | **Private method** |
+> | 4 | `#activeNodes.get(k)?.relaySessionIdBytes` | **Private, ONE narrow read** |
+> | 5 | `#heldContent.get(k)` | **Private, ONE narrow read** |
+> | 6 | `getSessionTree(...)` | Already public |
+> | 7 | `getSessionRecord(...)` | Already public |
+> | 8 | `isSessionDiverged(...)` | Already public |
+>
+> **Shape: a narrow context interface the manager implements — NOT widened fields, NOT `this`.**
+> Rows 4 and 5 are handed over as accessors returning exactly what the two call sites read today, so
+> the moved expressions stay character-identical (row 5 returns the same map, so
+> `heldHere ? [...heldHere.values()].some(…) : false` moves verbatim rather than being "simplified"
+> into a helper — that would be a logic change wearing a refactor's clothes).
+>
+> **Why this seam is safe, measured:** **zero test files reference these methods by name.** They are
+> exercised entirely through the public ingest path, so a correct move leaves all 434 test files
+> untouched — Rule B is satisfied by construction rather than by luck.
+>
 > ⚠️ **THE ORDER OF THE CHECKS INSIDE IT IS ITSELF A SECURITY PROPERTY** — decode → signature →
 > signer → what the proof is about. Everything after the signer answers `unusable`, which refuses the
 > message and leaves the session alive; signature and signer answer `refuted`, which FREEZES it. A
