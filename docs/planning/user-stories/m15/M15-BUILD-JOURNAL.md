@@ -11371,3 +11371,115 @@ Every new guard verified by DELETING it and watching the test go red — the rec
 cases red), the directory seal check (1 of 4), the relay escalation. Gates: **cello-client 4962
 passed / 11 skipped**, lint and typecheck clean; **trustless-cello 2036 passed / 631 skipped**, lint
 and typecheck clean.
+
+---
+
+## DOD-M15-GODFILE-1 — the 20,368-line class, split
+
+`core/daemon/src/session-node-manager.ts` was **20,368 lines in one class — a quarter of the
+daemon**, with 555 members and the next largest file in the repo at 6,077. It is **3,392** now,
+across twenty-two modules beside it. Every line of comment moved with the code it describes.
+
+### Why this was a correctness risk, not a tidiness one
+
+Two measurements decided how it was done. First, it had never been refactored: 525 lines in June,
+19,878 in September, monotonic, with nearly half the growth in the final three weeks. Second, the
+refactor that *did* happen proves a split alone is not the fix — nine commits took `daemon.ts` from
+6,279 lines to 2,081 in July, and it was back to 6,077 within two months with no guard in the way.
+
+So the ratchet came first and the split second. `eslint.config.mjs` carries a `max-lines` rule with
+one visible grandfather list, lowered after every extraction, and CI refuses an in-file
+`eslint-disable` of it. The number now sits at 3,392 — below the general 3,000 ceiling is still not
+true, and that is a decision recorded below rather than a shortfall.
+
+### What moved
+
+| | lines |
+|---|---|
+| content — sending, receiving, the stream, and the shared context | 3,828 |
+| session lifecycle — opened, accepted, revived, torn down | 1,840 |
+| relay — the blind witness, reservations, quarantine | 1,624 |
+| seal — readiness, the leaf, the carry, the certificate | 1,112 |
+| the fifteen modules from the two earlier orders | — |
+
+The content path was split in TWO rather than one, and the seam is real rather than aesthetic:
+outbound reaches nothing inbound at all, and inbound reaches exactly ONE thing outbound — settling
+the acknowledgement for a message we sent, which arrives on the very stream the receiver is already
+reading. That is also what keeps both halves under the ordinary ceiling; a single content file would
+have been 3,772 and needed a grandfather entry of its own, which is the thing the ratchet exists to
+prevent.
+
+### Bugs found and fixed
+
+**A hung `cello_send` with no error, no log and no timeout.** *Symptom:* the whole suite green while
+a send never returned. *Root cause:* a map of pending salt promises was added to a collaborator's
+eviction, but the manager SETTLED those promises rather than deleting them — so the settle no-op'd
+and the promise never resolved. *Fix:* eviction leaves it alone; the caller settles it. *Rule:*
+never fold a map into a collaborator's eviction without checking what the original did with it —
+delete and settle are not the same operation.
+
+**Signing silently disabled, and sessions falling back to unencrypted content.** *Symptom:* nothing.
+*Root cause:* the key-provider resolver was passed to a collaborator as a captured VALUE during
+construction, and the manager assigns it afterwards — so it was frozen at `null` for the life of the
+process. *Fix:* anything the manager can replace after construction is reached through a getter.
+*Rule:* a captured value is a snapshot; if the owner can reassign the field, the context must not
+hold the value.
+
+**Four source-scanning guards had stopped watching the code they police.** These are the ones that
+matter, because each stayed GREEN:
+
+- The revival parity scan — which proves *everything establishment does, revival does too* — names
+  its collaborator prefixes explicitly. It missed three new ones in turn. The relay miss cost real
+  coverage: establishment's connect and revival's reconnect left its checklist **at the same
+  moment**, so parity still held and the scan stayed green while no longer checking the single most
+  important step it exists for. The fourth miss would have taken everything: inside a collaborator a
+  sibling call reads `this.#ctx.relay.…`, which the pattern could not match at all, so an empty list
+  compared equal to an empty list.
+- The relay-only IP-leak guard scanned a hand-written pair of files, and the read it looks for moved
+  into the new relay file. Nothing leaks today; what it cost is the future — an address-building
+  read added to that file would be invisible, and an operator running relay-only would publish their
+  real IP while the setting still said "on".
+- The seal-status guard matched a four-line TYPE SIGNATURE, then matched PROSE — the comment
+  explaining the very fix it polices.
+- The `agent_name` join guard still named two files as owning the session SQL, which had been stale
+  since the previous order.
+
+*Fix:* the two file-list guards are now globs over the source directory; the parity pattern sees
+through the context; the seal guard's two filters agree with each other. Each gained a check that
+fires when its pattern matches nothing anywhere. **Rule: a loop over a hand-maintained list gets
+SHORTER when someone forgets an entry, never red.** A glob cannot shrink.
+
+**Seven doc blocks were attached to the wrong method**, some for two milestones. Always the same
+shape: a method is reduced to a delegator, its block stays behind, and the method below it inherits
+a description of something else — then the next extraction carries the pair into a file where the
+method the orphan describes does not exist at all, at which point nobody can recover what it meant.
+*Rule:* move a block with its method; two blocks in a row is the tell.
+
+**A `securityGateway` that a constructor could not hand out.** Its required-argument check sat at the
+END of the constructor while a collaborator built at the top needed the value. Moved to the top —
+which also means a caller that forgot to screen is told before the manager builds anything.
+
+### What is deliberately NOT done
+
+`gracefulShutdown` (196 lines) and `#evictSessionCaches` (194) stayed on the manager. The first is
+PROCESS teardown — it closes the database, sets the shutting-down flag, stops the reservation
+watchdog. The second clears the shared maps every collaborator writes. Moving either would mean a
+collaborator reaching back through its own context to mutate its owner's core lifecycle state, which
+is a worse shape than a larger manager. They are 390 of the 3,392 lines that remain: **the general
+3,000 ceiling was reachable by forcing that seam and was not taken.**
+
+Two gaps were found and left, both recorded in the follow-through log: the two lazily-opened stores
+are created in eleven separate places, and the `agent_name` guard's exemption needed rewriting from
+a list of query shapes into the actual rule. Both are redesigns rather than moves.
+
+### Evidence
+
+Every unit reviewed by `cello-unit-reviewer`; every finding fixed and committed separately. Each
+review verified "pure movement" MECHANICALLY — normalising the new file back through the constructor's
+own binding and diffing both directions as line multisets — rather than by reading. Every repointed
+guard was then made to fail on purpose: delete the thing it polices, watch it go red.
+
+Gates on each unit: `rm -rf core/*/dist core/*/*.tsbuildinfo && pnpm run build:clean`, then
+**4,971 tests green**, lint and typecheck clean, then the live binary spine **7/7** — two agents
+registering, opening a session, sending, receiving, both closing, and coming back with a
+byte-identical notarized seal.
