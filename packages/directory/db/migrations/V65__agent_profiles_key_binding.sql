@@ -25,13 +25,17 @@
 -- ─── Nullable, and what a NULL means operationally ────────────────────────────────────────────
 -- A migration cannot mint a signature — only the daemon holding the seed can. So rows written
 -- before this column exists read back NULL, and the client for such an agent has not sent one.
--- Those agents are NOT served: #processSessionRequest refuses with `key_binding_unavailable`
--- rather than brokering a session neither side could verify. The operator re-registers, the daemon
--- mints the binding from key material it already has (no second DKG — key refresh preserves the
--- group key), and the row is written with it.
 --
--- Refusing rather than degrading is the point. A tolerated NULL reproduces exactly the state this
--- column exists to end, and hands the choice to the party the check exists to catch.
+-- THIS NODE STILL BROKERS THE SESSION, and logs `session.key_binding.unavailable` naming which
+-- side is unbound. It does NOT refuse: a directory cannot verify a binding, so a refusal here
+-- would put the decision in the one party that cannot make it. Both CLIENTS refuse the assignment
+-- instead — by name, with the remedy — which is the enforcement point that can actually check a
+-- signature. The operator re-registers, the daemon mints the binding from key material it already
+-- has (no second DKG — key refresh preserves the group key), and the row is written with it.
+--
+-- Registration itself is where the fail-closed sits: `decodeInboundSignalingFrame` REJECTS a
+-- `dkg_complete` that carries no `key_binding`, so no new profile can be written without one. The
+-- nullability below exists only for rows that predate this migration.
 --
 -- ─── Hash chain: NOT AFFECTED, and that is checked rather than assumed ────────────────────────
 -- `agent_profiles` is not in HASH_CHAINED_TABLES (hash-chain.ts) and setProfile writes a plain
@@ -56,5 +60,6 @@ ALTER TABLE agent_profiles ADD COLUMN IF NOT EXISTS key_binding TEXT;
 COMMENT ON COLUMN agent_profiles.key_binding IS
   '038-KEYBIND: hex 64-byte Ed25519 signature by the agent''s own K_local over '
   '(k_local_pubkey, primary_pubkey). The directory stores and serves it and can neither forge nor '
-  'swap it — the signer is a key no directory holds. NULL means the agent registered before the '
-  'proof existed; sessions for it are REFUSED until it re-registers, never brokered unverifiable.';
+  'swap it — the signer is a key no directory holds, which is why this node never verifies it. '
+  'NULL means the agent registered before the proof existed: sessions for it are still brokered '
+  'here and REFUSED BY BOTH CLIENTS, which are the only parties that can check the signature.';

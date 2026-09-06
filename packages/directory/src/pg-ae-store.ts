@@ -161,8 +161,10 @@ const TIER_A: readonly TierAPg[] = [
     // while a peer holds NULL, so the hashes never meet. `key_binding` cannot — it is NULL only for
     // a profile whose ORIGIN row was written before the column existed, so it is NULL everywhere and
     // hashes as absent on both sides. Requiring it would refuse a row that converges perfectly well,
-    // in exchange for nothing: such an agent is already unreachable, because the session path
-    // refuses to broker without a binding.
+    // in exchange for nothing: such an agent is already unreachable, because BOTH CLIENTS refuse an
+    // assignment carrying no binding. (This node brokers it anyway and logs
+    // `session.key_binding.unavailable` — it cannot verify a signature by a key no directory holds,
+    // so it is not the party that enforces one.)
     requiredColumns: ["agent_id"],
   },
   {

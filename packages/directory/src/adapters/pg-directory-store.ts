@@ -311,7 +311,9 @@ export class PgDirectoryStore implements DirectoryStore {
       status: string;
       agent_id: string | null;
       // 038-KEYBIND. NULL for an agent registered before the binding existed. Carried as undefined
-      // rather than "" so `#processSessionRequest`'s refusal fires on absence and not on falsiness.
+      // rather than "" so the session path can tell ABSENT from a zero-length value: the first is a
+      // pre-038 profile, the second would be a corrupt one, and only the encoder gate below tells
+      // them apart. This node never verifies the value — it cannot; the clients do.
       key_binding: string | null;
     }>(`SELECT k_local_pubkey, primary_pubkey, ml_dsa_pubkey, phone_stub_hash, registered_at, status, agent_id, key_binding FROM agent_profiles WHERE status = 'active'`);
     for (const row of result.rows) {

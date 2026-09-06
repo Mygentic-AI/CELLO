@@ -167,8 +167,12 @@ export function encodeSessionAssignment(frame: SessionAssignmentFrame): Uint8Arr
      * refusal. There is no third outcome, which is what "the carrier is untrusted by construction"
      * means in code.
      *
-     * Emitted UNCONDITIONALLY once present: #processSessionRequest refuses to build an assignment
-     * without them, so a gate here could only hide a bug it was written to prevent.
+     * ⚠️ THE THREE GATES BELOW ARE LOAD-BEARING, not belt-and-braces. An earlier draft of this
+     * sentence said `#processSessionRequest` refuses to build an assignment without them — it does
+     * not; that refusal was removed, because a directory cannot verify a binding and so cannot be
+     * the party that enforces one. These gates are the only thing between a NULL profile column and
+     * an assignment that ships the field as `undefined`. Deleting them does not surface a bug; it
+     * puts a malformed value on the wire.
      */
     const kb = a as unknown as {
       participant_a_key_binding?: Uint8Array;
@@ -1395,7 +1399,29 @@ export function decodeOutboundSignalingFrame(bytes: Uint8Array): OutboundSignali
     if (signature_type === "frost") {
       const signer_pubkey = toUint8Array(raw["signer_pubkey"]);
       if (!signer_pubkey || signer_pubkey.length !== 32) return null;
-      assignment = { ...commonFields, signature_type: "frost", signer_pubkey } as SessionAssignment;
+      /**
+       * 038-KEYBIND — the three key-binding fields, decoded rather than dropped (review F2).
+       *
+       * This is an ALLOWLIST decoder: a field it does not name is silently gone. That is the right
+       * default, and it is exactly why these have to be named here — anything decoding an assignment
+       * through this function would otherwise hand its caller a frame with no proof that either
+       * party's threshold key is its own, and the caller would refuse a session that was fine. The
+       * first test written against the real wire bytes caught this immediately.
+       *
+       * Shape-checked only. This package cannot verify a binding (the signer is a K_local no
+       * directory holds); a wrong-length value becomes undefined and the CLIENTS refuse by name.
+       */
+      const participant_a_key_binding = toUint8Array(raw["participant_a_key_binding"]);
+      const participant_b_primary_pubkey = toUint8Array(raw["participant_b_primary_pubkey"]);
+      const participant_b_key_binding = toUint8Array(raw["participant_b_key_binding"]);
+      assignment = {
+        ...commonFields,
+        signature_type: "frost",
+        signer_pubkey,
+        ...(participant_a_key_binding?.length === 64 ? { participant_a_key_binding } : {}),
+        ...(participant_b_primary_pubkey?.length === 32 ? { participant_b_primary_pubkey } : {}),
+        ...(participant_b_key_binding?.length === 64 ? { participant_b_key_binding } : {}),
+      } as SessionAssignment;
     } else {
       assignment = { ...commonFields, signature_type: "single" } as SessionAssignment;
     }
