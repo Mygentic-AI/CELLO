@@ -428,6 +428,59 @@ verifies against the tarball.
 
 ---
 
+## ⚠️ THE MEASURED FINDING — under 4,000 is NOT reachable by pure movement. Andre's call.
+
+**This is the most important output of the order, so it is stated before the progress detail.**
+
+The target and the method are in conflict, and it is measurable rather than a matter of taste.
+Rule A says pure movement; THE TRAP says a part whose dependencies cannot be stated in a short list
+is not a seam and must be recorded rather than forced. Applying both rules honestly, the file stops
+at roughly **16,000 lines, not 4,000.**
+
+**How this was measured** — with the TypeScript compiler's own parser, after a hand-rolled scan was
+found to be silently truncating method bodies and therefore under-reading how much state each method
+touches. Ten candidate domains, each scored by how many things it would need from the manager:
+
+| domain | lines | context size | verdict |
+|---|---|---|---|
+| contacts + transcript + divergence | 771 | **5** | extracted ✅ |
+| refusals + quarantine + ordering | 951 | **13** | extracted ✅ |
+| authorship | 428 | **8** | extracted ✅ |
+| park recovery | 766 | 14 | borderline |
+| witness alerts | 279 | 13 | borderline |
+| standing receiver | 1,634 | **23** | not a seam |
+| salt / encryption | 1,921 | **35** | not a seam |
+| seal | 2,137 | **36** | not a seam |
+| relay / reservations | 2,603 | **35** | not a seam |
+
+**And the structural reason, which is the part that matters:** the class's state forms **ONE
+connected component** — 280 methods and 221 fields all transitively sharing state. **47% of the
+method lines live in 55 methods that each touch five or more state fields.** There is no cut line
+through that graph. A context of 35 is not a narrow interface; it is the manager with an extra hop,
+which THE TRAP names as one of the two outcomes *worse than the god file*.
+
+**So the remaining ~13,000 lines cannot be moved without doing one of the three forbidden things** —
+widening private state, passing `this`, or accepting a 35-member proxy interface — **unless the
+class is REDESIGNED**, which is not movement and carries real behaviour risk on the inbound path.
+
+### The recommendation, because an open question handed back is unfinished work
+
+**Split this into two orders and let 036 close on what movement can honestly deliver.**
+
+1. **036 closes at ~16,000** with the ratchet holding that number, five modules extracted, the dead
+   code gone and every seam with a short dependency list taken. That is a real result: the parts
+   that were separable are separated, and the ratchet means the file can never grow back.
+2. **A second order does the redesign** — session lifecycle, salt, seal and relay each becoming a
+   collaborator that owns its state. That is design work with its own risk budget, and it wants the
+   live two-daemon test as a gate for each step, not just at the end.
+
+**Why not simply lower the bar to 16,000 and call it done:** because the four entangled domains are
+where the risk actually lives, and leaving them means the file is still the thing an evaluator opens
+first. The recommendation is to do the redesign, not to skip it — only to stop pretending it is a
+move.
+
+---
+
 ## Newly discovered
 
 _(Anything found while working that is not this mission. Record and keep going.)_
